@@ -28,7 +28,7 @@ function fixture() {
 
 test('public SDK tools bind the calling Agent, never expose start/selfgrant and unregister cleanly', async () => {
   const f = fixture()
-  assert.equal(f.definitions.size, 4)
+  assert.equal(f.definitions.size, 6)
   assert.equal([...f.definitions.keys()].some(name => /start|allow|resume/.test(name)), false)
   await f.definitions.get('qiuya_computer_status').execute({}, f.exec)
   assert.equal(f.calls[0][1], 'chat-one')

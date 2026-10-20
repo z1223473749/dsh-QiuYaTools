@@ -14,6 +14,7 @@ export class ComputerSessionService {
   private readonly listeners = new Set<() => void>()
   private readonly allowed = new Set<string>()
   private readonly denied = new Set<string>()
+  private ownerControlVersion = 0
   private activeSession: string | undefined
   private nextEpoch = 0
   private disposed = false
@@ -22,7 +23,7 @@ export class ComputerSessionService {
   private readonly unsubscribe?: () => void
   constructor(readonly driver: DeviceDriver, private readonly options: ComputerSessionOptions = {}) {
     this.unsubscribe = driver.subscribe?.(event => {
-      if (event.event === 'previewClosed') {
+      if (event.event === 'previewClosed' || event.event === 'humanInput') {
         const id = event.sessionId ?? this.activeSession
         if (id) void this.pause(id).catch(() => {})
       } else if (event.event === 'disconnected') {
@@ -68,6 +69,27 @@ export class ComputerSessionService {
     this.notify()
   }
   private isAllowed(record: SessionRecord): boolean { return record.allowOnce || this.allowedApps().includes(record.snapshot.target?.appId ?? '') }
+  async permittedTargets(sessionId: string, signal?: AbortSignal): Promise<NativeTarget[]> {
+    const record = this.record(sessionId)
+    this.fence(record, record.snapshot.epoch)
+    const apps = new Set(this.allowedApps())
+    if (record.allowOnce && record.snapshot.target) apps.add(record.snapshot.target.appId)
+    return (await this.targets(signal)).filter(target => apps.has(target.appId))
+  }
+  /** Agents may change targets only within grants the owner has already made. */
+  async selectTarget(sessionId: string, targetId: string, signal?: AbortSignal): Promise<ComputerSessionSnapshot> {
+    const record = this.record(sessionId), epoch = record.snapshot.epoch
+    const controlVersion = this.ownerControlVersion
+    this.fence(record, epoch)
+    const target = (await this.permittedTargets(sessionId, signal)).find(item => item.id === targetId)
+    this.fence(record, epoch); signal?.throwIfAborted()
+    if (!target) throw new ComputerError('APP_NOT_ALLOWED', '目标应用尚未授权或已关闭')
+    const allowOnce = record.allowOnce && target.appId === record.snapshot.target?.appId
+    await this.transition(sessionId, 'stopped')
+    signal?.throwIfAborted()
+    if (this.ownerControlVersion !== controlVersion || record.snapshot.state !== 'stopped') throw new ComputerError('CONTROL_CHANGED', '切换目标已被用户控制动作取消')
+    return this.start(sessionId, targetId, { allowOnce, signal })
+  }
   private fence(record: SessionRecord, epoch: number, human = false): void {
     this.assertEnabled()
     if (this.activeSession !== record.snapshot.sessionId || record.snapshot.epoch !== epoch || !(human ? record.snapshot.state === 'humanControl' : ['ready', 'running'].includes(record.snapshot.state))) throw new ComputerError('CONTROL_CHANGED', '操作控制权已变化，请重新观察后继续')
@@ -138,7 +160,7 @@ export class ComputerSessionService {
       const current = (await this.driver.targets(operationSignal)).find(item => item.id === target.id)
       operationSignal.throwIfAborted()
       if (!current || current.pid !== target.pid || current.appId !== target.appId) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新选择并授权')
-      const observation = await this.driver.observe(target.id, operationSignal)
+      const observation = await (preview && this.driver.preview ? this.driver.preview(target.id, operationSignal) : this.driver.observe(target.id, operationSignal))
       operationSignal.throwIfAborted()
       if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '观察期间控制权已变化')
       this.validateObservation(observation, target)
@@ -237,10 +259,11 @@ export class ComputerSessionService {
     void promise.then(() => { record.transition = undefined }, () => { record.transition = undefined })
     return promise
   }
-  pause(sessionId: string) { return this.transition(sessionId, 'paused') }
-  takeover(sessionId: string) { return this.transition(sessionId, 'humanControl') }
-  stop(sessionId: string) { return this.transition(sessionId, 'stopped') }
+  pause(sessionId: string) { this.ownerControlVersion++; return this.transition(sessionId, 'paused') }
+  takeover(sessionId: string) { this.ownerControlVersion++; return this.transition(sessionId, 'humanControl') }
+  stop(sessionId: string) { this.ownerControlVersion++; return this.transition(sessionId, 'stopped') }
   async resume(sessionId: string): Promise<ComputerSessionSnapshot> {
+    this.ownerControlVersion++
     this.assertEnabled()
     const record = this.record(sessionId)
     if (record.transition) await record.transition

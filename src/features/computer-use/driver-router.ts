@@ -31,6 +31,7 @@ export class ComputerDriverRouter implements DeviceDriver {
   status(signal?: AbortSignal) { return this.current.status(signal).then(status => ({ ...status, mode: this.mode })) }
   targets(signal?: AbortSignal) { return this.current.targets(signal) }
   observe(targetId: string, signal?: AbortSignal) { return this.current.observe(targetId, signal) }
+  preview(targetId: string, signal?: AbortSignal) { return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
   lease(epoch: number, signal?: AbortSignal) { return this.current.lease(epoch, signal) }
   release(epoch: number, signal?: AbortSignal) { return this.current.release(epoch, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.current.act(epoch, targetId, action, signal) }

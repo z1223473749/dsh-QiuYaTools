@@ -25,6 +25,7 @@ export interface DeviceDriver {
   status(signal?: AbortSignal): Promise<ComputerStatus>
   targets(signal?: AbortSignal): Promise<NativeTarget[]>
   observe(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
+  preview?(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
   lease(epoch: number, signal?: AbortSignal): Promise<unknown>
   release(epoch: number, signal?: AbortSignal): Promise<unknown>
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown>

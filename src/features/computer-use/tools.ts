@@ -35,6 +35,15 @@ export function installComputerTools(ctx: Context, service: ComputerSessionServi
   const register = services.tools.register.bind(services.tools)
   const unregister = [
     register({
+      name: 'qiuya_computer_targets', description: 'List windows only in applications already authorized by the owner. Requires an active computer session; does not grant access.', parameters: noParameters, output,
+      async execute(args, exec) { parameters(args, []); return { targets: await service.permittedTargets(session(exec), exec.signal) } },
+    }),
+    register({
+      name: 'qiuya_computer_select', description: 'Switch the active computer session to an already-authorized application window. Cannot resume a paused or human-controlled session and cannot grant new application access.',
+      parameters: { type: 'object', additionalProperties: false, required: ['targetId'], properties: { targetId: { type: 'string' } } }, output,
+      async execute(args, exec) { const input = parameters(args, ['targetId']); return JSON.parse(JSON.stringify(await service.selectTarget(session(exec), requireIdentity(input.targetId, '目标'), exec.signal))) },
+    }),
+    register({
       name: 'qiuya_computer_status', description: 'Read this chat’s computer-control session. The owner must select and authorize an application in the computer panel before use.', parameters: noParameters, output,
       async execute(args, exec) { parameters(args, []); const id = session(exec); return JSON.parse(JSON.stringify(service.get(id) ?? { sessionId: id, state: 'idle' })) },
     }),

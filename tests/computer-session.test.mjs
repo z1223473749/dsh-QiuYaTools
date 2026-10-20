@@ -27,6 +27,37 @@ function fixture() {
 async function start(f) { await f.service.start('chat', f.target.id, { allowOnce: true }); return f.service.observe('chat') }
 const request = (frame, id = 'a1', action = { kind: 'click', x: 30, y: 40 }) => ({ frameId: frame.frameId, actionId: id, action })
 
+test('Agent target switching preserves owner grants and cannot resume paused control', async () => {
+  const f = fixture()
+  const original = { ...f.target }, other = { ...f.target, id: 'other-window', appId: 'not-authorized' }
+  f.driver.targets = async () => [original, { ...original, id: 'same-app-new-window' }, other]
+  await start(f)
+  assert.deepEqual((await f.service.permittedTargets('chat')).map(t => t.id), [original.id, 'same-app-new-window'])
+  await assert.rejects(f.service.selectTarget('chat', other.id), { code: 'APP_NOT_ALLOWED' })
+  await f.service.selectTarget('chat', 'same-app-new-window')
+  assert.equal(f.service.get('chat').target.id, 'same-app-new-window')
+  await f.service.pause('chat')
+  await assert.rejects(f.service.selectTarget('chat', original.id), { code: 'CONTROL_CHANGED' })
+  await f.service.dispose()
+})
+
+test('owner pause during Agent target switching cancels the pending restart', async () => {
+  const f = fixture(); await start(f)
+  const release = f.driver.release
+  let settle
+  const held = new Promise(resolve => { settle = resolve })
+  f.driver.release = async epoch => { await release(epoch); await held }
+  const select = f.service.selectTarget('chat', f.target.id)
+  await new Promise(resolve => setImmediate(resolve))
+  const pause = f.service.pause('chat')
+  settle()
+  await assert.rejects(select, { code: 'CONTROL_CHANGED' })
+  await pause
+  assert.equal(f.service.get('chat').state, 'stopped', 'The interrupted switch remains stopped and cannot be resumed implicitly')
+  assert.equal(f.records.filter(row => row[0] === 'lease').length, 1)
+  await f.service.dispose()
+})
+
 test('owner authorization and one-desktop lease isolate chats; snapshot contains no image bytes', async () => {
   const f = fixture()
   await assert.rejects(f.service.start('chat', f.target.id), { code: 'APP_NOT_ALLOWED' })

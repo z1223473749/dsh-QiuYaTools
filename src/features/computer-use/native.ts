@@ -100,6 +100,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     return targets
   }
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
+  preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
   lease(epoch: number, signal?: AbortSignal) { return this.rpc('lease', { epoch }, signal) }
   release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.rpc('act', { epoch, targetId, action }, signal) }

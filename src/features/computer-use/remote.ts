@@ -113,6 +113,7 @@ export class RemoteComputerDriver implements DeviceDriver {
     return targets.map(target => ({ ...target, appId: `${this.deviceId}:${target.appId}` }))
   }
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
+  preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
   async lease(epoch: number, signal?: AbortSignal): Promise<unknown> {
     const result = await this.rpc('lease', { epoch: epochNumber(epoch) }, signal)
     this.activeEpoch = epoch; this.startHeartbeat(); return result
@@ -204,7 +205,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       let result: unknown
       if (op === 'status') result = { ...await driver.status(controller.signal), protocolVersion: COMPUTER_AGENT_VERSION, leaseTimeoutMs: leaseTimeout }
       else if (op === 'targets') result = await driver.targets(controller.signal)
-      else if (op === 'observe') result = await driver.observe(requireIdentity(payload.targetId, '目标'), controller.signal)
+      else if (op === 'observe') result = payload.preview === true && driver.preview ? await driver.preview(requireIdentity(payload.targetId, '目标'), controller.signal) : await driver.observe(requireIdentity(payload.targetId, '目标'), controller.signal)
       else {
         const epoch = epochNumber(payload.epoch)
         if (op === 'lease') {
