@@ -58,8 +58,9 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-label { font-size: 13px; font-weight: 600; line-height: 1.5; }
 .qyt-settings .qyt-feedback { min-height: 16px; margin-top: 7px; color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .qyt-settings .qyt-feedback[role="alert"] { color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary)); }
-.qyt-tabs { display: flex; min-width: 0; gap: 3px; padding: 4px; border: 1px solid var(--qyt-ocean-line); border-radius: 13px; background: var(--qyt-surface-muted); overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--qyt-ocean-line) transparent; }
-.qyt-tabs > button { display: flex; flex: 1 0 62px; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-width: 62px; margin: 0; padding: 8px 4px; border: 0; border-radius: 11px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; line-height: 1.35; white-space: nowrap; cursor: pointer; }
+.qyt-tabs { display: flex; flex-wrap: wrap; min-width: 0; gap: 4px; padding: 4px; border: 1px solid var(--qyt-ocean-line); border-radius: 13px; background: var(--qyt-surface-muted); }
+.qyt-tabs > button { display: flex; flex: 1 0 calc(20% - 4px); flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-width: 0; margin: 0; padding: 8px 4px; border: 0; border-radius: 11px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; line-height: 1.35; white-space: normal; cursor: pointer; }
+.qyt-tabs > button > span { max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .qyt-tabs > button > svg { flex: none; width: 18px; height: 18px; }
 .qyt-tabs > button[aria-selected="true"] { color: var(--dsw-alias-label-primary); background: var(--qyt-selected); box-shadow: 0 1px 2px rgba(32,40,44,.04); font-weight: 600; }
 .qyt-tabs > button[aria-selected="true"] > svg { color: var(--qyt-ocean); }
