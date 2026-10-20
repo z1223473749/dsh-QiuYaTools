@@ -20,6 +20,7 @@ internal static class Program
         if (args.Contains("--capture-parent-test")) { CaptureSelfTest.Parent(); return; }
         if (args.Contains("--capture-worker")) { CaptureBroker.RunWorker(); return; }
         if (args.Contains("--self-test-capture")) { Program.Emit(CaptureSelfTest.Run()); return; }
+        if (args.Contains("--self-test-preview")) { Program.Emit(PreviewSelfTest.Run()); return; }
         if (args.Contains("--input-guardian")) { DesktopLeaseGuard.RunGuardian(); return; }
         if (args.Contains("--self-test-input")) { Program.Emit(ComputerDriver.TestReleaseFailures()); return; }
         if (args.Contains("--release-input")) { EmergencyRelease.Run(); return; }

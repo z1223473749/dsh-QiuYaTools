@@ -65,6 +65,7 @@ try {
   for($i=0;$i -lt 80 -and !(Test-Path (Join-Path $Output 'fixture-state.json'));$i++){Start-Sleep -Milliseconds 100}
   Assert (Test-Path (Join-Path $Output 'fixture-state.json')) 'WIN-NATIVE-FIXTURE-01'
   $unit=Start-Helper '--self-test-input';$last=$null;while($null -ne ($line=$unit.StandardOutput.ReadLine())){$last=$line|ConvertFrom-Json};Assert ($last.passed -eq $true -and $last.actualOsInput -eq $false) 'WIN-REJECTED-RELEASE-STATE-01' $last
+  $unit=Start-Helper '--self-test-preview';$last=$null;while($null -ne ($line=$unit.StandardOutput.ReadLine())){$last=$line|ConvertFrom-Json};Assert ($last.passed -eq $true -and $last.checks -eq 6 -and $last.actualOsInput -eq $false) 'WIN-PREVIEW-POINTER-GEOMETRY-06' $last
   $computer=Start-Helper '--computer'
   $status=Good $computer 'status'
   Assert ($status.available -and $status.platform -eq 'win32') 'WIN-NATIVE-STATUS-01' $status
@@ -141,7 +142,8 @@ try {
   [void](Good $computer 'lease' @{epoch=3})
   $observed=Good $computer 'observe' @{targetId=$target.id;preview=$true}
   Assert ($observed.elements -eq '') 'WIN-PREVIEW-CAPTURE-ONLY-01'
-  # Deliberately cover the target with the native topmost preview; act must move/hide it before injection.
+  # Deliberately cover the target with the native topmost preview; pointer input must move it visibly.
+  Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class PreviewVisibility{[DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);[DllImport("user32.dll")]public static extern int GetSystemMetrics(int n);[DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);struct Rect{public int L,T,R,B;}public static string Bounds(IntPtr h){Rect r;GetWindowRect(h,out r);return r.L+","+r.T+","+r.R+","+r.B;}}'
   Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class FixtureNative{[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern IntPtr FindWindow(string c,string t);[DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);[DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);struct Rect{public int L,T,R,B;}public static int[] Center(IntPtr h){Rect r;GetWindowRect(h,out r);return new[]{(r.L+r.R)/2,(r.T+r.B)/2};}public static IntPtr Window(string t){return FindWindow(null,t);}[DllImport("user32.dll")]public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int h2,uint f);[DllImport("user32.dll")]public static extern short GetAsyncKeyState(int k);}'
   $previewHandle=[FixtureNative]::Window(('QiuYaTools Overlap Preview '+[char]0x2014+' QiuYaTools'))
   Assert ($previewHandle -ne [IntPtr]::Zero -and [FixtureNative]::SetWindowPos($previewHandle,[IntPtr](-1),$observed.geometry.x,$observed.geometry.y,600,420,0x0010)) 'WIN-PREVIEW-OVERLAP-SETUP-01' @{handle=$previewHandle.ToInt64()} 
@@ -149,6 +151,17 @@ try {
   [void](Good $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='click';x=$point.x;y=$point.y}})
   Start-Sleep -Milliseconds 100
   Assert ((Fixture-State).clicks -eq 2) 'WIN-PREVIEW-OVERLAP-INPUT-01'
+  Assert ([PreviewVisibility]::IsWindowVisible($previewHandle)) 'WIN-PREVIEW-POINTER-AVOIDANCE-STAYS-VISIBLE-01'
+  $textPoint=Element-Point (Good $computer 'observe' @{targetId=$target.id}) 'Fixture text input'
+  [void](Good $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='click';x=$textPoint.x;y=$textPoint.y}})
+  [void][FixtureNative]::SetWindowPos($previewHandle,[IntPtr](-1),$observed.geometry.x,$observed.geometry.y,600,420,0x0010)
+  $beforeTypeBounds=[PreviewVisibility]::Bounds($previewHandle)
+  [void](Good $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='type';text='preview stays visible'}})
+  [void](Good $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='key';key='CTRL+A'}})
+  Assert ([PreviewVisibility]::IsWindowVisible($previewHandle) -and [PreviewVisibility]::Bounds($previewHandle) -eq $beforeTypeBounds) 'WIN-PREVIEW-TYPE-KEY-DO-NOT-MOVE-01'
+  [void][FixtureNative]::SetWindowPos($previewHandle,[IntPtr](-1),0,0,[PreviewVisibility]::GetSystemMetrics(0),[PreviewVisibility]::GetSystemMetrics(1),0x0010)
+  $blocked=Rpc $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='click';x=$point.x;y=$point.y}}
+  Assert (!$blocked.ok -and $blocked.error.code -eq 'preview-overlap' -and [PreviewVisibility]::IsWindowVisible($previewHandle) -and ([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0) 'WIN-PREVIEW-NO-SAFE-SPACE-REJECTS-BEFORE-DOWN-01'
   [void](Good $computer 'closePreview')
   Assert (@($events | Where-Object {$_.event -eq 'previewClosed' -and $_.sessionId -eq 'preview-overlap'}).Count -eq 1) 'WIN-PREVIEW-CLOSE-ALL-01'
   $observed=Good $computer 'observe' @{targetId=$target.id}
@@ -165,6 +178,10 @@ try {
   [void](Good $computer 'openPreview' @{sessionId='preview-physical-busy';url=('http://127.0.0.1:'+$port+'/preview');title='QiuYaTools Busy Preview'})
   $busyPreview=[FixtureNative]::Window(('QiuYaTools Busy Preview '+[char]0x2014+' QiuYaTools'))
   Assert ($busyPreview -ne [IntPtr]::Zero) 'WIN-PREVIEW-BUSY-HOOK-SETUP-01'
+  # Reproduce the real 1000x800 target whose whole-window avoidance used to hide all controls.
+  $fixtureHandle=[FixtureNative]::Window('QiuYaTools Windows Test Fixture')
+  [void][FixtureNative]::SetWindowPos($fixtureHandle,[IntPtr]::Zero,364,118,1000,800,0x0014)
+  $observed=Good $computer 'observe' @{targetId=$target.id};$point=Element-Point $observed 'Fixture drag pad'
   [void](Good $computer 'lease' @{epoch=4})
   $id=Send-Request $computer 'act' @{epoch=4;targetId=$target.id;action=@{kind='drag';x=($point.x-180);y=$point.y;toX=($point.x+180);toY=$point.y}}
   $held=$null
@@ -175,6 +192,9 @@ try {
   }
   for($i=0;$i -lt 40 -and (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0);$i++){Start-Sleep -Milliseconds 5}
   Assert (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0) 'WIN-PREVIEW-BUSY-ACTUAL-DOWN-01'
+  $visibilityWatch=[Diagnostics.Stopwatch]::StartNew();$visibilitySamples=0;$stayedVisible=$true
+  while($visibilityWatch.ElapsedMilliseconds -lt 200 -and (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0)){$visibilitySamples++;if(![PreviewVisibility]::IsWindowVisible($busyPreview)){$stayedVisible=$false};Start-Sleep -Milliseconds 10}
+  Assert ($stayedVisible -and $visibilitySamples -ge 5) 'WIN-PREVIEW-LARGE-TARGET-HELD-DRAG-CONTROLS-VISIBLE-01' @{samples=$visibilitySamples;milliseconds=$visibilityWatch.ElapsedMilliseconds}
   $center=[FixtureNative]::Center($busyPreview)
   # This is only a cursor-routing diagnostic. It is not proof of a physical HID event.
   [void][FixtureNative]::SetCursorPos($center[0],$center[1])

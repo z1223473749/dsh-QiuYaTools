@@ -109,28 +109,49 @@ internal sealed class BrowserWindow : Form
     internal bool IsPreview => preview;
     protected override bool ShowWithoutActivation => preview;
     internal bool Prepared { get; private set; }
-    internal static IDisposable UncoverTarget(Rectangle target)
+    internal static void UncoverPointer(IReadOnlyList<Point> trajectory)
     {
-        var hidden = new List<BrowserWindow>();
+        if (trajectory.Count == 0) return;
+        var placements = new List<(BrowserWindow Window, Point Location)>();
         foreach (var window in Application.OpenForms.OfType<BrowserWindow>().Where(window => window.preview && window.Visible).ToArray()) {
-            if (!window.Bounds.IntersectsWith(target)) continue;
+            if (!IntersectsTrajectory(window.Bounds, trajectory)) continue;
             Rectangle? placement = null;
             foreach (var screen in Screen.AllScreens) {
                 var area = screen.WorkingArea;
                 foreach (var point in new[] { new Point(area.Left + 8, area.Top + 8), new Point(area.Right - window.Width - 8, area.Top + 8), new Point(area.Left + 8, area.Bottom - window.Height - 8), new Point(area.Right - window.Width - 8, area.Bottom - window.Height - 8) }) {
                     var candidate = new Rectangle(point, window.Size);
-                    if (area.Contains(candidate) && !candidate.IntersectsWith(target)) { placement = candidate; break; }
+                    if (area.Contains(candidate) && !IntersectsTrajectory(candidate, trajectory)) { placement = candidate; break; }
                 }
                 if (placement != null) break;
             }
-            if (placement is Rectangle safe) { window.StartPosition = FormStartPosition.Manual; window.Location = safe.Location; }
-            else { window.Hide(); hidden.Add(window); }
+            if (placement is not Rectangle safe) throw new NativeFailure("preview-overlap", "Move or resize the visible preview away from the pointer path before input");
+            placements.Add((window, safe.Location));
         }
-        return new RestorePreviews(hidden);
+        // Plan all placements before moving any window; a rejected action has not pressed a button.
+        foreach (var (window, location) in placements) { window.StartPosition = FormStartPosition.Manual; window.Location = location; window.Present(false); }
     }
-    private sealed class RestorePreviews(List<BrowserWindow> windows) : IDisposable
+    internal static bool IntersectsTrajectory(Rectangle bounds, IReadOnlyList<Point> trajectory)
     {
-        public void Dispose() { foreach (var window in windows) if (!window.IsDisposed && !window.Failed) window.Present(false); }
+        // Keep the actual piecewise pointer path clear, rather than rejecting its much larger bounding box.
+        bounds.Inflate(4, 4);
+        for (var index = 0; index < trajectory.Count; index++) {
+            var from = trajectory[index];
+            if (bounds.Contains(from)) return true;
+            if (index == 0) continue;
+            var to = trajectory[index - 1];
+            var low = 0.0; var high = 1.0;
+            var dx = (double)to.X - from.X; var dy = (double)to.Y - from.Y;
+            bool Clip(double direction, double distance)
+            {
+                if (direction == 0) return distance >= 0;
+                var ratio = distance / direction;
+                if (direction < 0) { if (ratio > high) return false; low = Math.Max(low, ratio); }
+                else { if (ratio < low) return false; high = Math.Min(high, ratio); }
+                return true;
+            }
+            if (Clip(-dx, from.X - bounds.Left) && Clip(dx, bounds.Right - from.X) && Clip(-dy, from.Y - bounds.Top) && Clip(dy, bounds.Bottom - from.Y) && low <= high) return true;
+        }
+        return false;
     }
     internal bool Failed { get; private set; }
     private bool ready;

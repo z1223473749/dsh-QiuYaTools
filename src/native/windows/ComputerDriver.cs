@@ -206,7 +206,13 @@ internal sealed class ComputerDriver : IDisposable
         lock (inputLock) { Check(requested); }
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
         if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
-        using var uncovered = BrowserWindow.UncoverTarget(target.Rect);
+        var trajectory = new List<Point>();
+        if (kind is "move" or "click" or "scroll") trajectory.Add(PointOf(target.Rect, action, "x", "y"));
+        else if (kind == "drag") {
+            var from = PointOf(target.Rect, action, "x", "y"); var to = PointOf(target.Rect, action, "toX", "toY");
+            for (var step = 0; step <= 20; step++) trajectory.Add(new Point(from.X + (to.X - from.X) * step / 20, from.Y + (to.Y - from.Y) * step / 20));
+        }
+        BrowserWindow.UncoverPointer(trajectory);
         if (Native.GetForegroundWindow() != target.Handle) {
             Native.SetForegroundWindow(target.Handle);
             await Task.Delay(80);
