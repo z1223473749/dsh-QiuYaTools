@@ -286,14 +286,14 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('nine icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
+test('ten icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 9)
-    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    assert.equal(tabs.length, 10)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'qThemeTab', 'aboutTab', 'updatesTab', 'computerTab'])
     const scrolled = []
     tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
@@ -314,14 +314,16 @@ test('nine icon tabs expose labelled panels and support roving focus and scrolli
       assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
+    key('ArrowLeft', 9)
     key('ArrowLeft', 8)
     assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
     key('ArrowLeft', 7)
     assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
     key('ArrowRight', 8)
+    key('ArrowRight', 9)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 8)
+    key('End', 9)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }

@@ -13,6 +13,7 @@ export const zh = {
   enabled: '启用全部功能',
   enabledHint: '一键开关所有增强功能，Q 主题可单独设置。',
   features: '功能设置',
+  computerTab: '电脑操控',
   pastedTextTab: '长文本',
   sessionWindowsTab: '独立窗口',
   bulkArchiveTab: '批量归档',
@@ -74,6 +75,7 @@ export const zh = {
 
 export type LocaleKey = keyof typeof zh
 export const en: Record<LocaleKey, string> = {
+  computerTab: 'Computer use',
   nav: 'QiuYaTools',
   title: 'QiuYa 增强工具箱',
   subtitle: 'Manage features and preferences.',

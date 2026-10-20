@@ -208,6 +208,7 @@ test('host hides its generated form using the owner fiber and releases the overr
     },
   })
   assert.deepEqual(injections, [
+    ['connection', 'webServer'],
     ['connection'], ['settings'], ['connection', 'webServer'],
     ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
   ], 'optional update, session and suggestion services must not block registration')

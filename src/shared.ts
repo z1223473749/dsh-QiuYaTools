@@ -12,6 +12,7 @@ export interface Preferences {
   promptSuggestionsEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
+  computerUseEnabled: boolean
   pasteCharacterThreshold: number
   pasteLineThreshold: number
 }
@@ -30,6 +31,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   qThemeEnabled: false,
+  computerUseEnabled: false,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 })

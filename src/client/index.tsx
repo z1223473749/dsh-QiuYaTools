@@ -15,6 +15,7 @@ import { installAccountMenuEntry } from './account-menu.ts'
 import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
+import { ComputerPanel } from '../features/computer-use/panel.tsx'
 import { installQTheme } from './q-theme.ts'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
@@ -37,7 +38,7 @@ type SettingsProps = PropsRuntime<'settings.section'> & PropsLocale<typeof NS> &
 type ThresholdDraft = { characters: string; lines: string }
 type FormOperations = Parameters<ConfigForm<Preferences>['mutate']>[0]
 
-type SettingsTab = FeatureField | 'qTheme' | 'about' | 'updates'
+type SettingsTab = FeatureField | 'qTheme' | 'about' | 'updates' | 'computer'
 const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey; hint: LocaleKey; steps: readonly LocaleKey[] }[] = [
   { field: 'pastedTextEnabled', tab: 'pastedTextTab', label: 'pastedText', hint: 'pastedTextHint', steps: [] },
   { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
@@ -51,6 +52,7 @@ const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   { id: 'qTheme', label: 'qThemeTab' },
   { id: 'about', label: 'aboutTab' },
   { id: 'updates', label: 'updatesTab' },
+  { id: 'computer', label: 'computerTab' },
 ]
 
 function SettingsIcon({ name }: { name: SettingsTab }) {
@@ -181,7 +183,8 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
-        {tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
+        {tab.id === 'computer' ? activeTab === 'computer' && <ComputerPanel ctx={ctx} enabled={preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([{ op: 'set', path: ['computerUseEnabled'], value }]) }}/>
+          : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
           : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} />
             : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
               <div className="qyt-card qyt-feature-summary">

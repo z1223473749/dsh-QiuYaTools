@@ -5,6 +5,8 @@ import { installSessionWindowsHost } from './features/session-windows/host.ts'
 import { installPluginUpdatesHost } from './updates/host.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
+import { installComputerHost } from './features/computer-use/host.ts'
+import { installComputerTools } from './features/computer-use/tools.ts'
 import pkg from '../package.json' with { type: 'json' }
 
 /** Preferences persisted by Harness in the active profile. */
@@ -17,6 +19,7 @@ export interface Config {
   sidebarToolsEnabled: Volatile<boolean>
   promptSuggestionsEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
+  computerUseEnabled: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
   pasteLineThreshold: Volatile<number>
 }
@@ -30,6 +33,7 @@ export const Config = z.object({
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
+  computerUseEnabled: z.boolean().default(false).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
     .description('粘贴内容达到此字符数时转为 TXT 附件').volatile(),
   pasteLineThreshold: z.number().step(1).min(1).max(100_000).default(15)
@@ -38,6 +42,20 @@ export const Config = z.object({
 
 /** QiuYaTools owns its settings page instead of a second generated form. */
 export function apply(ctx: Context, config: Config): void {
+  ctx.inject(['connection', 'webServer'], child => {
+    let stopped = false
+    let cleanup: (() => Promise<void>) | undefined
+    child.effect(() => {
+      void installComputerHost(child, () => config.enabled.get() && config.computerUseEnabled.get()).then(host => {
+        if (stopped) { void host.dispose(); return }
+        cleanup = host.dispose
+        child.inject(['tools', 'attachments'], tools => {
+          tools.effect(() => installComputerTools(tools, host.service, { enabled: () => config.enabled.get() && config.computerUseEnabled.get() }))
+        })
+      }).catch(error => child.logger.error('电脑操控初始化失败：%s', error instanceof Error ? error.message : '初始化失败'))
+      return async () => { stopped = true; await cleanup?.() }
+    })
+  })
   ctx.inject(['connection'], child => {
     child.effect(() => installPluginUpdatesHost(child, { repository: PROJECT_REPOSITORY, version: pkg.version, packageName: pkg.name }))
   })

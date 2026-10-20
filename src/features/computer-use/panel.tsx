@@ -1,0 +1,70 @@
+import React, { useEffect, useState } from 'react'
+import type { Context } from '@deepseek-ai/cordis'
+import type { ComputerSessionSnapshot, NativeTarget } from './contract.ts'
+
+interface Rpc { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
+interface Catalog { list: { getSnapshot(): { ids: string[]; byId: Record<string, { displayTitle?: string; title?: string; blank?: boolean; origin?: string }> } } }
+const endpoint = 'qiuya-tools.computer.control'
+export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Context; enabled: boolean; onEnabled(value: boolean): void; disabled: boolean }) {
+  const [targets, setTargets] = useState<NativeTarget[]>([]), [targetId, setTargetId] = useState('')
+  const [sessionId, setSessionId] = useState(() => typeof document === 'undefined' ? '' : document.querySelector('[data-conversation-session]')?.getAttribute('data-conversation-session') ?? '')
+  const [sessions, setSessions] = useState<ComputerSessionSnapshot[]>([]), [allowed, setAllowed] = useState<string[]>([])
+  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [native, setNative] = useState<{ permissions?: Record<string, boolean>; message?: string } | null>()
+  const [chats, setChats] = useState<{ id: string; title: string }[]>([])
+  const call = async (op: string, extra: object = {}) => {
+    const connection = ctx.get('connection') as Rpc | undefined
+    if (!connection) throw new Error('连接尚未就绪')
+    const response = await connection.rpc.call('/api', endpoint, { op, sessionId, ...extra })
+    if (!response.ok) throw new Error(response.error?.message ?? '电脑操控请求失败')
+    return response.value
+  }
+  const refresh = async () => {
+    const result = await call('status') as { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; native: { permissions?: Record<string, boolean>; message?: string } | null }
+    setSessions(result.sessions); setAllowed(result.allowedApps); setNative(result.native)
+    const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
+    if (catalog) setChats(catalog.ids.filter(id => catalog.byId[id]?.origin !== 'subagent').map(id => ({ id, title: catalog.byId[id].displayTitle ?? catalog.byId[id].title ?? id })))
+  }
+  useEffect(() => {
+    if (!enabled) return
+    let disposed = false
+    const run = async () => { try { if (!disposed) await refresh() } catch (error) { if (!disposed) setMessage((error as Error).message) } }
+    void run(); const timer = window.setInterval(() => { void run() }, 1500)
+    return () => { disposed = true; window.clearInterval(timer) }
+  }, [enabled, sessionId])
+  const action = async (op: string, extra = {}) => {
+    if (busy) return
+    setBusy(true); setMessage('')
+    try {
+      const result = await call(op, extra)
+      if (op === 'targets') { const list = result as NativeTarget[]; setTargets(list); if (!list.some(t => t.id === targetId)) setTargetId(list[0]?.id ?? '') }
+      await refresh()
+    } catch (error) { setMessage((error as Error).message) } finally { setBusy(false) }
+  }
+  const current = sessions.find(item => item.sessionId === sessionId)
+  return <div className="qyt-feature-panel">
+    <div className="qyt-card"><div className="qyt-toggle-row"><h3>电脑操控</h3><label><input type="checkbox" checked={enabled} disabled={disabled} onChange={e => onEnabled(e.target.checked)}/> 启用</label></div>
+      <p className="qyt-muted">让当前聊天操作所选应用，并通过悬浮窗查看画面、暂停或接管。</p>
+      {enabled && <><p>选择关联聊天和目标窗口后，本次允许该聊天操作此应用。</p>
+        <div style={{ display: 'grid', gap: 12 }}>
+          <label>关联聊天 <select value={sessionId} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+          <label>应用窗口 <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请刷新窗口列表</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title || item.appId}</option>)}</select></label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="qyt-button" disabled={busy} onClick={() => { void action('targets') }}>刷新窗口</button>
+            <button className="qyt-button" disabled={busy || !sessionId || !targetId} onClick={() => { void action('start', { targetId }) }}>允许本次并开始</button>
+            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('preview') }}>悬浮实时预览</button>
+            {(['pause', 'takeover', 'resume', 'stop'] as const).map((op, i) => <button className="qyt-button" key={op} disabled={busy || !current} onClick={() => { void action(op) }}>{['暂停', '接管', '继续', '停止'][i]}</button>)}
+          </div>
+          {current && <p role="status">{current.target?.title} · {current.state}{current.error ? ` · ${current.error.message}` : ''}</p>}
+        </div>
+        <div><strong>系统权限</strong>{native?.permissions && Object.entries(native.permissions).map(([key, granted]) => <p key={key}>{({ screenRecording: '屏幕录制', accessibility: '辅助功能', inputMonitoring: '输入监控' } as Record<string, string>)[key] ?? key}：{granted ? '已允许' : '未允许'}</p>)}{native?.message && <p>{native.message}</p>}</div>
+        <p className="qyt-muted">Mac 需要在系统设置中允许“QiuYaTools Computer”的屏幕录制和辅助功能。Windows 桌面操作会使用当前前台输入。关闭悬浮窗将暂停任务。</p>
+      </>}
+      {message && <p role="alert">{message}</p>}
+    </div>
+    {enabled && <div className="qyt-card"><h4>始终允许的应用</h4><p className="qyt-muted">持续授权由你管理，撤销后立即停止该应用的操作。</p>
+      {targetId && targets.find(t => t.id === targetId) && <button className="qyt-button" disabled={busy} onClick={() => { void action('allow', { appId: targets.find(t => t.id === targetId)!.appId, allowed: true }) }}>始终允许所选应用</button>}
+      {allowed.map(appId => <p key={appId}>{appId} <button disabled={busy} onClick={() => { void action('allow', { appId, allowed: false }) }}>撤销</button></p>)}
+      {!allowed.length && <p>暂无持续授权</p>}
+    </div>}
+  </div>
+}
