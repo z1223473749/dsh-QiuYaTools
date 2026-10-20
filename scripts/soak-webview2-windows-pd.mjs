@@ -111,12 +111,33 @@ try {
   for (const name of files.keys()) await transfer(name)
   files.set('launch.mjs', Buffer.from(`import{writeFile}from'node:fs/promises';import{dirname,join}from'node:path';import{fileURLToPath,pathToFileURL}from'node:url';const base=dirname(fileURLToPath(import.meta.url));try{process.argv=[process.execPath,join(base,'soak-computer-webview2.mjs'),'--runtime',join(base,'runtime.mjs'),'--native',join(base,'qiuya-windows.exe'),'--fixture',join(base,'windows-webview2-soak-fixture.ps1'),'--minutes',${JSON.stringify(String(minutes))},'--faults',${JSON.stringify(String(faults))},'--output',join(base,'evidence')];await import(pathToFileURL(process.argv[1]).href)}catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:error.message,code:error.code}));process.exitCode=1}finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:process.exitCode||0}))}`))
   await transfer('launch.mjs')
-  files.set('start.ps1', Buffer.from(`$ErrorActionPreference='Stop';$p=Start-Process -FilePath ${quote(node)} -ArgumentList ${quote(`"${win32.join(guestRoot, 'launch.mjs')}"`)} -WorkingDirectory ${quote(guestRoot)} -WindowStyle Hidden -RedirectStandardOutput ${quote(win32.join(guestRoot, 'runner.log'))} -RedirectStandardError ${quote(win32.join(guestRoot, 'runner.err'))} -PassThru;@{pid=$p.Id;createdAtTicks=$p.StartTime.ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress|Set-Content -LiteralPath ${quote(win32.join(guestRoot, 'runner-identity.json'))} -Encoding UTF8;$p.WaitForExit()`))
+  files.set('start.ps1', Buffer.from(`$ErrorActionPreference='Stop'
+$p=$null;$out=$null;$err=$null
+try {
+ $out=[IO.File]::Open(${quote(win32.join(guestRoot, 'runner.log'))},[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+ $err=[IO.File]::Open(${quote(win32.join(guestRoot, 'runner.err'))},[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+ $start=[Diagnostics.ProcessStartInfo]::new()
+ $start.FileName=${quote(node)};$start.Arguments=${quote(`"${win32.join(guestRoot, 'launch.mjs')}"`)};$start.WorkingDirectory=${quote(guestRoot)}
+ $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+ $p=[Diagnostics.Process]::new();$p.StartInfo=$start
+ if(!$p.Start()){throw 'Runner did not start'}
+ $null=$p.SafeHandle
+ @{pid=$p.Id;createdAtTicks=$p.StartTime.ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress|Set-Content -LiteralPath ${quote(win32.join(guestRoot, 'runner-identity.json'))} -Encoding UTF8
+ $copyOut=$p.StandardOutput.BaseStream.CopyToAsync($out);$copyError=$p.StandardError.BaseStream.CopyToAsync($err)
+ $p.WaitForExit()
+ if(-not ([Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($copyOut,$copyError),10000))){throw 'Runner log copy did not finish'}
+ @{passed=$true;exitCode=$p.ExitCode;createNoWindow=$true;stdoutCopied=$true;stderrCopied=$true}|ConvertTo-Json -Compress|Set-Content -LiteralPath ${quote(win32.join(guestRoot, 'launcher-completed.json'))} -Encoding UTF8
+} catch {
+ @{passed=$false;error=$_.Exception.Message}|ConvertTo-Json -Compress|Set-Content -LiteralPath ${quote(win32.join(guestRoot, 'launcher-completed.json'))} -Encoding UTF8
+ throw
+} finally {
+ if($out){$out.Dispose()};if($err){$err.Dispose()};if($p){$p.Dispose()}
+}`))
   await transfer('start.ps1')
   task = `QiuYaTools-webview2-soak-${key}`
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${win32.join(guestRoot, 'start.ps1')}"`
   await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(minutes) + 8}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
-  environment = { kind: 'real-native-WebView2-720p-endurance', vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 2000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
+  environment = { kind: 'real-native-WebView2-720p-endurance', vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', runnerLaunch: '.NET ProcessStartInfo UseShellExecute=false/CreateNoWindow=true/redirected streams with awaited BaseStream.CopyToAsync', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 2000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
   console.error(JSON.stringify({ stage: 'interactive-native-WebView2-started', minutes, faults, guestRoot, output }))
   const deadline = Date.now() + minutes * 60000 + 360000
@@ -144,8 +165,10 @@ try {
   await new Promise(done => setTimeout(done, 2000))
   const after = JSON.parse(await ps(`$ErrorActionPreference='Stop';$file=${quote(win32.join(guestRoot, 'evidence/cleanup-verification.json'))};$r=Get-Content -LiteralPath ${quote(win32.join(guestRoot, 'runner-identity.json'))} -Raw|ConvertFrom-Json;$items=@($r);if(Test-Path $file){$items+=@((Get-Content -LiteralPath $file -Raw|ConvertFrom-Json).tracked)};$live=@();foreach($i in $items){$p=Get-Process -Id $i.pid -ErrorAction SilentlyContinue;if($p -and $p.StartTime.ToUniversalTime().Ticks.ToString()-eq $i.createdAtTicks){$live+=@{pid=[int]$i.pid;createdAtTicks=$i.createdAtTicks}}};@{passed=($live.Count-eq 0);checked=$items.Count;remaining=$live}|ConvertTo-Json -Depth 5 -Compress`))
   await writeFile(join(output, 'post-run-cleanup-verification.json'), JSON.stringify(after, null, 2))
+  const launcher = JSON.parse(await ps(`$ErrorActionPreference='Stop';[IO.File]::ReadAllText(${quote(win32.join(guestRoot, 'launcher-completed.json'))})`))
+  await writeFile(join(output, 'launcher-completed.json'), JSON.stringify(launcher, null, 2))
   const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
-  outerVerdict = { status: report.status === 'passed' && completed.exitCode === 0 && after.passed ? 'passed' : 'failed', runnerStatus: report.status, exitCode: completed.exitCode, naturalCleanupPassed: after.passed, helperSha256, runtimeSha256: environment.inputHashes['runtime.mjs'] }
+  outerVerdict = { status: report.status === 'passed' && completed.exitCode === 0 && after.passed && launcher.passed && launcher.exitCode === completed.exitCode && launcher.stdoutCopied && launcher.stderrCopied ? 'passed' : 'failed', runnerStatus: report.status, exitCode: completed.exitCode, launcher, naturalCleanupPassed: after.passed, helperSha256, runtimeSha256: environment.inputHashes['runtime.mjs'] }
   await writeFile(join(output, 'delivery-verdict.json'), JSON.stringify(outerVerdict, null, 2))
   console.log(JSON.stringify({ ...outerVerdict, output, frames: report.frames, elapsedMs: report.elapsedMs, endToEndFps: report.endToEndFps, latencyP95Ms: report.latencyP95Ms, invalid: report.invalidTimestamps, faults: report.faults?.length }, null, 2))
   if (outerVerdict.status !== 'passed') process.exitCode = 1

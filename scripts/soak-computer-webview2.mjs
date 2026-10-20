@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm, rename } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsProcessSnapshotCommand, windowsPinnedProcessCommand, windowsRunnerConsoleProbeCommand, verifyWindowsRunnerConsoleBinding, partitionWindowsCleanupIdentities } from './computer-webview2-soak-evidence.mjs'
+import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsProcessSnapshotCommand, windowsPinnedProcessCommand, partitionWindowsCleanupIdentities } from './computer-webview2-soak-evidence.mjs'
 
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (key, fallback) => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1] }
@@ -41,7 +41,7 @@ const server = createServer(async (request, response) => {
 })
 let fixture, fixtureReady, fixtureTelemetry, fixtureBuffer = '', fixtureError = '', fixtureTickAt = 0
 const oraclePending = new Map(); let oracleSequence = 0
-let runnerConsole = null
+let windowsSystemDirectory, deferredUntilRunnerExit = []
 let driver, host, page, unsubscribe, fatal, phase = 'setup', generation = 0, measurementStart = 0, report, attachmentWrites = 0
 const mark = (kind, detail = {}) => { trace.push({ atMs: Date.now(), elapsedMs: measurementStart ? Date.now() - measurementStart : null, phase, kind, ...detail }); if (trace.length > 4000) trace.shift() }
 const snapshot = () => { const value = host?.service.get(sessionId); return value ? { state: value.state, epoch: value.epoch } : null }
@@ -63,14 +63,18 @@ async function ownedProcesses() {
     const key = `${item.pid}:${item.createdAtTicks}`, previous = identities.get(key)
     identities.set(key, { ...previous, pid: item.pid, createdAtTicks: item.createdAtTicks, name: item.name, expectedExecutablePath: row.executablePath || previous?.expectedExecutablePath })
   }
-  const runner = [...identities.values()].find(item => item.pid === process.pid)
-  if (!runner?.expectedExecutablePath) throw new Error('Owned runner executable identity was unavailable')
-  // An atomic early ledger survives a killed Node runner before finally executes.
-  const ledger = { schemaVersion: 1, runner, companion, fixturePath, nativeData, temporaryRoot: temporary, runnerConsole, tracked: [...identities.values()] }
-  const checkpoint = join(output, 'ownership-checkpoint.next.json')
-  await writeFile(checkpoint, JSON.stringify(ledger)); await rename(checkpoint, join(output, 'ownership-checkpoint.json'))
+  await saveOwnershipCheckpoint()
+
   return { rows, owned }
 }
+async function saveOwnershipCheckpoint() {
+  const runner = [...identities.values()].find(item => item.pid === process.pid)
+  if (!runner?.expectedExecutablePath) throw new Error('Owned runner executable identity was unavailable')
+  const ledger = { schemaVersion: 1, runner, companion, fixturePath, nativeData, temporaryRoot: temporary, windowsSystemDirectory, deferredUntilRunnerExit, tracked: [...identities.values()] }
+  const checkpoint = join(output, 'ownership-checkpoint.next.json')
+  await writeFile(checkpoint, JSON.stringify(ledger)); await rename(checkpoint, join(output, 'ownership-checkpoint.json'))
+}
+
 async function waitFor(operation, description, timeout = 20000, allowFatal = false) {
   const end = Date.now() + timeout
   while (Date.now() < end) { if (fatal && !allowFatal) throw fatal; const result = await operation(); if (result) return result; await new Promise(done => setTimeout(done, 100)) }
@@ -223,11 +227,7 @@ async function sample() {
 }
 try {
   // Persist the UUID ownership boundary before starting any native GUI child.
-  const initialOwnership = await ownedProcesses()
-  const runnerIdentity = [...identities.values()].find(item => item.pid === process.pid)
-  const binding = JSON.parse(await powershell(windowsRunnerConsoleProbeCommand(runnerIdentity)))
-  runnerConsole = verifyWindowsRunnerConsoleBinding(binding, initialOwnership.owned, runnerIdentity)
-  identities.set(`${runnerConsole.pid}:${runnerConsole.createdAtTicks}`, runnerConsole)
+  windowsSystemDirectory = await powershell('[Console]::WriteLine([Environment]::SystemDirectory)')
   await ownedProcesses()
   fixture = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', fixturePath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
   fixture.stderr.on('data', chunk => { fixtureError = (fixtureError + chunk.toString()).slice(-2000) })
@@ -348,8 +348,25 @@ try {
   oraclePending.clear()
   unsubscribe?.()
   // Capture any disposable release/guardian child created by shutdown as well.
-  try { await ownedProcesses(); for (const item of identities.values()) if (item.pid !== process.pid && !tracked.some(row => row.pid === item.pid && row.createdAtTicks === item.createdAtTicks)) tracked.push(item) } catch (error) { errors.push(error.message) }
-  const { immediate: retireBeforeRunnerExit, deferred: deferredUntilRunnerExit } = partitionWindowsCleanupIdentities(tracked, runnerConsole)
+  let cleanupOwnership
+  try {
+    cleanupOwnership = await ownedProcesses()
+    for (const item of identities.values()) if (item.pid !== process.pid && !tracked.some(row => row.pid === item.pid && row.createdAtTicks === item.createdAtTicks)) tracked.push(item)
+  } catch (error) { errors.push(error.message) }
+  let retireBeforeRunnerExit = tracked
+  if (cleanupOwnership) {
+    try {
+      const runner = [...identities.values()].find(item => item.pid === process.pid)
+      const partition = partitionWindowsCleanupIdentities(tracked, cleanupOwnership.rows, { owned: cleanupOwnership.owned, runner, systemDirectory: windowsSystemDirectory })
+      retireBeforeRunnerExit = partition.immediate; deferredUntilRunnerExit = partition.deferred
+      for (const item of deferredUntilRunnerExit) {
+        identities.set(`${item.pid}:${item.createdAtTicks}`, item)
+        const index = tracked.findIndex(row => row.pid === item.pid && row.createdAtTicks === item.createdAtTicks)
+        tracked[index] = item
+      }
+      await saveOwnershipCheckpoint()
+    } catch (error) { errors.push(error.message) }
+  }
   let remaining = [], retirementVerified = false
   try {
     await waitFor(async () => { const rows = await snapshotRows(); remaining = retireBeforeRunnerExit.filter(item => rows.some(row => sameWindowsProcessIdentity(row, item))); return !remaining.length }, 'Owned WebView2/native/source process identities remained after cleanup', 15000, true)

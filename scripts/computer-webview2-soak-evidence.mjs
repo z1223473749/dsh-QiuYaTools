@@ -65,43 +65,21 @@ export function createWebViewOwnershipTracker() {
   }
 }
 
-/** Attach only this probe process to the already pinned runner console; never show it.
- * https://learn.microsoft.com/en-us/windows/console/attachconsole
- * The last attached process owns console lifetime. GetConsoleWindow may be a
- * pseudoconsole message HWND: it is an identity oracle, never visibility proof.
+/** Defer verification of owned direct console infrastructure until its Node client exits.
+ * This is not a unique console-host API binding and never removes resource/outer checks.
  */
-export function windowsRunnerConsoleProbeCommand(runner) {
-  // Reuse the strict identity validator before embedding an identity in PS source.
-  windowsPinnedProcessCommand([runner])
-  const identity = Buffer.from(JSON.stringify(runner), 'utf8').toString('base64')
-  return `$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'
-using System;using System.Runtime.InteropServices;
-public static class QytRunnerConsoleBinding {
- [DllImport("kernel32.dll",SetLastError=true)]public static extern bool FreeConsole();
- [DllImport("kernel32.dll",SetLastError=true)]public static extern bool AttachConsole(uint pid);
- [DllImport("kernel32.dll")]public static extern IntPtr GetConsoleWindow();
- [DllImport("kernel32.dll")]public static extern IntPtr GetStdHandle(int which);
- [DllImport("kernel32.dll")]public static extern bool SetStdHandle(int which,IntPtr value);
- [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
-}
-'@
-$i=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${identity}')));$p=$null;$c=$null;$attached=$false;$writer=[Console]::Out;$originalIn=[QytRunnerConsoleBinding]::GetStdHandle(-10);$originalOut=[QytRunnerConsoleBinding]::GetStdHandle(-11);$originalError=[QytRunnerConsoleBinding]::GetStdHandle(-12);$json=$null;try{$p=[Diagnostics.Process]::GetProcessById([int]$i.pid);$null=$p.SafeHandle;if($p.StartTime.ToUniversalTime().Ticks.ToString() -ne $i.createdAtTicks -or $p.MainModule.FileName -ine $i.expectedExecutablePath){throw 'Runner identity changed before console binding'};$null=[QytRunnerConsoleBinding]::FreeConsole();if(![QytRunnerConsoleBinding]::AttachConsole([uint32]$i.pid)){throw 'Could not attach read-only probe to runner console'};$attached=$true;$window=[QytRunnerConsoleBinding]::GetConsoleWindow();[uint32]$consolePid=0;$thread=[QytRunnerConsoleBinding]::GetWindowThreadProcessId($window,[ref]$consolePid);if($window -eq [IntPtr]::Zero -or $thread -eq 0 -or $consolePid -eq 0){throw 'Runner console window identity unavailable'};$c=[Diagnostics.Process]::GetProcessById([int]$consolePid);$null=$c.SafeHandle;$result=@{proof='GetConsoleWindow+GetWindowThreadProcessId-after-AttachConsole';runnerPid=$i.pid;runnerCreatedAtTicks=$i.createdAtTicks;consoleHwnd=$window.ToInt64().ToString('x');pid=[int]$consolePid;createdAtTicks=$c.StartTime.ToUniversalTime().Ticks.ToString();expectedExecutablePath=$c.MainModule.FileName};$json=$result|ConvertTo-Json -Compress}finally{if($attached){$null=[QytRunnerConsoleBinding]::FreeConsole()};$null=[QytRunnerConsoleBinding]::SetStdHandle(-10,$originalIn);$null=[QytRunnerConsoleBinding]::SetStdHandle(-11,$originalOut);$null=[QytRunnerConsoleBinding]::SetStdHandle(-12,$originalError);if($c){$c.Dispose()};if($p){$p.Dispose()}};$writer.WriteLine($json)`
-}
-
-export function verifyWindowsRunnerConsoleBinding(binding, owned, runner) {
-  const proof = 'GetConsoleWindow+GetWindowThreadProcessId-after-AttachConsole'
-  if (binding?.proof !== proof || binding.runnerPid !== runner.pid || binding.runnerCreatedAtTicks !== runner.createdAtTicks || !/^[a-f0-9]+$/iu.test(binding.consoleHwnd ?? '') || BigInt('0x' + binding.consoleHwnd) === 0n) throw new Error('Runner console Win32 binding was unavailable')
-  const row = owned.find(item => item.pid === binding.pid && sameWindowsProcessIdentity(item, binding))
-  if (!row || !preciseWindowsProcessIdentity(row)) throw new Error('Runner console must match an already owned exact process identity')
-  windowsPinnedProcessCommand([binding])
-  return { ...binding, name: row.name, deferredUntilRunnerExit: true }
-}
-
-export function partitionWindowsCleanupIdentities(tracked, runnerConsole) {
-  const deferred = [], immediate = []
+export function partitionWindowsCleanupIdentities(tracked, rows, { owned, runner, systemDirectory }) {
+  const pathKey = value => typeof value === 'string' ? value.replaceAll('/', '\\').replace(/\\$/u, '').toLowerCase() : ''
+  if (!/^[a-z]:[\\/]/iu.test(systemDirectory ?? '')) throw new Error('Windows system directory unavailable')
+  const root = owned.find(row => row.pid === runner.pid && sameWindowsProcessIdentity(row, runner))
+  if (!root || !preciseWindowsProcessIdentity(root)) throw new Error('Current owned runner identity unavailable for cleanup')
+  const target = pathKey(systemDirectory) + '\\conhost.exe', immediate = [], deferred = []
   for (const item of tracked) {
-    const bound = runnerConsole?.deferredUntilRunnerExit === true && runnerConsole.proof === 'GetConsoleWindow+GetWindowThreadProcessId-after-AttachConsole' && item.pid === runnerConsole.pid && item.createdAtTicks === runnerConsole.createdAtTicks
-    ;(bound ? deferred : immediate).push(item)
+    const member = owned.find(row => row.pid === item.pid && sameWindowsProcessIdentity(row, item))
+    const row = rows.find(row => row.pid === item.pid && sameWindowsProcessIdentity(row, item))
+    const infrastructure = member && row && preciseWindowsProcessIdentity(member) && preciseWindowsProcessIdentity(row) && row.parentPid === runner.pid && pathKey(row.executablePath) === target && ticks(row.createdAtTicks) >= ticks(runner.createdAtTicks)
+    if (infrastructure) deferred.push({ ...item, deferredUntilRunnerExit: true, deferralReason: 'current-owned-direct-system-console-infrastructure; lifetime verified after runner exit', parentPid: row.parentPid })
+    else immediate.push(item)
   }
   return { immediate, deferred }
 }
@@ -138,6 +116,7 @@ export function windowsEmergencyCleanupIdentities(rows, { runner, helperPath }, 
 /** All verification and optional termination use one pinned Process object, never taskkill/PID. */
 export function windowsPinnedProcessCommand(identities, { terminate = false } = {}) {
   if (!Array.isArray(identities) || identities.length > 4096) throw new Error('Cleanup identity budget exceeded')
+  if (identities.length === 0) return `[Console]::WriteLine('${JSON.stringify({ passed: true, terminate, results: [], errors: [] })}')`
   const seen = new Set()
   for (const item of identities) {
     if (!Number.isSafeInteger(item.pid) || item.pid <= 0 || ticks(item.createdAtTicks) === null || typeof item.expectedExecutablePath !== 'string' || !/^[a-z]:[\\/]/iu.test(item.expectedExecutablePath) || item.expectedExecutablePath.length > 32768 || seen.has(item.pid)) throw new Error('Invalid pinned cleanup identity')

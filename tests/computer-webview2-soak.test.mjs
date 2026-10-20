@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runInNewContext } from 'node:vm'
-import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, preciseWindowsProcessIdentity, sameWindowsProcessIdentity, windowsEmergencyCleanupIdentities, windowsPinnedProcessCommand, windowsRunnerConsoleProbeCommand, verifyWindowsRunnerConsoleBinding, partitionWindowsCleanupIdentities } from '../scripts/computer-webview2-soak-evidence.mjs'
+import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, preciseWindowsProcessIdentity, sameWindowsProcessIdentity, windowsEmergencyCleanupIdentities, windowsPinnedProcessCommand, partitionWindowsCleanupIdentities } from '../scripts/computer-webview2-soak-evidence.mjs'
 
 test('native WebView2 clocks span killed page generations, include recovery outage, and exclude warm-up', () => {
   const stats = new WebViewClockAccumulator(), now = 1792550000000
@@ -113,20 +113,29 @@ test('pinned cleanup requires exact bounded identities and never delegates termi
 })
 
 
-test('only the exact Win32-bound runner console defers retirement until runner exit', () => {
-  const runner = { pid: 10, createdAtTicks: '639281324193729160', expectedExecutablePath: 'C:\\node\\node.exe' }
-  const host = { pid: 20, parentPid: 10, name: 'conhost.exe', createdAtTicks: '639281324193729179', cimCreatedAtTicks: '639281324193729170' }
-  const probe = { proof: 'GetConsoleWindow+GetWindowThreadProcessId-after-AttachConsole', runnerPid: runner.pid, runnerCreatedAtTicks: runner.createdAtTicks, consoleHwnd: '123abc', pid: host.pid, createdAtTicks: host.createdAtTicks, expectedExecutablePath: 'C:\\Windows\\System32\\conhost.exe' }
-  const bound = verifyWindowsRunnerConsoleBinding(probe, [host], runner)
-  const otherConsole = { ...host, pid: 30 }, reused = { ...host, createdAtTicks: '639281324193729189', cimCreatedAtTicks: '639281324193729180' }
-  const split = partitionWindowsCleanupIdentities([host, otherConsole, reused], bound)
-  assert.deepEqual(split.deferred, [host]); assert.deepEqual(split.immediate, [otherConsole, reused])
-  assert.deepEqual(partitionWindowsCleanupIdentities([host], null).immediate, [host], 'A name/PPID match without API proof grants no exception')
-  assert.throws(() => verifyWindowsRunnerConsoleBinding({ ...probe, consoleHwnd: '0' }, [host], runner), /unavailable/)
-  assert.throws(() => verifyWindowsRunnerConsoleBinding({ ...probe, runnerCreatedAtTicks: '639281324193729161' }, [host], runner), /unavailable/)
-  assert.throws(() => verifyWindowsRunnerConsoleBinding(probe, [reused], runner), /already owned exact/)
-  const command = windowsRunnerConsoleProbeCommand(runner)
-  assert.ok(command.includes('GetConsoleWindow')); assert.ok(command.includes('GetWindowThreadProcessId')); assert.ok(command.includes('AttachConsole'))
-  assert.ok(command.includes('SetStdHandle')); assert.ok(command.includes('$writer.WriteLine($json)'))
-  assert.doesNotMatch(command, /ShowWindow|SetForegroundWindow|SetWindowPos/u)
+test('empty pinned cleanup returns an actual empty report without converting JSON [] into a null process row', () => {
+  for (const terminate of [false, true]) {
+    const command = windowsPinnedProcessCommand([], { terminate })
+    assert.doesNotMatch(command, /GetProcessById|ConvertFrom-Json|foreach|Kill\(/u)
+    const encoded = command.match(/^\[Console\]::WriteLine\('(.+)'\)$/u)?.[1]
+    assert.ok(encoded)
+    assert.deepEqual(JSON.parse(encoded), { passed: true, terminate, results: [], errors: [] })
+  }
+})
+
+
+test('only current owned exact direct system-console infrastructure defers to outer runner-exit verification', () => {
+  const birth = 639281324193729160n
+  const row = (pid, parentPid, delta, path) => { const stamp = birth + BigInt(delta); return { pid, parentPid, createdAtTicks: String(stamp), cimCreatedAtTicks: String(stamp - stamp % 10n), executablePath: path } }
+  const runner = row(10, 1, 0, 'C:\\node\\node.exe')
+  const console = row(20, 10, 19, 'C:\\WINDOWS\\system32\\conhost.exe')
+  const nested = row(21, 99, 29, console.executablePath), fake = row(22, 10, 39, 'C:\\fake\\conhost.exe'), old = row(23, 10, -1, console.executablePath), unowned = row(24, 10, 59, console.executablePath)
+  const rows = [runner, console, nested, fake, old, unowned], tracked = rows.slice(1), owned = rows.filter(item => item !== unowned)
+  const result = partitionWindowsCleanupIdentities(tracked, rows, { owned, runner, systemDirectory: 'C:\\Windows\\System32' })
+  assert.deepEqual(result.deferred.map(item => item.pid), [20])
+  assert.equal(result.immediate.length + result.deferred.length, tracked.length, 'Deferral never removes tracked resource identities')
+  assert.deepEqual(result.immediate.map(item => item.pid), [21, 22, 23, 24])
+  const stale = { ...console, createdAtTicks: String(birth + 18n) }
+  assert.equal(partitionWindowsCleanupIdentities([stale], rows, { owned, runner, systemDirectory: 'C:\\Windows\\System32' }).deferred.length, 0, 'PID reuse/exact-birth mismatch grants no deferral')
+  assert.throws(() => partitionWindowsCleanupIdentities(tracked, rows, { owned: [], runner, systemDirectory: 'C:\\Windows\\System32' }), /runner identity unavailable/)
 })
