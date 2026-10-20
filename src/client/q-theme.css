@@ -30,6 +30,8 @@ body[data-qyt-q-theme="ocean"] {
   --qyt-q-composer-fill: rgba(235, 246, 239, .94);
   --qyt-q-composer-dock: rgba(235, 246, 239, .18);
   --qyt-q-stat-fill: rgba(235, 246, 239, .92);
+  --qyt-q-task-fill: rgba(240, 248, 244, .98);
+  --qyt-q-task-line: rgba(17, 109, 131, .18);
   --qyt-q-sky-glow: rgba(153, 197, 182, .25);
   --qyt-q-sand-glow: rgba(237, 217, 179, .18);
 
@@ -118,6 +120,8 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --qyt-q-composer-fill: rgba(33, 50, 47, .94);
   --qyt-q-composer-dock: rgba(30, 47, 44, .22);
   --qyt-q-stat-fill: rgba(33, 50, 47, .94);
+  --qyt-q-task-fill: rgba(34, 49, 47, .98);
+  --qyt-q-task-line: rgba(142, 198, 210, .24);
   --qyt-q-sky-glow: rgba(57, 100, 88, .18);
   --qyt-q-sand-glow: rgba(119, 107, 77, .10);
 
@@ -254,6 +258,44 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   box-shadow: 0 1px 4px var(--qyt-q-shadow);
 }
 
+/* The native Todo header remains in the composer stack. Its expanded list
+   floats above that anchor, so opening tasks never grows the writing seat.
+   Only this dock panel is positioned; history views and other menus keep
+   their native layout and task status colors. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]:has([data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded="true"]) {
+  z-index: 9;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] {
+  position: relative;
+  overflow: visible;
+  border: 1px solid var(--qyt-q-task-line);
+  border-radius: 14px;
+  background: var(--qyt-q-task-fill);
+  backdrop-filter: none;
+  box-shadow: 0 6px 20px -12px var(--qyt-q-shadow-float), 0 1px 4px var(--qyt-q-shadow);
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded]:focus-visible {
+  border-radius: 8px;
+  outline: 2px solid var(--qyt-q-focus-line);
+  outline-offset: 2px;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
+  position: absolute;
+  inset: auto 0 calc(100% + 10px);
+  z-index: 1;
+  box-sizing: border-box;
+  max-height: min(240px, max(0px, calc(var(--dsh-conversation-viewport-height, 100dvh) - var(--dsh-composer-height, 160px) - 24px)));
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--qyt-q-task-line);
+  border-radius: 16px;
+  background: var(--qyt-q-task-fill);
+  box-shadow: 0 16px 40px -12px var(--qyt-q-shadow-float), 0 3px 10px -3px var(--qyt-q-shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
   background-color: var(--dsw-alias-bg-layer-1);
 }
@@ -323,6 +365,12 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
 }
 
 @media (forced-colors: active) {
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before { content: none; }
   body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child,
   body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav,

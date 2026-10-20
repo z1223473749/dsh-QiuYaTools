@@ -277,7 +277,10 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
     for (const rule of allRules(sheet.sheet.cssRules)) {
       if (!rule.style) continue
       if (rule.style.getPropertyValue('position') || rule.style.getPropertyValue('z-index') || rule.style.getPropertyValue('backdrop-filter') || rule.style.getPropertyValue('-webkit-backdrop-filter')) {
-        assert.ok(rule.selectorText.includes('[data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before'), 'glass is confined to the decoration, never a native fixed-tooltip ancestor')
+        const seat = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]'
+        const dock = '[data-slot="conversation.input.dock"] > [data-testid="todo-panel"]'
+        const todo = `${seat} ${dock}`
+        assert.ok([`${seat}::before`, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the canvas decoration and the native task dock')
       }
     }
   } finally { dom.window.close() }
