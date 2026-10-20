@@ -99,9 +99,9 @@ export class RemoteComputerDriver implements DeviceDriver {
     this.timer = setInterval(() => {
       if (this.heartbeating || this.activeEpoch === undefined || this.disposed) return
       this.heartbeating = true
-      void this.rpc('heartbeat', { epoch: this.activeEpoch }).catch(() => {
+      void this.rpc('heartbeat', { epoch: this.activeEpoch }).catch(error => {
         if (this.timer) clearInterval(this.timer); this.timer = undefined; this.activeEpoch = undefined
-        this.emit({ event: 'disconnected' })
+        this.emit({ event: error instanceof ComputerError && error.code === 'HUMAN_INPUT' ? 'humanInput' : 'disconnected' })
       }).finally(() => { this.heartbeating = false })
     }, this.options.heartbeatMs ?? 1000)
     this.timer.unref?.()
@@ -165,13 +165,25 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
   let token: string | undefined = pairToken(options.token), active: ActiveLease | undefined, nextNativeEpoch = 0, closing = false
   let pairingGeneration = 0
   const clients = new Map<string, number>(), pending = new Set<AbortController>()
+  const interruptions = new Map<string, { epoch: number; code: string }>()
   const leaseTimeout = options.leaseTimeoutMs ?? 5000
   if (!Number.isFinite(leaseTimeout) || leaseTimeout < 100 || leaseTimeout > 60_000) throw new ComputerError('INVALID_TIMEOUT', '租约超时必须介于 100 和 60000 毫秒')
   const revokeLease = async (): Promise<void> => {
     const lease = active; active = undefined
     if (lease) await driver.release(lease.nativeEpoch)
   }
+  const unsubscribe = driver.subscribe?.(event => {
+    const lease = active
+    if (!lease || !['humanInput', 'previewClosed', 'disconnected'].includes(event.event)) return
+    interruptions.set(lease.clientId, { epoch: lease.epoch, code: event.event === 'disconnected' ? 'DISCONNECTED' : 'HUMAN_INPUT' })
+    // Input is fenced by the companion immediately. Mirror that revocation to
+    // the paired owner instead of letting its healthy heartbeat retain a lease.
+    if (event.event === 'disconnected') active = undefined
+    else void revokeLease().catch(() => {})
+  })
   const leaseFor = (clientId: string, epoch: number): ActiveLease => {
+    const interruption = interruptions.get(clientId)
+    if (interruption?.epoch === epoch) throw new ComputerError(interruption.code, interruption.code === 'HUMAN_INPUT' ? '独立电脑已由本地用户暂停' : '独立电脑执行器已断开')
     if (!active || active.clientId !== clientId || active.epoch !== epoch || Date.now() - active.lastSeen > leaseTimeout) throw new ComputerError('CONTROL_CHANGED', '远端输入租约无效或已过期')
     return active
   }
@@ -213,6 +225,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
           if ((clients.get(clientId) ?? 0) >= epoch) throw new ComputerError('STALE_EPOCH', '控制周期必须递增')
           if (!clients.has(clientId) && clients.size >= 128) throw new ComputerError('CLIENT_LIMIT', '配对客户端数量已达上限，请重新配对')
           clients.set(clientId, epoch)
+          interruptions.delete(clientId)
           const previous = active, candidate: ActiveLease = { clientId, epoch, nativeEpoch: ++nextNativeEpoch, lastSeen: Date.now() }
           active = candidate
           if (previous) await driver.release(previous.nativeEpoch)
@@ -252,7 +265,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
   const host = address.address.includes(':') ? `[${address.address}]` : address.address
   return {
     server, endpoint: `http://${host}:${address.port}${COMPUTER_AGENT_PATH}`,
-    async revoke(newToken) { token = newToken === undefined ? undefined : pairToken(newToken); pairingGeneration++; for (const controller of pending) controller.abort(new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销')); await revokeLease(); clients.clear() },
-    async close() { if (closing) return; closing = true; clearInterval(watchdog); token = undefined; pairingGeneration++; for (const controller of pending) controller.abort(); await revokeLease().catch(() => {}); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) },
+    async revoke(newToken) { token = newToken === undefined ? undefined : pairToken(newToken); pairingGeneration++; for (const controller of pending) controller.abort(new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销')); await revokeLease(); clients.clear(); interruptions.clear() },
+    async close() { if (closing) return; closing = true; unsubscribe?.(); clearInterval(watchdog); token = undefined; pairingGeneration++; for (const controller of pending) controller.abort(); await revokeLease().catch(() => {}); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) },
   }
 }

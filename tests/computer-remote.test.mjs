@@ -10,7 +10,9 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 async function fixture(t, options = {}) {
   const input = [], released = [], leased = [], target = { id: 'window-1', appId: 'fixture.app', pid: 10, title: 'Fixture', x: 0, y: 0, width: 100, height: 100, scale: 1 }
   let active = 0, sequence = 0
+  const listeners = new Set()
   const driver = {
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
     async status() { return { available: true, platform: 'win32' } },
     async targets() { return [target] },
     async observe(targetId) { return { targetId, frameId: `frame-${++sequence}`, imageBase64: '/9j/2Q==', mediaType: 'image/jpeg', width: 100, height: 100, elements: 'button', geometry: { x: 0, y: 0, width: 100, height: 100, scale: 1 } } },
@@ -27,7 +29,7 @@ async function fixture(t, options = {}) {
     return { status: response.status, value: await response.json() }
   }
   t.after(async () => { await Promise.allSettled(clients.map(client => client.dispose())); await agent.close() })
-  return { agent, driver, remote, raw, input, leased, released, target }
+  return { agent, driver, remote, raw, input, leased, released, target, emit: event => { for (const listener of listeners) listener(event) } }
 }
 
 test('endpoint policy permits trusted TLS/loopback and requires explicit opt-in for paired private HTTP', () => {
@@ -118,4 +120,20 @@ test('HTTP action cancellation triggers native release and cannot produce a succ
 test('client rejects incompatible remote protocol and never follows credential-carrying redirects', async () => {
   const driver = new RemoteComputerDriver({ endpoint: 'http://127.0.0.1:1', token, fetch: async (_url, options) => { assert.equal(options.redirect, 'error'); return Response.json({ version: 2, requestId: 1, ok: true, result: {} }) } })
   await assert.rejects(driver.status(), { code: 'VERSION_MISMATCH' }); await driver.dispose()
+})
+
+test('physical intervention in the guest revokes its lease and pauses the paired owner through heartbeat', async t => {
+  const f = await fixture(t), a = f.remote('owner', { heartbeatMs: 25 }), events = []
+  a.subscribe(event => events.push(event))
+  await a.lease(1)
+  f.emit({ event: 'humanInput', reason: 'escape' })
+  const deadline = Date.now() + 1000
+  while (!events.length && Date.now() < deadline) await delay(10)
+  assert.deepEqual(events, [{ event: 'humanInput' }])
+  assert.ok(f.released.includes(1))
+  await assert.rejects(a.act(1, 'window-1', { kind: 'key', key: 'Enter' }), { code: 'HUMAN_INPUT' })
+  assert.equal(f.input.length, 0)
+  await a.lease(2)
+  await a.act(2, 'window-1', { kind: 'key', key: 'Enter' })
+  assert.equal(f.input.length, 1, 'explicit fresh lease may resume after physical intervention')
 })
