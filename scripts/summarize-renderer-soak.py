@@ -19,7 +19,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     groups = {
         "total": lambda name: True,
-        "browser": lambda name: name.lower() == "msedge.exe",
+        "browser": lambda name: name.lower() in ("msedge.exe", "msedgewebview2.exe"),
         "native": lambda name: name.lower() == "qiuya-windows.exe",
         "node": lambda name: name.lower() == "node.exe",
     }
@@ -74,7 +74,12 @@ def main():
     axes[1].set_xlabel("Elapsed measurement time (minutes)")
     axes[0].legend(ncol=3, fontsize=8, loc="upper right")
     axes[0].set_title(f"Windows preview renderer resource snapshots — runner: {report['status']}")
-    fig.suptitle("640 × 360 / installed Edge / production preview canvas; not native WebView2 endurance", fontsize=10)
+    if report.get("kind") == "real-native-WebView2-production-preview-720p-endurance":
+        pixels = report.get("sourcePixels", {})
+        label = f"{pixels.get('width', '?')} × {pixels.get('height', '?')} source / actual native WebView2 / production preview canvas"
+    else:
+        label = "640 × 360 / installed Edge / production preview canvas; not native WebView2 endurance"
+    fig.suptitle(label, fontsize=10)
     fig.savefig(output / "resource-trend.png", dpi=160)
     plt.close(fig)
     print(json.dumps({"summary": str(output / "resource-summary.json"), "chart": str(output / "resource-trend.png"), "runnerStatus": report["status"]}))
