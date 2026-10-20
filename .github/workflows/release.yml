@@ -31,6 +31,8 @@ jobs:
             const { version } = JSON.parse(fs.readFileSync("package.json"));
             if (process.env.GITHUB_REF !== `refs/tags/v${version}`) throw new Error("Run this workflow from the matching v<package version> tag");
           '
+      - name: Read version notes from changelog
+        run: node scripts/release-notes.mjs "$RUNNER_TEMP/qiuya-release-notes.md"
       - run: npm run check
       - name: Pack universal release
         run: |
@@ -41,4 +43,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --generate-notes artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/qiuya-release-notes.md" artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/SHA256SUMS
