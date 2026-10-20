@@ -2,49 +2,48 @@
 
 给 DeepSeek Harness 加一点顺手的小功能。
 
-长文本附件、会话分窗、批量归档、计划批注、菜单增强，还有手绘 Q主题。
-
 ## 安装
 
-打开 Harness 的 **插件 → 添加插件**，复制下面的完整链接安装：
+1. 打开 Harness 的 **插件 → 添加插件**。
+2. 粘贴下面的完整链接并安装：
 
-```text
-https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
-```
+   ```text
+   https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
+   ```
 
-安装后点击 **立即启用**，进入 **设置 → QiuYaTools**。左下角账号菜单也有入口。
+3. 点击 **立即启用**，进入 **设置 → QiuYaTools**。
 
-**已安装？** 打开 **QiuYaTools → 版本更新 → 检查更新**。有新版时直接更新，完成后重开 Harness，原有设置保留。
+左下角账号菜单也有 QiuYaTools 入口。
 
 ## 功能
 
-- **长文本转附件**：粘贴长文本自动变成 TXT；字符数、行数阈值可调，默认 1000 个字符或 15 行。
-- **会话独立窗口**：右键打开，或拖出列表；同一会话重复打开会唤起已有窗口。
-- **多选与批量归档**：Shift 连选、⌘ / Ctrl 多选，再右键归档；支持归档工作区全部会话。
-- **计划批注**：选中文字添加评论，直接提交修改建议，保留原有输入草稿。
-- **Q主题「鲸与海」**：白发少年与鲸鱼的手绘海面，支持浅色、深色外观。
+| 功能 | 怎么用 |
+| --- | --- |
+| 长文本附件 | 粘贴长文本自动转为 TXT，默认 1000 个字符或 15 行，阈值可调。 |
+| 会话独立窗口 | 右键打开，或把会话拖出列表；再次打开同一会话会唤起已有窗口。 |
+| 批量归档 | Shift 连选、⌘ / Ctrl 多选后右键归档，也可归档工作区全部会话。 |
+| 计划批注 | 选中计划文字添加评论，提交修改建议，保留输入框原有草稿。 |
+| 菜单增强 | 右键置顶、标记未读、复制标题或路径、打开目录；工作区可移到顶部。 |
+| Q主题「鲸与海」 | 手绘鲸鱼与白发少年，适配浅色、深色外观。 |
 
-会话菜单（右键或 `…`）：
+五项增强默认开启，可单独开关，也可一键全选。Q主题默认关闭，独立设置。
 
-- 置顶 / 取消置顶
-- 重命名、分叉、归档
-- 标记未读 / 已读
-- 复制标题、会话 ID、工作目录
-- 打开工作目录
-- 新窗口打开
+## 界面预览
 
-工作区菜单（右键或 `…`）：
+以下为隔离环境中的插件界面截图，不含真实会话、项目或账号数据。
 
-- 移到顶部
-- 复制路径、打开目录
-- 归档全部会话
+**功能设置**
 
-五项增强功能默认开启，每项可单独设置，也可一键开关全部。Q主题默认关闭，独立设置。
+![QiuYaTools 功能设置与长文本转换阈值](docs/images/settings.jpg)
 
-## 说明
+**Q主题「鲸与海」**
 
-- 当前适配官方 macOS Harness `0.2.1-rc.2`；独立窗口要求 macOS 13+，支持 Apple Silicon 和 Intel。
-- 未读标记保存在本机，重新进入会话后清除。归档保留工作区和磁盘目录。
-- 安装时填写上面的完整链接。当前未发布 npm 包，单独填写 `dsh-qiuya-tools` 不适用于新安装。
+![QiuYaTools 鲸与海主题设置与预览](docs/images/q-theme.jpg)
 
-[下载与发布记录](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [使用细节与开发](docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)
+## 更新与兼容
+
+在 **QiuYaTools → 版本更新 → 检查更新** 中升级，完成后完全退出并重新打开 Harness，原有设置保留。
+
+当前适配官方 macOS Harness **0.2.1-rc.2**。独立窗口需要 **macOS 13+**，安装包包含 Apple Silicon 和 Intel 组件。
+
+[发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [使用与开发](docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)
