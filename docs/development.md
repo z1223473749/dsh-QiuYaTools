@@ -54,6 +54,8 @@ npm run check
 
 `check` 执行严格类型检查、完整构建和测试。测试覆盖真实 DOM/React 交互、配置原子保存、快速启停和异步清理、附件接收、批量归档目标与失败处理、计划批注定位和耐久回执、窗口 RPC/进程生命周期及拖拽排序保护。归档测试使用隔离 fixture，不操作真实会话。
 
+Host 将配置校验库一起打包，只保留 Node 内置模块作为运行时导入；Client 继续使用 Harness 提供的共享模块。发布前还会对最终 tgz 执行 `node scripts/verify-package.mjs <安装包路径>`，在没有开发依赖的空目录中加载 Host 并验证配置与注册。
+
 | 路径 | 职责 |
 | --- | --- |
 | `src/index.ts` | Host volatile Config 和窗口通道 |

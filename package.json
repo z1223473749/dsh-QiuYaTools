@@ -1,6 +1,6 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "长文本附件、会话分窗、批量归档、计划批注和提示词建议，配合菜单增强与手绘 Q 主题，让 Harness 更顺手。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
@@ -50,8 +50,7 @@
     "prepack": "npm run check"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/cordis": "~4.0.5"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",

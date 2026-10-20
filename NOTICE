@@ -8,6 +8,10 @@ DeepSeek Harness — https://github.com/deepseek-ai/deepseek-harness
 Copyright (c) 2026 DeepSeek
 Plan preview, comment and review components are adapted to the plugin API.
 
+Schemastery and Cosmokit — https://github.com/deepseek-ai/deepseek-harness
+Copyright (c) 2021-present Shigma
+MIT-licensed schema and utility code is bundled into the Host entry.
+
 MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

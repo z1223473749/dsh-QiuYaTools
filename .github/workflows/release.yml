@@ -39,6 +39,8 @@ jobs:
           mkdir -p artifacts
           npm pack --ignore-scripts --pack-destination artifacts
           node scripts/prepare-release.mjs
+      - name: Verify packed Host without workspace dependencies
+        run: node scripts/verify-package.mjs artifacts/dsh-qiuya-tools.tgz
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}

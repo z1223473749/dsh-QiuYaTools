@@ -10,7 +10,9 @@ await writeFile(new URL('../src/client/brand-assets.ts', import.meta.url), `// G
 await mkdir('lib', { recursive: true })
 await build({
   entryPoints: ['src/index.ts'], outfile: 'lib/index.js', bundle: true,
-  platform: 'node', target: 'node22', format: 'esm', packages: 'external',
+  // Ship schema validation with the Host; installed/linked plugins cannot rely
+  // on the development node_modules directory or a peer-resolution fallback.
+  platform: 'node', target: 'node22', format: 'esm',
 })
 const client = await build({
   entryPoints: ['src/client/index.tsx'], bundle: true, write: false,
