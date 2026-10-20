@@ -1,38 +1,64 @@
-# QiuYa 增强工具箱 · 收录申请待确认稿
+# 收录 QiuYa 增强工具箱
 
-本稿对应 v0.5.2，收录内容仍待用户确认；确认后再更新线上申请。
+给 DeepSeek Harness 加一点顺手的小功能，MIT 开源，分类为 `ui`。
 
----
+## 功能
 
-添加 **QiuYa 增强工具箱**，分类 `ui`。
+- **长文本附件**：粘贴长内容时自动转成 TXT 附件，转换阈值可以调整。
+- **会话独立窗口**：右键打开，或将会话拖出列表，方便同时查看多个会话。
+- **多选与批量归档**：多选会话后右键归档，也能归档工作区内的全部会话。
+- **计划批注**：选中计划中的文字添加评论，再提交修改建议，保留原有输入草稿。
+- **会话菜单增强**：右键置顶、标记未读、复制标题或路径、打开工作目录；工作区支持移到顶部。
+- **提示词建议**：在空输入框显示当前会话的下一句建议，按 Tab 填入、Esc 隐藏，修改后手动发送。
+- **Q主题「鲸与海」**：白发少年与鲸鱼的手绘海面，支持浅色和深色外观。
 
-给 DeepSeek Harness 加一点顺手的小功能：
+前六项增强默认开启，可在 **设置 → QiuYaTools** 中单独开关或一键全选。Q主题默认关闭，可按喜好开启；左下角账号菜单也有设置入口。
 
-- **长文本转 TXT 附件**：粘贴达到字符数或行数阈值时自动转换，默认 1000 个字符或 15 行，支持调整。
-- **会话独立窗口**：右键打开或拖出列表，按会话复用窗口，拖动时预加载。
-- **多选与批量归档**：Shift / ⌘ / Ctrl 多选后右键归档，也可归档工作区全部会话。
-- **计划批注**：选中文字评论，在同一张审批卡提交修改建议，保留输入草稿。
-- **会话菜单增强**：未读标记、复制标题和目录、打开目录；置顶、重命名等沿用原生操作。
-- **提示词建议**：回复结束且输入框为空时推荐下一句，建议按会话隔离，失焦仍保留。聚焦后按 Tab 填入、Esc 隐藏，仍需手动发送；使用当前会话所选模型，会产生少量额外模型用量。
-- **Q主题「鲸与海」**：白发少年与鲸鱼的手绘海面，支持浅色与深色外观。
-
-在 **设置 → QiuYaTools** 中分别开关功能；左下角账号菜单也有入口。六项增强默认开启，可单独开关或一键全选；Q主题默认关闭，独立设置。提供 GitHub 正式版本检查和更新。
+提示词建议使用当前会话所选模型，会产生少量额外模型用量。
 
 ## 安装
 
-打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。功能设置位于 **设置 → QiuYaTools**。
+打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。
 
-GitHub 安装包作为备用入口，也可直接粘贴到“添加插件”：
+[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools) · [源码与使用说明](https://github.com/z1223473749/dsh-QiuYaTools)
+
+<details>
+<summary>GitHub 备用安装链接</summary>
+
+也可在“添加插件”中粘贴：
 
 ```text
 https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
 ```
 
-镜像源同步可能稍有延迟；找不到包或新版本时，可切换到 [npm 官方源](https://registry.npmjs.org/)，或使用 GitHub 备用链接。
+镜像源同步新版本可能稍有延迟；暂时找不到包或版本时，可切换到 [npm 官方源](https://registry.npmjs.org/)，或使用此链接。
 
-- [npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)
-- [源码与说明](https://github.com/z1223473749/dsh-QiuYaTools)
-- [发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases)
-- 当前验证目标：官方 macOS Harness `0.2.1-rc.2`；独立窗口支持 macOS 13+，安装包包含 Apple Silicon / Intel 组件。
-- MIT 开源，包含可工作的源码、`dsh.bundle`、Cordis patch 和预构建安装包。
-- 本 PR 只新增一条插件 YAML。满足仓库年龄要求并得到用户确认后再提交评审。
+</details>
+
+## 界面预览
+
+**功能设置**
+
+![QiuYa 增强工具箱设置页](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/settings.jpg)
+
+**Q主题「鲸与海」**
+
+![Q主题鲸与海的新会话界面](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/q-theme-home.png)
+
+## 兼容与验证
+
+适配官方 macOS Harness **0.2.1-rc.2**。独立窗口需要 **macOS 13+**，安装包包含 Apple Silicon 和 Intel 组件。
+
+[v0.5.2 已发布](https://github.com/z1223473749/dsh-QiuYaTools/releases/tag/v0.5.2)，393 项测试与构建检查通过：[CI 验证记录](https://github.com/z1223473749/dsh-QiuYaTools/actions/runs/39444860345)。
+
+<details>
+<summary>收录自查</summary>
+
+- [x] 本 PR 只新增 `data/plugins/z1223473749__dsh-QiuYaTools.yml`。
+- [x] 插件提供有效的 `dsh.bundle` 声明。
+- [x] 插件类别为 `ui`。
+- [x] 中英文描述与实际功能一致。
+- [ ] 插件仓库创建已满一天，满足时间为北京时间 **2026-10-21 15:15:40**。
+- [x] 插件仓库已添加 `dsh-plugin` topic。
+
+</details>
