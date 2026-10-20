@@ -1,0 +1,115 @@
+import { spawn } from 'node:child_process'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { ComputerError } from './contract.ts'
+import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
+
+export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number }
+export function computerCompanionPath(platform: NodeJS.Platform = process.platform, architecture: string = process.arch, base = new URL('./', import.meta.url)): string {
+  if (platform === 'darwin') return fileURLToPath(new URL('./QiuYaTools Computer.app/Contents/MacOS/qiuya-computer', base))
+  if (platform === 'win32' && ['arm64', 'x64'].includes(architecture)) return fileURLToPath(new URL(`./native/win32-${architecture}/qiuya-windows.exe`, base))
+  throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无电脑操控执行器')
+}
+interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void }
+/** Bounded JSONL companion transport. Requests and secrets never enter argv. */
+export class NativeCompanionDriver implements DeviceDriver {
+  private child?: ChildProcessWithoutNullStreams
+  private readonly pending = new Map<number, Pending>()
+  private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
+  private buffer = ''
+  private disposed = false
+  private nextRequestId = 0
+  constructor(private readonly options: NativeCompanionOptions = {}) {}
+  static defaultPath = computerCompanionPath
+  subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  private emit(event: NativeComputerEvent): void { for (const listener of this.listeners) { try { listener(event) } catch {} } }
+  private fail(error: unknown, child = this.child): void {
+    if (child && this.child !== child) return
+    this.child = undefined; this.buffer = ''
+    for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }
+    this.pending.clear()
+    this.emit({ event: 'disconnected' })
+  }
+  private start(): ChildProcessWithoutNullStreams {
+    if (this.disposed) throw new ComputerError('DISPOSED', '电脑操控执行器已停用')
+    if (this.child) return this.child
+    const executable = this.options.executable ?? computerCompanionPath()
+    const args = this.options.args ?? (process.platform === 'win32' ? ['--computer'] : [])
+    const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    this.child = child
+    child.stdin.on('error', error => this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child))
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      if (this.child !== child) return
+      this.buffer += chunk
+      if (Buffer.byteLength(this.buffer) > (this.options.maxMessageBytes ?? 48 * 1024 * 1024)) { this.fail(new ComputerError('NATIVE_MESSAGE_LIMIT', '执行器响应超出限制'), child); child.kill(); return }
+      let end: number
+      while ((end = this.buffer.indexOf('\n')) >= 0) {
+        const line = this.buffer.slice(0, end).trim(); this.buffer = this.buffer.slice(end + 1)
+        if (!line) continue
+        let message: Record<string, unknown>
+        try { message = JSON.parse(line) } catch { this.fail(new ComputerError('NATIVE_PROTOCOL', '执行器返回了无效 JSON'), child); child.kill(); return }
+        if (!message || typeof message !== 'object') continue
+        if (typeof message.event === 'string') { this.emit(message as NativeComputerEvent); continue }
+        if (typeof message.requestId !== 'number' || !Number.isSafeInteger(message.requestId)) continue
+        const entry = this.pending.get(message.requestId)
+        if (!entry) continue
+        this.pending.delete(message.requestId); entry.clean()
+        if (message.ok === true) entry.resolve(message.result)
+        else {
+          const error = message.error as { code?: unknown; message?: unknown } | undefined
+          entry.reject(new ComputerError(typeof error?.code === 'string' ? error.code : 'NATIVE_FAILED', typeof error?.message === 'string' ? error.message : typeof message.error === 'string' ? message.error : '原生操作失败'))
+        }
+      }
+    })
+    // Drain stderr without copying arbitrary native output or private contents to logs.
+    child.stderr.resume()
+    child.once('error', error => this.fail(new ComputerError('NATIVE_UNAVAILABLE', error.message), child))
+    child.once('exit', () => this.fail(new ComputerError('NATIVE_EXITED', '原生执行器已退出'), child))
+    return child
+  }
+  private rpc<T>(op: string, payload: object = {}, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    if (this.pending.size >= 128) return Promise.reject(new ComputerError('QUEUE_FULL', '执行器请求过多'))
+    let child: ChildProcessWithoutNullStreams
+    try { child = this.start() } catch (error) { return Promise.reject(error) }
+    return new Promise<T>((resolve, reject) => {
+      const requestId = ++this.nextRequestId
+      const timer = setTimeout(() => {
+        // A timed-out mutating native request has unknown outcome. Kill the worker;
+        // reconnecting requires a fresh service lease and observation.
+        this.fail(new ComputerError('NATIVE_TIMEOUT', '原生操作超时，执行器已停止'), child); child.kill()
+      }, this.options.timeoutMs ?? 20_000)
+      const abort = () => { const entry = this.pending.get(requestId); if (!entry) return; this.pending.delete(requestId); entry.clean(); reject(signal?.reason ?? new ComputerError('ABORTED', '操作已取消')) }
+      const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+      this.pending.set(requestId, { resolve: value => resolve(value as T), reject, clean })
+      signal?.addEventListener('abort', abort, { once: true })
+      // Close the aborted-between-check-and-listener race before writing input.
+      if (signal?.aborted) { abort(); return }
+      child.stdin.write(`${JSON.stringify({ requestId, op, ...payload })}\n`, error => { if (error) this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child) })
+    })
+  }
+  async status(signal?: AbortSignal): Promise<ComputerStatus> {
+    try { return await this.rpc<ComputerStatus>('status', {}, signal) }
+    catch (error) { if (signal?.aborted) throw error; return { available: false, platform: process.platform, message: error instanceof Error ? error.message : '执行器不可用' } }
+  }
+  async targets(signal?: AbortSignal): Promise<NativeTarget[]> {
+    const result = await this.rpc<NativeTarget[] | { targets: NativeTarget[] }>('targets', {}, signal)
+    const targets = Array.isArray(result) ? result : result?.targets
+    if (!Array.isArray(targets)) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的窗口列表无效')
+    return targets
+  }
+  observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
+  lease(epoch: number, signal?: AbortSignal) { return this.rpc('lease', { epoch }, signal) }
+  release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.rpc('act', { epoch, targetId, action }, signal) }
+  openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.rpc('openPreview', { url, title, sessionId }, signal) }
+  closePreview(signal?: AbortSignal) { return this.rpc('closePreview', {}, signal) }
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    const child = this.child
+    this.fail(new ComputerError('DISPOSED', '电脑操控执行器已停用'))
+    child?.stdin.end(); child?.kill(); this.listeners.clear()
+  }
+}
