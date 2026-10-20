@@ -143,7 +143,7 @@ try {
     if (Date.now() >= nextResource) {
       const processes = await ownedProcesses()
       resources.push({ elapsedMs: Date.now() - measurementStart, fixtureExitCode: fixture.exitCode, fixtureLastTickMsAgo: fixtureTickAt ? Date.now() - fixtureTickAt : null, fixtureTelemetry, node: process.memoryUsage(), processes })
-      await writeFile(join(output, 'progress.json'), JSON.stringify({ elapsedMs: Date.now() - measurementStart, stats: await page.evaluate(() => ({ ...window.__soak, latencies: undefined, firstInvalidImage: undefined })), resources: resources.at(-1) }, null, 2))
+      await writeFile(join(output, 'progress.json'), JSON.stringify({ measurementStartMs: measurementStart, elapsedMs: Date.now() - measurementStart, stats: await page.evaluate(() => ({ ...window.__soak, latencies: undefined, firstInvalidImage: undefined })), resources: resources.at(-1) }, null, 2))
       nextResource += 30000
     }
     if (Date.now() >= nextFault && faults.length < expectedFaults) {
