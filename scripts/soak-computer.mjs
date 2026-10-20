@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -37,7 +38,13 @@ if (windows) {
 let fixture, browser, host, driver, fixtureTickAt, fixtureTelemetry, fixtureReady, fixtureError = ''
 const routes = new Map(), resources = [], pauses = [], faults = [], nativeArtifacts = [], started = Date.now()
 const companion = resolve(arg('--native', windows ? join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`) : join(root, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')))
-let attachmentWrites = 0
+let attachmentWrites = 0, phase = 'setup', measurementStart, httpSequence = 0, unNative, unSession
+const faultTrace = [], httpPending = new Map()
+const errorCode = error => typeof error?.code === 'string' && /^[a-zA-Z0-9_-]{1,64}$/u.test(error.code) ? error.code : error?.name === 'AbortError' ? 'AbortError' : 'UNKNOWN'
+const snapshot = () => { const state = host?.service.get('soak'); return state ? { state: state.state, epoch: state.epoch, errorCode: state.error?.code } : null }
+const trace = (kind, fields = {}) => { faultTrace.push({ atMs: Date.now(), elapsedMs: measurementStart ? Date.now() - measurementStart : undefined, phase, kind, ...fields }); if (faultTrace.length > 4000) faultTrace.shift() }
+const mark = next => { phase = next; trace('phase', { snapshot: snapshot(), pendingHttp: [...httpPending.values()] }) }
+const saveTrace = () => writeFile(join(output, 'fault-trace.json'), JSON.stringify({ events: faultTrace, pendingHttp: [...httpPending.values()] }, null, 2))
 async function ownedProcesses() {
   if (!windows) {
     const { stdout } = await run('/bin/ps', ['-axo', 'pid=,ppid=,rss=,%cpu=,comm='])
@@ -46,19 +53,40 @@ async function ownedProcesses() {
   // A controlled parent termination can orphan a capture/guardian child. Its
   // exact executable belongs to this UUID fixture directory, so retain it even
   // when it is no longer discoverable from the live Node descendant graph.
-  const code = `$ErrorActionPreference='Stop';$result=@(Get-CimInstance Win32_Process|ForEach-Object{if($_.CreationDate){@{pid=[int]$_.ProcessId;parentPid=[int]$_.ParentProcessId;name=$_.Name;createdAtTicks=$_.CreationDate.ToUniversalTime().Ticks.ToString();executablePath=$_.ExecutablePath;workingSetBytes=[long]$_.WorkingSetSize;cpuSeconds=([double]$_.KernelModeTime+[double]$_.UserModeTime)/10000000}}});ConvertTo-Json -InputObject $result -Compress`
+  const code = `$ErrorActionPreference='Stop';$result=@(Get-CimInstance Win32_Process|ForEach-Object{if($_.CreationDate){@{pid=[int]$_.ProcessId;parentPid=[int]$_.ParentProcessId;name=$_.Name;createdAtTicks=$_.CreationDate.ToUniversalTime().Ticks.ToString();executablePath=$_.ExecutablePath;workingSetBytes=[long]$_.WorkingSetSize;privateBytes=[long]$_.PrivatePageCount;cpuSeconds=([double]$_.KernelModeTime+[double]$_.UserModeTime)/10000000}}});ConvertTo-Json -InputObject $result -Compress`
   const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true })
   return ownedWindowsProcesses(JSON.parse(stdout.trim()), process.pid, companion)
 }
-async function recordNativeArtifact() { nativeArtifacts.push({ atMs: Date.now(), sha256: createHash('sha256').update(await readFile(companion)).digest('hex') }) }
+async function recordNativeArtifact() {
+  // Evidence hashing must not allocate another entire ~68 MiB companion buffer
+  // into the measured Node process at every controlled restart.
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(companion)) hash.update(chunk)
+  nativeArtifacts.push({ atMs: Date.now(), sha256: hash.digest('hex') })
+}
 const server = createServer(async (req, res) => {
+  let requestId, op, detailed
   try {
     const route = routes.get(new URL(req.url, 'http://127.0.0.1').pathname)
     if (!route) { res.writeHead(404).end(); return }
     const chunks = []; for await (const chunk of req) chunks.push(chunk)
+    if (req.method === 'POST') {
+      const input = JSON.parse(Buffer.concat(chunks))
+      op = ['status', 'frame', 'pause', 'stop', 'resume', 'takeover'].includes(input.payload?.op) ? input.payload.op : 'other'
+      requestId = ++httpSequence; detailed = phase !== 'capture' || op === 'pause'
+      httpPending.set(requestId, { requestId, op, beganPhase: phase, atMs: Date.now() })
+      if (detailed) trace('http-start', { requestId, op, snapshot: snapshot() })
+    }
     const response = await route.fetch(new Request(`http://127.0.0.1${req.url}`, { method: req.method, ...(req.method === 'POST' ? { body: Buffer.concat(chunks) } : {}) }))
-    res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer()))
-  } catch { res.writeHead(500).end() }
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (requestId) {
+      let result
+      try { result = JSON.parse(bytes).result } catch {}
+      if (detailed || result?.ok === false) trace('http-result', { requestId, op, ok: result?.ok, code: result?.error?.code, snapshot: snapshot() })
+    }
+    res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(bytes)
+  } catch (error) { trace('http-error', { requestId, op, code: errorCode(error), snapshot: snapshot() }); res.writeHead(500).end() }
+  finally { if (requestId) httpPending.delete(requestId) }
 })
 try {
   fixture = spawn(executable, fixtureArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: windows })
@@ -84,10 +112,12 @@ try {
   if (windows) { assert.ok(fixtureReady.sessionId > 0, 'Fixture must run in an interactive Windows session'); assert.equal(fixtureReady.preventsIdleDisplaySleep, true) }
   await recordNativeArtifact()
   driver = new NativeCompanionDriver({ executable: companion, ...(windows ? { args: ['--computer'] } : {}) })
+  unNative = driver.subscribe(event => trace('native-event', { event: event.event, snapshot: snapshot() }))
   const targets = await driver.targets(), target = targets.find(t => t.pid === fixture.pid)
   assert.ok(target, 'Only the disposable endurance fixture may be selected')
   const attachments = { saveImage() { attachmentWrites++; throw new Error('Preview must not persist attachments') } }
   host = await installComputerHost({ get: name => name === 'sessions' ? { get: () => ({}) } : name === 'attachments' ? attachments : undefined, attachments, webServer: { port: 1 }, connection: { browserPeer: { principal: { kind: 'owner' } }, authenticatedUrl: url => url, fetch: { register(route) { routes.set(route.path, route); return async () => routes.delete(route.path) } } } }, () => true, { driver })
+  unSession = host.service.subscribe(() => trace('session-state', { snapshot: snapshot() }))
   await host.service.start('soak', target.id, { allowOnce: true })
   // Capture remains available while paused. A capture-only endurance runner
   // must not reserve the desktop input lock for thirty minutes.
@@ -98,14 +128,16 @@ try {
   await page.addInitScript(installSoakClockProbe)
   await page.goto(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.preview?session=soak`)
   await page.waitForFunction(() => window.__soak.frames > 5, { timeout: 20000 })
-  const measurementStart = await page.evaluate(() => {
+  measurementStart = await page.evaluate(() => {
     // Warm-up proves decoding works; it must not inflate the measured FPS.
     // Keep any invalid frames from warm-up visible to the zero-invalid gate.
     const stats = window.__soak
     stats.warmupFrames = stats.frames; stats.frames = 0; stats.latencies = []
     stats.first = 0; stats.last = 0; stats.maxFrameGapMs = 0
     return Date.now()
-  }), until = measurementStart + minutes * 60000
+  })
+  mark('capture')
+  const until = measurementStart + minutes * 60000
   let nextResource = measurementStart, nextFault = measurementStart + minutes * 60000 / (expectedFaults + 1)
   while (Date.now() < until) {
     if (Date.now() >= nextResource) {
@@ -115,6 +147,7 @@ try {
       nextResource += 30000
     }
     if (Date.now() >= nextFault && faults.length < expectedFaults) {
+      mark('fault-pause')
       const before = Date.now(); await host.service.pause('soak'); pauses.push(Date.now() - before)
       // Simulate a terminated companion, then explicitly start a new owner lease.
       let companionPid
@@ -125,13 +158,16 @@ try {
         companionPid = line && Number(line.trim().split(/\s+/u)[0])
       }
       if (!companionPid) throw new Error('Owned companion PID was not found')
+      mark('fault-kill'); trace('controlled-termination', { pid: companionPid, snapshot: snapshot() })
       process.kill(companionPid, 'SIGTERM')
       await new Promise(done => setTimeout(done, 1200))
-      await host.service.stop('soak'); await host.service.start('soak', target.id, { allowOnce: true })
-      await host.service.pause('soak'); await recordNativeArtifact()
+      mark('fault-stop'); await host.service.stop('soak')
+      mark('fault-start'); await host.service.start('soak', target.id, { allowOnce: true })
+      mark('fault-release-input'); await host.service.pause('soak'); await recordNativeArtifact()
       const state = host.service.get('soak')
       assert.equal(state.state, 'paused', 'Restart must release its temporary input lease')
       faults.push({ type: 'companion-termination-explicit-restart', pid: companionPid, at: Date.now() - measurementStart, inputReleasedState: state.state })
+      await saveTrace(); mark('capture')
       nextFault += minutes * 60000 / (expectedFaults + 1)
     }
     await new Promise(done => setTimeout(done, 250))
@@ -163,6 +199,7 @@ try {
   if (result.status !== 'passed') process.exitCode = 1
 } catch (error) { await writeFile(join(output, 'report.json'), JSON.stringify({ status: 'failed', elapsedMs: Date.now() - started, reason: error.message, fixtureReady, fixtureExitCode: fixture?.exitCode, fixtureSignalCode: fixture?.signalCode, fixtureLastTickMsAgo: fixtureTickAt ? Date.now() - fixtureTickAt : null, fixtureError, resources }, null, 2)); console.error(error.message); process.exitCode = 1 }
 finally {
+  mark('cleanup')
   const cleanup = await Promise.allSettled([host ? host.dispose() : driver?.dispose(), browser?.close()])
   if (fixture) {
     fixture.stdin.on('error', () => {}); fixture.stdin.end('quit\n')
@@ -173,6 +210,7 @@ finally {
     }
     fixture.stdout.destroy(); fixture.stderr.destroy(); fixture.stdin.destroy()
   }
+  unNative?.(); unSession?.(); await saveTrace()
   server.closeAllConnections(); if (server.listening) await new Promise(done => server.close(done)); await rm(temp, { recursive: true, force: true })
   if (cleanup.some(result => result.status === 'rejected')) {
     const failed = cleanup.filter(result => result.status === 'rejected').map(result => String(result.reason))
