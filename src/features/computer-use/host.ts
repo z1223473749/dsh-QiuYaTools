@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ComputerSessionService } from './session.ts'
-import { NativeCompanionDriver } from './native.ts'
+import { ComputerDriverRouter } from './driver-router.ts'
 import { computerError, requireIdentity, type DeviceDriver } from './contract.ts'
 import { computerPreviewPage } from './preview-page.ts'
 
@@ -27,7 +27,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     const stored: unknown = JSON.parse(await readFile(join(directory, 'permissions.json'), 'utf8'))
     if (Array.isArray(stored) && stored.every(id => typeof id === 'string' && id.length <= 512)) allowed = stored
   } catch { /* A missing/invalid approval store grants nothing. */ }
-  const driver = options.driver ?? new NativeCompanionDriver()
+  const driver = options.driver ?? new ComputerDriverRouter()
   const service = new ComputerSessionService(driver, {
     enabled,
     readAllowedApps: () => allowed,
@@ -69,6 +69,14 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         } else {
           if (!['pause', 'stop'].includes(input.op)) assertEnabled()
           if (input.op === 'targets') value = await service.targets(request.signal)
+          else if (input.op === 'connect') {
+            if (!(driver instanceof ComputerDriverRouter)) throw new Error('此执行器不支持切换设备')
+            for (const item of service.list()) await service.stop(item.sessionId)
+            if (input.mode === 'local') await driver.useLocal()
+            else if (input.mode === 'remote' && typeof input.endpoint === 'string' && typeof input.token === 'string') await driver.useRemote({ endpoint: input.endpoint, token: input.token, allowInsecurePrivateNetwork: input.allowPrivateNetwork === true })
+            else throw new Error('请选择本机或提供独立电脑的配对地址与密钥。')
+            value = await driver.status(request.signal)
+          }
           else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
           else if (!sessionId) throw new Error('请先选择要关联的聊天。')
           else if (input.op === 'start') {

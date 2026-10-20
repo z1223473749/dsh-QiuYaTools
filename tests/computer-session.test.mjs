@@ -163,3 +163,31 @@ test('failed permission persistence never silently grants and failed revoke stil
   await assert.rejects(service.start('chat', f.target.id), { code: 'APP_NOT_ALLOWED' })
   await service.dispose(); await f.service.dispose()
 })
+
+test('a recycled window id cannot expose a different application through preview or resume', async () => {
+  const f = fixture(); await start(f)
+  const observe = f.driver.observe; let captured = 0
+  f.driver.observe = async (...args) => { captured++; return observe(...args) }
+  f.target.pid = 456; f.target.appId = 'unapproved.app'
+  await assert.rejects(f.service.preview('chat'), { code: 'TARGET_CHANGED' })
+  await f.service.pause('chat')
+  await assert.rejects(f.service.resume('chat'), { code: 'TARGET_CHANGED' })
+  assert.equal(captured, 0)
+  await f.service.dispose()
+})
+
+test('human clicks accept a recently displayed frame despite the next preview, but reject expired or geometrically stale frames', async () => {
+  const f = fixture(); let now = 1000
+  const service = new ComputerSessionService(f.driver, { now: () => now })
+  await service.start('chat', f.target.id, { allowOnce: true }); await service.takeover('chat')
+  const shown = await service.preview('chat')
+  await service.preview('chat')
+  await service.humanAct('chat', request(shown, 'human-recent'))
+  assert.equal(f.records.filter(row => row[0] === 'input').length, 1)
+  const expired = await service.preview('chat'); now += 2001
+  assert.throws(() => service.humanAct('chat', request(expired, 'human-expired')), { code: 'STALE_OBSERVATION' })
+  const stale = await service.preview('chat'); f.target.x += 10
+  await assert.rejects(service.humanAct('chat', request(stale, 'human-moved')), { code: 'STALE_OBSERVATION' })
+  assert.equal(f.records.filter(row => row[0] === 'input').length, 1)
+  await service.dispose(); await f.service.dispose()
+})

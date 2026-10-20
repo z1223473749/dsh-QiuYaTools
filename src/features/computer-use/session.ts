@@ -1,7 +1,7 @@
 import { ComputerError, checkActionBounds, computerError, parseComputerAction, requireIdentity, sameGeometry, validGeometry } from './contract.ts'
 import type { ComputerActionRequest, ComputerActionResult, ComputerObservation, ComputerSessionSnapshot, ComputerState, DeviceDriver, NativeTarget } from './contract.ts'
 
-interface SessionRecord { snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewObservation?: ComputerSessionSnapshot['lastObservation']; transition?: Promise<ComputerSessionSnapshot> }
+interface SessionRecord { snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewFrames: Map<string, { metadata: NonNullable<ComputerSessionSnapshot['lastObservation']>; capturedAt: number }>; transition?: Promise<ComputerSessionSnapshot> }
 export interface ComputerSessionOptions {
   enabled?: () => boolean
   readAllowedApps?: () => readonly string[]
@@ -77,7 +77,7 @@ export class ComputerSessionService {
     const oldEpoch = record.snapshot.epoch
     record.snapshot = { ...record.snapshot, epoch: ++this.nextEpoch }
     delete record.snapshot.lastObservation
-    delete record.previewObservation
+    record.previewFrames.clear()
     for (const controller of record.controllers) controller.abort(new ComputerError('CONTROL_CHANGED', '操作已暂停或停止'))
     return oldEpoch
   }
@@ -99,7 +99,7 @@ export class ComputerSessionService {
       for (const [id, record] of this.sessions) if (['stopped', 'faulted', 'disconnected'].includes(record.snapshot.state)) { this.sessions.delete(id); if (this.sessions.size < 128) break }
       if (this.sessions.size >= 128) throw new ComputerError('SESSION_LIMIT', '电脑会话数量已达上限')
     }
-    const record: SessionRecord = { snapshot: { sessionId, state: 'connecting', target: null, epoch: ++this.nextEpoch, updatedAt: this.clock() }, controllers: new Set(), pending: new Set(), actions: new Map(), allowOnce: options.allowOnce === true }
+    const record: SessionRecord = { snapshot: { sessionId, state: 'connecting', target: null, epoch: ++this.nextEpoch, updatedAt: this.clock() }, controllers: new Set(), pending: new Set(), actions: new Map(), previewFrames: new Map(), allowOnce: options.allowOnce === true }
     this.sessions.set(sessionId, record); this.activeSession = sessionId; this.notify()
     const epoch = record.snapshot.epoch
     try {
@@ -109,6 +109,8 @@ export class ComputerSessionService {
         if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '开始操作已取消')
         const target = targets.find(item => item.id === targetId)
         if (!target || !validGeometry(target)) throw new ComputerError('TARGET_NOT_FOUND', '目标窗口已关闭或不可用')
+        requireIdentity(target.appId, '应用')
+        if (!Number.isSafeInteger(target.pid) || target.pid <= 0 || typeof target.title !== 'string') throw new ComputerError('INVALID_TARGET', '执行器返回的应用身份无效')
         record.snapshot.target = { ...target }
         if (!this.isAllowed(record)) throw new ComputerError('APP_NOT_ALLOWED', '请先允许此应用，或从面板授权本次操作')
         await this.driver.lease(epoch, signal)
@@ -133,12 +135,21 @@ export class ComputerSessionService {
     const record = this.record(sessionId), target = record.snapshot.target, epoch = record.snapshot.epoch
     if (!target || !['ready', 'running', 'paused', 'humanControl'].includes(record.snapshot.state)) throw new ComputerError('NOT_READY', '电脑会话尚未就绪')
     return this.operation(record, signal, async operationSignal => {
+      const current = (await this.driver.targets(operationSignal)).find(item => item.id === target.id)
+      operationSignal.throwIfAborted()
+      if (!current || current.pid !== target.pid || current.appId !== target.appId) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新选择并授权')
       const observation = await this.driver.observe(target.id, operationSignal)
       operationSignal.throwIfAborted()
       if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '观察期间控制权已变化')
       this.validateObservation(observation, target)
+      record.snapshot.target = { ...current, ...observation.geometry }
       const { imageBase64: _, elements: _elements, mediaType: _mediaType, ...metadata } = observation
-      if (preview) record.previewObservation = structuredClone(metadata)
+      if (preview) {
+        const now = this.clock()
+        for (const [id, frame] of record.previewFrames) if (now - frame.capturedAt > 2000) record.previewFrames.delete(id)
+        record.previewFrames.set(metadata.frameId, { metadata: structuredClone(metadata), capturedAt: now })
+        while (record.previewFrames.size > 8) record.previewFrames.delete(record.previewFrames.keys().next().value!)
+      }
       else { record.snapshot.lastObservation = structuredClone(metadata); this.notify() }
       return observation
     })
@@ -156,7 +167,11 @@ export class ComputerSessionService {
       return old.promise
     }
     this.fence(record, epoch, human)
-    const readObservation = () => human ? record.previewObservation : record.snapshot.lastObservation
+    const readObservation = () => {
+      if (!human) return record.snapshot.lastObservation
+      const frame = record.previewFrames.get(request.frameId)
+      return frame && this.clock() - frame.capturedAt <= 2000 ? frame.metadata : undefined
+    }
     const observation = readObservation()
     if (!observation || observation.frameId !== request.frameId) throw new ComputerError('STALE_OBSERVATION', '请先获取当前截图再执行操作')
     checkActionBounds(action, observation)
@@ -178,13 +193,13 @@ export class ComputerSessionService {
         })
         this.fence(record, epoch, human)
         delete record.snapshot.lastObservation
-        delete record.previewObservation
+        record.previewFrames.clear()
         record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }
         this.change(record, human ? 'humanControl' : 'ready')
         return { actionId: request.actionId, targetId: target.id, epoch, result }
       } catch (error) {
         delete record.snapshot.lastObservation
-        delete record.previewObservation
+        record.previewFrames.clear()
         if (record.snapshot.lastAction?.actionId === request.actionId) { record.snapshot.lastAction = { ...record.snapshot.lastAction, phase: 'failed', at: this.clock() }; this.notify() }
         if (record.snapshot.epoch === epoch) {
           const releasedEpoch = this.invalidate(record)
@@ -237,10 +252,15 @@ export class ComputerSessionService {
     this.change(record, 'resuming')
     try {
       await this.operation(record, undefined, async signal => {
+        const target = record.snapshot.target!
+        const current = (await this.driver.targets(signal)).find(item => item.id === target.id)
+        signal.throwIfAborted()
+        if (!current || current.pid !== target.pid || current.appId !== target.appId) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新选择并授权')
         const observation = await this.driver.observe(record.snapshot.target!.id, signal)
         signal.throwIfAborted()
         if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '继续操作已取消')
         this.validateObservation(observation, record.snapshot.target!)
+        record.snapshot.target = { ...current, ...observation.geometry }
         const { imageBase64: _, elements: _elements, mediaType: _mediaType, ...metadata } = observation
         record.snapshot.lastObservation = metadata
         await this.driver.lease(epoch, signal)

@@ -11,6 +11,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   const [sessions, setSessions] = useState<ComputerSessionSnapshot[]>([]), [allowed, setAllowed] = useState<string[]>([])
   const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [native, setNative] = useState<{ permissions?: Record<string, boolean>; message?: string } | null>()
   const [chats, setChats] = useState<{ id: string; title: string }[]>([])
+  const [mode, setMode] = useState<'local' | 'remote'>('local'), [endpointUrl, setEndpointUrl] = useState(''), [token, setToken] = useState(''), [allowPrivate, setAllowPrivate] = useState(false)
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
     if (!connection) throw new Error('连接尚未就绪')
@@ -46,6 +47,9 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
       <p className="qyt-muted">让当前聊天操作所选应用，并通过悬浮窗查看画面、暂停或接管。</p>
       {enabled && <><p>选择关联聊天和目标窗口后，本次允许该聊天操作此应用。</p>
         <div style={{ display: 'grid', gap: 12 }}>
+          <label>操作环境 <select value={mode} onChange={e => setMode(e.target.value as 'local' | 'remote')}><option value="local">这台电脑</option><option value="remote">独立虚拟机或远端电脑</option></select></label>
+          {mode === 'remote' && <><label>配对地址 <input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={e => setEndpointUrl(e.target.value)}/></label><label>配对密钥 <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)}/></label><label><input type="checkbox" checked={allowPrivate} onChange={e => setAllowPrivate(e.target.checked)}/> 允许通过受信任的私有网络连接（例如本机虚拟机）</label></>}
+          <button className="qyt-button" disabled={busy || mode === 'remote' && (!endpointUrl || !token)} onClick={() => { void action('connect', { mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate }) }}>连接所选环境</button>
           <label>关联聊天 <select value={sessionId} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
           <label>应用窗口 <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请刷新窗口列表</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title || item.appId}</option>)}</select></label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
