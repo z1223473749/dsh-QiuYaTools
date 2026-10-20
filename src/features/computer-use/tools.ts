@@ -66,12 +66,13 @@ export function installComputerTools(ctx: Context, service: ComputerSessionServi
       },
     }),
     register({
-      name: 'qiuya_computer_act', description: 'Perform one action in this chat’s authorized application using the latest observation frameId. Then observe again to verify the result. Paused or human-controlled sessions reject Agent input.',
+      name: 'qiuya_computer_act', description: 'Perform one action in this chat’s authorized application using the latest frameId, then observe to verify. Browser mode also supports navigate/openTab(url), selectorClick/selectorType(selector,text), and closeTab within owner-approved origins. These browser actions do not work in native desktop mode. Paused and human-controlled sessions reject Agent input.',
       parameters: { type: 'object', additionalProperties: false, required: ['frameId', 'action'], properties: {
         actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string' },
         action: { type: 'object', required: ['kind'], additionalProperties: false, properties: {
-          kind: { type: 'string', enum: ['click', 'move', 'drag', 'scroll', 'type', 'key'] },
+          kind: { type: 'string', enum: ['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'] },
           x: { type: 'number' }, y: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, text: { type: 'string' }, key: { type: 'string' }, deltaX: { type: 'number' }, deltaY: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] },
+          url: { type: 'string' }, selector: { type: 'string' },
         } },
       } }, output,
       async execute(args, exec) { const input = parameters(args, ['actionId', 'frameId', 'action']); return JSON.parse(JSON.stringify(await service.act(session(exec), { actionId: input.actionId === undefined ? String(exec.callId) : requireIdentity(input.actionId, '操作'), frameId: requireIdentity(input.frameId, '帧'), action: parseComputerAction(input.action) }, exec.signal))) },

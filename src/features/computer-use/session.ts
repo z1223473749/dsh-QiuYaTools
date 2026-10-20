@@ -182,6 +182,7 @@ export class ComputerSessionService {
     const record = this.record(sessionId), epoch = record.snapshot.epoch
     requireIdentity(request?.actionId, '操作'); requireIdentity(request?.frameId, '帧')
     const action = parseComputerAction(request.action)
+    if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(action.kind) && !this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器专用操作')
     const fingerprint = JSON.stringify({ epoch, frameId: request.frameId, action, human })
     const old = record.actions.get(request.actionId)
     if (old) {
@@ -214,6 +215,26 @@ export class ComputerSessionService {
           return this.driver.act(epoch, target.id, action, operationSignal)
         })
         this.fence(record, epoch, human)
+        if (['navigate', 'openTab', 'closeTab'].includes(action.kind)) {
+          if (!this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器标签页操作')
+          const next = await this.driver.resolveActionTarget(target, action, result, signal)
+          this.fence(record, epoch, human)
+          if (next === null) {
+            const released = this.invalidate(record)
+            await this.driver.release(released)
+            record.allowOnce = false
+            if (this.activeSession === sessionId) this.activeSession = undefined
+            record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }
+            this.change(record, 'stopped')
+            return { actionId: request.actionId, targetId: target.id, epoch, result }
+          }
+          if (!validGeometry(next) || !Number.isSafeInteger(next.pid) || next.pid <= 0) throw new ComputerError('INVALID_TARGET', '浏览器目标身份无效')
+          requireIdentity(next.id, '目标'); requireIdentity(next.appId, '应用')
+          record.snapshot.target = { ...next }
+          // The browser adapter attests this target is inside the owner's
+          // explicit site allowlist; this workflow grant is never persisted.
+          record.allowOnce = true
+        }
         delete record.snapshot.lastObservation
         record.previewFrames.clear()
         record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }

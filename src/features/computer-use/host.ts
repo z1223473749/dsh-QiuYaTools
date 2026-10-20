@@ -28,8 +28,9 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     if (Array.isArray(stored) && stored.every(id => typeof id === 'string' && id.length <= 512)) allowed = stored
   } catch { /* A missing/invalid approval store grants nothing. */ }
   const driver = options.driver ?? new ComputerDriverRouter()
+  let switching = false
   const service = new ComputerSessionService(driver, {
-    enabled,
+    enabled: () => enabled() && !switching,
     readAllowedApps: () => allowed,
     writeAllowedApps: async ids => {
       if (!directory) throw new Error('当前 Host 没有可持久化配置目录，请使用本次允许。')
@@ -47,7 +48,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     wasEnabled = current
   }, 100)
   poll.unref()
-  const assertEnabled = () => { if (disposed || !enabled()) throw new Error('请先在设置中启用电脑操控。') }
+  const assertEnabled = () => { if (disposed || !enabled()) throw new Error('请先在设置中启用电脑操控。'); if (switching) throw new Error('正在切换操作环境，请稍候。') }
   const owner = () => services.connection.browserPeer?.principal.kind === 'owner'
   const unregister = [services.connection.fetch.register({
     path: `/api/${COMPUTER_ENDPOINT}`, methods: ['POST'], requestBody: 'buffered',
@@ -65,17 +66,27 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         const sessionId = input.sessionId === undefined ? undefined : requireIdentity(input.sessionId, '会话')
         let value: unknown
         if (input.op === 'status') {
-          value = { enabled: enabled(), sessions: service.list(), allowedApps: service.allowedApps(), native: enabled() ? await service.status(request.signal).catch(computerError) : null }
+          value = { enabled: enabled(), switching, sessions: service.list(), allowedApps: service.allowedApps(), native: switching ? { available: false, message: '正在切换操作环境' } : enabled() ? await service.status(request.signal).catch(computerError) : null }
         } else {
           if (!['pause', 'stop'].includes(input.op)) assertEnabled()
           if (input.op === 'targets') value = await service.targets(request.signal)
           else if (input.op === 'connect') {
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('此执行器不支持切换设备')
-            for (const item of service.list()) await service.stop(item.sessionId)
-            if (input.mode === 'local') await driver.useLocal()
-            else if (input.mode === 'remote' && typeof input.endpoint === 'string' && typeof input.token === 'string') await driver.useRemote({ endpoint: input.endpoint, token: input.token, allowInsecurePrivateNetwork: input.allowPrivateNetwork === true })
-            else throw new Error('请选择本机或提供独立电脑的配对地址与密钥。')
-            value = await driver.status(request.signal)
+            switching = true
+            try {
+              for (const item of service.list()) await service.stop(item.sessionId)
+              if (input.mode === 'local') await driver.useLocal()
+              else if (input.mode === 'remote' && typeof input.endpoint === 'string' && typeof input.token === 'string') await driver.useRemote({ endpoint: input.endpoint, token: input.token, allowInsecurePrivateNetwork: input.allowPrivateNetwork === true })
+              else if (input.mode === 'browser') {
+                if (!directory) throw new Error('浏览器连接需要独立的 Host 配置目录。')
+                if (!['chrome', 'edge'].includes(input.browser) || !Array.isArray(input.allowedOrigins) || input.allowedOrigins.length < 1 || input.allowedOrigins.length > 128 || input.allowedOrigins.some((origin: unknown) => typeof origin !== 'string' || origin.length > 2048)) throw new Error('请选择浏览器并填写允许的网站来源。')
+                if (input.initialUrl !== undefined && (typeof input.initialUrl !== 'string' || input.initialUrl.length > 8192)) throw new Error('起始页面地址无效。')
+                if (input.cdpEndpoint !== undefined && (typeof input.cdpEndpoint !== 'string' || input.cdpEndpoint.length > 2048)) throw new Error('现有浏览器连接地址无效。')
+                await mkdir(directory, { recursive: true, mode: 0o700 })
+                await driver.useBrowser({ browser: input.browser, profileDir: join(directory, 'browser-profiles', input.browser), allowedOrigins: input.allowedOrigins, ...(input.cdpEndpoint ? { cdpEndpoint: input.cdpEndpoint } : {}) }, input.initialUrl, request.signal)
+              } else throw new Error('请选择本机或提供独立电脑的配对地址与密钥。')
+              value = await driver.status(request.signal)
+            } finally { switching = false }
           }
           else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
           else if (!sessionId) throw new Error('请先选择要关联的聊天。')

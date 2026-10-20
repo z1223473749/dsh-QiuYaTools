@@ -222,3 +222,32 @@ test('human clicks accept a recently displayed frame despite the next preview, b
   assert.equal(f.records.filter(row => row[0] === 'input').length, 1)
   await service.dispose(); await f.service.dispose()
 })
+
+test('browser navigation follows only an adapter-attested allowed target and closeTab releases the workflow', async () => {
+  const f = fixture(), frame = await start(f)
+  f.driver.act = async (_epoch, targetId, action) => {
+    f.records.push(['input', action.kind])
+    if (action.kind === 'navigate') f.target.appId = 'browser:owner-device:https://approved.example'
+    if (action.kind === 'openTab') f.target.id = 'new-tab'
+    return action.kind === 'closeTab' ? { closed: true } : { targetId: f.target.id }
+  }
+  f.driver.resolveActionTarget = async (_target, action) => action.kind === 'closeTab' ? null : { ...f.target }
+  await f.service.act('chat', request(frame, 'navigate', { kind: 'navigate', url: 'https://approved.example/' }))
+  assert.equal(f.service.get('chat').target.appId, 'browser:owner-device:https://approved.example')
+  const navigated = await f.service.observe('chat')
+  await f.service.act('chat', request(navigated, 'open', { kind: 'openTab', url: 'https://approved.example/second' }))
+  assert.equal(f.service.get('chat').target.id, 'new-tab')
+  const opened = await f.service.observe('chat')
+  await f.service.act('chat', request(opened, 'close', { kind: 'closeTab' }))
+  assert.equal(f.service.get('chat').state, 'stopped')
+  assert.equal(f.records.at(-1)[0], 'release')
+  assert.throws(() => f.service.act('chat', request(opened, 'late', { kind: 'key', key: 'Enter' })), { code: 'CONTROL_CHANGED' })
+  await f.service.dispose()
+})
+
+test('browser-only actions cannot fall through to an ordinary native driver', async () => {
+  const f = fixture(), frame = await start(f)
+  assert.throws(() => f.service.act('chat', request(frame, 'native-navigate', { kind: 'navigate', url: 'https://approved.example' })), { code: 'BROWSER_ACTION_UNSUPPORTED' })
+  assert.equal(f.records.some(record => record[0] === 'input'), false)
+  await f.service.dispose()
+})

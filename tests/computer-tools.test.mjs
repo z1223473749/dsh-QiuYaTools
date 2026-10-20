@@ -8,7 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
 
 const source = (await build({ entryPoints: [new URL('../src/features/computer-use/tools.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external' })).outputFiles[0].text
 const module = { exports: {} }, require = createRequire(import.meta.url)
-vm.runInNewContext(source, { module, exports: module.exports, Buffer, require: id => id === '@deepseek-ai/dsh-tools' ? sdk : require(id) })
+vm.runInNewContext(source, { module, exports: module.exports, Buffer, URL, require: id => id === '@deepseek-ai/dsh-tools' ? sdk : require(id) })
 const { installComputerTools } = module.exports
 function fixture() {
   const definitions = new Map(), calls = [], saved = []
@@ -91,5 +91,18 @@ test('cancelled observation does not create an attachment', async () => {
   const f = fixture(), abort = new AbortController(); abort.abort(new Error('cancelled'))
   await assert.rejects(f.definitions.get('qiuya_computer_observe').execute({}, { ...f.exec, signal: abort.signal }))
   assert.equal(f.saved.length, 0)
+  f.dispose()
+})
+
+test('registered Agent action exposes structured browser navigation and selectors without eval or file paths', async () => {
+  const f = fixture(), tool = f.definitions.get('qiuya_computer_act')
+  assert.ok(tool.parameters.properties.action.properties.kind.enum.includes('navigate'))
+  assert.equal('expression' in tool.parameters.properties.action.properties, false)
+  assert.equal('filePath' in tool.parameters.properties.action.properties, false)
+  await tool.execute({ frameId: 'f1', action: { kind: 'navigate', url: 'https://approved.example/path' } }, f.exec)
+  assert.equal(f.calls.at(-1)[2].action.url, 'https://approved.example/path')
+  await tool.execute({ frameId: 'f2', action: { kind: 'selectorType', selector: '#name', text: '中文🙂' } }, f.exec)
+  assert.equal(f.calls.at(-1)[2].action.kind, 'selectorType')
+  for (const action of [{ kind: 'navigate', url: 'javascript:alert(1)' }, { kind: 'openTab', url: 'file:///tmp/private' }, { kind: 'selectorClick', selector: '\0bad' }]) await assert.rejects(tool.execute({ frameId: 'f1', action }, f.exec))
   f.dispose()
 })

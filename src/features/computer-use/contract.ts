@@ -8,9 +8,10 @@ export interface ComputerObservation {
   cursor?: { x: number; y: number; visible: boolean }
 }
 export interface ComputerAction {
-  kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key'
+  kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType'
   x?: number; y?: number; toX?: number; toY?: number; text?: string; key?: string
   deltaX?: number; deltaY?: number; button?: 'left' | 'right' | 'middle'
+  url?: string; selector?: string
 }
 export interface ComputerActionRequest { actionId: string; frameId: string; action: ComputerAction }
 export interface ComputerActionResult { actionId: string; targetId: string; epoch: number; result: unknown }
@@ -29,6 +30,7 @@ export interface DeviceDriver {
   lease(epoch: number, signal?: AbortSignal): Promise<unknown>
   release(epoch: number, signal?: AbortSignal): Promise<unknown>
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown>
+  resolveActionTarget?(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal): Promise<NativeTarget | null>
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal): Promise<unknown>
   closePreview(signal?: AbortSignal): Promise<unknown>
   subscribe?(listener: (event: NativeComputerEvent) => void): () => void
@@ -55,16 +57,23 @@ export function validGeometry(value: ComputerGeometry): boolean {
 export function parseComputerAction(value: unknown): ComputerAction {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ComputerError('INVALID_ACTION', '操作必须是对象')
   const input = value as Record<string, unknown>
-  const fields = new Set(['kind', 'x', 'y', 'toX', 'toY', 'text', 'key', 'deltaX', 'deltaY', 'button'])
+  const fields = new Set(['kind', 'x', 'y', 'toX', 'toY', 'text', 'key', 'deltaX', 'deltaY', 'button', 'url', 'selector'])
   if (Object.keys(input).some(key => !fields.has(key))) throw new ComputerError('INVALID_ACTION', '操作包含不支持的参数')
-  if (!['click', 'move', 'drag', 'scroll', 'type', 'key'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
+  if (!['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
   for (const field of ['x', 'y', 'toX', 'toY', 'deltaX', 'deltaY']) if (input[field] !== undefined && (typeof input[field] !== 'number' || !Number.isFinite(input[field]) || Math.abs(input[field] as number) > 1_000_000)) throw new ComputerError('INVALID_ACTION', `${field} 无效`)
   if (input.button !== undefined && !['left', 'right', 'middle'].includes(String(input.button))) throw new ComputerError('INVALID_ACTION', '鼠标按键无效')
   if (['click', 'move', 'drag', 'scroll'].includes(String(input.kind)) && (input.x === undefined || input.y === undefined)) throw new ComputerError('INVALID_ACTION', '操作需要 x 和 y')
   if (input.kind === 'drag' && (input.toX === undefined || input.toY === undefined)) throw new ComputerError('INVALID_ACTION', '拖动需要终点')
   if (input.kind === 'scroll' && input.deltaX === undefined && input.deltaY === undefined) throw new ComputerError('INVALID_ACTION', '滚动需要距离')
-  if (input.kind === 'type' && (typeof input.text !== 'string' || input.text.length > 100_000 || input.text.includes('\0'))) throw new ComputerError('INVALID_ACTION', '输入文本无效')
+  if (['type', 'selectorType'].includes(String(input.kind)) && (typeof input.text !== 'string' || input.text.length > 100_000 || input.text.includes('\0'))) throw new ComputerError('INVALID_ACTION', '输入文本无效')
   if (input.kind === 'key' && (typeof input.key !== 'string' || input.key.length === 0 || input.key.length > 128 || /[\x00-\x1f\x7f]/u.test(input.key))) throw new ComputerError('INVALID_ACTION', '按键无效')
+  if (['navigate', 'openTab'].includes(String(input.kind))) {
+    if (typeof input.url !== 'string' || input.url.length > 8192) throw new ComputerError('INVALID_ACTION', '页面地址无效')
+    try { const url = new URL(input.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error() } catch { throw new ComputerError('INVALID_ACTION', '页面地址必须是无嵌入凭据的 HTTP 或 HTTPS 地址') }
+  }
+  if (['selectorClick', 'selectorType'].includes(String(input.kind)) && (typeof input.selector !== 'string' || !input.selector || input.selector.length > 2048 || /[\x00-\x1f\x7f]/u.test(input.selector))) throw new ComputerError('INVALID_SELECTOR', 'CSS 选择器无效')
+  if (input.selector !== undefined && !['selectorClick', 'selectorType'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '请使用浏览器专用的选择器操作')
+  if (input.url !== undefined && !['navigate', 'openTab'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '页面地址只适用于导航或新标签页')
   return { ...input } as unknown as ComputerAction
 }
 export function checkActionBounds(action: ComputerAction, observation: Pick<ComputerObservation, 'width' | 'height'>): void {
