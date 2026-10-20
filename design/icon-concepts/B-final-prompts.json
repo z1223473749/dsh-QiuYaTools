@@ -1,0 +1,16 @@
+{
+  "generator": "Built-in image_gen",
+  "selectedConcept": "B",
+  "reference": "B-handpainted.png",
+  "transparent_background": true,
+  "prompts": [
+    {
+      "key": "color",
+      "prompt": "Use case: precise-object-edit / production logo export. Edit target is the attached previously approved B concept board. Extract ONLY the LEFT full-color hand-painted icon as one standalone SQUARE app icon. Preserve the approved artwork as faithfully as possible: exact white-haired boy's face and sitting pose, muted teal robe, coral sash, blue whale facing left with cream belly, flowing tail on right, and pale seafoam rounded-square tile. Do not redesign, change color palette, add details or make it 3D. Remove the entire right monochrome mark and the surrounding empty board. Fit the left rounded-square icon cleanly in a square canvas with a small even 4% transparent margin. Clean stray speckles outside the rounded-square tile, keep restrained painted texture inside. No text, no letters, no watermark. This is a final plugin app icon to appear at 36px; keep the character and whale clear. Output one square transparent PNG, ideally 512x512."
+    },
+    {
+      "key": "mono",
+      "prompt": "Use case: logo-brand / production small menu icon. Edit target/reference: the attached approved B board. Produce ONLY one standalone compact monochrome MENU GLYPH derived from the RIGHT-hand B boy-on-whale motif. Keep its distinctive orientation and pose: small short windswept white-haired boy seated on the back of a whale facing left, whale tail curving up on the right. Simplify aggressively for a 20px menu icon: bold whale silhouette, clear white-hair negative-space shape, seated boy upper body/one hanging leg, one tiny eye, at most one belly separation curve. Remove all fine brush texture, facial lines, clothing folds, belly hatching and tiny outlines. Critical technical requirement: use ONLY solid BLACK opaque ink plus genuinely TRANSPARENT empty/negative space, no white filled pixels, no gray, no background, no rounded-square tile, no shadows. White hair and whale belly are transparent cutouts within the black silhouette. Make the silhouette coherent and attractive at 20–24px; avoid disconnected tiny pieces, thin strokes or overly detailed full illustration. Center a single glyph on a square transparent canvas with 5% margin, occupying 90% width. No words, numbers or additional objects. Output one transparent PNG."
+    }
+  ]
+}

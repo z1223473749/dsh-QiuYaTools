@@ -1,0 +1,25 @@
+{
+  "generator": "Built-in image_gen",
+  "status": "Concepts awaiting user selection; not installed as runtime icons",
+  "transparent_background": true,
+  "variants": [
+    {
+      "id": "A",
+      "name": "清爽扁平",
+      "file": "A-flat.png",
+      "prompt": "Use case: logo-brand. Create one polished landscape icon concept sheet with TWO matching marks side by side, generous transparent padding, no text anywhere. Subject: 湫 (Qiu), the white-haired teenage boy from the animated film Big Fish & Begonia / 大鱼海棠, sitting naturally on a friendly whale's back, both in side profile. The boy has short windswept white hair, a dark teal simple tunic and a quiet warm expression; legs hang to one side. This is a desktop productivity plugin icon for 'QiuYa 增强工具箱'. LEFT: an elegant simplified flat app icon, navy and turquoise whale with ivory belly, white-haired boy, smooth large silhouettes, subtle ocean-blue rounded-square tile behind the subject. Whale fills most of the tile, curved tail lifted, boy clearly seated on its back. RIGHT: the exact same composition redrawn as a compact TRUE BLACK AND WHITE menu mark, solid black shapes with white negative-space hair/belly, no gray, no gradient, no surrounding tile. Preserve the recognizable boy-on-whale silhouette while removing tiny facial/clothing details so it reads at 20–24px. Minimal clean vector-like edges, limited details, premium calm friendly feel. No waves, bubbles, extra characters, lettering, watermark or mockup devices. Transparent sheet outside left icon tile and right mark."
+    },
+    {
+      "id": "B",
+      "name": "温柔手绘",
+      "file": "B-handpainted.png",
+      "prompt": "Use case: logo-brand. Create one landscape design concept sheet containing TWO corresponding icons side by side on a genuinely transparent background, no text or labels. Main motif: 湫 / Qiu, the white-haired teenage boy from 大鱼海棠 / Big Fish & Begonia, sitting on a graceful whale's back. Short soft tousled white hair, simple muted blue-green clothing, legs draped comfortably on one side, peaceful gentle expression. The whale is round but elegant with a small friendly eye and flowing tail. LEFT: refined hand-painted 2D animation app icon with clean shapes, a pale seafoam rounded-square tile, softly shaded azure whale, cream highlights and a small warm coral clothing accent; restrained brush texture, poetic but legible at app icon size. Focus on the boy and whale only; generous breathing room, compact centered silhouette. RIGHT: a faithful simplified BLACK AND WHITE menu icon based on the left silhouette, black shapes with crisp white negative space for the boy's white hair and whale belly; no gray, texture, gradient or background tile, drawn for a 20–24px menu. Keep boy sitting ON the whale, no separate floating character. No ocean scenery, no text, no watermark, no extra animals, no collage or device mockup."
+    },
+    {
+      "id": "C",
+      "name": "圆润立体",
+      "file": "C-clay.png",
+      "prompt": "Use case: logo-brand. Generate one premium landscape icon proposal sheet with TWO side-by-side matching marks, no words. Motif: the short white-haired boy 湫 / Qiu from the Chinese animated movie 大鱼海棠 / Big Fish & Begonia, seated on the back of a gentle whale. White windswept hair, youthful kind face, simple dark blue-green tunic, feet dangling, clearly riding the whale rather than floating. LEFT: charming restrained 3D soft-clay desktop app icon on a deep midnight-blue rounded square, a luminous turquoise whale with ivory underside and lifted curved tail, small white-haired boy seated at the middle of its back, smooth matte surfaces and soft studio lighting. Clean compact composition, no noisy scenery or sparkles, readable silhouette at 48px. RIGHT: matching flat monochrome menu mark, pure solid black plus white negative space, no grayscale shading, no 3D or surrounding tile; retain whale, seated boy, white-hair cutout and lifted tail while simplifying for 20–24px. Transparent space outside left tile and around right mark. Avoid text, borders, logos, watermark, extra characters, waves, props and device mockups."
+    }
+  ]
+}

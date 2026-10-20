@@ -1,0 +1,328 @@
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import vm from 'node:vm'
+import { build } from 'esbuild'
+import { JSDOM } from 'jsdom'
+
+const require = createRequire(import.meta.url)
+const React = require('react')
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://harness.test' })
+Object.assign(globalThis, {
+  window: dom.window,
+  document: dom.window.document,
+  HTMLElement: dom.window.HTMLElement,
+  IS_REACT_ACT_ENVIRONMENT: true,
+})
+const { createRoot } = require('react-dom/client')
+const { Simulate } = require('react-dom/test-utils')
+const { act } = React
+const settingsStyle = document.createElement('style')
+settingsStyle.textContent = '.harness-options { overflow-y: auto; }\n' + readFileSync(new URL('../src/client/styles.css', import.meta.url), 'utf8')
+document.head.append(settingsStyle)
+
+const compiled = await build({
+  entryPoints: [new URL('../src/client/index.tsx', import.meta.url).pathname],
+  bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs', packages: 'external',
+  jsx: 'transform', loader: { '.css': 'text' },
+  plugins: [{
+    name: 'isolate-settings-from-feature-installers',
+    setup(builder) {
+      builder.onResolve({ filter: /^\.\/features\.ts$/ }, () => ({ path: 'installers', namespace: 'test-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, () => ({ contents: 'export function installFeatures() {}' }))
+      builder.onResolve({ filter: /^\.\/about\.tsx$/ }, () => ({ path: 'about', namespace: 'about-stub' }))
+      builder.onResolve({ filter: /^react$/, namespace: 'about-stub' }, () => ({ path: 'react', external: true }))
+      builder.onLoad({ filter: /.*/, namespace: 'about-stub' }, () => ({ contents: `import React from 'react'; export function AboutPanel({ version, ctx }) { return React.createElement('article', { 'data-about-version': version, 'data-about-context': ctx ? 'present' : 'missing' }, 'about-panel') }` }))
+    },
+  }],
+})
+const module = { exports: {} }
+vm.runInNewContext(compiled.outputFiles[0].text, {
+  module, exports: module.exports,
+  require(id) {
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return {
+      Switch: ({ checked, disabled, label, onChange }) => React.createElement('button', {
+        type: 'button', role: 'switch', disabled, 'aria-label': label, 'aria-checked': checked,
+        onClick: () => onChange(!checked),
+      }),
+    }
+    return require(id)
+  },
+})
+const { QiuYaToolsSettings } = module.exports
+
+const defaults = {
+  enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
+  bulkArchiveEnabled: true, planCommentsEnabled: true,
+  pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
+}
+const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled']
+
+function mount(value = {}, policy = {}) {
+  let snapshot = {
+    status: 'ready', writable: true, value: { ...value }, revision: 1,
+    ...policy,
+  }
+  const listeners = new Set()
+  const mutations = []
+  let failure = null
+  const form = {
+    getSnapshot: () => snapshot,
+    subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback) },
+    async mutate(operations) {
+      mutations.push(structuredClone(operations))
+      if (failure) throw failure
+      const next = { ...snapshot.value }
+      for (const operation of operations) {
+        assert.equal(operation.op, 'set')
+        assert.equal(operation.path.length, 1)
+        next[operation.path[0]] = operation.value
+      }
+      snapshot = { ...snapshot, value: next, revision: snapshot.revision + 1 }
+      for (const listener of listeners) listener()
+      return true
+    },
+    set() { throw Error('Settings writes must be atomic form.mutate calls') },
+  }
+  const dialog = document.createElement('div')
+  dialog.dataset.shortcutModal = 'settings'
+  const options = document.createElement('div')
+  options.className = 'harness-options'
+  const container = document.createElement('div')
+  container.dataset.slot = 'settings.section'
+  container.style.display = 'contents'
+  options.append(container)
+  dialog.append(options)
+  document.body.append(dialog)
+  const root = createRoot(container)
+  act(() => root.render(React.createElement(QiuYaToolsSettings, { form, t: key => key, ctx: {} })))
+  return {
+    container, options, mutations,
+    snapshot: () => snapshot,
+    failWith(error) { failure = error },
+    switch(label) { return container.querySelector(`[role="switch"][aria-label="${label}"]`) },
+    tab(label) { return [...container.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === label) },
+    select(label) { act(() => Simulate.click(this.tab(label))) },
+    async toggle(label) { await act(async () => { Simulate.click(this.switch(label)) }) },
+    edit(index, value) { act(() => Simulate.change(container.querySelectorAll('input')[index], { target: { value } })) },
+    async submit() { await act(async () => { Simulate.submit(container.querySelector('form')) }) },
+    dispose() { act(() => root.unmount()); dialog.remove() },
+  }
+}
+
+test('settings default every feature to on and atomically turn every feature off and on', async () => {
+  const f = mount()
+  try {
+    assert.equal(f.container.querySelectorAll('[role="switch"]').length, 2, 'only the master and active feature switches are mounted')
+    for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab']) {
+      f.select(label)
+      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 2)
+    }
+    f.select('pastedTextTab')
+    assert.equal(f.container.querySelectorAll('input')[0].value, '1000')
+    assert.equal(f.container.querySelectorAll('input')[1].value, '15')
+    await f.toggle('enabled')
+    assert.equal(f.mutations.length, 1)
+    assert.equal(f.mutations[0].length, 5)
+    assert.deepEqual(f.mutations[0][0], { op: 'set', path: ['enabled'], value: true })
+    for (const field of featureFields) assert.equal(f.snapshot().value[field], false)
+    assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
+    await f.toggle('enabled')
+    assert.equal(f.mutations.length, 2)
+    for (const field of featureFields) assert.equal(f.snapshot().value[field], true)
+    assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 2)
+  } finally { f.dispose() }
+})
+
+test('each settings switch updates only its feature and the legacy master field', async () => {
+  for (const [field, label] of [
+    ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
+    ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'],
+  ]) {
+    const f = mount({ ...defaults, unrelated: { preserve: true } })
+    try {
+      f.select(`${label}Tab`)
+      await f.toggle(label)
+      assert.deepEqual(f.mutations, [[
+        { op: 'set', path: ['enabled'], value: true },
+        { op: 'set', path: [field], value: false },
+      ]])
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'false')
+      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
+      for (const other of featureFields.filter(other => other !== field)) assert.equal(f.snapshot().value[other], true)
+      assert.deepEqual(f.snapshot().value.unrelated, { preserve: true })
+    } finally { f.dispose() }
+  }
+})
+
+test('a legacy paused profile can be activated through an individual feature switch', async () => {
+  const f = mount({ enabled: false })
+  try {
+    assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
+    f.select('sessionWindowsTab')
+    await f.toggle('sessionWindows')
+    assert.deepEqual(f.mutations[0], [
+      { op: 'set', path: ['enabled'], value: true },
+      { op: 'set', path: ['sessionWindowsEnabled'], value: true },
+    ])
+    assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'true')
+  } finally { f.dispose() }
+})
+
+test('threshold edits stay local and both limits save in one atomic namespace mutation', async () => {
+  const f = mount(defaults)
+  try {
+    f.edit(0, '2000')
+    f.edit(1, '30')
+    assert.equal(f.mutations.length, 0)
+    assert.equal(f.snapshot().value.pasteCharacterThreshold, 1000)
+    f.select('sessionWindowsTab')
+    f.select('aboutTab')
+    assert.equal(f.mutations.length, 0, 'browsing tabs never saves draft settings')
+    f.select('pastedTextTab')
+    assert.deepEqual([...f.container.querySelectorAll('input')].map(input => input.value), ['2000', '30'])
+    await f.submit()
+    assert.deepEqual(f.mutations, [[
+      { op: 'set', path: ['pasteCharacterThreshold'], value: 2000 },
+      { op: 'set', path: ['pasteLineThreshold'], value: 30 },
+    ]])
+    assert.equal(f.container.querySelectorAll('input')[0].value, '2000')
+    assert.equal(f.container.querySelector('button[type="submit"]').disabled, true)
+    assert.match(f.container.textContent, /saved/)
+  } finally { f.dispose() }
+})
+
+test('threshold validation blocks malformed or out-of-range values and accepts the inclusive limits', async () => {
+  const f = mount(defaults)
+  try {
+    for (const value of ['', '0', '-1', '1.5', '1e3', '1000001']) {
+      f.edit(0, value)
+      await f.submit()
+      assert.equal(f.mutations.length, 0, `invalid characters: ${value}`)
+      assert.match(f.container.querySelector('[role="alert"]').textContent, /invalidCharacters/)
+    }
+    f.edit(0, '1')
+    for (const value of ['', '0', '-1', '1.5', '100001']) {
+      f.edit(1, value)
+      await f.submit()
+      assert.equal(f.mutations.length, 0, `invalid lines: ${value}`)
+      assert.match(f.container.querySelector('[role="alert"]').textContent, /invalidLines/)
+    }
+    f.edit(1, '1')
+    await f.submit()
+    assert.equal(f.snapshot().value.pasteCharacterThreshold, 1)
+    assert.equal(f.snapshot().value.pasteLineThreshold, 1)
+    f.edit(0, '1000000')
+    f.edit(1, '100000')
+    await f.submit()
+    assert.equal(f.snapshot().value.pasteCharacterThreshold, 1_000_000)
+    assert.equal(f.snapshot().value.pasteLineThreshold, 100_000)
+  } finally { f.dispose() }
+})
+
+test('read-only or unavailable settings cannot write, and failures retain threshold edits for retry', async () => {
+  for (const policy of [{ writable: false }, { status: 'loading' }, { status: 'unavailable' }]) {
+    const f = mount(defaults, policy)
+    try {
+      assert.equal([...f.container.querySelectorAll('[role="switch"], input, button[type="submit"]')].every(control => control.disabled), true)
+      assert.equal([...f.container.querySelectorAll('[role="tab"]')].every(control => !control.disabled), true)
+      await f.submit()
+      assert.equal(f.mutations.length, 0)
+      f.select('aboutTab')
+      assert.ok(f.container.querySelector('[data-about-version]'), 'About remains available while settings cannot be written')
+    } finally { f.dispose() }
+  }
+  const f = mount(defaults)
+  try {
+    f.edit(0, '2500')
+    f.failWith(Error('connection failed'))
+    await f.submit()
+    assert.match(f.container.querySelector('[role="alert"]').textContent, /saveError/)
+    assert.equal(f.container.querySelectorAll('input')[0].value, '2500')
+    assert.equal(f.container.querySelector('button[type="submit"]').disabled, false)
+    f.failWith(null)
+    await f.submit()
+    assert.equal(f.snapshot().value.pasteCharacterThreshold, 2500)
+  } finally { f.dispose() }
+})
+
+test('five icon tabs expose labelled panels and support roving focus with arrows, Home and End', () => {
+  const f = mount()
+  try {
+    const tablist = f.container.querySelector('[role="tablist"]')
+    assert.equal(tablist.getAttribute('aria-label'), 'features')
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')]
+    assert.equal(tabs.length, 5)
+    assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
+    for (const tab of tabs) {
+      assert.ok(tab.querySelector('svg[aria-hidden="true"]'), 'every tab has a decorative corresponding icon')
+      const panel = document.getElementById(tab.getAttribute('aria-controls'))
+      assert.equal(panel?.getAttribute('aria-labelledby'), tab.id)
+      assert.equal(panel?.hidden, tab.getAttribute('aria-selected') !== 'true')
+    }
+    function key(value, expected) {
+      const event = new dom.window.KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true })
+      act(() => document.activeElement.dispatchEvent(event))
+      assert.equal(event.defaultPrevented, true)
+      assert.equal(document.activeElement, tabs[expected])
+      assert.equal(tabs[expected].getAttribute('aria-selected'), 'true')
+      assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
+      assert.equal(f.container.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1)
+    }
+    tabs[0].focus()
+    key('ArrowLeft', 4)
+    assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
+    key('ArrowRight', 0)
+    key('ArrowRight', 1)
+    key('End', 4)
+    key('Home', 0)
+    assert.equal(f.mutations.length, 0)
+  } finally { f.dispose() }
+})
+
+test('About mounts on its first visit and keeps its instance while another tab is active', () => {
+  const f = mount()
+  try {
+    assert.equal(f.container.querySelector('[data-about-version]'), null)
+    f.select('aboutTab')
+    const about = f.container.querySelector('[data-about-version]')
+    assert.ok(about)
+    f.select('planCommentsTab')
+    assert.equal(f.container.querySelector('[data-about-version]'), about)
+    assert.equal(about.closest('[role="tabpanel"]').hidden, true)
+    f.select('aboutTab')
+    assert.equal(f.container.querySelector('[data-about-version]'), about)
+    assert.equal(about.closest('[role="tabpanel"]').hidden, false)
+    assert.equal(f.mutations.length, 0)
+  } finally { f.dispose() }
+})
+
+test('scroll containment applies only to our native outlet and keeps header, master and tabs outside the scrolling panel', () => {
+  const f = mount()
+  const otherDialog = document.createElement('div')
+  otherDialog.dataset.shortcutModal = 'settings'
+  otherDialog.innerHTML = '<div class="harness-options"><div data-slot="settings.section" style="display: contents"><section>Another settings page</section></div></div>'
+  document.body.append(otherDialog)
+  try {
+    const style = node => dom.window.getComputedStyle(node)
+    const section = f.container.querySelector('.qyt-settings')
+    const fixed = f.container.querySelector('.qyt-fixed')
+    const tabs = f.container.querySelector('[role="tablist"]')
+    const panel = f.container.querySelector('[role="tabpanel"]:not([hidden])')
+    assert.equal(style(f.options).overflow, 'hidden')
+    assert.equal(style(otherDialog.firstElementChild).overflowY, 'auto', 'other native settings retain their original scrolling')
+    assert.equal(style(section).overflow, 'hidden')
+    assert.equal(style(section).minHeight, '0')
+    assert.equal(style(fixed).flexShrink, '0')
+    assert.equal(style(tabs).flexShrink, '0')
+    assert.equal(style(panel).overflowY, 'auto')
+    assert.equal(style(panel).minHeight, '0')
+    assert.ok(fixed.contains(f.container.querySelector('h2')))
+    assert.ok(fixed.contains(f.switch('enabled')))
+    assert.equal(panel.contains(fixed), false)
+    assert.equal(panel.contains(tabs), false)
+  } finally { f.dispose(); otherDialog.remove() }
+})
+
+test.after(() => dom.window.close())

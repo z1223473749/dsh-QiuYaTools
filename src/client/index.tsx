@@ -1,0 +1,236 @@
+import React, { useId, useRef, useState, useSyncExternalStore } from 'react'
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import pkg from '../../package.json' with { type: 'json' }
+import {
+  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, allFeaturesEnabled, isFeatureEnabled, parsePasteThreshold,
+  type FeatureField, type Preferences,
+} from '../shared.ts'
+import { installFeatures } from './features.ts'
+import { installAccountMenuEntry } from './account-menu.ts'
+import { installSettingsNavIcon } from './settings-nav-icon.ts'
+import { AboutPanel } from './about.tsx'
+import { MONO_ICON_DATA_URL } from './brand-assets.ts'
+import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
+import { zh, en, type LocaleKey } from './locales.ts'
+import css from './styles.css'
+
+const NS = 'qiuyaTools'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    qiuyaTools: LocaleKey
+  }
+}
+
+type SettingsProps = PropsRuntime<'settings.section'> & PropsLocale<typeof NS> & {
+  form: ConfigForm<Preferences>
+  ctx: Context
+}
+
+type ThresholdDraft = { characters: string; lines: string }
+type FormOperations = Parameters<ConfigForm<Preferences>['mutate']>[0]
+
+type SettingsTab = FeatureField | 'about'
+const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey; hint: LocaleKey; steps: readonly LocaleKey[] }[] = [
+  { field: 'pastedTextEnabled', tab: 'pastedTextTab', label: 'pastedText', hint: 'pastedTextHint', steps: [] },
+  { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
+  { field: 'bulkArchiveEnabled', tab: 'bulkArchiveTab', label: 'bulkArchive', hint: 'bulkArchiveHint', steps: ['bulkArchiveSelect', 'bulkArchiveSelected', 'bulkArchiveWorkspace'] },
+  { field: 'planCommentsEnabled', tab: 'planCommentsTab', label: 'planComments', hint: 'planCommentsHint', steps: ['planCommentsSelection', 'planCommentsCard', 'planCommentsSubmit'] },
+]
+const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
+  ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
+  { id: 'about', label: 'aboutTab' },
+]
+
+function SettingsIcon({ name }: { name: SettingsTab }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {name === 'pastedTextEnabled' ? <><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></>
+      : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
+        : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
+          : name === 'planCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
+            : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>}
+  </svg>
+}
+
+export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
+  const snapshot = useSyncExternalStore(
+    listener => form.subscribe(listener),
+    () => form.getSnapshot(),
+    () => form.getSnapshot(),
+  )
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [thresholdDraft, setThresholdDraft] = useState<ThresholdDraft | null>(null)
+  const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
+  const [activeTab, setActiveTab] = useState<SettingsTab>('pastedTextEnabled')
+  const [aboutVisited, setAboutVisited] = useState(false)
+  const tabs = useRef<(HTMLButtonElement | null)[]>([])
+  const id = useId()
+  const ready = snapshot.status === 'ready'
+  const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
+  const allEnabled = allFeaturesEnabled(preferences)
+  const anyEnabled = FEATURE_FIELDS.some(field => isFeatureEnabled(preferences, field))
+  const disabled = !ready || !snapshot.writable || saveState === 'saving'
+  const draft: ThresholdDraft = thresholdDraft ?? {
+    characters: String(preferences.pasteCharacterThreshold),
+    lines: String(preferences.pasteLineThreshold),
+  }
+  const thresholdDirty = draft.characters !== String(preferences.pasteCharacterThreshold)
+    || draft.lines !== String(preferences.pasteLineThreshold)
+
+  function activateTab(tab: SettingsTab): void {
+    if (tab === 'about') setAboutVisited(true)
+    setActiveTab(tab)
+  }
+
+  function navigateTabs(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
+    const next = event.key === 'ArrowRight' ? (index + 1) % TABS.length
+      : event.key === 'ArrowLeft' ? (index - 1 + TABS.length) % TABS.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : undefined
+    if (next === undefined) return
+    event.preventDefault()
+    activateTab(TABS[next].id)
+    tabs.current[next]?.focus()
+  }
+
+  async function persist(operations: FormOperations): Promise<boolean> {
+    if (disabled) return false
+    setSaveState('saving')
+    try {
+      const accepted = await form.mutate(operations)
+      setSaveState(accepted ? 'saved' : 'error')
+      return accepted
+    } catch {
+      setSaveState('error')
+      return false
+    }
+  }
+
+  async function setAllFeatures(value: boolean): Promise<void> {
+    await persist([
+      { op: 'set', path: ['enabled'], value: true },
+      ...FEATURE_FIELDS.map(field => ({ op: 'set' as const, path: [field], value })),
+    ])
+  }
+
+  async function setFeature(field: FeatureField, value: boolean): Promise<void> {
+    await persist([
+      { op: 'set', path: ['enabled'], value: true },
+      { op: 'set', path: [field], value },
+    ])
+  }
+
+  function editThreshold(field: keyof ThresholdDraft, value: string): void {
+    setThresholdDraft({ ...draft, [field]: value })
+    setThresholdError(null)
+    if (saveState !== 'saving') setSaveState('idle')
+  }
+
+  async function saveThresholds(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (disabled) return
+    const characters = parsePasteThreshold(draft.characters, 'characters')
+    if (characters === undefined) { setThresholdError('invalidCharacters'); return }
+    const lines = parsePasteThreshold(draft.lines, 'lines')
+    if (lines === undefined) { setThresholdError('invalidLines'); return }
+    setThresholdError(null)
+    if (await persist([
+      { op: 'set', path: ['pasteCharacterThreshold'], value: characters },
+      { op: 'set', path: ['pasteLineThreshold'], value: lines },
+    ])) setThresholdDraft(null)
+  }
+
+  return (
+    <section className="qyt-settings" aria-label={t('nav')}>
+      <div className="qyt-fixed">
+        <header className="qyt-header">
+          <span className="qyt-brand" aria-hidden="true"><span style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }} /></span>
+          <div className="qyt-heading">
+            <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span></div>
+            <span className="qyt-status" data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : snapshot.status === 'loading' ? 'loading' : 'unavailableState')}</span>
+          </div>
+        </header>
+
+        <div className="qyt-card qyt-master qyt-toggle-row">
+          <div><div className="qyt-label">{t('enabled')}</div><p className="qyt-muted">{t('enabledHint')}</p></div>
+          <Switch checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} />
+        </div>
+        <p className="qyt-feedback qyt-save-feedback" role={saveState === 'error' ? 'alert' : 'status'}>
+          {snapshot.status === 'loading' ? t('loading')
+            : !ready ? t('unavailable')
+              : !snapshot.writable ? t('readOnly')
+                : saveState === 'saving' ? t('saving')
+                  : saveState === 'error' ? t('saveError')
+                    : saveState === 'saved' ? t('saved') : t('persistence')}
+        </p>
+      </div>
+
+      <div className="qyt-tabs" role="tablist" aria-label={t('features')} aria-orientation="horizontal">
+        {TABS.map((tab, index) => <button key={tab.id} ref={element => { tabs.current[index] = element }} type="button" role="tab" id={`${id}-tab-${tab.id}`} aria-selected={activeTab === tab.id} aria-controls={`${id}-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => { activateTab(tab.id) }} onKeyDown={event => { navigateTabs(event, index) }}>
+          <SettingsIcon name={tab.id} /><span>{t(tab.label)}</span>
+        </button>)}
+      </div>
+
+      {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
+        {tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} /> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id).map(feature => <div className="qyt-feature-panel" key={feature.field}>
+          <div className="qyt-card qyt-feature-summary">
+            <div className="qyt-toggle-row">
+              <div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name={feature.field} /></span><h3>{t(feature.label)}</h3></div>
+              <Switch checked={isFeatureEnabled(preferences, feature.field)} label={t(feature.label)} disabled={disabled} onChange={value => { void setFeature(feature.field, value) }} />
+            </div>
+            <p className="qyt-muted">{t(feature.hint)}</p>
+          </div>
+          {feature.field === 'pastedTextEnabled' ? <form className="qyt-card qyt-thresholds" noValidate aria-label={t('pasteThresholds')} onSubmit={event => { void saveThresholds(event) }}>
+            <h4>{t('pasteThresholds')}</h4>
+            <p className="qyt-muted">{t('pasteThresholdHint')}</p>
+            <div className="qyt-threshold-fields">
+              <label className="qyt-number-field">
+                <span>{t('characterThreshold')}</span>
+                <input type="number" inputMode="numeric" min={1} max={1_000_000} step={1} value={draft.characters} disabled={disabled} aria-invalid={thresholdError === 'invalidCharacters'} onChange={event => { editThreshold('characters', event.target.value) }} />
+                <span className="qyt-muted">{t('characterRange')}</span>
+              </label>
+              <label className="qyt-number-field">
+                <span>{t('lineThreshold')}</span>
+                <input type="number" inputMode="numeric" min={1} max={100_000} step={1} value={draft.lines} disabled={disabled} aria-invalid={thresholdError === 'invalidLines'} onChange={event => { editThreshold('lines', event.target.value) }} />
+                <span className="qyt-muted">{t('lineRange')}</span>
+              </label>
+            </div>
+            <div className="qyt-threshold-footer"><p className="qyt-feedback" role={thresholdError === null ? 'status' : 'alert'}>{thresholdError === null ? t('thresholdDraft') : t(thresholdError)}</p><button className="qyt-button" type="submit" disabled={disabled || !thresholdDirty}>{t('saveThresholds')}</button></div>
+          </form> : <div className="qyt-card qyt-guide"><h4>{t('howToUse')}</h4><ol>{feature.steps.map(step => <li key={step}>{t(step)}</li>)}</ol></div>}
+        </div>)}
+      </div>)}
+    </section>
+  )
+}
+
+export const inject = ['slots', 'locale', 'configForms', 'connection']
+
+/** Every contribution leaves with the plugin fiber, including styles and feature listeners. */
+export function apply(ctx: Context): void {
+  ctx.effect(() => installEarlySessionWindowNavigation(ctx))
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }))
+  ctx.effect(() => {
+    const style = document.createElement('style')
+    style.dataset.plugin = 'dsh-qiuya-tools'
+    style.textContent = css
+    document.head.append(style)
+    return () => { style.remove() }
+  })
+  const t = ctx.locale.bind(NS)
+  const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: SETTINGS_ID,
+    order: 50,
+    label: () => t('nav'),
+    locale: NS,
+    inject: () => ({ form, ctx }),
+  }, QiuYaToolsSettings))
+  ctx.effect(() => installAccountMenuEntry(ctx, () => t('nav')))
+  ctx.effect(() => installSettingsNavIcon(ctx))
+  installFeatures(ctx, form)
+}

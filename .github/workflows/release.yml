@@ -1,0 +1,44 @@
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      QIUYA_TOOLS_UNIVERSAL: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - name: Validate version and tag
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const { version } = JSON.parse(fs.readFileSync("package.json"));
+            if (process.env.GITHUB_REF !== `refs/tags/v${version}`) throw new Error("Run this workflow from the matching v<package version> tag");
+          '
+      - run: npm run check
+      - name: Pack universal release
+        run: |
+          mkdir -p artifacts
+          npm pack --ignore-scripts --pack-destination artifacts
+          node scripts/prepare-release.mjs
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --generate-notes artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/SHA256SUMS
