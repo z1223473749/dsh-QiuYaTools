@@ -18,7 +18,7 @@ if ($element.Current.ProcessId -ne $targetProcess.Id -or -not $element.Current.N
 $items = $element.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $labels = New-Object 'System.Collections.Generic.List[string]'
 $pressed = $false
-$clicked=$false;$typed=$false;$point=$null;$textValue=$null
+$clicked=$false;$typed=$false;$point=$null;$textValue=$null;$valueObservation=$null
  Add-Type @'
 using System;using System.Runtime.InteropServices;
 public class QytPreviewMouse {
@@ -75,7 +75,17 @@ for ($i = 0; $i -lt [Math]::Min($items.Count, 300); $i++) {
     $point=@{x=[int][Math]::Round($bounds.Left+$bounds.Width/2);y=[int][Math]::Round($bounds.Top+$bounds.Height/2)}
     [QytPreviewMouse]::Click($point.x,$point.y,$handle,$true);$clicked=$true
     $value=$item.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-    $value.SetValue($Text);$textValue=$value.Current.Value;$typed=$true
+    # Chromium can acknowledge the UIA write before the provider's current
+    # value reflects it. Set once, then observe without replaying input or focus.
+    $value.SetValue($Text);$typed=$true
+    $valueWatch=[Diagnostics.Stopwatch]::StartNew();$valueReads=0;$valueMatched=$false
+    do {
+      $textValue=$value.Current.Value;$valueReads++
+      $valueMatched=[string]::Equals($textValue,$Text,[StringComparison]::Ordinal)
+      if($valueMatched){break}
+      Start-Sleep -Milliseconds 50
+    } while($valueWatch.ElapsedMilliseconds -lt 5000)
+    $valueObservation=@{matched=$valueMatched;attempts=$valueReads;elapsedMs=$valueWatch.Elapsed.TotalMilliseconds;lastValue=$textValue;setValueCalls=1}
   }
   if ($Button -and -not $pressed -and $label -eq $Button -and $item.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button) {
     if($MouseButton){
@@ -93,4 +103,4 @@ for ($i = 0; $i -lt [Math]::Min($items.Count, 300); $i++) {
 if ($Button -and -not $pressed) { throw 'Native preview button was not invokable' }
 if($Operation -eq 'click-image' -and -not $clicked){throw 'Native preview image was not clickable'}
 if($Operation -eq 'set-text' -and -not $typed){throw 'Native preview text input was not writable'}
-@{ targetId=$WindowId; pid=$targetProcess.Id;window=[QytPreviewMouse]::WindowInfo($handle);windowDpi=[QytPreviewMouse]::GetDpiForWindow($handle);coordinates='UIA physical / WindowFromPhysicalPoint / SetPhysicalCursorPos';labels=$labels.ToArray(); pressed=$pressed;clicked=$clicked;typed=$typed;textValue=$textValue;point=$point;foregroundBefore=$foregroundBefore;foregroundAfter=(Get-FixtureForeground);mouseSource=if($clicked){'Win32 SendInput OS-synthetic, not Parallels hardware'}else{$null} } | ConvertTo-Json -Depth 6 -Compress
+@{ targetId=$WindowId; pid=$targetProcess.Id;window=[QytPreviewMouse]::WindowInfo($handle);windowDpi=[QytPreviewMouse]::GetDpiForWindow($handle);coordinates='UIA physical / WindowFromPhysicalPoint / SetPhysicalCursorPos';labels=$labels.ToArray(); pressed=$pressed;clicked=$clicked;typed=$typed;textValue=$textValue;valueObservation=$valueObservation;point=$point;foregroundBefore=$foregroundBefore;foregroundAfter=(Get-FixtureForeground);mouseSource=if($clicked){'Win32 SendInput OS-synthetic, not Parallels hardware'}else{$null} } | ConvertTo-Json -Depth 6 -Compress
