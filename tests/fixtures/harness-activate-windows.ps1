@@ -60,9 +60,15 @@ public class QytFixtureActivation {
   int x=(bounds.Left+bounds.Right)/2,y=bounds.Top+15;bool restored=false;int restoreError=0;
   Record("before",h,x,y);
   try {
-   if(!SetWindowPos(h,new IntPtr(-1),0,0,0,0,1|2|16))throw new Exception("Could not uncover fixture titlebar");
+   // Raise this own fixture within its original z-order group. A background
+   // TOPMOST request can acknowledge success without changing the native style.
+   long requestedInsertAfter=top?-1:0;
+   bool uncovered=SetWindowPos(h,new IntPtr(requestedInsertAfter),0,0,0,0,1|2|16);
+   int uncoverError=uncovered?0:Marshal.GetLastWin32Error();long uncoverStyle=GetWindowLongPtr(h,-20).ToInt64();
+   Diagnostics["uncover"]=new{requestedInsertAfter,callResult=uncovered,win32Error=uncoverError,currentExtendedStyle=uncoverStyle,currentTopmost=(uncoverStyle&8)!=0};
+   if(!uncovered)throw new Exception("Could not uncover fixture titlebar");
    System.Threading.Thread.Sleep(100);
-   Record("afterTopmost",h,x,y);
+   Record("afterUncover",h,x,y);
    if(GetAncestor(WindowFromPhysicalPoint(new Point{X=x,Y=y}),2)!=h)throw new Exception("Another window covers the fixture titlebar; no input sent");
    if(!SetPhysicalCursorPos(x,y))throw new Exception("Could not position fixture mouse");
    var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
