@@ -173,7 +173,18 @@ try {
   $id=Send-Request $computer 'act' @{epoch=3;targetId=$target.id;action=@{kind='drag';x=($point.x-180);y=$point.y;toX=($point.x+180);toY=$point.y}}
   $interrupted=Read-Reply $computer $id
   Assert (!$interrupted.ok -and $interrupted.error.code -eq 'stale-epoch') 'WIN-PHYSICAL-ESCAPE-DRAG-01'
-  Assert (@($events | Where-Object {$_.event -eq 'humanInput'}).Count -ge 1) 'WIN-PHYSICAL-HUMAN-EVENT-01'
+  # Epoch invalidation can reply before the independent release thread emits
+  # humanInput. Drain this same stream only; do not repeat HID input or actions.
+  $eventWait=[Diagnostics.Stopwatch]::StartNew()
+  while (@($events | Where-Object {$_.event -eq 'humanInput' -and $_.epoch -eq 3}).Count -eq 0 -and $eventWait.ElapsedMilliseconds -lt 2000) {
+    $lineTask=$computer.StandardOutput.ReadLineAsync()
+    if (!$lineTask.Wait([Math]::Max(1,2000-[int]$eventWait.ElapsedMilliseconds))) { throw 'Physical interruption event timed out after the original stale reply' }
+    if ($null -eq $lineTask.Result) { throw 'Native helper ended before physical interruption event' }
+    $event=$lineTask.Result|ConvertFrom-Json
+    if (!$event.event) { throw 'Unexpected native reply while awaiting physical interruption event' }
+    $events.Add($event)
+  }
+  Assert (@($events | Where-Object {$_.event -eq 'humanInput' -and $_.epoch -eq 3}).Count -ge 1) 'WIN-PHYSICAL-HUMAN-EVENT-01' @{epoch=3;readOnlyWaitAfterReplyMs=$eventWait.ElapsedMilliseconds;extraHidInputs=0;extraActions=0}
   Assert (([FixtureNative]::GetAsyncKeyState(1) -band 0x8000) -eq 0) 'WIN-PHYSICAL-MOUSE-RELEASE-01'
   [void](Good $computer 'openPreview' @{sessionId='preview-physical-busy';url=('http://127.0.0.1:'+$port+'/preview');title='QiuYaTools Busy Preview'})
   $busyPreview=[FixtureNative]::Window(('QiuYaTools Busy Preview '+[char]0x2014+' QiuYaTools'))
