@@ -16,8 +16,9 @@ export async function main(environment = process.env) {
   const driver = new NativeCompanionDriver({ executable: environment.QIUYA_COMPUTER_NATIVE_EXECUTABLE, args: nativeArgs })
   const port = Number(environment.QIUYA_COMPUTER_PORT ?? 0)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('QIUYA_COMPUTER_PORT must be between 0 and 65535')
-  const agent = await createComputerAgentServer(driver, { token, host: environment.QIUYA_COMPUTER_HOST ?? '127.0.0.1', port })
+  const agent = await createComputerAgentServer(driver, { token, host: environment.QIUYA_COMPUTER_HOST ?? '127.0.0.1', port, ...(environment.QIUYA_COMPUTER_EXCHANGE_DIR ? { exchangeDirectory: environment.QIUYA_COMPUTER_EXCHANGE_DIR } : {}) })
   process.stdout.write(`Computer agent listening: ${agent.endpoint}\nPairing credentials are never printed. Default binding is loopback; use a trusted TLS or SSH tunnel for another device.\n`)
+  process.stdout.write(`Manual file exchange: ${environment.QIUYA_COMPUTER_EXCHANGE_DIR ? 'enabled (dedicated directory, 8 MiB per file, no overwrite)' : 'disabled'}\n`)
   let closing = false
   const close = async () => { if (closing) return; closing = true; try { await agent.close() } finally { await driver.dispose() } }
   const shutdown = () => { void close().catch(() => { process.stderr.write('Computer agent cleanup failed; inspect the native input state before reconnecting.\n'); process.exitCode = 1 }) }

@@ -4,13 +4,14 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
 import { ComputerError, computerError, parseComputerAction, requireIdentity } from './contract.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
+import { ComputerExchange, EXCHANGE_MAX_BYTES, EXCHANGE_CHUNK_BYTES, parseExchangeRequest, type ExchangeResult } from './exchange.ts'
 export { NativeCompanionDriver } from './native.ts'
 
 export const COMPUTER_AGENT_VERSION = 1
 export const COMPUTER_AGENT_PATH = '/v1/computer'
 const REQUEST_LIMIT = 512 * 1024
 const RESPONSE_LIMIT = 48 * 1024 * 1024
-const operations = new Set(['status', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat'])
+const operations = new Set(['status', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat', 'exchange'])
 function pairToken(value: string): string {
   if (typeof value !== 'string' || value.length < 32 || value.length > 512 || /\s|[\x00-\x1f\x7f]/u.test(value)) throw new ComputerError('INVALID_PAIR_TOKEN', '配对令牌必须至少 32 字符且不包含空白')
   return value
@@ -70,6 +71,9 @@ export class RemoteComputerDriver implements DeviceDriver {
   private disposing?: Promise<void>
   private requestId = 0
   private heartbeating = false
+  private readonly exchangeUploads = new Set<string>()
+  private readonly exchangePending = new Set<Promise<unknown>>()
+  private exchangeUncertain = false
   constructor(private readonly options: RemoteComputerOptions) {
     this.endpoint = computerAgentEndpoint(options.endpoint, options.allowInsecurePrivateNetwork)
     this.token = pairToken(options.token)
@@ -89,8 +93,11 @@ export class RemoteComputerDriver implements DeviceDriver {
     const requestId = ++this.requestId
     try {
       if (signal?.aborted) abort()
-      const response = await this.fetcher(this.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` }, body: JSON.stringify({ version: COMPUTER_AGENT_VERSION, clientId: this.clientId, requestId, op, payload }), signal: controller.signal, redirect: 'error' })
-      const value = await readResponse(response, this.options.maxResponseBytes ?? RESPONSE_LIMIT) as { version?: unknown; requestId?: unknown; ok?: unknown; result?: T; error?: { code?: unknown; message?: unknown } }
+      const body = JSON.stringify({ version: COMPUTER_AGENT_VERSION, clientId: this.clientId, requestId, op, payload })
+      if (op === 'exchange' && Buffer.byteLength(body) > 256000) throw new ComputerError('EXCHANGE_REQUEST_LIMIT', '文件交换请求超过分块限制。')
+      const response = await this.fetcher(this.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` }, body, signal: controller.signal, redirect: 'error' })
+      const limit = op === 'exchange' ? Math.min(256000, this.options.maxResponseBytes ?? RESPONSE_LIMIT) : this.options.maxResponseBytes ?? RESPONSE_LIMIT
+      const value = await readResponse(response, limit) as { version?: unknown; requestId?: unknown; ok?: unknown; result?: T; error?: { code?: unknown; message?: unknown } }
       if (value?.version !== COMPUTER_AGENT_VERSION) throw new ComputerError('VERSION_MISMATCH', '远端电脑代理协议版本不兼容')
       if (!response.ok || value.ok !== true) throw new ComputerError(typeof value.error?.code === 'string' ? value.error.code : 'REMOTE_FAILED', typeof value.error?.message === 'string' ? value.error.message : '远端操作失败')
       if (value.requestId !== requestId) throw new ComputerError('REMOTE_PROTOCOL', '远端响应身份不匹配')
@@ -112,6 +119,30 @@ export class RemoteComputerDriver implements DeviceDriver {
     this.timer.unref?.()
   }
   status(signal?: AbortSignal) { return this.rpc<ComputerStatus>('status', {}, signal) }
+  async exchange(raw: unknown, signal?: AbortSignal): Promise<ExchangeResult> {
+    if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
+    const request = parseExchangeRequest(raw)
+    const operation = (async () => {
+      try {
+        const result = await this.rpc<ExchangeResult>('exchange', { request }, signal)
+        if (this.disposed) throw new ComputerError('DISPOSED', '文件请求完成时连接已关闭，结果请重新确认。')
+        if (request.action === 'begin') {
+          if (typeof result.id !== 'string' || !/^[a-f0-9-]{36}$/u.test(result.id)) throw new ComputerError('REMOTE_PROTOCOL', '远端未返回有效上传标识。')
+          this.exchangeUploads.add(result.id)
+        } else if (request.action === 'commit' || request.action === 'abort') this.exchangeUploads.delete(request.id!)
+        else if (request.action === 'cancel') { this.exchangeUploads.clear(); this.exchangeUncertain = false }
+        return result
+      } catch (error) {
+        // A lost begin reply may have created a transaction whose ID is unknown.
+        // Failed/unknown commits remain pending; never replay the mutation.
+        if (request.action === 'begin') this.exchangeUncertain = true
+        throw error
+      }
+    })()
+    this.exchangePending.add(operation)
+    void operation.then(() => this.exchangePending.delete(operation), () => this.exchangePending.delete(operation))
+    return operation
+  }
   async targets(signal?: AbortSignal): Promise<NativeTarget[]> {
     const targets = await this.rpc<NativeTarget[]>('targets', {}, signal)
     if (!Array.isArray(targets)) throw new ComputerError('REMOTE_PROTOCOL', '远端目标列表无效')
@@ -152,10 +183,30 @@ export class RemoteComputerDriver implements DeviceDriver {
     // including acquisitions whose HTTP response was lost or cancelled.
     for (const controller of this.pending) controller.abort(new ComputerError('DISPOSED', '独立电脑连接已关闭'))
     this.disposing = (async () => {
-      const results = await Promise.allSettled([...this.ownedEpochs].map(async epoch => {
+      const cleanup: Promise<unknown>[] = [...this.ownedEpochs].map(async epoch => {
         await this.rpc('release', { epoch }, AbortSignal.timeout(2000), true)
         this.ownedEpochs.delete(epoch)
-      }))
+      })
+      cleanup.push((async () => {
+        if (this.exchangePending.size) {
+          let deadline: ReturnType<typeof setTimeout> | undefined
+          try {
+            await Promise.race([Promise.allSettled([...this.exchangePending]), new Promise((_, reject) => { deadline = setTimeout(() => reject(new ComputerError('EXCHANGE_CLEANUP_FAILED', '在途文件请求未确认停止，请稍后重试关闭连接。')), 2000) })])
+          } finally { clearTimeout(deadline) }
+        }
+        if (this.exchangeUploads.size || this.exchangeUncertain) {
+          try { await this.rpc('exchange', { request: { action: 'cancel' } }, AbortSignal.timeout(2000), true) }
+          catch (error) {
+            // Revoked file authority is no longer usable by this connection.
+            // The agent owns cleanup/TTL from this point; this is not an ACK
+            // that its temporary files are gone. Native lease cleanup above
+            // deliberately keeps requiring its own successful release ACK.
+            if (!(error instanceof ComputerError) || error.code !== 'PAIR_UNAUTHORIZED') throw error
+          }
+          this.exchangeUploads.clear(); this.exchangeUncertain = false
+        }
+      })())
+      const results = await Promise.allSettled(cleanup)
       this.listeners.clear()
       const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
       if (failure) { this.disposing = undefined; throw failure.reason }
@@ -167,6 +218,7 @@ export class RemoteComputerDriver implements DeviceDriver {
 export interface ComputerAgentOptions {
   token: string; host?: string; port?: number; leaseTimeoutMs?: number
   maxRequestBytes?: number; maxResponseBytes?: number
+  exchangeDirectory?: string
 }
 export interface ComputerAgentServer { server: Server; endpoint: string; revoke(newToken?: string): Promise<void>; close(): Promise<void> }
 interface ActiveLease { clientId: string; epoch: number; nativeEpoch: number; lastSeen: number; controller?: AbortController; acquisition?: Promise<unknown> }
@@ -195,6 +247,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
   const interruptions = new Map<string, { epoch: number; code: string }>()
   const leaseTimeout = options.leaseTimeoutMs ?? 5000
   if (!Number.isFinite(leaseTimeout) || leaseTimeout < 100 || leaseTimeout > 60_000) throw new ComputerError('INVALID_TIMEOUT', '租约超时必须介于 100 和 60000 毫秒')
+  const exchange = options.exchangeDirectory ? await ComputerExchange.create(options.exchangeDirectory) : undefined
   const releaseLease = (lease: ActiveLease): Promise<void> => {
     const previous = releasing.get(lease.nativeEpoch); if (previous) return previous
     lease.controller?.abort(new ComputerError('CONTROL_CHANGED', '远端租约已撤销'))
@@ -259,6 +312,14 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       if (op === 'status') result = { ...await driver.status(controller.signal), protocolVersion: COMPUTER_AGENT_VERSION, leaseTimeoutMs: leaseTimeout, cleanupPending: pendingReleases.size > 0 }
       else if (op === 'targets') result = await driver.targets(controller.signal)
       else if (op === 'observe') result = payload.preview === true && driver.preview ? await driver.preview(requireIdentity(payload.targetId, '目标'), controller.signal) : await driver.observe(requireIdentity(payload.targetId, '目标'), controller.signal)
+      else if (op === 'exchange') {
+        if (Object.keys(payload).some(key => key !== 'request')) throw new ComputerError('EXCHANGE_REQUEST', '文件交换参数无效。')
+        const request = parseExchangeRequest(payload.request)
+        if (!exchange) {
+          if (request.action !== 'status' && request.action !== 'cancel') throw new ComputerError('EXCHANGE_DISABLED', '远端未启用专用交换目录，请由代理管理者设置 QIUYA_COMPUTER_EXCHANGE_DIR。')
+          result = { enabled: false, maxBytes: EXCHANGE_MAX_BYTES, chunkBytes: EXCHANGE_CHUNK_BYTES }
+        } else result = await exchange.run(`${generation}:${clientId}`, request, controller.signal)
+      }
       else {
         const epoch = epochNumber(payload.epoch)
         if (op === 'lease') {
@@ -316,18 +377,26 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
   server.headersTimeout = 10_000; server.requestTimeout = 25_000; server.maxHeadersCount = 32
   const watchdog = setInterval(() => { if (active && Date.now() - active.lastSeen > leaseTimeout) void revokeLease().catch(() => {}); else if (pendingReleases.size) void drainReleases().catch(() => {}) }, Math.min(1000, Math.max(25, leaseTimeout / 4)))
   watchdog.unref()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => { server.off('error', reject); resolve() }) })
+  try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => { server.off('error', reject); resolve() }) }) }
+  catch (error) { clearInterval(watchdog); unsubscribe?.(); await exchange?.close(); throw error }
   const address = server.address()
   if (!address || typeof address === 'string') throw new ComputerError('LISTEN_FAILED', '无法取得代理监听地址')
   const host = address.address.includes(':') ? `[${address.address}]` : address.address
   return {
     server, endpoint: `http://${host}:${address.port}${COMPUTER_AGENT_PATH}`,
-    async revoke(newToken) { token = newToken === undefined ? undefined : pairToken(newToken); pairingGeneration++; clients.clear(); interruptions.clear(); for (const controller of pending) controller.abort(new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销')); await revokeLease() },
+    async revoke(newToken) {
+      token = newToken === undefined ? undefined : pairToken(newToken); pairingGeneration++; clients.clear(); interruptions.clear()
+      for (const controller of pending) controller.abort(new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销'))
+      const results = await Promise.allSettled([exchange?.reset(), revokeLease()])
+      const failure = results.find((item): item is PromiseRejectedResult => item.status === 'rejected'); if (failure) throw failure.reason
+    },
     async close() {
-      if (closing) { await drainReleases(); return }
+      if (closing) { const results = await Promise.allSettled([exchange?.close(), drainReleases()]); const failed = results.find((item): item is PromiseRejectedResult => item.status === 'rejected'); if (failed) throw failed.reason; return }
       closing = true; unsubscribe?.(); clearInterval(watchdog); token = undefined; pairingGeneration++
       for (const controller of pending) controller.abort()
       let failure: unknown
+      const fileCleanup = exchange?.close()
+      void fileCleanup?.catch(() => {})
       try { await revokeLease() }
       catch (error) {
         failure = error
@@ -335,6 +404,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
         // confirm cleanup. Never clear uncertain epochs merely on RPC failure.
         if (driver.dispose) try { await driver.dispose(); pendingReleases.clear(); failure = undefined } catch (retirementError) { failure = retirementError }
       } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+      try { await fileCleanup } catch (error) { failure ??= error }
       if (failure) throw failure
     },
   }

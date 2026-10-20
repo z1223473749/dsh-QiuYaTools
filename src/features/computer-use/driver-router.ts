@@ -2,6 +2,7 @@ import { NativeCompanionDriver } from './native.ts'
 import { RemoteComputerDriver, type RemoteComputerOptions } from './remote.ts'
 import { BrowserSession, BrowserDeviceDriver, type BrowserOptions } from './browser.ts'
 import { ComputerError, type DeviceDriver, type NativeComputerEvent, type ComputerAction, type NativeTarget } from './contract.ts'
+import type { ExchangeResult } from './exchange.ts'
 
 /** Switching is performed only after the Host has stopped every active session. */
 export class ComputerDriverRouter implements DeviceDriver {
@@ -95,6 +96,13 @@ export class ComputerDriverRouter implements DeviceDriver {
   }
   status(signal?: AbortSignal) { this.assertLive(); const current = this.current, mode = this.mode; return current.status(signal).then(status => ({ ...status, mode })) }
   targets(signal?: AbortSignal) { this.assertLive(); return this.current.targets(signal) }
+  async exchange(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> {
+    this.assertLive()
+    const current = this.current as DeviceDriver & { exchange?(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> }, generation = this.generation
+    if (this.mode !== 'remote' || !current.exchange) throw new ComputerError('EXCHANGE_REMOTE_ONLY', '文件交换仅适用于已配对的独立电脑。')
+    const result = await current.exchange(request, signal)
+    this.assertGeneration(generation); return result
+  }
   observe(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.observe(targetId, signal) }
   preview(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
   lease(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.lease(epoch, signal) }

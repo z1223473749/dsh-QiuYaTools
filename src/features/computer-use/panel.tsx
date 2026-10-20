@@ -1,27 +1,99 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComputerSessionSnapshot, NativeTarget } from './contract.ts'
+import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.ts'
 
 interface Rpc { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
 interface Catalog { list: { getSnapshot(): { ids: string[]; byId: Record<string, { displayTitle?: string; title?: string; blank?: boolean; origin?: string }> } } }
 const endpoint = 'qiuya-tools.computer.control'
+type NativeView = { permissions?: Record<string, boolean>; message?: string; mode?: 'local' | 'remote' | 'browser' }
+function FileExchangePanel({ call }: { call(op: string, extra?: object): Promise<unknown> }) {
+  const [listing, setListing] = useState<ExchangeResult>(), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const request = async (value: ExchangeRequest) => await call('exchange', { request: value }) as ExchangeResult
+  const refresh = async () => {
+    const status = await request({ action: 'status' })
+    const result = status.enabled ? await request({ action: 'list' }) : status
+    if (mounted.current) setListing(result)
+    return result
+  }
+  const upload = async (file: File) => {
+    if (busy) return
+    setBusy(true); setMessage('正在上传…'); let id: string | undefined, committed = false
+    try {
+      if (file.size > 8 * 1024 * 1024) throw new Error('单文件不能超过 8 MiB。')
+      const bytes = new Uint8Array(await file.arrayBuffer()), digest = await crypto.subtle.digest('SHA-256', bytes)
+      const sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+      const begun = await request({ action: 'begin', name: file.name, size: file.size, sha256 }); id = begun.id
+      if (!id) throw new Error('远端没有返回上传标识。')
+      for (let offset = 0; offset < bytes.length;) {
+        if (!mounted.current) throw new Error('文件交换面板已关闭。')
+        const chunk = bytes.subarray(offset, offset + 128 * 1024); let text = ''
+        for (let start = 0; start < chunk.length; start += 8192) text += String.fromCharCode(...chunk.subarray(start, start + 8192))
+        const result = await request({ action: 'chunk', id, offset, data: btoa(text) })
+        if (result.offset !== offset + chunk.length) throw new Error('远端上传位置不一致，上传已取消。')
+        offset += chunk.length
+      }
+      if (!mounted.current) throw new Error('文件交换面板已关闭。')
+      const published = await request({ action: 'commit', id })
+      if (published.done !== true || published.file?.name !== file.name || published.file.size !== file.size) throw new Error('远端未确认完整文件，请刷新列表检查，不要自动重传。')
+      committed = true; await refresh()
+      if (mounted.current) setMessage('文件已上传至远端专用交换目录。')
+    } catch (error) { if (mounted.current) setMessage((error as Error).message) }
+    finally {
+      if (id && !committed) await request({ action: 'abort', id }).catch(() => {})
+      if (mounted.current) setBusy(false)
+    }
+  }
+  const download = async (file: ExchangeFile) => {
+    if (busy) return
+    setBusy(true); setMessage('正在下载…')
+    try {
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > 8 * 1024 * 1024) throw new Error('远端文件超过 8 MiB 限制。')
+      const chunks: Uint8Array<ArrayBuffer>[] = []; let offset = 0
+      do {
+        if (!mounted.current) throw new Error('文件交换面板已关闭。')
+        const result = await request({ action: 'read', name: file.name, version: file.version, offset })
+        if (typeof result.data !== 'string' || result.data.length > 174764 || result.file?.version !== file.version) throw new Error('远端下载数据无效。')
+        const binary = atob(result.data), bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+        if (bytes.length > 128 * 1024 || result.offset !== offset + bytes.length || result.offset > file.size || !bytes.length && !result.done) throw new Error('下载位置或分块大小无效。')
+        offset = result.offset; chunks.push(bytes)
+        if (result.done) { if (offset !== file.size) throw new Error('下载大小不一致。'); break }
+      } while (offset < file.size)
+      const url = URL.createObjectURL(new Blob(chunks, { type: 'application/octet-stream' })), anchor = document.createElement('a')
+      anchor.href = url; anchor.download = file.name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 30000)
+      if (mounted.current) setMessage('文件已交给本机浏览器下载。')
+    } catch (error) { if (mounted.current) setMessage((error as Error).message) }
+    finally { if (mounted.current) setBusy(false) }
+  }
+  return <div className="qyt-card"><h4>手动文件交换</h4><p className="qyt-muted">仅操作远端代理管理者明确启用的专用目录。单文件最多 8 MiB，不覆盖同名文件；不分享本机文件路径，也不给聊天模型文件操作能力。</p>
+    <button className="qyt-button" disabled={busy} onClick={() => { setBusy(true); setMessage(''); void refresh().catch(error => setMessage(error.message)).finally(() => setBusy(false)) }}>检查并刷新交换目录</button>
+    {listing && !listing.enabled && <p>远端尚未开启文件交换。请由代理管理者设置 QIUYA_COMPUTER_EXCHANGE_DIR 为专用真实目录后重启代理。</p>}
+    {listing?.enabled && <><label>选择本机文件并上传 <input type="file" disabled={busy} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void upload(file) }}/></label>
+      {listing.files?.map(file => <p key={file.name}>{file.name} · {file.size} 字节 <button className="qyt-button" disabled={busy} onClick={() => { void download(file) }}>下载</button></p>)}
+      {!listing.files?.length && <p>专用目录暂无可交换的普通文件。</p>}{listing.truncated && <p>列表最多显示 100 个文件；请由目录管理者整理后刷新。</p>}
+    </>}{message && <p role="status">{message}</p>}
+  </div>
+}
 export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Context; enabled: boolean; onEnabled(value: boolean): void; disabled: boolean }) {
   const [targets, setTargets] = useState<NativeTarget[]>([]), [targetId, setTargetId] = useState('')
   const [sessionId, setSessionId] = useState(() => typeof document === 'undefined' ? '' : document.querySelector('[data-conversation-session]')?.getAttribute('data-conversation-session') ?? '')
   const [sessions, setSessions] = useState<ComputerSessionSnapshot[]>([]), [allowed, setAllowed] = useState<string[]>([])
-  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [native, setNative] = useState<{ permissions?: Record<string, boolean>; message?: string } | null>()
+  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [native, setNative] = useState<NativeView | null>(), [fileGeneration, setFileGeneration] = useState(0)
   const [chats, setChats] = useState<{ id: string; title: string }[]>([])
   const [mode, setMode] = useState<'local' | 'remote' | 'browser'>('local'), [endpointUrl, setEndpointUrl] = useState(''), [token, setToken] = useState(''), [allowPrivate, setAllowPrivate] = useState(false)
   const [browser, setBrowser] = useState<'chrome' | 'edge'>('chrome'), [origins, setOrigins] = useState(''), [initialUrl, setInitialUrl] = useState(''), [cdpEndpoint, setCdpEndpoint] = useState('')
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
     if (!connection) throw new Error('连接尚未就绪')
-    const response = await connection.rpc.call('/api', endpoint, { op, sessionId, ...extra })
+    const response = await connection.rpc.call('/api', endpoint, { op, ...(sessionId ? { sessionId } : {}), ...extra })
     if (!response.ok) throw new Error(response.error?.message ?? '电脑操控请求失败')
     return response.value
   }
   const refresh = async () => {
-    const result = await call('status') as { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; native: { permissions?: Record<string, boolean>; message?: string } | null }
+    const result = await call('status') as { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; native: NativeView | null }
     setSessions(result.sessions); setAllowed(result.allowedApps); setNative(result.native)
     const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
     if (catalog) setChats(catalog.ids.filter(id => catalog.byId[id]?.origin !== 'subagent').map(id => ({ id, title: catalog.byId[id].displayTitle ?? catalog.byId[id].title ?? id })))
@@ -38,7 +110,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     setBusy(true); setMessage('')
     try {
       const result = await call(op, extra)
-      if (op === 'connect') { setTargets([]); setTargetId('') }
+      if (op === 'connect') { setTargets([]); setTargetId(''); setFileGeneration(value => value + 1) }
       if (op === 'targets') { const list = result as NativeTarget[]; setTargets(list); if (!list.some(t => t.id === targetId)) setTargetId(list[0]?.id ?? '') }
       await refresh()
     } catch (error) { setMessage((error as Error).message) } finally { setBusy(false) }
@@ -53,6 +125,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
           {mode === 'remote' && <><label>配对地址 <input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={e => setEndpointUrl(e.target.value)}/></label><label>配对密钥 <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)}/></label><label><input type="checkbox" checked={allowPrivate} onChange={e => setAllowPrivate(e.target.checked)}/> 允许通过受信任的私有网络连接（例如本机虚拟机）</label></>}
           {mode === 'browser' && <><label>浏览器 <select value={browser} onChange={e => setBrowser(e.target.value as 'chrome' | 'edge')}><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option></select></label><label>允许的网站来源（每行一个）<textarea rows={3} value={origins} placeholder="https://example.com" onChange={e => setOrigins(e.target.value)}/></label><label>起始页面 <input type="url" value={initialUrl} placeholder="https://example.com/" onChange={e => setInitialUrl(e.target.value)}/></label><details><summary>连接已开启调试的浏览器</summary><label>本机调试地址（可选）<input type="url" value={cdpEndpoint} placeholder="http://127.0.0.1:9222" onChange={e => setCdpEndpoint(e.target.value)}/></label></details><p className="qyt-muted">默认打开独立的浏览器配置，可在其中登录。只允许列出的网站；修改后重新连接即生效。浏览器通道可在后台操作标签页。</p></>}
           <button className="qyt-button" disabled={busy || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>连接所选环境</button>
+          {mode === 'remote' && native?.mode === 'remote' && !busy && <FileExchangePanel key={fileGeneration} call={call}/>}
           <label>关联聊天 <select value={sessionId} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
           <label>应用窗口 <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请刷新窗口列表</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title || item.appId}</option>)}</select></label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

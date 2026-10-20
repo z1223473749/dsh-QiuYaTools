@@ -42,9 +42,11 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     },
   })
   let disposed = false, wasEnabled = enabled()
+  const fileRequests = new Set<AbortController>()
+  const cancelFiles = () => { for (const controller of fileRequests) controller.abort(new Error('文件交换已停止。')) }
   const poll = setInterval(() => {
     const current = enabled()
-    if (wasEnabled && !current) for (const item of service.list()) void service.stop(item.sessionId).catch(() => {})
+    if (wasEnabled && !current) { cancelFiles(); for (const item of service.list()) void service.stop(item.sessionId).catch(() => {}) }
     wasEnabled = current
   }, 100)
   poll.unref()
@@ -72,7 +74,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           if (input.op === 'targets') value = await service.targets(request.signal)
           else if (input.op === 'connect') {
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('此执行器不支持切换设备')
-            switching = true
+            switching = true; cancelFiles()
             try {
               for (const item of service.list()) await service.stop(item.sessionId)
               if (input.mode === 'local') await driver.useLocal()
@@ -87,6 +89,12 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
               } else throw new Error('请选择本机或提供独立电脑的配对地址与密钥。')
               value = await driver.status(request.signal)
             } finally { switching = false }
+          }
+          else if (input.op === 'exchange') {
+            if (!(driver instanceof ComputerDriverRouter)) throw new Error('文件交换仅适用于已配对的独立电脑。')
+            const controller = new AbortController(); fileRequests.add(controller)
+            try { value = await driver.exchange(input.request, AbortSignal.any([request.signal, controller.signal])); assertEnabled(); if (!owner()) throw new Error('文件交换需要本机所有者权限。') }
+            finally { fileRequests.delete(controller) }
           }
           else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
           else if (!sessionId) throw new Error('请先选择要关联的聊天。')
@@ -118,7 +126,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
   })]
   return { service, async dispose() {
     if (disposed) return
-    disposed = true; clearInterval(poll)
+    disposed = true; clearInterval(poll); cancelFiles()
     let failure: unknown
     try { await service.dispose() } catch (error) { failure = error }
     const removed = await Promise.allSettled(unregister.map(stop => Promise.resolve().then(stop)))
