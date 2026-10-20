@@ -33,15 +33,15 @@
 
 ## 界面预览
 
-以下为隔离示例预览，主题使用插件实际样式；不含真实会话、项目或账号数据。
+主题截图来自实际使用界面；设置页和提示词演示使用隔离示例。
 
 **Q主题 · 新会话**
 
-![Q主题鲸与海的新会话界面示例](docs/images/q-theme-home.jpg)
+![Q主题鲸与海的新会话界面](docs/images/q-theme-home.png)
 
 **Q主题 · 会话阅读**
 
-![Q主题半透明会话与输入框示例](docs/images/q-theme-conversation.jpg)
+![Q主题半透明会话与输入框](docs/images/q-theme-conversation.png)
 
 **功能设置**
 
