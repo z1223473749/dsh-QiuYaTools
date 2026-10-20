@@ -4,6 +4,7 @@ import { build } from 'esbuild'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const directory = await mkdtemp(join(tmpdir(), 'qiuya-computer-native-'))
 const source = (await build({ entryPoints: [new URL('../src/features/computer-use/native.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
@@ -13,9 +14,9 @@ const script = join(directory, 'fixture.cjs'), records = join(directory, 'reques
 await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
 
 test('platform resolver selects fixed native assets and rejects unsupported architectures', () => {
-  const base = new URL('file:///fixture/plugin/')
-  assert.equal(computerCompanionPath('darwin', 'arm64', base), '/fixture/plugin/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')
-  assert.equal(computerCompanionPath('win32', 'x64', base), '/fixture/plugin/native/win32-x64/qiuya-windows.exe')
+  const base = pathToFileURL(directory + '/')
+  assert.equal(computerCompanionPath('darwin', 'arm64', base), join(directory, 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'))
+  assert.equal(computerCompanionPath('win32', 'x64', base), join(directory, 'native/win32-x64/qiuya-windows.exe'))
   assert.throws(() => computerCompanionPath('win32', 'ia32', base), { code: 'PLATFORM_UNSUPPORTED' })
 })
 
@@ -71,4 +72,22 @@ test('incompatible companion is rejected before target enumeration or input', as
     const lines = (await readFile(records, 'utf8')).trim().split('\n').map(JSON.parse).filter(row => row.argv.includes('--wrong-protocol'))
     assert.deepEqual(lines.map(row => row.op), ['status'])
   } finally { driver.dispose() }
+})
+
+test('unexpected worker exit clears its recorded owned inputs in a separate cleanup process without replaying the action', async () => {
+  const worker = join(directory, 'crash.cjs'), cleanup = join(directory, 'released.json')
+  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else if(r.op==='observe'){process.stdout.write(JSON.stringify({event:'inputHeld',keys:[17],mouseButtons:['left']})+'\\n',()=>process.exit(77))}})`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
+  await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
+  await driver.dispose()
+  assert.deepEqual(JSON.parse(await readFile(cleanup, 'utf8')), { keys: [17], mouseButtons: ['left'] })
+})
+
+test('failed emergency cleanup blocks subsequent workers and makes disposal report the failure', async () => {
+  const worker = join(directory, 'cleanup-failure.cjs')
+  await writeFile(worker, `if(process.argv.includes('--release-input')){process.stdin.resume();process.stdin.once('end',()=>process.exit(2))}else{require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else process.stdout.write(JSON.stringify({event:'inputHeld',keys:[],mouseButtons:['left']})+'\\n',()=>process.exit(77))})}`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
+  await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
+  await assert.rejects(driver.targets(), { code: 'NATIVE_CLEANUP_FAILED' })
+  await assert.rejects(driver.dispose(), { code: 'NATIVE_CLEANUP_FAILED' })
 })
