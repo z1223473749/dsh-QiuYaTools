@@ -103,7 +103,16 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
             if (!sessions?.get(sessionId)) throw new Error('关联聊天不可用，请重新选择。')
             value = await service.start(sessionId, requireIdentity(input.targetId, '目标'), { allowOnce: true, signal: request.signal })
           }
-          else if (input.op === 'pause') value = await service.pause(sessionId)
+          else if (input.op === 'pause') {
+            if (input.expectedEpoch !== undefined) {
+              if (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0) throw new Error('预览控制周期无效。')
+              const current = service.get(sessionId)
+              if (!current) throw new Error('电脑会话不存在，请重新选择。')
+              // No await may separate this check from pause's synchronous
+              // invalidation. An old preview error cannot stop a new session.
+              value = current.epoch === input.expectedEpoch ? await service.pause(sessionId) : current
+            } else value = await service.pause(sessionId)
+          }
           else if (input.op === 'takeover') value = await service.takeover(sessionId)
           else if (input.op === 'resume') value = await service.resume(sessionId)
           else if (input.op === 'stop') value = await service.stop(sessionId)
