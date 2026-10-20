@@ -59,7 +59,11 @@
 
 Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通过附件和adapter投影。Mac报告实际捕获3次带图请求、4个图片块；Windows最终报告同样验证带图请求和后续真实native move。测试使用本地确定性provider，没有复制真实账户凭据。这证明工具和图片运输，不证明视觉推理。
 
-真实视觉模型固定任务为 **blocked**。当前 `deepseek-flash` 配置没有本次可用图像推理证据，[最近本机只读模型预检](../artifacts/computer-use/model-readiness-delivery-final/report.json)的 `/v1/models` 返回503。不能根据模型名字、本地adapter或浏览器脚本推断完成了视觉模型定位、填写与接管后继续。
+真实视觉固定任务仍为 **blocked**，但已经找到图片能力声明：[当前安装版能力审计](../artifacts/computer-use/model-capability-audit/report.json)确认 `deepseek-account / deepseek-flash`（显示名DeepSeek-V4.1-Flash）的官方bundled目录为`text+image`，account实时列表失败时也可fallback此目录。目录声明不证明本次账号认证、服务/配额或视觉任务成功。
+
+实际desktop服务监听49210，[公开只读RPC探测](../artifacts/computer-use/model-capability-audit/owner-probe.json)两个入口均401；没有使用私有signing secret造Cookie，也没有复制凭据。官方CLI无attach/get-url，当前桌面锁屏，CUA获取现有Harness窗口超时，尚未取得合法owner renderer连接，因此未向真实模型发送推理请求。解锁后应复用现有登录态验证，而不是先断言必须更换模型。
+
+[另一自定义模型入口503](../artifacts/computer-use/model-readiness-delivery-final/report.json)对应localhost49506的pi-ai route；该route未配置input，adapter默认仅text。它不能代替默认account模型的可用性结论，也不能根据模型名称、本地确定性adapter或脚本推断真实视觉定位、填写与接管继续已经通过。
 
 ## 5. 性能、资源与修复证据
 
