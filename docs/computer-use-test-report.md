@@ -2,7 +2,7 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告区分实际桌面、浏览器、确定性模型、故障注入及真实模型，不把这些证据相互替代。原始范围见 [开发计划](windows-and-computer-use-development-plan.md)，操作方式见 [使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。x64宿主的实际手动预览出现失去置顶、目标遮挡输入栏的失败，正在定位；Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
+**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。x64宿主的实际手动预览出现缺少置顶、目标遮挡输入栏的失败，正在定位；Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
 
 ## 1. 版本、环境及证据口径
 
@@ -24,7 +24,7 @@
 | Windows Node 隐藏启动 | passed：真实 Node `windowsHide:true` 启动最终 helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-hook-final/report.json) |
 | Windows 在途拖动释放 | passed：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
 | Windows 最终实际 Harness | passed：包 `ab9d9b12…`，真实 Host/UI **12/12**，含原功能、原生窗、可信浏览器拖出、主 Agent 收图、原生预览人工操作、8MiB 文件交换 | [报告](../artifacts/harness-e2e/windows-canvas-final/report.json)、[验证边界](../artifacts/harness-e2e/windows-canvas-final/validation-notes.json) |
-| Windows x64实际Harness | failed：首轮11/12，后续诊断10/12。真实主Agent图片/原生move可执行，但手动点击目标后预览失去置顶，footer物理命中被目标遮挡而拒绝；后续菜单超时可能级联。不能把native52当此项已通过 | [首次](../artifacts/harness-e2e/windows-x64-activation-failure/report.json)、[控制诊断](../artifacts/harness-e2e/windows-x64-control-diagnostic-failure/report.json)、[实际手动失败](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/manual-preview-input-evidence.json) |
+| Windows x64实际Harness | failed：首轮11/12，后续诊断10/12。真实主Agent图片/原生move可执行，但预览缺少置顶，手动点击目标后footer物理命中被目标遮挡而拒绝；后续菜单超时可能级联。不能把native52当此项已通过 | [首次](../artifacts/harness-e2e/windows-x64-activation-failure/report.json)、[控制诊断](../artifacts/harness-e2e/windows-x64-control-diagnostic-failure/report.json)、[实际手动失败](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/manual-preview-input-evidence.json) |
 | Windows 最终安装恢复 | passed：ARM64 `ab9d9b12…`与x64 `54f25c87…`包，各官方管理器安装、升级保留配置、坏包恢复、回滚、重装 **5/5**；x64为ARM来宾转译 | [ARM64](../artifacts/install-e2e/windows-canvas-final/report.json)、[x64](../artifacts/install-e2e/windows-x64-final/report.json) |
 | Mac 最终安装恢复 | passed：包 `e528ed96…`，相同官方管理器流程 **5/5**；不需要解锁后的桌面输入 | [报告](../artifacts/install-e2e/macos-canvas-final/report.json) |
 | Mac 历史实际 Harness | passed：解锁时原功能、主 Agent 图像、原生分窗等 **10/10**；这是该次源码/候选的证据，新 canvas 在 Mac WKWebView 的手动输入没有被这份旧报告覆盖 | [报告](../artifacts/harness-e2e/macos/report.json) |
@@ -122,7 +122,9 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 三次实际宿主测试均保留。首次激活前置拒绝点击，缺少当时hit的完整证据，不能事后定因；第二次Continue超时没有及时捕获原始Host状态，不能用第三次成功替代原因。第三次实际达到主Agent带图/move、暂停/继续/接管，但预览WS_EX_TOPMOST=false，点击目标后目标成为前台，footer被遮挡而安全拒绝；文件交换8MiB和安装5仍分别通过。
 
-[实际安装helper哈希](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/actual-installed-helper-hashes.json)及[隔离源码复建](../artifacts/computer-use/windows-native-source-binding/report.json)确认精确3b2二进制。源码重建须保留SDK嵌入的原SourceRevisionId，不能把新Git元数据导致的SHA变化当旧代码证据。[纯Win32/UIA最小静态对照](../artifacts/computer-use/windows-preview-topmost-direct/report.json)两架构始终topmost=true，故只说明静态初始化和该组UIA动作不复现，不代表真实Host缺陷已修。下一步定位认证跳转与真实Host状态中首次demote阶段。
+[实际安装helper哈希](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/actual-installed-helper-hashes.json)及[隔离源码复建](../artifacts/computer-use/windows-native-source-binding/report.json)确认精确3b2二进制。源码重建须保留SDK嵌入的原SourceRevisionId，不能把新Git元数据导致的SHA变化当旧代码证据。[纯Win32/UIA最小静态对照](../artifacts/computer-use/windows-preview-topmost-direct/report.json)两架构始终topmost=true，故只说明静态初始化和该组UIA动作不复现，不代表真实Host缺陷已修。后续[首次显示时间线](../artifacts/harness-e2e/windows-x64-first-show-timeline-diagnostic/window-timeline-summary.json)在8秒中采样276次，首次hidden与首次visible均为0x10100；最大间隙148.6ms，不能排除间隙内短暂状态。
+
+进一步[独立原生诊断副本](../artifacts/harness-e2e/windows-x64-native-present-trace-diagnostic/native-presentation-summary.json)记录34条事件：preview字段和managed TopMost均为true，同一STA/WinForms线程；SetWindowPos返回true/error0，但即时及下一消息轮的原生style仍为0x10100。该次置顶请求没有实现，未观察到先置顶再由UIA/导航撤销。WINDOWPOS在base.WndProc前已出现具体insertAfter HWND，Windows可规范化该参数，不能凭此指认外部hook。诊断包0985275e…仅替换原54f包的helper和manifest，**不能算生产包新验收**；当前继续检查启动、前台及进程上下文，缺陷尚未修复。
 
 原生52项的overlap setup会显式SetWindowPos(-1)，隐藏启动5项主要检查可见性，因此不能覆盖这里“真实宿主初始/接管后始终置顶”的缺口。
 
@@ -130,7 +132,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 [Mac完整30分钟旧报告](../artifacts/computer-use/macos-soak-fixed/report.json)是 **failed**：1,800,796ms、19,691有效唯一帧、892无效/过旧时间戳、5次受控终止、0附件写入；即使P95 104ms或旧uniqueFPS达标也不能改判通过。源时间戳冻结在2026-10-20 18:02:33.511 UTC，与pmset显示器熄灭同秒，证据在 `environment-interruption/`。fixture已增加仅生命周期内的防显示器闲置休眠断言与draw遥测；没有修改全局电源或登录设置。修复后短测仍失败，最新桌面锁屏，完整重验blocked。
 
-最近[预检](../artifacts/computer-use/preflight-closeout-final/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5、Chrome17不替代它。
+最近[预检](../artifacts/computer-use/preflight-after-x64-diagnostics/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5、Chrome17不替代它。
 
 | 未完成验收 | 状态 | 前提/范围 |
 | --- | --- | --- |

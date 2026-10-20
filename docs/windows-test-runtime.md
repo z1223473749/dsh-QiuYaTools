@@ -107,6 +107,6 @@ npm install --package-lock-only --ignore-scripts --os=win32 --cpu=arm64 \
 
 本次已实际完成独立 lock 的完整 `npm ci --ignore-scripts`（668 个包）、归档打包与官方 Node ZIP 校验，生成记录见 `artifacts/windows-test-runtime/manifest.json`；不是只执行 dry-run。该次 lock SHA256 为 `dd08239ab518fa1bd0254774b8209853122bffe0c87c1734deab145a82e70dea`，最新准备归档 SHA256 为 `d73549cd1bd3421674e648c407ed7f4517c9ca2cf4ddbf467ea23a6d123e329a`。这次准备包含明确激活自有目标的 fixture；准备完成不等于其最终 E2E 已执行。
 
-首个 lock 资产（归档 SHA256 `8200ae0ad4769178d68d45687a7e4c31cd5a444d6a9693fa0b5ffb9d1713a342`）已解包到全新的 Windows 来宾 UUID 目录并实际启动 Harness/Edge。该轮为 9/10：主 Agent 观察成功且图片进入 adapter，移动动作被原生层以 `foreground-denied` 拒绝，要求先激活目标窗口；该轮没有运行到悬浮窗手动输入分支。正在为这一前台条件补充明确的测试操作并重跑，不能把此前旧外部 runtime 的 10/10 算成新 lock 的通过。最终结果和候选包绑定见 [测试报告](computer-use-test-report.md)。
+首个 lock 资产（归档 SHA256 `8200ae0ad4769178d68d45687a7e4c31cd5a444d6a9693fa0b5ffb9d1713a342`）已解包到全新的 Windows 来宾 UUID 目录并实际启动 Harness/Edge。该轮为 9/10：主 Agent 观察成功且图片进入 adapter，移动动作被原生层以 `foreground-denied` 拒绝，要求先激活目标窗口；该轮没有运行到悬浮窗手动输入分支。此历史失败保留，后续增加了显式激活自有目标的前置操作，并使用新 lock 资产完成 ARM64 最终包 UI12；x64 宿主的独立失败另行保留。精确环境、结果和候选包绑定见 [测试报告](computer-use-test-report.md)，旧外部 runtime 的 10/10 不算新 lock 通过。
 
 另外已验证 `--plan`、错误 Node 文件拒绝、不匹配 manifest 拒绝及显式旧归档来源标记。新运行时不会从用户日常 Harness profile 复制配置、账户或凭据。
