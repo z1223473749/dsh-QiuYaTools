@@ -18,6 +18,7 @@ export class ComputerDriverRouter implements DeviceDriver {
   private readonly controllers = new Set<AbortController>()
   private readonly retirement = new WeakMap<DeviceDriver, Promise<void>>()
   private readonly retiring = new Set<Promise<void>>()
+  private readonly failedRetirements = new Set<DeviceDriver>()
   private disposing?: Promise<void>
   mode: 'local' | 'remote' | 'browser' = 'local'
   constructor(options: { local?: DeviceDriver; remoteFactory?: (options: RemoteComputerOptions) => DeviceDriver; browserFactory?: (options: BrowserOptions) => BrowserSession } = {}) {
@@ -35,7 +36,10 @@ export class ComputerDriverRouter implements DeviceDriver {
     const previous = this.retirement.get(driver); if (previous) return previous
     const pending = Promise.resolve().then(async () => { await driver.dispose?.() })
     this.retirement.set(driver, pending); this.retiring.add(pending)
-    void pending.then(() => { this.retiring.delete(pending) }, () => { this.retiring.delete(pending) })
+    void pending.then(() => { this.retiring.delete(pending); this.failedRetirements.delete(driver) }, () => {
+      this.retiring.delete(pending); this.failedRetirements.add(driver)
+      if (this.retirement.get(driver) === pending) this.retirement.delete(driver)
+    })
     return pending
   }
   private async switching(run: (generation: number, signal: AbortSignal) => Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -45,15 +49,21 @@ export class ComputerDriverRouter implements DeviceDriver {
     const controller = new AbortController(); this.controllers.add(controller)
     const abort = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
-    try { await run(generation, controller.signal) }
+    try {
+      // A previous failed cleanup remains a resource owner. Retry it before
+      // starting any replacement, rather than forgetting its rejected promise.
+      for (const driver of [...this.failedRetirements]) await this.retire(driver)
+      controller.signal.throwIfAborted(); this.assertGeneration(generation)
+      await run(generation, controller.signal)
+    }
     finally { this.controllers.delete(controller); signal?.removeEventListener('abort', abort) }
   }
   private async fallbackLocal(generation: number): Promise<void> {
     this.assertGeneration(generation)
     const previous = this.current
-    this.unsubscribe?.(); this.unsubscribe = undefined; this.current = this.local; this.mode = 'local'
     if (previous !== this.local) await this.retire(previous)
     this.assertGeneration(generation)
+    this.unsubscribe?.(); this.unsubscribe = undefined; this.current = this.local; this.mode = 'local'
   }
   useLocal() { return this.switching(async generation => { await this.fallbackLocal(generation) }) }
   useRemote(options: RemoteComputerOptions) {
@@ -106,11 +116,11 @@ export class ComputerDriverRouter implements DeviceDriver {
     this.disposed = true; this.generation++
     for (const controller of this.controllers) controller.abort(new ComputerError('DISPOSED', '电脑执行器路由已关闭'))
     this.unsubscribe?.(); this.unLocal(); this.listeners.clear()
-    const all = new Set([...this.candidates, this.current, this.local])
+    const all = new Set([...this.candidates, ...this.failedRetirements, this.current, this.local])
     this.disposing = (async () => {
       const results = await Promise.allSettled([...all].map(driver => this.retire(driver)).concat([...this.retiring]))
       const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-      if (failure) throw failure.reason
+      if (failure) { this.disposing = undefined; throw failure.reason }
     })()
     return this.disposing
   }

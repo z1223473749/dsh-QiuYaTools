@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
 
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/driver-router.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/driver-router.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { ComputerDriverRouter } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 function driver(name) {
@@ -104,4 +105,33 @@ test('shutdown cleans local preview even if disposing the remote driver fails', 
   await router.useRemote({ endpoint: 'http://127.0.0.1', token: 'fixture' })
   await assert.rejects(router.dispose(), /remote cleanup failed/)
   assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1)
+})
+
+test('failed backend retirement is retried before replacement and is not hidden by local fallback', async () => {
+  const local = driver('local'), remote = driver('remote'), replacement = driver('replacement')
+  let fail = true, attempts = 0, constructed = 0
+  remote.dispose = async () => { attempts++; if (fail) throw new Error('owned input cleanup offline') }
+  const router = new ComputerDriverRouter({ local, remoteFactory: () => ++constructed === 1 ? remote : replacement })
+  await router.useRemote({ endpoint: 'http://127.0.0.1', token: 'old' })
+  await assert.rejects(router.useLocal(), /cleanup offline/)
+  assert.equal(router.mode, 'remote', 'failed disposal must not be presented as a completed switch')
+  await assert.rejects(router.useRemote({ endpoint: 'http://127.0.0.1', token: 'new' }), /cleanup offline/)
+  assert.equal(constructed, 1, 'no replacement starts while old input cleanup remains uncertain')
+  fail = false
+  await router.useRemote({ endpoint: 'http://127.0.0.1', token: 'new' })
+  assert.equal(attempts, 3); assert.equal((await router.status()).name, 'replacement')
+  await router.dispose()
+})
+
+test('shutdown retries forgotten candidate cleanup and failed disposal can itself be retried', async () => {
+  const local = driver('local'), candidate = driver('candidate'); let attempts = 0, fail = true
+  candidate.status = async () => { throw new Error('connection rejected') }
+  candidate.dispose = async () => { attempts++; if (fail) throw new Error('candidate cleanup offline') }
+  const router = new ComputerDriverRouter({ local, remoteFactory: () => candidate })
+  await assert.rejects(router.useRemote({ endpoint: 'http://127.0.0.1', token: 'bad' }), /candidate cleanup offline/)
+  await assert.rejects(router.dispose(), /candidate cleanup offline/)
+  assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1)
+  fail = false; await router.dispose()
+  assert.equal(attempts, 3)
+  assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1, 'successful cleanup is not replayed')
 })

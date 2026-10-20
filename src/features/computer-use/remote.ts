@@ -64,8 +64,10 @@ export class RemoteComputerDriver implements DeviceDriver {
   private readonly pending = new Set<AbortController>()
   private timer?: ReturnType<typeof setInterval>
   private activeEpoch?: number
+  private readonly ownedEpochs = new Set<number>()
   private issuedEpoch = 0
   private disposed = false
+  private disposing?: Promise<void>
   private requestId = 0
   private heartbeating = false
   constructor(private readonly options: RemoteComputerOptions) {
@@ -78,8 +80,8 @@ export class RemoteComputerDriver implements DeviceDriver {
   }
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private emit(event: NativeComputerEvent): void { for (const listener of this.listeners) { try { listener(event) } catch {} } }
-  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal): Promise<T> {
-    if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
+  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, cleanup = false): Promise<T> {
+    if (this.disposed && !cleanup) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     signal?.throwIfAborted()
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(new ComputerError('REMOTE_TIMEOUT', '远端操作超时')), this.options.timeoutMs ?? 20_000)
     const abort = () => controller.abort(signal?.reason)
@@ -100,7 +102,9 @@ export class RemoteComputerDriver implements DeviceDriver {
     this.timer = setInterval(() => {
       if (this.heartbeating || this.activeEpoch === undefined || this.disposed) return
       this.heartbeating = true
-      void this.rpc('heartbeat', { epoch: this.activeEpoch }).catch(error => {
+      const epoch = this.activeEpoch
+      void this.rpc('heartbeat', { epoch }).catch(error => {
+        if (this.activeEpoch !== epoch || this.disposed) return
         if (this.timer) clearInterval(this.timer); this.timer = undefined; this.activeEpoch = undefined
         this.emit({ event: error instanceof ComputerError && error.code === 'HUMAN_INPUT' ? 'humanInput' : 'disconnected' })
       }).finally(() => { this.heartbeating = false })
@@ -116,31 +120,47 @@ export class RemoteComputerDriver implements DeviceDriver {
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
   async lease(epoch: number, signal?: AbortSignal): Promise<unknown> {
+    if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     epochNumber(epoch)
     if (epoch <= this.issuedEpoch) throw new ComputerError('STALE_EPOCH', '远端控制周期必须递增')
     this.issuedEpoch = epoch
+    // A timeout does not prove that the remote native lease was never acquired.
+    this.ownedEpochs.add(epoch)
     const result = await this.rpc('lease', { epoch }, signal)
-    if (this.disposed || this.issuedEpoch !== epoch) { await this.rpc('release', { epoch }).catch(() => {}); throw new ComputerError('CONTROL_CHANGED', '远端租约已被更新的控制周期替代') }
+    if (this.disposed || this.issuedEpoch !== epoch) { if (!this.disposed) await this.release(epoch).catch(() => {}); throw new ComputerError('CONTROL_CHANGED', '远端租约已被更新的控制周期替代') }
+    // The server confirms cleanup of this client's older leases before granting this one.
+    for (const previous of this.ownedEpochs) if (previous < epoch) this.ownedEpochs.delete(previous)
     this.activeEpoch = epoch; this.startHeartbeat(); return result
   }
   async release(epoch: number, signal?: AbortSignal): Promise<unknown> {
-    if (this.activeEpoch === epoch) { this.activeEpoch = undefined; if (this.timer) clearInterval(this.timer); this.timer = undefined }
-    return this.rpc('release', { epoch: epochNumber(epoch) }, signal)
+    epochNumber(epoch)
+    if (this.activeEpoch === epoch) { if (this.timer) clearInterval(this.timer); this.timer = undefined }
+    const result = await this.rpc('release', { epoch }, signal)
+    this.ownedEpochs.delete(epoch)
+    if (this.activeEpoch === epoch) this.activeEpoch = undefined
+    return result
   }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action) }, signal) }
   async openPreview(_url: string, _title: string, _sessionId: string): Promise<unknown> { throw new ComputerError('LOCAL_PREVIEW_REQUIRED', '独立电脑预览应在本机窗口显示') }
   async closePreview(): Promise<unknown> { return undefined }
-  async dispose(): Promise<void> {
-    if (this.disposed) return
-    if (this.timer) clearInterval(this.timer); this.timer = undefined
-    const epoch = this.activeEpoch; this.activeEpoch = undefined
-    // Cancel owned requests first, then allow only the already-started cleanup
-    // RPC to finish. Concurrent callers cannot begin new work during disposal.
-    for (const controller of this.pending) controller.abort(new ComputerError('DISPOSED', '独立电脑连接已关闭'))
-    const release = epoch === undefined ? Promise.resolve() : this.rpc('release', { epoch }, AbortSignal.timeout(2000)).catch(() => {})
+  dispose(): Promise<void> {
+    if (this.disposing) return this.disposing
     this.disposed = true
-    await release
-    this.listeners.clear()
+    if (this.timer) clearInterval(this.timer); this.timer = undefined
+    this.activeEpoch = undefined
+    // Every uncertain acquisition is retained until cleanup is acknowledged,
+    // including acquisitions whose HTTP response was lost or cancelled.
+    for (const controller of this.pending) controller.abort(new ComputerError('DISPOSED', '独立电脑连接已关闭'))
+    this.disposing = (async () => {
+      const results = await Promise.allSettled([...this.ownedEpochs].map(async epoch => {
+        await this.rpc('release', { epoch }, AbortSignal.timeout(2000), true)
+        this.ownedEpochs.delete(epoch)
+      }))
+      this.listeners.clear()
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      if (failure) { this.disposing = undefined; throw failure.reason }
+    })()
+    return this.disposing
   }
 }
 
