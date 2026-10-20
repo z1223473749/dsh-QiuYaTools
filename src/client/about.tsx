@@ -74,25 +74,27 @@ export function AboutPanel({ version, ctx }: { version: string; ctx: Context }) 
 
   return <div className="qyt-about">
     <style>{css}</style>
-    <div className="qyt-about-hero">
-      <img src={COLOR_ICON_DATA_URL} width="64" height="64" alt="白发少年坐在鲸鱼上" />
-      <div><span className="qyt-about-eyebrow">QiuYaTools</span><h3>为日常使用，多一点顺手。</h3><p>把常用的小功能放在一起，让你更专注于对话和创作。</p></div>
-    </div>
-    <div className="qyt-about-links">
-      {PROJECT_REPOSITORY && <a className="qyt-about-link" href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><AboutIcon kind="github"/><span><strong>GitHub 开源仓库</strong><small>{PROJECT_REPOSITORY.replace('https://github.com/', '')}</small></span><AboutIcon kind="arrow"/></a>}
-      {PROJECT_ISSUES && <a className="qyt-about-link" href={PROJECT_ISSUES} target="_blank" rel="noopener noreferrer"><AboutIcon kind="heart"/><span><strong>反馈与建议</strong><small>发现问题，或聊聊你想要的功能</small></span><AboutIcon kind="arrow"/></a>}
-    </div>
-    <section className="qyt-card qyt-about-update" aria-label="插件更新">
-      <div className="qyt-about-update-title"><span><AboutIcon kind="update"/><h4>版本与更新</h4></span><span className="qyt-version">当前 v{version}</span></div>
-      <p className="qyt-about-update-message" role={failed ? 'alert' : 'status'}>{message}</p>
+    <header className="qyt-about-hero">
+      <div className="qyt-about-sky" aria-hidden="true"><span className="qyt-about-spark qyt-about-spark-one"/><span className="qyt-about-spark qyt-about-spark-two"/><span className="qyt-about-dot"/></div>
+      <div className="qyt-about-art"><span className="qyt-about-halo" aria-hidden="true"/><img src={COLOR_ICON_DATA_URL} width="108" height="108" alt="白发少年坐在鲸鱼上" /></div>
+      <div className="qyt-about-copy"><span className="qyt-about-eyebrow">QiuYa 增强工具箱</span><h3 className="qyt-about-title">QiuYaTools<span aria-hidden="true">.</span></h3><p className="qyt-about-tagline">给 Harness 加一点顺手的小功能。</p></div>
+      <div className="qyt-about-sea" aria-hidden="true"/>
+    </header>
+    <nav className="qyt-about-links" aria-label="项目与反馈">
+      {PROJECT_REPOSITORY && <a className="qyt-about-link" href={PROJECT_REPOSITORY} target="_blank" rel="noopener noreferrer"><span className="qyt-about-link-icon"><AboutIcon kind="github"/></span><span className="qyt-about-link-copy"><strong>GitHub 开源</strong><small>看看源码，一起完善</small></span><AboutIcon kind="arrow"/></a>}
+      {PROJECT_ISSUES && <a className="qyt-about-link" href={PROJECT_ISSUES} target="_blank" rel="noopener noreferrer"><span className="qyt-about-link-icon"><AboutIcon kind="heart"/></span><span className="qyt-about-link-copy"><strong>反馈与建议</strong><small>聊聊你的新想法</small></span><AboutIcon kind="arrow"/></a>}
+    </nav>
+    <section className="qyt-about-update" aria-label="插件更新" aria-busy={busy !== null}>
+      <div className="qyt-about-update-title"><span><span className="qyt-about-update-icon"><AboutIcon kind="update"/></span><h4>版本与更新</h4></span><span className="qyt-about-current">当前 v{version}</span></div>
+      <p className="qyt-about-update-message" data-state={failed ? 'error' : completed ? 'complete' : busy ? 'busy' : 'idle'} role={failed ? 'alert' : 'status'}>{message}</p>
       {check?.status === 'available' && check.release && !completed && <div className="qyt-about-release"><span>v{check.release.version}</span>{check.release.title && <strong>{check.release.title}</strong>}{check.release.notes && <p>{check.release.notes}</p>}</div>}
       <div className="qyt-about-update-actions">
-        <button className="qyt-button" type="button" disabled={busy !== null || completed} onClick={() => { void checkUpdates() }}>{busy === 'check' ? '正在检查…' : '检查更新'}</button>
-        {check?.status === 'available' && check.canInstall && !completed && <button className="qyt-button qyt-button-primary" type="button" disabled={busy !== null} onClick={() => { void installUpdate() }}>{busy === 'install' ? '正在更新…' : `更新至 v${check.release?.version}`}</button>}
+        <button className="qyt-button qyt-about-check" type="button" disabled={busy !== null || completed} onClick={() => { void checkUpdates() }}>{busy === 'check' ? '正在检查…' : '检查更新'}</button>
+        {check?.status === 'available' && check.canInstall && !completed && <button className="qyt-button qyt-button-primary qyt-about-install" type="button" disabled={busy !== null} onClick={() => { void installUpdate() }}>{busy === 'install' ? '正在更新…' : `更新至 v${check.release?.version}`}</button>}
         {PROJECT_RELEASES && <a href={PROJECT_RELEASES} target="_blank" rel="noopener noreferrer">发布记录 <AboutIcon kind="arrow"/></a>}
       </div>
       <p className="qyt-about-update-hint">更新后需要重新打开 Harness；设置会保留。开发链接安装会切换为发布版，源码目录仍保留。</p>
     </section>
-    <footer className="qyt-about-footer"><span>QiuYa · MIT 开源</span><a href="https://www.qiuya.cc" target="_blank" rel="noopener noreferrer">www.qiuya.cc <AboutIcon kind="arrow"/></a></footer>
+    <footer className="qyt-about-footer"><span>Made by <strong>QiuYa</strong><span className="qyt-about-footer-dot" aria-hidden="true"/>MIT 开源</span><a href="https://www.qiuya.cc" target="_blank" rel="noopener noreferrer">www.qiuya.cc <AboutIcon kind="arrow"/></a></footer>
   </div>
 }

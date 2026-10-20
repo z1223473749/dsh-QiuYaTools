@@ -155,4 +155,33 @@ test('About resolves the declared connection service through the public Cordis c
   } finally { f.dispose() }
 })
 
+test('About presents the chosen brand art, keeps every public entry and hides decorative details from accessibility', () => {
+  const f = mount(() => Promise.reject(new Error('No request expected')))
+  try {
+    const image = f.container.querySelector('.qyt-about-hero img')
+    assert.equal(image.getAttribute('width'), '108')
+    assert.equal(image.getAttribute('height'), '108')
+    assert.equal(image.alt, '白发少年坐在鲸鱼上')
+    assert.match(f.container.querySelector('.qyt-about-title').textContent, /QiuYaTools/)
+    for (const selector of ['.qyt-about-sky', '.qyt-about-halo', '.qyt-about-sea']) {
+      assert.equal(f.container.querySelector(selector).getAttribute('aria-hidden'), 'true')
+    }
+    const projectLinks = [...f.container.querySelectorAll('nav[aria-label="项目与反馈"] a')]
+    assert.equal(projectLinks.length, 2)
+    assert.equal(new URL(projectLinks[0].href).hostname, 'github.com')
+    assert.equal(new URL(projectLinks[1].href).pathname.endsWith('/issues'), true)
+    const releases = [...f.container.querySelectorAll('a')].find(link => link.textContent.includes('发布记录'))
+    assert.equal(new URL(releases.href).pathname.endsWith('/releases'), true)
+    const website = f.container.querySelector('a[href="https://www.qiuya.cc"]')
+    assert.ok(website)
+    assert.match(website.textContent, /www\.qiuya\.cc/)
+    for (const link of [...projectLinks, releases, website]) {
+      assert.equal(link.target, '_blank')
+      assert.equal(link.rel, 'noopener noreferrer')
+    }
+    assert.doesNotMatch(f.container.querySelector('footer').textContent, /AI|图标/)
+    assert.equal(f.calls.length, 0)
+  } finally { f.dispose() }
+})
+
 test.after(() => dom.window.close())
