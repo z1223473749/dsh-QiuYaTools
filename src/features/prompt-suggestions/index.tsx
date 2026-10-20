@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useRef } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { attachPromptSuggestion, type PromptSuggestionController, type PromptSuggestionState, type PromptSuggestionReply } from './client.ts'
@@ -69,7 +70,10 @@ export function installPromptSuggestions(ctx: Context): () => void {
       const card = anchor.current?.closest<HTMLElement>('[data-composer-card]')
       if (!card?.closest('[data-slot="main.conversation"]')) return
       const menu = nativeMenu(ctx, sessionId)
+      const selection = ctx.uiSession.adapter.current
       const instance = attachPromptSuggestion(card, {
+        anchor: anchor.current!,
+        isCurrentSession: () => selection.getSnapshot().key === sessionId,
         read: () => current.current.state,
         captureInsertion: () => current.current.inputActions.captureInsertion(),
         insertText: (text, span) => current.current.inputActions.insertText(text, span),
@@ -87,7 +91,8 @@ export function installPromptSuggestions(ctx: Context): () => void {
       })
       controller.current = instance
       const stopMenu = menu?.subscribe(instance.sync)
-      return () => { stopMenu?.(); instance.dispose(); if (controller.current === instance) controller.current = undefined }
+      const stopSelection = selection.subscribe(instance.sync)
+      return () => { stopSelection(); stopMenu?.(); instance.dispose(); if (controller.current === instance) controller.current = undefined }
     }, [sessionId])
     useLayoutEffect(() => { controller.current?.sync() })
     return <span ref={anchor} data-qyt-prompt-anchor="" hidden aria-hidden="true" />

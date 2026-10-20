@@ -14,6 +14,8 @@ export interface PromptInsertion { readonly start: number; readonly end: number;
 export interface PromptSuggestionRequest { sessionId: string; requestId: string; language: 'zh' | 'en' }
 export interface PromptSuggestionReply { suggestion: string | null; anchorMessageId: string | null }
 export interface PromptSuggestionOptions {
+  anchor?: HTMLElement
+  isCurrentSession?(): boolean
   read(): PromptSuggestionState
   captureInsertion(): PromptInsertion
   insertText(text: string, span: PromptInsertion): boolean
@@ -47,6 +49,8 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
   const doc = card.ownerDocument
   const page = doc.defaultView
   if (!page) return { sync() {}, dispose() {} }
+  const ownerSessionId = options.read().sessionId
+  const anchor = options.anchor ?? card
   const ghost = doc.createElement('div')
   ghost.className = 'qyt-prompt-suggestion'
   ghost.setAttribute('aria-hidden', 'true')
@@ -95,7 +99,8 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
   const locate = (): void => {
     const found = card.querySelector<HTMLElement>('[data-composer-input]')
     const parent = found?.parentElement ?? null
-    if (parent !== grow) {
+    if (found !== editor || parent !== grow) {
+      stopRequest(); hide(); candidate = undefined; attemptedKey = ''
       grow?.removeAttribute('data-qyt-prompt-visible')
       ghost.remove(); announcement.remove()
       grow = parent
@@ -109,20 +114,28 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
     return Array.from(doc.querySelectorAll<HTMLElement>(menuSelector)).some(element =>
       element.getClientRects().length > 0 && !element.closest('[hidden], [aria-hidden="true"]'))
   }
+  const ownsSession = (state: PromptSuggestionState): boolean => {
+    if (state.sessionId !== ownerSessionId || !anchor.isConnected || !card.isConnected
+      || anchor.closest('[data-composer-card]') !== card
+      || card.closest('[data-conversation-session]')?.getAttribute('data-conversation-session') !== ownerSessionId) return false
+    try { return options.isCurrentSession?.() !== false } catch { return false }
+  }
+  // Display belongs to the visible conversation, independently of keyboard focus.
   const eligible = (state: PromptSuggestionState): boolean => {
-    if (!canSuggest(state) || !card.isConnected || card.getClientRects().length === 0 || !editor || !grow || disposed) return false
-    if (doc.visibilityState === 'hidden' || !doc.hasFocus() || doc.activeElement !== editor) return false
+    if (!canSuggest(state) || !ownsSession(state) || card.getClientRects().length === 0 || !editor || !grow || disposed) return false
+    if (doc.visibilityState === 'hidden') return false
     if (composing || Date.now() < compositionUntil || editor.hasAttribute('data-composer-composing')) return false
     if (editor.getAttribute('contenteditable') !== 'true' || editor.getAttribute('aria-disabled') === 'true') return false
-    if (editor.textContent !== '' || card.closest('[hidden], [aria-hidden="true"]')) return false
+    if (editor.textContent !== '' || card.closest('[hidden], [aria-hidden="true"], [inert]')) return false
+    return true
+  }
+  const canAccept = (state: PromptSuggestionState): boolean => {
+    if (!eligible(state) || !editor || !doc.hasFocus() || doc.activeElement !== editor) return false
     try { if (options.nativeMenuOpen?.()) return false } catch { return false }
     if (card.querySelector('[data-trigger-menu], [data-popup-select], [role="listbox"]') || portalMenuOpen()) return false
     const selection = doc.getSelection()
     if (!selection?.isCollapsed || !selection.anchorNode || !editor.contains(selection.anchorNode)) return false
-    try {
-      const span = options.captureInsertion()
-      return span.start === 0 && span.end === 0 && span.draftRev === state.draftRev
-    } catch { return false }
+    return true
   }
   const show = (state: PromptSuggestionState): void => {
     if (!candidate || !grow || !eligible(state) || dismissedKey === currentKey) { hide(); return }
@@ -138,6 +151,9 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
     if (disposed) return
     locate()
     const state = options.read()
+    if (!ownsSession(state)) {
+      stopRequest(); hide(); candidate = undefined; attemptedKey = ''; return
+    }
     const nextKey = identity(state)
     if (nextKey !== currentKey) {
       stopRequest(); hide(); candidate = undefined; attemptedKey = ''; currentKey = nextKey
@@ -158,6 +174,7 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
       void options.request({ sessionId: current.sessionId, requestId: id, language: current.language }, abort.signal)
         .then(result => {
           if (disposed || epoch !== generation || abort.signal.aborted || identity(options.read()) !== scheduledKey) return
+          if (!eligible(options.read())) { stopRequest(); hide(); return }
           candidate = suggestionText(result.suggestion)
           show(options.read())
         }).catch(() => { /* A failed helper request leaves the native placeholder and draft alone. */ })
@@ -170,8 +187,9 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
     if (event.key !== 'Tab' && event.key !== 'Escape') return
     locate()
     const state = options.read()
+    if (!ownsSession(state) || identity(state) !== currentKey) { sync(); return }
     if (!editor || event.target !== editor && !(event.target instanceof page.Node && editor.contains(event.target))
-      || identity(state) !== currentKey || !eligible(state)) { hide(); return }
+      || !canAccept(state)) return
     if (event.key === 'Escape') {
       dismissedKey = currentKey; hide(); stopRequest(); event.preventDefault(); return
     }
@@ -194,17 +212,20 @@ export function attachPromptSuggestion(card: HTMLElement, options: PromptSuggest
   const observer = new page.MutationObserver(sync)
   observer.observe(card, { subtree: true, childList: true, attributes: true, attributeFilter: ['contenteditable', 'aria-disabled', 'data-composer-composing', 'hidden', 'data-trigger-menu', 'data-popup-select'] })
   // Native toolbar menus are portaled to body and can retain editor focus on WebKit.
-  // Ignore ordinary conversation mutations; only menu/trigger changes resync the helper.
+  // Ignore ordinary message mutations, but invalidate immediately when the native
+  // conversation marker changes or React detaches this specific slot occurrence.
   const portalSelector = `${menuSelector}, ${triggerSelector}`
   const portalObserver = new page.MutationObserver(records => {
     const touchesMenu = (node: Node): boolean => node instanceof page.Element
       && (!!node.closest(portalSelector) || !!node.querySelector(portalSelector))
+    const containsOwner = (node: Node): boolean => node === anchor || node === card
+      || node instanceof page.Element && (node.contains(anchor) || node.contains(card))
     if (records.some(record => record.type === 'attributes'
-      ? (record.target instanceof page.Element && (card.contains(record.target) || touchesMenu(record.target)))
-      : touchesMenu(record.target) || [...record.addedNodes, ...record.removedNodes].some(touchesMenu))) sync()
+      ? (record.target instanceof page.Element && (card.contains(record.target) || containsOwner(record.target) || touchesMenu(record.target)))
+      : touchesMenu(record.target) || [...record.addedNodes, ...record.removedNodes].some(node => touchesMenu(node) || containsOwner(node)))) sync()
   })
   portalObserver.observe(doc.body, { subtree: true, childList: true, attributes: true,
-    attributeFilter: ['aria-expanded', 'aria-controls', 'aria-hidden', 'hidden', 'role'] })
+    attributeFilter: ['aria-expanded', 'aria-controls', 'aria-hidden', 'hidden', 'inert', 'role', 'data-conversation-session'] })
   card.addEventListener('keydown', onKeyDown)
   card.addEventListener('input', onInput)
   card.addEventListener('focusin', sync)

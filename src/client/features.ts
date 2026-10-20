@@ -15,7 +15,7 @@ const dependencies: Record<FeatureField, string[]> = {
   bulkArchiveEnabled: ['locale', 'sessions', 'workspaces', 'uiWorkspace'],
   planCommentsEnabled: ['slots', 'locale', 'sessions', 'sidebarRight'],
   sidebarToolsEnabled: ['slots', 'sessions', 'workspaces', 'uiSession'],
-  promptSuggestionsEnabled: ['slots', 'locale', 'connection'],
+  promptSuggestionsEnabled: ['slots', 'locale', 'connection', 'uiSession'],
 }
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */

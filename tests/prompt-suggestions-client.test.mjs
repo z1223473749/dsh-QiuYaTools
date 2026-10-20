@@ -63,6 +63,7 @@ function fixture(t, { state: patch = {}, beforeInstall, debounceMs = 1 } = {}) {
     <button id="outside" type="button">其他控件</button>
   </section></main></body></html>`, { url: 'https://harness.test/' })
   const { document: doc } = dom.window
+  const section = doc.querySelector('[data-phase="active"]')
   const card = doc.querySelector('[data-composer-card]')
   const form = doc.querySelector('form')
   const outside = doc.getElementById('outside')
@@ -84,6 +85,7 @@ function fixture(t, { state: patch = {}, beforeInstall, debounceMs = 1 } = {}) {
     ready: true, draft: '', draftRev: 1, phase: 'plain', attachmentCount: 0, occurrenceCount: 0,
     ...patch,
   }
+  section.dataset.conversationSession = state.sessionId
   const requests = []
   const canceled = []
   const inserted = []
@@ -93,6 +95,7 @@ function fixture(t, { state: patch = {}, beforeInstall, debounceMs = 1 } = {}) {
   let insert = () => true
   let requestId = 0
   let nativeMenuOpen = false
+  let currentSession = true
   let submits = 0
   form.addEventListener('submit', event => { submits++; event.preventDefault() })
   const options = {
@@ -108,24 +111,26 @@ function fixture(t, { state: patch = {}, beforeInstall, debounceMs = 1 } = {}) {
     createRequestId: () => `request-${++requestId}`,
     debounceMs,
     nativeMenuOpen: () => nativeMenuOpen,
+    isCurrentSession: () => currentSession,
     send: () => forbidden.push('send'),
     setDraft: () => forbidden.push('setDraft'),
   }
   const f = {
-    dom, doc, card, outside, state, requests, canceled, inserted, forbidden, time,
+    dom, doc, section, card, outside, state, requests, canceled, inserted, forbidden, time,
     get editor() { return card.querySelector('[data-composer-input]') },
     get grow() { return this.editor?.parentElement },
     get placeholder() { return card.querySelector('[data-composer-placeholder]') },
     get controller() { return controllers.at(-1) },
     get submits() { return submits },
-    install() {
-      const controller = module.exports.attachPromptSuggestion(card, options)
+    install(overrides = {}) {
+      const controller = module.exports.attachPromptSuggestion(card, { ...options, ...overrides })
       controllers.push(controller)
       return controller
     },
     setCapture(value) { capture = value },
     setInsert(value) { insert = value },
     nativeMenu(value, sync = true) { nativeMenuOpen = value; if (sync) this.controller?.sync() },
+    currentSession(value, sync = true) { currentSession = value; if (sync) this.controller?.sync() },
     selectEditor() {
       const range = doc.createRange()
       range.selectNodeContents(this.editor); range.collapse(false)
@@ -232,7 +237,7 @@ test('draft, attachment, reference and non-ready input states never request a su
   })
 })
 
-test('native readonly, hidden, unfocused and nonempty editor surfaces remain native', async t => {
+test('native readonly, hidden and nonempty editor surfaces remain native', async t => {
   for (const [name, beforeInstall] of [
     ['contenteditable=false', f => f.editor.setAttribute('contenteditable', 'false')],
     ['aria-disabled', f => f.editor.setAttribute('aria-disabled', 'true')],
@@ -241,10 +246,10 @@ test('native readonly, hidden, unfocused and nonempty editor surfaces remain nat
     ['hidden ancestor', f => f.card.parentElement.setAttribute('hidden', '')],
     ['aria-hidden ancestor', f => f.card.parentElement.setAttribute('aria-hidden', 'true')],
     ['unlaid-out card', f => { f.card.getClientRects = () => [] }],
-    ['document without focus', f => f.windowFocus(false)],
     ['background page', f => f.visibility('hidden')],
-    ['another focused control', f => f.outside.focus()],
     ['detached card', f => f.card.remove()],
+    ['missing conversation marker', f => f.section.removeAttribute('data-conversation-session')],
+    ['another conversation marker', f => { f.section.dataset.conversationSession = 'session-two' }],
   ]) await t.test(name, async t => {
     const f = fixture(t, { beforeInstall })
     await f.tick(10)
@@ -355,22 +360,21 @@ test('a rejected or throwing public insertion leaves Tab available to native nav
   })
 })
 
-test('the insertion span is checked again after the eligibility read without swallowing stale Tab presses', async t => {
-  for (const failure of ['revision', 'throw']) await t.test(failure, async t => {
-    const f = fixture(t); await f.show()
-    let captures = 0
-    f.setCapture(() => {
-      captures++
-      if (captures === 2 && failure === 'throw') throw new Error('editor changed during key handling')
-      return { start: 0, end: 0, draftRev: f.state.draftRev - (captures === 2 ? 1 : 0) }
-    })
-    assert.equal(f.key('Tab').defaultPrevented, false)
-    assert.equal(captures, 2)
-    assert.deepEqual(f.inserted, [])
-    await settle()
-    assert.equal(f.visible(), false)
-    assert.equal(f.placeholderVisible(), true)
+test('a revision change during insertion capture cannot bypass the public insert CAS or consume Tab', async t => {
+  const f = fixture(t); await f.show()
+  f.setCapture(() => {
+    const draftRev = f.state.draftRev
+    f.state.draftRev++
+    return { start: 0, end: 0, draftRev }
   })
+  f.setInsert((_text, span) => span.draftRev === f.state.draftRev)
+  assert.equal(f.key('Tab').defaultPrevented, false)
+  assert.deepEqual(f.forbidden, [])
+  assert.equal(f.state.draft, '')
+  assert.equal(f.editor.textContent, '')
+  await settle()
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
 })
 
 test('native menus and native keyboard handlers take precedence over suggestion acceptance', async t => {
@@ -379,9 +383,10 @@ test('native menus and native keyboard handlers take precedence over suggestion 
     const menu = f.doc.createElement('div'); menu.setAttribute(marker, marker === 'role' ? 'listbox' : '')
     f.card.append(menu)
     assert.equal(f.key('Tab').defaultPrevented, false)
+    assert.equal(f.key('Escape').defaultPrevented, false)
     assert.deepEqual(f.inserted, [])
     await settle()
-    assert.equal(f.visible(), false)
+    assert.equal(f.visible(), true, 'native command menus affect key acceptance, not passive display')
   })
   await t.test('native preventDefault', async t => {
     const f = fixture(t); await f.show()
@@ -393,57 +398,59 @@ test('native menus and native keyboard handlers take precedence over suggestion 
     const f = fixture(t); await f.show()
     f.nativeMenu(true, false)
     assert.equal(f.key('Tab').defaultPrevented, false)
+    assert.equal(f.key('Escape').defaultPrevented, false)
     assert.deepEqual(f.inserted, [])
-    assert.equal(f.visible(), false)
+    assert.equal(f.visible(), true)
   })
 })
 
-test('portaled native menus immediately keep Tab native and restore the cached suggestion after closing', async t => {
+test('portaled native menus keep the suggestion visible while Tab and Escape remain native', async t => {
   for (const role of ['menu', 'dialog', 'alertdialog']) await t.test(role, async t => {
     const f = fixture(t); await f.show()
     const menu = portalMenu(f, { role })
     assert.equal(f.doc.activeElement, f.editor, 'a portal can open without moving native editor focus')
     assert.equal(f.key('Tab').defaultPrevented, false, 'keydown rechecks the portal before MutationObserver runs')
+    assert.equal(f.key('Escape').defaultPrevented, false)
     assert.deepEqual(f.inserted, [])
     await settle()
-    assert.equal(f.visible(), false)
-    assert.equal(f.placeholderVisible(), true)
+    assert.equal(f.visible(), true)
+    assert.equal(f.placeholderVisible(), false)
     menu.remove(); await settle()
-    assert.equal(f.visible(), true, 'closing the portal restores the same eligible conversation context')
+    assert.equal(f.visible(), true)
     assert.equal(f.requests.length, 1, 'a cached suggestion does not spend another model request')
     assert.equal(f.key('Tab').defaultPrevented, true)
     assert.equal(f.inserted.length, 1)
   })
 })
 
-test('a portaled menu cancels pending work and its stale completion cannot appear', async t => {
+test('a portaled menu preserves pending work and its result can display without accepting menu keys', async t => {
   const f = fixture(t); await f.tick(1)
   const menu = portalMenu(f)
   await settle()
-  assert.equal(f.requests[0].signal.aborted, true)
-  assert.deepEqual(f.canceled, ['request-1'])
+  assert.equal(f.requests[0].signal.aborted, false)
+  assert.deepEqual(f.canceled, [])
   assert.equal(f.doc.activeElement, f.editor)
-  await f.reply(0, '打开菜单前的旧建议')
-  assert.equal(f.visible(), false)
-  assert.equal(f.key('Tab').defaultPrevented, false)
-  menu.remove(); await f.tick(1)
-  assert.equal(f.requests.length, 2)
-  await f.reply(1, '关闭菜单后的建议')
+  await f.reply(0, '菜单打开时返回的建议')
   assert.equal(f.visible(), true)
-  assert.equal(f.key('Tab').defaultPrevented, true)
-  assert.deepEqual(f.inserted.map(value => value.text), ['关闭菜单后的建议'])
-})
-
-test('an already open portaled dialog prevents a helper request until it closes', async t => {
-  let menu
-  const f = fixture(t, { beforeInstall(value) { menu = portalMenu(value, { role: 'dialog' }) } })
-  await f.tick(20)
-  assert.equal(f.requests.length, 0)
-  assert.equal(f.visible(), false)
+  assert.equal(f.key('Tab').defaultPrevented, false)
+  assert.equal(f.key('Escape').defaultPrevented, false)
   menu.remove(); await f.tick(1)
   assert.equal(f.requests.length, 1)
-  await f.reply()
   assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, true)
+  assert.deepEqual(f.inserted.map(value => value.text), ['菜单打开时返回的建议'])
+})
+
+test('an already open portaled dialog does not prevent passive suggestion generation', async t => {
+  let menu
+  const f = fixture(t, { beforeInstall(value) { menu = portalMenu(value, { role: 'dialog' }) } })
+  await f.show()
+  assert.equal(f.key('Tab').defaultPrevented, false)
+  assert.equal(f.key('Escape').defaultPrevented, false)
+  menu.remove(); await settle()
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, true)
 })
 
 test('hidden or unlaid-out portal menus do not suppress an otherwise eligible composer', async t => {
@@ -469,7 +476,7 @@ test('hidden or unlaid-out portal menus do not suppress an otherwise eligible co
   })
 })
 
-test('portal visibility attribute changes hide and restore suggestions without any focus change', async t => {
+test('portal visibility attributes affect only key priority without replacing the displayed suggestion', async t => {
   for (const attribute of ['hidden', 'aria-hidden']) await t.test(attribute, async t => {
     const f = fixture(t)
     const parent = f.doc.createElement('div')
@@ -478,9 +485,10 @@ test('portal visibility attribute changes hide and restore suggestions without a
     portalMenu(f, { parent })
     await f.show()
     parent.removeAttribute(attribute); await settle()
-    assert.equal(f.visible(), false)
-    assert.equal(f.placeholderVisible(), true)
+    assert.equal(f.visible(), true)
+    assert.equal(f.placeholderVisible(), false)
     assert.equal(f.key('Tab').defaultPrevented, false)
+    assert.equal(f.key('Escape').defaultPrevented, false)
     parent.setAttribute(attribute, attribute === 'hidden' ? '' : 'true'); await settle()
     assert.equal(f.visible(), true)
     assert.equal(f.requests.length, 1)
@@ -501,7 +509,7 @@ test('expanded native model triggers win even when their portaled panel uses rol
     assert.equal(f.key('Tab').defaultPrevented, false, 'an expanded trigger is checked before its observer callback')
     assert.deepEqual(f.inserted, [])
     await settle()
-    assert.equal(f.visible(), false)
+    assert.equal(f.visible(), true)
     trigger.setAttribute('aria-expanded', 'false'); await settle()
     assert.equal(f.visible(), true)
     assert.equal(f.requests.length, 1)
@@ -509,7 +517,7 @@ test('expanded native model triggers win even when their portaled panel uses rol
   })
 })
 
-test('expanding a native model trigger cancels a pending helper and closing it permits a fresh request', async t => {
+test('expanding a native model trigger preserves pending work and only changes keyboard priority', async t => {
   const f = fixture(t)
   const trigger = f.doc.createElement('button')
   trigger.setAttribute('aria-controls', 'native-model-panel')
@@ -518,14 +526,16 @@ test('expanding a native model trigger cancels a pending helper and closing it p
   portalMenu(f, { role: 'group' }).id = 'native-model-panel'
   await f.tick(1)
   trigger.setAttribute('aria-expanded', 'true'); await settle()
-  assert.equal(f.requests[0].signal.aborted, true)
-  assert.deepEqual(f.canceled, ['request-1'])
-  await f.reply(0, '展开菜单之前的旧建议')
-  assert.equal(f.visible(), false)
-  trigger.removeAttribute('aria-expanded'); await f.tick(1)
-  assert.equal(f.requests.length, 2)
-  await f.reply(1, '关闭菜单后的新建议')
+  assert.equal(f.requests[0].signal.aborted, false)
+  assert.deepEqual(f.canceled, [])
+  await f.reply(0, '菜单展开时返回的建议')
   assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, false)
+  assert.equal(f.key('Escape').defaultPrevented, false)
+  trigger.removeAttribute('aria-expanded'); await f.tick(1)
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, true)
 })
 
 test('modified, repeated, composing and noncancelable keys keep their native behavior', async t => {
@@ -590,29 +600,94 @@ test('IME starting during a request aborts it and ignores its late result', asyn
   assert.equal(f.visible(), true)
 })
 
-test('blur and hidden documents cancel pending work and never display its stale completion', async t => {
+test('an unfocused but visible empty composer can display a suggestion without capturing an insertion', async t => {
+  for (const [name, leave, returnToEditor] of [
+    ['window without focus', f => f.windowFocus(false), f => f.windowFocus(true)],
+    ['another focused control', f => {
+      f.outside.focus()
+      const range = f.doc.createRange(); range.selectNodeContents(f.outside); range.collapse(false)
+      f.doc.getSelection().removeAllRanges(); f.doc.getSelection().addRange(range)
+      f.doc.dispatchEvent(new f.dom.window.Event('selectionchange'))
+    }, f => f.focusEditor()],
+  ]) await t.test(name, async t => {
+    const f = fixture(t, { beforeInstall(value) {
+      leave(value)
+      value.setCapture(() => { throw new Error('unfocused insertion is unavailable') })
+    } })
+    await f.show('失焦时仍可阅读的建议')
+    assert.equal(f.placeholderVisible(), false)
+    assert.equal(f.key('Tab').defaultPrevented, false, 'Tab acceptance still requires editor and document focus')
+    assert.deepEqual(f.inserted, [])
+    f.setCapture(() => ({ start: 0, end: 0, draftRev: f.state.draftRev }))
+    returnToEditor(f); f.selectEditor(); await settle()
+    assert.equal(f.visible(), true)
+    assert.equal(f.key('Tab').defaultPrevented, true)
+    assert.deepEqual(f.inserted.map(value => value.text), ['失焦时仍可阅读的建议'])
+  })
+})
+
+test('blur preserves an already visible suggestion and never retries the same context', async t => {
   for (const [name, leave, returnToEditor] of [
     ['window blur', f => f.windowFocus(false), f => f.windowFocus(true)],
     ['focusout to another control', f => f.outside.focus(), f => f.focusEditor()],
-    ['page hidden', f => f.visibility('hidden'), f => f.visibility('visible')],
+  ]) await t.test(name, async t => {
+    const f = fixture(t); await f.show('可以保留在输入框里的建议')
+    const ghost = f.ghost()
+    leave(f); await settle()
+    assert.equal(f.visible(), true)
+    assert.equal(f.ghost(), ghost)
+    assert.equal(f.ghost().querySelector('.qyt-prompt-suggestion-text').textContent, '可以保留在输入框里的建议')
+    assert.equal(f.placeholderVisible(), false)
+    assert.deepEqual(f.canceled, [])
+    assert.equal(f.key('Tab', {}, name === 'window blur' ? f.editor : f.outside).defaultPrevented, false)
+    assert.deepEqual(f.inserted, [])
+    await f.tick(20_000)
+    assert.equal(f.requests.length, 1)
+    returnToEditor(f); await settle()
+    assert.equal(f.visible(), true)
+    assert.equal(f.key('Tab').defaultPrevented, true)
+    assert.equal(f.inserted.length, 1)
+  })
+})
+
+test('losing focus during a pending request does not cancel a visible-page suggestion', async t => {
+  for (const [name, leave, returnToEditor] of [
+    ['window blur', f => f.windowFocus(false), f => f.windowFocus(true)],
+    ['focusout to another control', f => f.outside.focus(), f => f.focusEditor()],
   ]) await t.test(name, async t => {
     const f = fixture(t); await f.tick(1)
     leave(f); await settle()
-    assert.equal(f.requests[0].signal.aborted, true)
-    assert.deepEqual(f.canceled, ['request-1'])
-    await f.reply(0, '离开之前的结果')
-    assert.equal(f.visible(), false)
-    returnToEditor(f); await f.tick(1)
-    assert.equal(f.requests.length, 2)
-    await f.reply(1, '重新聚焦的结果')
+    assert.equal(f.requests[0].signal.aborted, false)
+    assert.deepEqual(f.canceled, [])
+    await f.reply(0, '焦点移走后返回的建议')
     assert.equal(f.visible(), true)
+    assert.equal(f.placeholderVisible(), false)
+    returnToEditor(f); await f.tick(1)
+    assert.equal(f.requests.length, 1)
+    assert.equal(f.visible(), true)
+    assert.equal(f.key('Tab').defaultPrevented, true)
+    assert.deepEqual(f.inserted.map(value => value.text), ['焦点移走后返回的建议'])
   })
+})
+
+test('a hidden page still cancels pending work and rejects its stale completion', async t => {
+  const f = fixture(t); await f.tick(1)
+  f.visibility('hidden'); await settle()
+  assert.equal(f.requests[0].signal.aborted, true)
+  assert.deepEqual(f.canceled, ['request-1'])
+  await f.reply(0, '页面隐藏前的旧结果')
+  assert.equal(f.visible(), false)
+  f.visibility('visible'); await f.tick(1)
+  assert.equal(f.requests.length, 2)
+  await f.reply(1, '重新可见后的新结果')
+  assert.equal(f.visible(), true)
 })
 
 test('switching session, conversation context or language aborts and discards the old request', async t => {
   for (const patch of [{ sessionId: 'session-two' }, { contextKey: 'assistant-turn-two' }, { language: 'en' }]) await t.test(Object.keys(patch)[0], async t => {
     const f = fixture(t); await f.tick(1)
     f.update(patch)
+    if (patch.sessionId) { f.section.dataset.conversationSession = patch.sessionId; f.install() }
     assert.equal(f.requests[0].signal.aborted, true)
     assert.deepEqual(f.canceled, ['request-1'])
     await f.tick(1)
@@ -626,9 +701,260 @@ test('switching session, conversation context or language aborts and discards th
   })
 })
 
+test('switching sessions immediately removes the old visible candidate even before the next sync', async t => {
+  const f = fixture(t); await f.show('第一条会话的建议')
+  Object.assign(f.state, { sessionId: 'session-two', contextKey: 'assistant-turn-two', draftRev: 2 })
+  assert.equal(f.key('Tab').defaultPrevented, false, 'a retained card cannot accept the previous session candidate')
+  assert.deepEqual(f.inserted, [])
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
+  f.controller.sync(); await f.tick(1)
+  assert.equal(f.requests.length, 1, 'one controller never rebinds to a new session')
+  f.section.dataset.conversationSession = 'session-two'; f.install(); await f.tick(1)
+  assert.equal(f.requests.length, 2)
+  assert.equal(f.requests[1].payload.sessionId, 'session-two')
+  await f.reply(1, '第二条会话的建议')
+  assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, true)
+  assert.deepEqual(f.inserted, [{ text: '第二条会话的建议', span: { start: 0, end: 0, draftRev: 2 } }])
+})
+
+test('a reused card with a replacement empty editor never inherits another session result or readonly state', async t => {
+  const f = fixture(t); await f.tick(1)
+  const previousGrow = f.grow
+  const replacementGrow = f.doc.createElement('div')
+  replacementGrow.dataset.grow = ''
+  const replacementEditor = f.editor.cloneNode(false)
+  const replacementPlaceholder = f.placeholder.cloneNode(true)
+  replacementGrow.append(replacementEditor, replacementPlaceholder)
+  Object.assign(f.state, { sessionId: 'session-two', contextKey: 'assistant-turn-two', draftRev: 2 })
+  f.section.dataset.conversationSession = 'session-two'
+  previousGrow.replaceWith(replacementGrow)
+  f.install()
+  await f.tick(1)
+  assert.equal(f.editor, replacementEditor)
+  assert.equal(f.editor.getAttribute('contenteditable'), 'true')
+  assert.equal(f.editor.getAttribute('aria-disabled'), null)
+  assert.equal(f.editor.textContent, '')
+  assert.equal(f.requests[0].signal.aborted, true)
+  assert.deepEqual(f.canceled, ['request-1'])
+  assert.equal(f.requests.length, 2)
+  assert.equal(f.requests[1].payload.sessionId, 'session-two')
+  await f.reply(0, '旧编辑器所属会话的结果')
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
+  await f.reply(1, '新编辑器所属会话的结果')
+  assert.equal(f.visible(), true)
+  assert.equal(f.ghost().parentElement, replacementGrow)
+  assert.equal(previousGrow.querySelector('.qyt-prompt-suggestion'), null)
+  assert.equal(previousGrow.hasAttribute('data-qyt-prompt-visible'), false)
+  f.focusEditor()
+  assert.equal(f.key('Tab').defaultPrevented, true)
+  assert.deepEqual(f.inserted.map(value => value.text), ['新编辑器所属会话的结果'])
+})
+
+test('changing only the native conversation marker invalidates the old owner before its state catches up', async t => {
+  for (const phase of ['visible candidate', 'pending request']) await t.test(phase, async t => {
+    const f = fixture(t)
+    if (phase === 'visible candidate') await f.show('第一条会话的建议')
+    else await f.tick(1)
+    const old = f.controller
+    f.section.dataset.conversationSession = 'session-two'
+    await settle()
+    assert.equal(f.state.sessionId, 'session-one', 'the former scope can lag behind the native conversation marker')
+    assert.equal(f.visible(), false)
+    assert.equal(f.placeholderVisible(), true)
+    assert.equal(f.key('Tab').defaultPrevented, false)
+    if (phase === 'pending request') {
+      assert.equal(f.requests[0].signal.aborted, true)
+      assert.deepEqual(f.canceled, ['request-1'])
+      await f.reply(0, 'marker 切换后才到达的旧结果')
+      assert.equal(f.visible(), false)
+    }
+    await f.tick(20)
+    assert.equal(f.requests.length, 1, 'an obsolete owner cannot generate for the newly marked card')
+    Object.assign(f.state, { sessionId: 'session-two', contextKey: 'assistant-turn-two' })
+    f.install(); await f.tick(1)
+    await f.reply(1, '新 marker 对应会话的建议')
+    old.dispose()
+    assert.equal(f.visible(), true)
+    assert.equal(f.card.querySelectorAll('.qyt-prompt-suggestion').length, 1)
+    assert.equal(f.ghost().querySelector('.qyt-prompt-suggestion-text').textContent, '新 marker 对应会话的建议')
+  })
+})
+
+test('a detached bridge anchor invalidates its request without disabling the still-mounted input', async t => {
+  const f = fixture(t)
+  const anchor = f.doc.createElement('span')
+  anchor.hidden = true
+  f.card.append(anchor)
+  f.install({ anchor }); await f.tick(1)
+  const old = f.controller
+  anchor.remove(); await settle()
+  assert.equal(f.card.isConnected, true)
+  assert.equal(f.requests[0].signal.aborted, true)
+  assert.deepEqual(f.canceled, ['request-1'])
+  await f.reply(0, '已经卸载的 bridge 的结果')
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
+  assert.equal(f.editor.getAttribute('contenteditable'), 'true')
+  const replacementAnchor = anchor.cloneNode(false)
+  f.card.append(replacementAnchor)
+  f.install({ anchor: replacementAnchor }); await f.tick(1)
+  assert.equal(f.requests.length, 2)
+  await f.reply(1, '新的 bridge 的建议')
+  old.dispose()
+  assert.equal(f.visible(), true)
+  assert.equal(f.key('Tab').defaultPrevented, true)
+  assert.deepEqual(f.inserted.map(value => value.text), ['新的 bridge 的建议'])
+})
+
+test('active-session selection wins before React scope or DOM updates can arrive', async t => {
+  for (const phase of ['visible candidate', 'pending request']) await t.test(phase, async t => {
+    const f = fixture(t)
+    if (phase === 'visible candidate') await f.show('已离开会话的建议')
+    else await f.tick(1)
+    f.currentSession(false, false)
+    assert.equal(f.section.dataset.conversationSession, 'session-one')
+    assert.equal(f.state.sessionId, 'session-one')
+    if (phase === 'pending request') await f.reply(0, '导航选择已切换后的旧响应')
+    else assert.equal(f.key('Tab').defaultPrevented, false, 'keydown checks current selection synchronously')
+    assert.equal(f.visible(), false)
+    assert.equal(f.placeholderVisible(), true)
+    assert.deepEqual(f.inserted, [])
+    f.controller.sync(); await f.tick(20)
+    assert.equal(f.requests.length, 1)
+    f.section.dataset.conversationSession = 'session-two'
+    Object.assign(f.state, { sessionId: 'session-two', contextKey: 'assistant-turn-two' })
+    f.currentSession(true, false)
+    f.install(); await f.tick(1)
+    await f.reply(1, '当前选择会话的建议')
+    assert.equal(f.visible(), true)
+    assert.equal(f.key('Tab').defaultPrevented, true)
+    assert.deepEqual(f.inserted.map(value => value.text), ['当前选择会话的建议'])
+  })
+})
+
+test('a current-session subscription can cancel stale work before React remounts its owner', async t => {
+  for (const phase of ['visible candidate', 'pending request']) await t.test(phase, async t => {
+    const f = fixture(t)
+    if (phase === 'visible candidate') await f.show('导航切换前可见的建议')
+    else await f.tick(1)
+    f.currentSession(false)
+    assert.equal(f.visible(), false, 'selection subscription clears the old decoration without another key event')
+    assert.equal(f.placeholderVisible(), true)
+    if (phase === 'pending request') {
+      assert.equal(f.requests[0].signal.aborted, true)
+      assert.deepEqual(f.canceled, ['request-1'])
+      await f.reply(0, '已取消的旧会话结果')
+      assert.equal(f.visible(), false)
+    }
+    assert.equal(f.key('Tab').defaultPrevented, false)
+    assert.deepEqual(f.inserted, [])
+  })
+})
+
+test('a new bridge mounted before the native marker waits for its own session without showing the former candidate', async t => {
+  const f = fixture(t); await f.show('旧会话还留在卡片上的建议')
+  const old = f.controller
+  const nextState = { ...f.state, sessionId: 'session-two', contextKey: 'assistant-turn-two' }
+  f.install({ read: () => ({ ...nextState }) })
+  assert.equal(f.section.dataset.conversationSession, 'session-one')
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
+  await f.tick(20)
+  assert.equal(f.requests.length, 1, 'the new bridge cannot request against the old native conversation scope')
+  f.section.dataset.conversationSession = 'session-two'; await f.tick(1)
+  assert.equal(f.requests.length, 2)
+  assert.equal(f.requests[1].payload.sessionId, 'session-two')
+  await f.reply(1, 'marker 到位后的新会话建议')
+  old.dispose()
+  assert.equal(f.visible(), true)
+  assert.equal(f.editor.textContent, '')
+  assert.equal(f.editor.getAttribute('contenteditable'), 'true')
+  assert.equal(f.ghost().querySelector('.qyt-prompt-suggestion-text').textContent, 'marker 到位后的新会话建议')
+})
+
+test('late results from a rapid A-to-B-to-A switch cannot replace the newest A decoration', async t => {
+  const f = fixture(t); await f.tick(1)
+  const firstA = f.controller
+  const stateB = { ...f.state, sessionId: 'session-two', contextKey: 'assistant-turn-two' }
+  f.section.dataset.conversationSession = 'session-two'
+  f.install({ read: () => ({ ...stateB }) }); await f.tick(1)
+  const ownerB = f.controller
+  f.section.dataset.conversationSession = 'session-one'
+  f.install(); await f.tick(1)
+  assert.deepEqual(f.requests.map(value => value.payload.sessionId), ['session-one', 'session-two', 'session-one'])
+  assert.equal(f.requests[0].signal.aborted, true)
+  assert.equal(f.requests[1].signal.aborted, true)
+  await f.reply(2, '最新 A 实例的建议')
+  const latestGhost = f.ghost()
+  await f.reply(0, '最旧 A 实例的迟到建议')
+  await f.reply(1, 'B 实例的迟到建议')
+  firstA.sync(); firstA.dispose(); ownerB.sync(); ownerB.dispose(); await settle()
+  assert.equal(f.visible(), true)
+  assert.equal(f.ghost(), latestGhost)
+  assert.equal(f.card.querySelectorAll('.qyt-prompt-suggestion').length, 1)
+  assert.equal(f.ghost().querySelector('.qyt-prompt-suggestion-text').textContent, '最新 A 实例的建议')
+  assert.equal(f.requests.length, 3)
+  assert.equal(f.key('Tab').defaultPrevented, true)
+  assert.deepEqual(f.inserted.map(value => value.text), ['最新 A 实例的建议'])
+})
+
+test('a blank new conversation keeps its editor empty and editable instead of retaining the previous suggestion', async t => {
+  const f = fixture(t); await f.show('上一条会话的建议')
+  f.outside.focus()
+  f.update({ sessionId: 'new-session', contextKey: '', ready: false, draftRev: 2 })
+  f.section.dataset.conversationSession = 'new-session'; f.install()
+  await f.tick(20)
+  assert.equal(f.visible(), false)
+  assert.equal(f.placeholderVisible(), true)
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.editor.textContent, '')
+  assert.equal(f.editor.getAttribute('contenteditable'), 'true')
+  assert.equal(f.editor.getAttribute('aria-disabled'), null)
+  f.focusEditor(); f.input('新会话里的手动输入')
+  assert.equal(f.editor.textContent, '新会话里的手动输入')
+  assert.equal(f.state.draft, '新会话里的手动输入')
+  assert.equal(f.key('Tab').defaultPrevented, false)
+  assert.deepEqual(f.inserted, [])
+  assert.deepEqual(f.forbidden, [])
+})
+
+test('reinstalling a reused card for a new session discards the old owner even when its state stays unchanged', async t => {
+  for (const phase of ['visible candidate', 'pending request']) await t.test(phase, async t => {
+    const f = fixture(t)
+    if (phase === 'visible candidate') await f.show('第一条会话的缓存建议')
+    else await f.tick(1)
+    const old = f.controller
+    const nextState = { ...f.state, sessionId: 'session-two', contextKey: 'assistant-turn-two' }
+    f.section.dataset.conversationSession = 'session-two'
+    f.install({ read: () => ({ ...nextState }) })
+    assert.equal(f.visible(), false)
+    assert.equal(f.placeholderVisible(), true)
+    assert.equal(f.state.sessionId, 'session-one', 'the disposed owner still closes over its old session')
+    await f.tick(1)
+    assert.equal(f.requests.length, 2)
+    assert.equal(f.requests[1].payload.sessionId, 'session-two')
+    if (phase === 'pending request') {
+      assert.equal(f.requests[0].signal.aborted, true)
+      await f.reply(0, '旧实例的延迟结果')
+      assert.equal(f.visible(), false)
+    }
+    await f.reply(1, '新会话实例的建议')
+    old.sync(); old.dispose(); await settle()
+    assert.equal(f.visible(), true)
+    assert.equal(f.card.querySelectorAll('.qyt-prompt-suggestion').length, 1)
+    assert.equal(f.ghost().querySelector('.qyt-prompt-suggestion-text').textContent, '新会话实例的建议')
+    assert.equal(f.key('Tab').defaultPrevented, true)
+    assert.deepEqual(f.inserted.map(value => value.text), ['新会话实例的建议'])
+  })
+})
+
 test('context changes before the debounce avoid starting the obsolete model request', async t => {
   const f = fixture(t)
   f.update({ sessionId: 'session-two', contextKey: 'turn-two' })
+  f.section.dataset.conversationSession = 'session-two'; f.install()
   await f.tick(1)
   assert.equal(f.requests.length, 1)
   assert.equal(f.requests[0].payload.sessionId, 'session-two')
