@@ -347,7 +347,7 @@ try {
     }, alphaId)
     await writeFile(join(output, 'preview-native-status.json'), JSON.stringify(nativeStatus, null, 2))
     const previewPath = join(output, 'floating-computer-preview.jpg')
-    let preview, observer, windowsPreview
+    let preview, observer, windowsPreview, observeWindowState
     if (process.platform === 'darwin') {
       observer = join(temporary, 'harness-window-evidence')
       await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'Vision', join(root, 'src/native/macos/fixtures/HarnessWindowEvidence.swift'), '-o', observer])
@@ -363,13 +363,15 @@ try {
       preview = await waitFor(async () => (await driver.targets()).find(target => target.title.startsWith('QiuYaTools · 电脑操控') && target.appId.toLowerCase().startsWith(profileHome.toLowerCase() + '\\')), 'Native floating preview did not appear')
       const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
       const windowStages = []
-      const observeWindowState = async stage => {
+      observeWindowState = async stage => {
         const snapshot = JSON.parse(await nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-window-state-windows.ps1'), '-WindowId', preview.id, '-ProfileRoot', profileHome]))
         const observation = { stage, target: preview, ...snapshot }
         windowStages.push(observation)
         await writeFile(join(output, `preview-window-${stage}.json`), JSON.stringify(observation, null, 2))
+        return observation
       }
-      if (windowStateDiagnostic) await observeWindowState('before-uia')
+      const firstWindowState = await observeWindowState('before-uia')
+      if (!windowStateDiagnostic) assert.equal(firstWindowState.state.window.topmost, true, 'The native floating preview must already be TOPMOST before the first UIA observation')
       windowsPreview = (button, options = []) => nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-preview-windows.ps1'), '-WindowId', preview.id, ...(button ? ['-Button', button] : []), ...options])
       // WebView2 enables its renderer accessibility tree after the first UIA
       // client arrives. Wait for the actual controls and successful frame.
@@ -439,6 +441,8 @@ try {
         try {
           evidence.receipts.push(JSON.parse(await windowsPreview('', ['-Operation', 'click-image', '-ImageLabel', '实时电脑画面', '-X', '0.5', '-Y', '0.85'])))
           evidence.actions.push(await completed('click'))
+          const afterTargetClick = await observeWindowState('after-manual-target-click')
+          assert.equal(afterTargetClick.state.window.topmost, true, 'The native floating preview must remain TOPMOST after the completed target click')
           const footer = JSON.parse(await windowsPreview('', ['-Operation', 'set-text', '-TextLabel', '接管后输入文字', '-Text', marker]))
           evidence.receipts.push(footer)
           assert.equal(footer.clicked, true, 'The user must actually activate the own preview footer before typing')
