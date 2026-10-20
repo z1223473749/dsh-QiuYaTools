@@ -37,6 +37,33 @@ node scripts/prepare-windows-test-runtime.mjs \
 
 manifest 记录依赖 lock、Node、归档及有限源码清单的 hash。状态 `prepared-not-run` 只表示准备完成；必须在 Windows 的登录交互桌面运行后才能报告对应 E2E 通过。归档 gzip 时间戳或文件属性可能因构建时间不同产生不同文件 SHA，不能因此声称字节可重复；锁定依赖与 manifest 用于追溯和验证该次资产。
 
+## 独立准备 x64 运行时
+
+ARM64 归档不能直接替换 Node 后用作 x64 Host：其中的 esbuild、sharp、koffi 等 npm 原生依赖按 ARM64 安装，插件也按 Host 的 `process.arch` 选择 helper。x64 必须使用独立 Node、独立 npm 安装目录和独立 manifest；两个架构复用同一完整性 lock，不混用归档。
+
+先准备 [Node.js v22.23.3 win-x64.zip](https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip)。对应官方 SHA256 为 `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`，来源同一份 [SHASUMS256.txt](https://nodejs.org/dist/v22.23.3/SHASUMS256.txt)。
+
+```sh
+node scripts/prepare-windows-test-runtime.mjs --arch x64 --plan
+node scripts/prepare-windows-test-runtime.mjs --arch x64 \
+  --node-zip /absolute/path/node-v22.23.3-win-x64.zip \
+  --output artifacts/windows-test-runtime-x64
+```
+
+此分支使用 `npm ci --ignore-scripts --include=optional --os=win32 --cpu=x64`，默认输出 `artifacts/windows-test-runtime-x64/`，归档名为 `qiuya-harness-windows-portable-x64.tgz`。ARM64 默认路径和现有文件保持独立。
+
+测试 x64 包时，额外设置：
+
+```sh
+export QIUYA_WINDOWS_ARCH=x64
+export QIUYA_WINDOWS_RUNTIME_MANIFEST="$PWD/artifacts/windows-test-runtime-x64/manifest.json"
+export QIUYA_WINDOWS_CANDIDATE="$PWD/artifacts/dsh-qiuya-tools-win32-x64.tgz"
+unset QIUYA_WINDOWS_HARNESS_ROOT
+node scripts/e2e-windows-harness-pd.mjs
+```
+
+wrapper 按选定架构提取精确候选的 helper、选取 Node 路径，并在来宾执行前核验实际 `process.arch`。跨架构 manifest 和不匹配的官方 Node ZIP 均会拒绝；重新使用来宾目录仍要求运行时归档与 Node 的完整 SHA 一致。ARM Windows 上的 x64 Node/Host 验收属于 x64 转译环境，不等于 Intel/AMD x64 硬件验收；最终报告必须保留这一边界。
+
 ## 运行 PD Windows Harness
 
 在已授权的 Mac 上设置确切 VM UUID 与 host-only 地址。它们必须由本次实际枚举确认，不根据 VM 名字推断。来宾需要已登录的交互桌面与安装好的 Edge/WebView2；不要将 Session 0 启动成功算作 GUI 验收。

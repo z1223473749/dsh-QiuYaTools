@@ -8,8 +8,17 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('../', import.meta.url))
 const fixture = join(root, 'tests/fixtures/windows-test-runtime')
 const folder = 'qiuya-harness-windows-portable'
-const archiveName = `${folder}-arm64.tgz`
-export const WINDOWS_TEST_NODE = Object.freeze({ version: '22.23.3', architecture: 'arm64', file: 'node-v22.23.3-win-arm64.zip', sha256: '33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535', source: 'https://nodejs.org/dist/v22.23.3/SHASUMS256.txt' })
+const nodeVersion = '22.23.3', nodeSource = `https://nodejs.org/dist/v${nodeVersion}/SHASUMS256.txt`
+export const WINDOWS_TEST_NODES = Object.freeze({
+  arm64: Object.freeze({ version: nodeVersion, architecture: 'arm64', file: `node-v${nodeVersion}-win-arm64.zip`, sha256: '33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535', source: nodeSource }),
+  x64: Object.freeze({ version: nodeVersion, architecture: 'x64', file: `node-v${nodeVersion}-win-x64.zip`, sha256: '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71', source: nodeSource }),
+})
+export const WINDOWS_TEST_NODE = WINDOWS_TEST_NODES.arm64
+function checkedArchitecture(architecture) {
+  if (!Object.hasOwn(WINDOWS_TEST_NODES, architecture)) throw new Error('Windows test architecture must be arm64 or x64')
+  return architecture
+}
+const defaultOutput = architecture => join(root, architecture === 'arm64' ? 'artifacts/windows-test-runtime' : 'artifacts/windows-test-runtime-x64')
 const overlays = ['scripts/e2e-harness.mjs', 'scripts/test-harness-install.mjs', 'tests/fixtures/harness-e2e-provider.mjs', 'tests/fixtures/harness-preview-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1', 'src/features/computer-use/native.ts', 'src/features/computer-use/contract.ts']
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const run = (executable, args, options = {}) => new Promise((done, reject) => {
@@ -17,7 +26,8 @@ const run = (executable, args, options = {}) => new Promise((done, reject) => {
   child.once('error', reject); child.once('exit', code => code === 0 ? done() : reject(new Error(`${executable} exited ${code}`)))
 })
 
-export async function windowsTestRuntimePlan() {
+export async function windowsTestRuntimePlan(architecture = 'arm64') {
+  checkedArchitecture(architecture)
   const specification = await readFile(join(fixture, 'package.json'))
   const lockBytes = await readFile(join(fixture, 'package-lock.json'))
   const pkg = JSON.parse(specification), lock = JSON.parse(lockBytes)
@@ -34,29 +44,30 @@ export async function windowsTestRuntimePlan() {
     })
     if (!path.startsWith('node_modules/') || value.link || (!bundledParent && (!value.integrity || !value.resolved?.startsWith('https://registry.npmjs.org/')))) throw new Error(`Nonportable test dependency lock entry: ${path}`)
   }
-  return { version: 1, platform: 'win32', architecture: 'arm64', folder, archiveName, node: WINDOWS_TEST_NODE, dependencies: pkg.dependencies, packageSha256: hash(specification), lockSha256: hash(lockBytes), overlays }
+  return { version: 1, platform: 'win32', architecture, folder, archiveName: `${folder}-${architecture}.tgz`, node: WINDOWS_TEST_NODES[architecture], dependencies: pkg.dependencies, packageSha256: hash(specification), lockSha256: hash(lockBytes), overlays }
 }
 
 /** An explicit external archive remains usable for existing runs, but is identified as unmanifested. */
 export async function loadWindowsTestRuntime(options = {}) {
-  const defaultDirectory = join(root, 'artifacts/windows-test-runtime')
+  const architecture = checkedArchitecture(options.architecture ?? 'arm64')
+  const plan = await windowsTestRuntimePlan(architecture), node = plan.node
+  const defaultDirectory = defaultOutput(architecture)
   const explicit = options.portablePath && options.nodeZipPath
   let manifest
   const manifestPath = options.manifestPath || (explicit ? undefined : join(defaultDirectory, 'manifest.json'))
   if (manifestPath) {
     try { manifest = JSON.parse(await readFile(manifestPath, 'utf8')) }
     catch { throw new Error('Prepare the Windows test runtime first, or supply both QIUYA_WINDOWS_PORTABLE_TGZ and QIUYA_WINDOWS_NODE_ZIP; see docs/windows-test-runtime.md') }
-    const plan = await windowsTestRuntimePlan()
-    if (manifest.version !== 1 || manifest.platform !== 'win32' || manifest.architecture !== 'arm64' || manifest.lockSha256 !== plan.lockSha256 || manifest.archive?.file !== archiveName || manifest.node?.file !== WINDOWS_TEST_NODE.file || manifest.node?.sha256 !== WINDOWS_TEST_NODE.sha256) throw new Error('Windows test-runtime manifest or dependency lock mismatch')
+    if (manifest.version !== 1 || manifest.platform !== 'win32' || manifest.architecture !== architecture || manifest.lockSha256 !== plan.lockSha256 || manifest.archive?.file !== plan.archiveName || manifest.node?.file !== node.file || manifest.node?.sha256 !== node.sha256) throw new Error('Windows test-runtime manifest or dependency lock mismatch')
   }
   const base = manifestPath ? dirname(resolve(manifestPath)) : defaultDirectory
-  const portablePath = resolve(options.portablePath || join(base, archiveName))
-  const nodeZipPath = resolve(options.nodeZipPath || join(base, WINDOWS_TEST_NODE.file))
+  const portablePath = resolve(options.portablePath || join(base, plan.archiveName))
+  const nodeZipPath = resolve(options.nodeZipPath || join(base, node.file))
   const portable = await readFile(portablePath), nodeZip = await readFile(nodeZipPath)
   const portableSha256 = hash(portable), nodeSha256 = hash(nodeZip)
-  if (nodeSha256 !== WINDOWS_TEST_NODE.sha256) throw new Error('The supplied Windows Node archive does not match the pinned official SHA256')
+  if (nodeSha256 !== node.sha256) throw new Error('The supplied Windows Node archive does not match the pinned official SHA256')
   if (manifest && portableSha256 !== manifest.archive.sha256) throw new Error('Windows test-runtime archive integrity mismatch')
-  return { portable, nodeZip, portablePath, nodeZipPath, portableSha256, nodeSha256, preparation: manifest ? 'locked-npm-ci-manifest' : 'explicit-external-artifacts-no-lock-manifest', lockSha256: manifest?.lockSha256 ?? null }
+  return { architecture, folder, node, portable, nodeZip, portablePath, nodeZipPath, portableSha256, nodeSha256, preparation: manifest ? 'locked-npm-ci-manifest' : 'explicit-external-artifacts-no-lock-manifest', lockSha256: manifest?.lockSha256 ?? null }
 }
 
 async function npmCli(explicit) {
@@ -75,13 +86,13 @@ async function npmCli(explicit) {
 
 async function main() {
   const arg = name => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1] }
-  const plan = await windowsTestRuntimePlan()
+  const plan = await windowsTestRuntimePlan(arg('--arch') || 'arm64'), node = plan.node
   if (process.argv.includes('--plan')) { console.log(JSON.stringify(plan, null, 2)); return }
   const sourceNode = arg('--node-zip')
   if (!sourceNode) throw new Error('Pass --node-zip <local official Node archive>; this script does not download Node or browsers')
   const nodeBytes = await readFile(resolve(sourceNode))
-  if (hash(nodeBytes) !== WINDOWS_TEST_NODE.sha256) throw new Error('Local Node archive failed pinned official SHA256 validation')
-  const output = resolve(arg('--output') || join(root, 'artifacts/windows-test-runtime'))
+  if (hash(nodeBytes) !== node.sha256) throw new Error('Local Node archive failed pinned official SHA256 validation')
+  const output = resolve(arg('--output') || defaultOutput(plan.architecture))
   await mkdir(output, { recursive: true })
   const work = await mkdtemp(join(output, 'prepare-')), portable = join(work, folder)
   try {
@@ -89,22 +100,22 @@ async function main() {
     for (const name of ['package.json', 'package-lock.json']) await copyFile(join(fixture, name), join(portable, name))
     const userconfig = join(work, 'isolated.npmrc')
     await writeFile(userconfig, 'registry=https://registry.npmjs.org\n')
-    await run(process.execPath, [await npmCli(arg('--npm-cli')), 'ci', '--ignore-scripts', '--include=optional', '--os=win32', '--cpu=arm64', '--registry=https://registry.npmjs.org', `--userconfig=${userconfig}`, '--no-audit', '--no-fund'], { cwd: portable, env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', npm_config_cache: join(output, 'npm-cache') } })
+    await run(process.execPath, [await npmCli(arg('--npm-cli')), 'ci', '--ignore-scripts', '--include=optional', '--os=win32', `--cpu=${plan.architecture}`, '--registry=https://registry.npmjs.org', `--userconfig=${userconfig}`, '--no-audit', '--no-fund'], { cwd: portable, env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', npm_config_cache: join(output, 'npm-cache') } })
     const sources = {}
     for (const name of overlays) {
       const bytes = await readFile(join(root, name)); sources[name] = hash(bytes)
       await mkdir(dirname(join(portable, name)), { recursive: true }); await writeFile(join(portable, name), bytes)
     }
-    const binary = join(portable, 'node_modules/@esbuild/win32-arm64/esbuild.exe')
+    const binary = join(portable, `node_modules/@esbuild/win32-${plan.architecture}/esbuild.exe`)
     await access(binary)
     await mkdir(join(portable, 'node_modules/.bin'), { recursive: true })
     await writeFile(join(portable, 'node_modules/.bin/pnpm.cmd'), '@echo off\r\nnode "%~dp0..\\pnpm\\bin\\pnpm.cjs" %*\r\n')
-    const archive = join(output, archiveName)
+    const archive = join(output, plan.archiveName)
     await run(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-czf', archive, '-C', work, folder])
-    await writeFile(join(output, WINDOWS_TEST_NODE.file), nodeBytes)
-    const manifest = { ...plan, archive: { file: archiveName, sha256: hash(await readFile(archive)) }, sources, createdAt: new Date().toISOString(), note: 'Public npm integrity lock; scripts disabled; no user runtime, profile, credentials, or bundled browser copied. Windows execution is a separate gate.' }
+    await writeFile(join(output, node.file), nodeBytes)
+    const manifest = { ...plan, archive: { file: plan.archiveName, sha256: hash(await readFile(archive)) }, sources, createdAt: new Date().toISOString(), note: 'Public npm integrity lock; scripts disabled; no user runtime, profile, credentials, or bundled browser copied. Windows execution is a separate gate.' }
     await writeFile(join(output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
-    console.log(JSON.stringify({ status: 'prepared-not-run', manifest: join(output, 'manifest.json'), portable: archive, nodeZip: join(output, WINDOWS_TEST_NODE.file) }, null, 2))
+    console.log(JSON.stringify({ status: 'prepared-not-run', manifest: join(output, 'manifest.json'), portable: archive, nodeZip: join(output, node.file) }, null, 2))
   } finally { if (!process.argv.includes('--keep-workdir')) await rm(work, { recursive: true, force: true }) }
 }
 
