@@ -5,15 +5,18 @@
 ## 安装
 
 1. 打开 Harness 的 **插件 → 添加插件**。
-2. 粘贴下面的完整链接并安装：
-
-   ```text
-   https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
-   ```
-
+2. 输入 npm 包名 **`dsh-qiuya-tools`**，点击安装。
 3. 点击 **立即启用**，进入 **设置 → QiuYaTools**。
 
-左下角账号菜单也有 QiuYaTools 入口。
+左下角账号菜单也有 QiuYaTools 入口。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。
+
+也可在“添加插件”中粘贴 GitHub 安装包链接：
+
+```text
+https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
+```
+
+镜像源同步新版本可能稍有延迟。暂时找不到包或新版本时，可稍后重试、切换到 [npm 官方源](https://registry.npmjs.org/)，或使用上面的 GitHub 链接。
 
 ## 功能
 
@@ -37,25 +40,25 @@
 
 **Q主题 · 新会话**
 
-![Q主题鲸与海的新会话界面](docs/images/q-theme-home.png)
+![Q主题鲸与海的新会话界面](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/q-theme-home.png)
 
 **Q主题 · 会话阅读**
 
-![Q主题半透明会话与输入框](docs/images/q-theme-conversation.png)
+![Q主题半透明会话与输入框](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/q-theme-conversation.png)
 
 **功能设置**
 
-![QiuYaTools 双排功能入口与长文本转换阈值](docs/images/settings.jpg)
+![QiuYaTools 双排功能入口与长文本转换阈值](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/settings.jpg)
 
 **Q主题设置**
 
-![QiuYaTools 鲸与海主题设置与预览](docs/images/q-theme.jpg)
+![QiuYaTools 鲸与海主题设置与预览](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/q-theme.jpg)
 
 **提示词建议**
 
 空输入框显示当前会话的建议，聚焦后按 Tab 填入。以下用示例回复演示交互，不调用真实模型。
 
-![QiuYaTools 灰字提示词与 Tab 填入示例](docs/images/prompt-suggestions.jpg)
+![QiuYaTools 灰字提示词与 Tab 填入示例](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/prompt-suggestions.jpg)
 
 ## 更新与兼容
 
@@ -63,4 +66,4 @@
 
 当前适配官方 macOS Harness **0.2.1-rc.2**。独立窗口需要 **macOS 13+**，安装包包含 Apple Silicon 和 Intel 组件。
 
-[发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [使用与开发](docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)
+[npm 包](https://www.npmjs.com/package/dsh-qiuya-tools) · [发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [使用与开发](https://github.com/z1223473749/dsh-QiuYaTools/blob/main/docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)

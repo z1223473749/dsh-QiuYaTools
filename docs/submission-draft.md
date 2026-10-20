@@ -1,6 +1,6 @@
 # QiuYa 增强工具箱 · 收录申请待确认稿
 
-本稿对应 v0.5.0，收录内容仍待用户确认；确认后再更新线上申请。
+本稿对应 v0.5.2，收录内容仍待用户确认；确认后再更新线上申请。
 
 ---
 
@@ -20,14 +20,17 @@
 
 ## 安装
 
-在 **插件 → 添加插件** 粘贴：
+打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。功能设置位于 **设置 → QiuYaTools**。
+
+GitHub 安装包作为备用入口，也可直接粘贴到“添加插件”：
 
 ```text
 https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
 ```
 
-安装并启用后，打开 **设置 → QiuYaTools**。
+镜像源同步可能稍有延迟；找不到包或新版本时，可切换到 [npm 官方源](https://registry.npmjs.org/)，或使用 GitHub 备用链接。
 
+- [npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)
 - [源码与说明](https://github.com/z1223473749/dsh-QiuYaTools)
 - [发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases)
 - 当前验证目标：官方 macOS Harness `0.2.1-rc.2`；独立窗口支持 macOS 13+，安装包包含 Apple Silicon / Intel 组件。

@@ -1,5 +1,21 @@
 # 使用细节与开发
 
+## 安装与更新
+
+打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。设置入口为 **设置 → QiuYaTools**，左下角账号菜单也可进入。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。
+
+也可在“添加插件”中粘贴 GitHub 备用安装链接：
+
+```text
+https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz
+```
+
+npm 镜像源可能延迟同步新版本；暂时找不到包或版本时，可切换到 [npm 官方源](https://registry.npmjs.org/) 后重试，或使用 GitHub 链接。
+
+更新可在 **QiuYaTools → 版本更新 → 检查更新** 中完成。安装完成后完全退出并重新打开 Harness，原有设置保留。
+
+## 使用细节
+
 ### 大文本阈值
 
 在设置页编辑“字符数”和“行数”，点击“保存阈值”。字符数允许 `1–1,000,000`，行数允许 `1–100,000`，均为整数；达到任一阈值即转换。Unicode 字符按码点计数，CRLF 算一个换行。原文和换行保留在 TXT 中。
@@ -55,6 +71,16 @@ npm run check
 `check` 执行严格类型检查、完整构建和测试。测试覆盖真实 DOM/React 交互、配置原子保存、快速启停和异步清理、附件接收、批量归档目标与失败处理、计划批注定位和耐久回执、窗口 RPC/进程生命周期及拖拽排序保护。归档测试使用隔离 fixture，不操作真实会话。
 
 Host 将配置校验库一起打包，只保留 Node 内置模块作为运行时导入；Client 继续使用 Harness 提供的共享模块。发布前还会对最终 tgz 执行 `node scripts/verify-package.mjs <安装包路径>`，在没有开发依赖的空目录中加载 Host 并验证配置与注册。
+
+### 版本发布
+
+GitHub 正式版本与 npm 包使用相同版本号。配置好 npm 发布授权后，发布工作流会在 GitHub 新版发布后，将同一版本安装包同步到 npm；同步失败时应查看 Actions 报错并重试，镜像源还可能需要额外同步时间。
+
+发布前更新 `package.json` 版本和 `CHANGELOG.md` 对应记录，版本标签使用 `v<版本号>`。工作流会先执行完整检查、构建通用 macOS 安装包并验证最终 tgz，再发布 GitHub 和 npm。GitHub 更新说明直接读取该版本的中文日志，缺少日志时停止发布。
+
+首次发布需要 npm 账号登录。包创建后，在 npm 的包设置中添加 GitHub Actions 受信任发布者：用户为 `z1223473749`，仓库为 `dsh-QiuYaTools`，工作流文件为 `release.yml`，环境留空，并允许 `npm publish`。此后由 GitHub OIDC 完成认证，无需在仓库保存 npm token。配置方式见 [npm 官方说明](https://docs.npmjs.com/trusted-publishers/)。
+
+如 npm 同步失败，可从对应版本标签手动运行 `Build and release` 重试。已存在的相同版本只在安装包校验值一致时跳过；校验值不同会停止，避免将不同内容视为同一个版本。
 
 | 路径 | 职责 |
 | --- | --- |

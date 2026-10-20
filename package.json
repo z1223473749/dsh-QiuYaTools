@@ -1,10 +1,14 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "长文本附件、会话分窗、批量归档、计划批注和提示词建议，配合菜单增强与手绘 Q 主题，让 Harness 更顺手。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },

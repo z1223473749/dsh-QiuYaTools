@@ -3,10 +3,12 @@ name: Build and release
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -14,7 +16,10 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: macos-15
+    permissions:
+      contents: write
     env:
       QIUYA_TOOLS_UNIVERSAL: '1'
     steps:
@@ -46,3 +51,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/qiuya-release-notes.md" artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/SHA256SUMS
+
+  publish-npm:
+    needs: release
+    if: >-
+      always() && !cancelled() &&
+      (needs.release.result == 'success' ||
+       (github.event_name == 'release' && github.event.action == 'published' &&
+        !github.event.release.draft && !github.event.release.prerelease) ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: npm-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Install OIDC-capable npm CLI
+        run: npm install --global npm@11.21.0 --registry=https://registry.npmjs.org
+      # GITHUB_TOKEN-created releases do not trigger another release workflow.
+      # needs.release also publishes in the original successful tag-push run.
+      - name: Publish the verified GitHub release archive to npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-npm.mjs
