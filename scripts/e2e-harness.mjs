@@ -294,7 +294,7 @@ try {
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     if (process.platform === 'win32') {
       await editor().fill('E2E:computer-move')
-      const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome]))
+      const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome, '-DiagnosticPath', join(output, 'fixture-user-activation-diagnostic.json')]))
       assert.equal(activation.active, true)
       await writeFile(join(output, 'fixture-user-activation.json'), JSON.stringify(activation, null, 2))
       // Keep the fixture user's foreground target. DOM input submits the main
@@ -372,7 +372,22 @@ try {
         assert.equal(receipt.pressed, true)
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
-      await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes(state), `Computer ${button} did not enter ${state}`)
+      try {
+        await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes(state), `Computer ${button} did not enter ${state}`)
+      } catch (error) {
+        // Preserve the actual backend state and native error before case cleanup
+        // can change focus or pause the session. A timeout alone is not a cause.
+        const backend = await page.evaluate(async sessionId => {
+          const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+          return { httpStatus: response.status, body: await response.json() }
+        }, alphaId).catch(failure => ({ error: failure.message }))
+        const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : undefined
+        const panelText = await page.locator('.qyt-feature-panel [role="status"]').innerText().catch(failure => failure.message)
+        await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: error.message, backend, native, panelText }, null, 2))
+        const pixels = await driver.observe(preview.id).catch(() => undefined)
+        if (pixels) await writeFile(join(output, `preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
+        throw error
+      }
       if (state === 'humanControl' && windowsPreview && process.argv.includes('--manual-preview-e2e')) {
         const marker = `E2E:manual-preview-${suffix}-你好`
         const evidence = { marker, mouseSource: 'Win32 SendInput OS-synthetic; not Parallels hardware', receipts: [], actions: [], states: [] }
