@@ -72,4 +72,6 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。Excel 专用加载项与 macOS 锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻 Codex。
 
+同一交互桌面同时只允许一个 QiuYaTools 原生执行器控制输入，包括不同配置与已配对的代理。执行器异常退出时，独立守护进程会根据输入记录尝试释放本插件按住的键与鼠标；新执行器也必须先完成旧输入恢复，系统拒绝清理时会阻止新控制。Windows 会检查系统是否接受释放事件；macOS 的事件接口没有键盘送达确认，验收依据权限、可读取的鼠标状态及受控应用实测，不能据此保证任意应用均已处理每个键盘事件。
+
 [npm 包](https://www.npmjs.com/package/dsh-qiuya-tools) · [发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [使用与开发](https://github.com/z1223473749/dsh-QiuYaTools/blob/main/docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)

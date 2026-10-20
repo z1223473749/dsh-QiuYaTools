@@ -26,26 +26,65 @@ final class EpochFence {
     private var heldKeys = Set<CGKeyCode>()
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
+    private var desktopLease: DesktopLeaseGuard?
     var preparePointerRegion: (([CGPoint]) throws -> Void)?
     var prepareFocus: (() -> Void)?
     private(set) var busy = false
-    var inputState: [String: Any] { ["mouseHeld": heldMouse != nil, "keysHeld": heldKeys.count,
+    var inputState: [String: Any] { ["mouseHeld": heldMouse != nil, "keysHeld": heldKeys.count, "ownerId": desktopLease?.ownerId as Any? ?? NSNull(),
         "leftButtonDown": CGEventSource.buttonState(.combinedSessionState, button: .left)] }
 
-    func releaseHeldInput() {
+    func releaseHeldInput() throws {
+        if heldMouse != nil || !heldKeys.isEmpty {
+            guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("INPUT_CLEANUP_FAILED", "Input permission was revoked before owned input could be released.") }
+        }
         if let button = heldMouse {
             let type: CGEventType = button == .left ? .leftMouseUp : button == .right ? .rightMouseUp : .otherMouseUp
-            if let event = CGEvent(mouseEventSource: eventSource, mouseType: type, mouseCursorPosition: lastPoint, mouseButton: button) { postPointer(event) }
+            guard let event = CGEvent(mouseEventSource: eventSource, mouseType: type, mouseCursorPosition: lastPoint, mouseButton: button) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned mouse release could not be created.") }
+            postPointer(event)
+            for _ in 0..<20 {
+                if !CGEventSource.buttonState(.combinedSessionState, button: button) { break }
+                usleep(10_000)
+            }
+            guard !CGEventSource.buttonState(.combinedSessionState, button: button) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned mouse release is not confirmed. Control remains blocked.") }
             heldMouse = nil
         }
-        for code in heldKeys { if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: false), let pid = lastPid { event.postToPid(pid) } }
+        for code in heldKeys {
+            guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: false) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release could not be created.") }
+            event.flags = []
+            if let pid = lastPid { event.postToPid(pid) }
+        }
         heldKeys.removeAll()
+        if desktopLease?.ownerId != nil { try desktopLease?.record(keys: [], mouse: nil, targetPid: nil) }
     }
 
-    func lease(_ epoch: Int) throws { try fence.lease(epoch); releaseHeldInput() }
-    func release(_ epoch: Int) { let wasActive = fence.active.map { $0 <= epoch } ?? false; fence.release(epoch); if wasActive { releaseHeldInput() } }
+    func lease(_ epoch: Int) throws {
+        guard epoch > fence.highest else { throw ComputerError("STALE_EPOCH", "The control lease is stale.") }
+        if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
+        try desktopLease!.acquire()
+        do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
+    }
+    func release(_ epoch: Int) throws {
+        let wasActive = fence.active.map { $0 <= epoch } ?? false
+        fence.release(epoch)
+        if wasActive || (fence.active == nil && desktopLease?.ownerId != nil) {
+            try releaseHeldInput()
+            try desktopLease?.release()
+        }
+    }
 
     func act(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any]) async throws -> [String: Any] {
+        var ownsInput = false
+        do {
+            let result = try await performAct(epoch: epoch, target: target, geometry: geometry, action: action, started: { ownsInput = true })
+            try releaseHeldInput()
+            return result
+        } catch {
+            if ownsInput { do { try releaseHeldInput() } catch { fence.release(epoch); throw error } }
+            throw error
+        }
+    }
+
+    private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for QiuYaTools Computer in System Settings.") }
         guard !busy else { throw ComputerError("INPUT_BUSY", "Another input action is still settling.") }
@@ -70,7 +109,8 @@ final class EpochFence {
         let dx = finiteNumber(action["deltaX"]) ?? 0; let dy = finiteNumber(action["deltaY"]) ?? 0
         guard abs(dx) <= 20_000, abs(dy) <= 20_000 else { throw ComputerError("INVALID_ACTION", "Scroll delta is too large.") }
         busy = true
-        defer { releaseHeldInput(); busy = false }
+        started()
+        defer { busy = false }
         prepareFocus?()
         if let point = start { try preparePointerRegion?(destination.map { [point, $0] } ?? [point]) }
         guard let application = NSRunningApplication(processIdentifier: target.pid), !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited.") }
@@ -79,6 +119,10 @@ final class EpochFence {
         try await Task.sleep(nanoseconds: 80_000_000)
         try check(epoch, target, geometry)
         lastPid = target.pid
+        // Record the entire action's possible downs before the first injected down.
+        // Keeping this superset until completion avoids an fsync for every typed character.
+        let keys: Set<CGKeyCode> = kind == "type" ? [0] : key.map { [$0.0] } ?? []
+        try desktopLease?.record(keys: keys, mouse: ["click", "drag"].contains(kind) ? button : nil, targetPid: target.pid)
         switch kind {
         case "click":
             try mouse(.mouseMoved, start!, .left, epoch, target, geometry)

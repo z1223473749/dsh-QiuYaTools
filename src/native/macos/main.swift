@@ -66,7 +66,7 @@ import ScreenCaptureKit
         // A drag captures further mouse events for its original window, so a
         // human's click on Pause may not reach WebKit. Revoke at the native event
         // boundary as well; the Host mirrors this event to its paused state.
-        input.release(epoch)
+        do { try input.release(epoch) } catch { Wire.send(["event": "inputCleanupFailed"]); shutdown(); return }
         var event: [String: Any] = ["event": "humanInput", "reason": escape ? "escape" : "preview-pointer", "epoch": epoch]
         if let sessionId = preview?.sessionId { event["sessionId"] = sessionId }
         Wire.send(event)
@@ -79,7 +79,7 @@ import ScreenCaptureKit
         if op == "lease" || op == "release" {
             guard let epoch = integer(command["epoch"]) else { Wire.failure(requestId, ComputerError("INVALID_EPOCH", "A nonnegative safe integer epoch is required.")); return }
             do {
-                if op == "lease" { try input.lease(epoch) } else { input.release(epoch) }
+                if op == "lease" { try input.lease(epoch) } else { try input.release(epoch) }
                 Wire.success(requestId, ["epoch": epoch, "active": input.fence.active == epoch])
             } catch { Wire.failure(requestId, error) }
             return
@@ -148,13 +148,18 @@ import ScreenCaptureKit
         if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
         globalInputMonitor = nil; localInputMonitor = nil
-        if let epoch = input.fence.active { input.release(epoch) }
-        input.releaseHeldInput(); preview?.close(); preview = nil
+        if let epoch = input.fence.active { try? input.release(epoch) }
+        try? input.releaseHeldInput(); preview?.close(); preview = nil
         Task { @MainActor in await capture.stop(); NSApp.terminate(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
     }
-    func applicationWillTerminate(_ notification: Notification) { input.releaseHeldInput() }
+    func applicationWillTerminate(_ notification: Notification) { try? input.releaseHeldInput() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
+if CommandLine.arguments.contains("--input-guardian") {
+    DesktopLeaseGuard.runGuardian()
+    exit(0)
 }
 
 MainActor.assumeIsolated {
