@@ -8,6 +8,7 @@ export interface GitHubReleaseCheckerOptions {
   currentVersion: string
   packageName: string
   architecture?: 'arm64' | 'x64'
+  platform?: 'darwin' | 'win32'
   fetch?: typeof fetch
   timeoutMs?: number
   cacheMs?: number
@@ -107,7 +108,7 @@ export class GitHubReleaseChecker {
         if (response.status === 403 || response.status === 429) throw new CheckFailure({ code: 'rate-limited', message: 'GitHub 暂时限制了版本检查，请稍后重试。' })
         if (!response.ok) throw new CheckFailure({ code: 'network', message: '暂时无法连接 GitHub，请检查网络或代理后重试。' })
         let release: ValidatedRelease
-        try { release = validateReleaseMetadata(await releaseJson(response), repository, this.options.packageName, this.options.architecture ?? 'arm64') }
+        try { release = validateReleaseMetadata(await releaseJson(response), repository, this.options.packageName, this.options.architecture ?? 'arm64', this.options.platform ?? 'darwin') }
         catch (error) {
           if (error instanceof CheckFailure) throw error
           throw new CheckFailure({ code: 'invalid-release', message: 'GitHub 的版本或安装包信息不完整，暂时无法更新。' })

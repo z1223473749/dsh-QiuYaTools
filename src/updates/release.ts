@@ -48,13 +48,14 @@ function exactUrl(input: unknown, expected: string): string {
 }
 
 /** Only deterministic architecture-specific assets or the universal package may be installed. */
-export function updateAssetNames(packageName: string, architecture: 'arm64' | 'x64'): readonly string[] {
+export function updateAssetNames(packageName: string, architecture: 'arm64' | 'x64', platform: 'darwin' | 'win32' = 'darwin'): readonly string[] {
   if (!/^[a-z0-9][a-z0-9._-]{0,213}$/.test(packageName)) throw new Error('Invalid update package name')
-  return [`${packageName}-darwin-universal.tgz`, `${packageName}-darwin-${architecture}.tgz`]
+  if (!['darwin', 'win32'].includes(platform) || !['arm64', 'x64'].includes(architecture)) throw new Error('Unsupported update platform')
+  return platform === 'win32' ? [`${packageName}-win32-${architecture}.tgz`] : [`${packageName}-darwin-universal.tgz`, `${packageName}-darwin-${architecture}.tgz`]
 }
 
 /** Check one public stable Release and bind every selected asset to that exact repository and tag. */
-export function validateReleaseMetadata(input: unknown, repository: GitHubRepository, packageName: string, architecture: 'arm64' | 'x64'): ValidatedRelease {
+export function validateReleaseMetadata(input: unknown, repository: GitHubRepository, packageName: string, architecture: 'arm64' | 'x64', platform: 'darwin' | 'win32' = 'darwin'): ValidatedRelease {
   const data = object(input)
   const version = parseSemanticVersion(data.tag_name)
   if (version === undefined || version.prerelease.length > 0 || data.draft !== false || data.prerelease !== false || !positiveInteger(data.id)) throw new Error('Invalid stable GitHub release')
@@ -64,7 +65,7 @@ export function validateReleaseMetadata(input: unknown, repository: GitHubReposi
   if (typeof data.published_at !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(data.published_at) || !Number.isFinite(Date.parse(data.published_at))) throw new Error('Invalid release publication time')
   if (!Array.isArray(data.assets) || data.assets.length > 1000) throw new Error('Invalid release assets')
   let asset: ReleaseAsset | undefined
-  for (const expectedName of updateAssetNames(packageName, architecture)) {
+  for (const expectedName of updateAssetNames(packageName, architecture, platform)) {
     const matches = data.assets.filter(item => item !== null && typeof item === 'object' && (item as { name?: unknown }).name === expectedName)
     if (matches.length > 1) throw new Error('Ambiguous release asset')
     if (matches.length === 0) continue

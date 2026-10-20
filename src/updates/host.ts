@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { GitHubReleaseChecker, type GitHubCheckResult } from './check.ts'
 import { validateUpdateArchive } from './archive.ts'
 import type { ReleaseAsset } from './release.ts'
@@ -122,7 +123,8 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
   const services = ctx as unknown as HostServices
   const request = options.fetch ?? globalThis.fetch.bind(globalThis)
   const architecture = process.arch === 'arm64' ? 'arm64' : 'x64'
-  const checker = new GitHubReleaseChecker({ repository: options.repository, currentVersion: options.version, packageName: options.packageName, architecture, fetch: request })
+  const platform = process.platform === 'win32' ? 'win32' : 'darwin'
+  const checker = new GitHubReleaseChecker({ repository: options.repository, currentVersion: options.version, packageName: options.packageName, architecture, platform, fetch: request })
   const lifetime = new AbortController()
   let disposed = false
   let pendingVersion: string | undefined
@@ -131,10 +133,10 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
   const manager = (): PluginManager | undefined => services.get?.('pluginManager') as PluginManager | undefined
   const profile = (): { dir?: unknown } | undefined => services.get?.('profileContext') as { dir?: unknown } | undefined
   const eligibility = (result: GitHubCheckResult): UpdateProblem | undefined => {
-    if (process.platform !== 'darwin' || !['arm64', 'x64'].includes(process.arch)) return { code: 'platform-unsupported', message: '当前自动更新安装包仅支持 macOS。' }
+    if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return { code: 'platform-unsupported', message: '当前自动更新安装包支持 macOS 和 Windows 的 ARM64 / x64。' }
     if (manager()?.installBundle === undefined) return { code: 'manager-unavailable', message: 'Harness 插件管理服务尚未就绪，请稍后重试。' }
     if (typeof profile()?.dir !== 'string') return { code: 'profile-unavailable', message: '当前 Harness 配置不支持自动更新安装。' }
-    if (result.release?.asset === undefined) return { code: 'asset-unavailable', message: '此版本尚未发布可用的 macOS 安装包，请稍后重试。' }
+    if (result.release?.asset === undefined) return { code: 'asset-unavailable', message: '此版本尚未发布匹配当前系统和架构的安装包，请稍后重试。' }
     return undefined
   }
   const check = async (force = false): Promise<UpdateCheckResult> => {
@@ -160,7 +162,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
         if (problem !== undefined) throw new UpdateFailure(problem)
         const asset = fresh.release.asset!
         const bytes = await downloadAsset(asset, request, lifetime.signal)
-        try { validateUpdateArchive(bytes, { packageName: options.packageName, version, architecture }) }
+        try { validateUpdateArchive(bytes, { packageName: options.packageName, version, architecture, platform }) }
         catch { fail('archive-invalid', '安装包内容或系统架构不匹配，已停止更新。') }
         if (disposed) fail('disposed', '插件已停止，更新没有继续。')
         const directory = profile()?.dir
@@ -170,7 +172,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
         const pluginManager = manager()
         if (pluginManager?.installBundle === undefined) fail('manager-unavailable', 'Harness 插件管理服务尚未就绪，请稍后重试。')
         requestId = randomUUID()
-        const result = await pluginManager.installBundle(`file:${path}`, { enabled: true, requestId, saveExact: true })
+        const result = await pluginManager.installBundle(pathToFileURL(path).href, { enabled: true, requestId, saveExact: true })
         if (!['applied', 'restart-required'].includes(result.application) || result.bundle !== options.packageName || result.version !== version) fail('install-failed', 'Harness 未能完成插件更新，原有功能设置已保留，请重试。')
         pendingVersion = version
         // Native helper and Host modules may still be resident even after a Client refresh.

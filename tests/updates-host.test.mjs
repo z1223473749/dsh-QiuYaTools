@@ -159,7 +159,7 @@ test('an explicit update validates bytes and delegates an immutable file package
   const result = await f.call(installEndpoint, { version: '1.1.0' })
   assert.equal(result.status, 'restart-required')
   assert.equal(f.calls.length, 1)
-  assert.equal(f.calls[0].spec, `file:${join(await realpath(f.directory), 'qiuya-tools-updates', `${f.digest}.tgz`)}`)
+  assert.equal(f.calls[0].spec, pathToFileURL(join(await realpath(f.directory), 'qiuya-tools-updates', `${f.digest}.tgz`)).href)
   assert.deepEqual(f.calls[0].bytes, f.packageBytes)
   assert.equal(f.calls[0].options.enabled, true)
   assert.equal(f.calls[0].options.saveExact, true)

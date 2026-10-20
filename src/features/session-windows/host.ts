@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { SESSION_WINDOW_CHANNEL, SESSION_WINDOW_STATUS_ENDPOINT, SESSION_WINDOW_OPEN_ENDPOINT, SESSION_WINDOW_QUERY, parseWindowRequest, type SessionWindowStatus } from './contract.ts'
 
+export function sessionWindowExecutable(base: string, platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
+  return fileURLToPath(new URL(platform === 'win32' ? `./native/win32-${arch === 'arm64' ? 'arm64' : 'x64'}/qiuya-windows.exe` : './QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', base))
+}
+
 interface SessionControllerReader { list(request: object, signal: AbortSignal): Promise<{ items: readonly { sessionId: string; title?: string; blank?: boolean }[] }> }
 interface SessionHeaderView { id: string; cwd?: string; title?: string }
 interface LiveSessionView { id: string; header: SessionHeaderView; seq: number }
@@ -148,7 +152,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean):
   const services = ctx as unknown as HostServices
   // A normal .app bundle gives AppKit, LaunchServices and accessibility tools
   // one stable identity while stdin still carries the private launch facts.
-  const executable = fileURLToPath(new URL('./QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', import.meta.url))
+  const executable = sessionWindowExecutable(import.meta.url)
   const companion = new SessionWindowCompanion(executable)
   // A cancel can arrive while exact target validation is awaiting persistence.
   // Keep its intent here so that late validation cannot resurrect a hidden view.
@@ -162,7 +166,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean):
     return (typeof services.get === 'function' ? services.get(name) : services[name]) as T | undefined
   }
   const status = async (peer?: CallingPeer): Promise<SessionWindowStatus> => {
-    if (process.platform !== 'darwin') return { available: false, reason: 'platform' }
+    if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return { available: false, reason: 'platform' }
     try { await access(executable, constants.X_OK) }
     catch { return { available: false, reason: 'helper-missing' } }
     if (!reader<SessionStoreReader>('sessions', peer) && !reader<SessionPersistenceReader>('sessionPersistence', peer) && !reader<SessionControllerReader>('sessionController', peer) && !reader<SessionQueryReader>('sessionQuery', peer)) return { available: false, reason: 'reader-missing' }

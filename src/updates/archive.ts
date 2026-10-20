@@ -4,6 +4,7 @@ export interface ArchiveValidationOptions {
   packageName: string
   version: string
   architecture: 'arm64' | 'x64'
+  platform?: 'darwin' | 'win32'
 }
 
 export interface ArchiveMetadata {
@@ -19,6 +20,27 @@ const MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 const MAX_ENTRIES = 10_000
 const MAX_METADATA_BYTES = 1024 * 1024
 const HELPER = 'package/lib/QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'
+
+/** Validate executable PE headers before passing Windows bundles to the installer. */
+export function windowsExecutableArchitecture(bytes: Buffer): 'arm64' | 'x64' {
+  if (bytes.length < 128 || bytes.readUInt16LE(0) !== 0x5a4d) invalid('invalid Windows executable')
+  const pe = bytes.readUInt32LE(0x3c)
+  if (pe < 64 || pe > bytes.length - 24 || bytes.readUInt32LE(pe) !== 0x00004550) invalid('invalid Windows PE header')
+  const machine = bytes.readUInt16LE(pe + 4)
+  const sections = bytes.readUInt16LE(pe + 6)
+  const optionalSize = bytes.readUInt16LE(pe + 20)
+  const characteristics = bytes.readUInt16LE(pe + 22)
+  if (!sections || sections > 96 || optionalSize < 112 || pe + 24 + optionalSize + sections * 40 > bytes.length
+    || !(characteristics & 2) || characteristics & 0x2000 || bytes.readUInt16LE(pe + 24) !== 0x20b) invalid('invalid Windows executable layout')
+  for (let index = 0; index < sections; index++) {
+    const section = pe + 24 + optionalSize + index * 40
+    const size = bytes.readUInt32LE(section + 16), offset = bytes.readUInt32LE(section + 20)
+    if (size > bytes.length || offset > bytes.length - size) invalid('truncated Windows executable section')
+  }
+  if (machine === 0xaa64) return 'arm64'
+  if (machine === 0x8664) return 'x64'
+  return invalid('unsupported Windows executable architecture')
+}
 const textDecoder = new TextDecoder('utf-8', { fatal: true })
 const safePaxKeys = new Set(['path', 'size', 'mtime', 'atime', 'ctime', 'uid', 'gid', 'uname', 'gname', 'charset', 'comment', 'SCHILY.dev', 'SCHILY.ino', 'SCHILY.nlink'])
 
@@ -158,6 +180,8 @@ function helperArchitectures(bytes: Buffer): Architecture[] {
 /** Validate an npm package archive entirely in memory before Host installation. */
 export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidationOptions): ArchiveMetadata {
   if (options.architecture !== 'arm64' && options.architecture !== 'x64') invalid('unsupported target architecture')
+  const platform = options.platform ?? 'darwin'
+  if (platform !== 'darwin' && platform !== 'win32') invalid('unsupported target platform')
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_COMPRESSED_BYTES) invalid('compressed size exceeds the limit')
   let tar: Buffer
   try { tar = gunzipSync(bytes, { maxOutputLength: MAX_UNPACKED_BYTES }) }
@@ -256,9 +280,9 @@ export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidat
     const relative = patch.startsWith('./') ? patch.slice(2) : patch
     if (!files.has(`package/${safePath(relative)}`)) invalid('missing bundle patch')
   }
-  const helper = files.get(HELPER)
-  if (!helper || (helper.mode & 0o111) === 0) invalid('missing executable native helper')
-  const architectures = helperArchitectures(helper.bytes)
+  const helper = files.get(platform === 'win32' ? `package/lib/native/win32-${options.architecture}/qiuya-windows.exe` : HELPER)
+  if (!helper || (platform === 'darwin' && (helper.mode & 0o111) === 0)) invalid('missing executable native helper')
+  const architectures = platform === 'win32' ? [windowsExecutableArchitecture(helper.bytes)] : helperArchitectures(helper.bytes)
   if (!architectures.includes(options.architecture)) invalid('native helper does not support this architecture')
   return { packageName: options.packageName, version: options.version, unpackedBytes, files: [...files.keys()], architectures }
 }
