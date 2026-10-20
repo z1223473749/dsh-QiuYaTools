@@ -576,7 +576,7 @@ try {
 }
 finally {
   await writeFile(join(output, 'session-window-rpc.json'), JSON.stringify(windowRpc, null, 2))
-  if (windowStateDiagnostic) {
+  if (process.platform === 'win32') {
     // A separately packaged diagnostic companion can emit sanitized native
     // presentation phases. Preserve them before shutting down this own Host;
     // the ordinary frozen candidate does not create this optional file.
