@@ -283,7 +283,18 @@ try {
   await test('computer-main-agent-tools-and-image-adapter-pipeline', async () => {
     await waitForInputWindow()
     assert.ok(independentTarget && alphaId, 'The fixture session window must exist before computer control')
-    await row(alpha).click(); await sleep(300); await openSettings()
+    await row(alpha).click(); await sleep(300)
+    if (process.platform === 'win32') {
+      await editor().fill('E2E:computer-move')
+      const beforeSetup = independentTarget
+      const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome, '-DiagnosticPath', join(output, 'fixture-user-activation-diagnostic.json')]))
+      assert.equal(activation.active, true)
+      await writeFile(join(output, 'fixture-user-activation.json'), JSON.stringify(activation, null, 2))
+      independentTarget = (await driver.targets()).find(target => target.id === beforeSetup.id)
+      assert.ok(independentTarget && independentTarget.pid === beforeSetup.pid && independentTarget.appId === beforeSetup.appId, 'Own fixture identity must remain stable after pre-authorization setup')
+      await writeFile(join(output, 'fixture-setup-target-geometry.json'), JSON.stringify({ beforeSetup, afterSetup: independentTarget, authorizationStarted: false }, null, 2))
+    }
+    await openSettings()
     await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
     const enable = page.getByRole('checkbox', { name: '启用', exact: true })
     if (!await enable.isChecked()) await enable.click()
@@ -296,10 +307,6 @@ try {
     await screenshot('computer-authorized')
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     if (process.platform === 'win32') {
-      await editor().fill('E2E:computer-move')
-      const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome, '-DiagnosticPath', join(output, 'fixture-user-activation-diagnostic.json')]))
-      assert.equal(activation.active, true)
-      await writeFile(join(output, 'fixture-user-activation.json'), JSON.stringify(activation, null, 2))
       // Keep the fixture user's foreground target. DOM input submits the main
       // Agent request without focusing another desktop/browser window.
       await page.evaluate(() => {

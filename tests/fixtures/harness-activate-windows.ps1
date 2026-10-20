@@ -10,12 +10,16 @@ using System;using System.Text;using System.Collections.Generic;using System.Run
 public class QytFixtureActivation {
  [StructLayout(LayoutKind.Sequential)]struct Rect{public int Left,Top,Right,Bottom;}
  [StructLayout(LayoutKind.Sequential)]struct Point{public int X,Y;}
+ [StructLayout(LayoutKind.Sequential)]struct MonitorInfo{public int Size;public Rect Monitor,Work;public uint Flags;}
  [StructLayout(LayoutKind.Sequential)]struct LastInput{public uint Size,Time;}
  [StructLayout(LayoutKind.Sequential)]struct MouseInput{public int X,Y;public uint Data,Flags,Time;public UIntPtr Extra;}
  [StructLayout(LayoutKind.Sequential)]struct Input{public uint Type;public MouseInput Mouse;}
  [DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);
  [DllImport("user32.dll",SetLastError=true)]static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int z,uint flags);
  [DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")]static extern IntPtr MonitorFromWindow(IntPtr h,uint flags);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern bool GetMonitorInfo(IntPtr h,ref MonitorInfo info);
+ [DllImport("user32.dll",SetLastError=true)]static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")]static extern IntPtr WindowFromPhysicalPoint(Point p);
  [DllImport("user32.dll")]static extern IntPtr GetAncestor(IntPtr h,uint flags);
  [DllImport("user32.dll")]static extern IntPtr GetWindow(IntPtr h,uint command);
@@ -54,22 +58,67 @@ public class QytFixtureActivation {
   var hit=WindowFromPhysicalPoint(new Point{X=x,Y=y});var root=GetAncestor(hit,2);
   Diagnostics[stage]=new{target=Window(h),point=new{x,y},hit=Window(root),foreground=Window(GetForegroundWindow()),above=Window(GetWindow(h,3)),below=Window(GetWindow(h,2)),activePopup=Window(GetLastActivePopup(h)),systemDpi=GetDpiForSystem(),threadDpiContext=GetThreadDpiAwarenessContext().ToInt64(),threadAwareness=GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()),desktop=Desktop()};
  }
- public static object Activate(IntPtr h) {
-  Rect bounds;if(!GetWindowRect(h,out bounds))throw new Exception("Fixture target disappeared");
+ static Rect RequireTarget(IntPtr h,int expectedPid,long expectedBorn) {
+  uint pid;GetWindowThreadProcessId(h,out pid);
+  if(pid!=expectedPid)throw new Exception("Own fixture identity changed");
+  using(var process=System.Diagnostics.Process.GetProcessById(expectedPid))if(process.StartTime.ToUniversalTime().Ticks!=expectedBorn)throw new Exception("Own fixture process changed");
+  Rect r;int cloaked;
+  if(!GetWindowRect(h,out r)||!IsWindowVisible(h)||!IsWindowEnabled(h)||IsIconic(h)||Cloaked(h,14,out cloaked,4)!=0||cloaked!=0)throw new Exception("Own fixture is unavailable for a visible titlebar click");
+  return r;
+ }
+ static bool ExposedTitlePoint(IntPtr h,int expectedPid,long expectedBorn,List<object> attempts,string stage,object placement,out int x,out int y) {
+  var r=RequireTarget(h,expectedPid,expectedBorn);double scale=Math.Max(1,GetDpiForWindow(h)/96.0);
+  int left=r.Left+(int)Math.Ceiling(48*scale),right=r.Right-(int)Math.Ceiling(160*scale);
+  y=r.Top+(int)Math.Round(15*scale);x=0;
+  if(right<left)throw new Exception("Own fixture has no safe titlebar segment");
+  var xs=new List<int>{(left+right)/2,left,right};
+  for(int candidate=left;candidate<right;candidate+=(int)Math.Ceiling(32*scale))xs.Add(candidate);
+  var seen=new HashSet<int>();var points=new List<object>();bool exposed=false;
+  foreach(int candidate in xs){
+   if(!seen.Add(candidate))continue;
+   var root=GetAncestor(WindowFromPhysicalPoint(new Point{X=candidate,Y=y}),2);bool own=root==h;
+   points.Add(new{x=candidate,y,matchedOwnTarget=own,hit=Window(root)});
+   if(own){x=candidate;exposed=true;break;}
+  }
+  attempts.Add(new{stage,bounds=Rectangle(r),placement,points,exposed});return exposed;
+ }
+ public static object Activate(IntPtr h,int expectedPid,long expectedBorn) {
+  var priorDpi=SetThreadDpiAwarenessContext(new IntPtr(-4));
+  if(priorDpi==IntPtr.Zero)throw new Exception("Could not use physical coordinates for this fixture thread");
+  try{return ActivatePhysical(h,expectedPid,expectedBorn);}
+  finally{SetThreadDpiAwarenessContext(priorDpi);}
+ }
+ static object ActivatePhysical(IntPtr h,int expectedPid,long expectedBorn) {
+  var original=RequireTarget(h,expectedPid,expectedBorn);int width=original.Right-original.Left,height=original.Bottom-original.Top;
   bool top=(GetWindowLongPtr(h,-20).ToInt64()&8)!=0;long before=GetForegroundWindow().ToInt64();
-  int x=(bounds.Left+bounds.Right)/2,y=bounds.Top+15;bool restored=false;int restoreError=0;
+  int x=(original.Left+original.Right)/2,y=original.Top+15;bool restored=false;int restoreError=0;
+  var attempts=new List<object>();Diagnostics["titlebarAttempts"]=attempts;Diagnostics["originalBounds"]=Rectangle(original);
   Record("before",h,x,y);
   try {
-   // Raise this own fixture within its original z-order group. A background
-   // TOPMOST request can acknowledge success without changing the native style.
-   long requestedInsertAfter=top?-1:0;
-   bool uncovered=SetWindowPos(h,new IntPtr(requestedInsertAfter),0,0,0,0,1|2|16);
-   int uncoverError=uncovered?0:Marshal.GetLastWin32Error();long uncoverStyle=GetWindowLongPtr(h,-20).ToInt64();
-   Diagnostics["uncover"]=new{requestedInsertAfter,callResult=uncovered,win32Error=uncoverError,currentExtendedStyle=uncoverStyle,currentTopmost=(uncoverStyle&8)!=0};
-   if(!uncovered)throw new Exception("Could not uncover fixture titlebar");
-   System.Threading.Thread.Sleep(100);
-   Record("afterUncover",h,x,y);
-   if(GetAncestor(WindowFromPhysicalPoint(new Point{X=x,Y=y}),2)!=h)throw new Exception("Another window covers the fixture titlebar; no input sent");
+   bool exposed=ExposedTitlePoint(h,expectedPid,expectedBorn,attempts,"original",null,out x,out y);
+   if(!exposed){
+    var monitor=MonitorFromWindow(h,2);var info=new MonitorInfo{Size=Marshal.SizeOf<MonitorInfo>()};
+    if(monitor==IntPtr.Zero||!GetMonitorInfo(monitor,ref info))throw new Exception("Could not inspect the own fixture monitor working area");
+    Diagnostics["workingArea"]=Rectangle(info.Work);
+    if(width>info.Work.Right-info.Work.Left||height>info.Work.Bottom-info.Work.Top)throw new Exception("Own fixture cannot retain its size inside this monitor working area");
+    var candidates=new[]{new Point{X=info.Work.Left,Y=info.Work.Top},new Point{X=info.Work.Right-width,Y=info.Work.Top},new Point{X=info.Work.Left,Y=info.Work.Bottom-height},new Point{X=info.Work.Right-width,Y=info.Work.Bottom-height}};
+    var seen=new HashSet<string>();int attempt=0;
+    foreach(var candidate in candidates){
+     if(!seen.Add(candidate.X+":"+candidate.Y))continue;
+     RequireTarget(h,expectedPid,expectedBorn);
+     // Only this profile-bound Alpha moves. Preserve size and z-order and do not activate it.
+     const uint flags=0x0001|0x0004|0x0010|0x0200;
+     bool moved=SetWindowPos(h,IntPtr.Zero,candidate.X,candidate.Y,0,0,flags);int error=moved?0:Marshal.GetLastWin32Error();
+     System.Threading.Thread.Sleep(100);
+     var current=RequireTarget(h,expectedPid,expectedBorn);
+     var placement=new{requestedX=candidate.X,requestedY=candidate.Y,requestedInsertAfter=0,flags,callResult=moved,win32Error=error,currentExtendedStyle=GetWindowLongPtr(h,-20).ToInt64()};
+     if(current.Right-current.Left!=width||current.Bottom-current.Top!=height)throw new Exception("Own fixture size changed during safe placement");
+     exposed=ExposedTitlePoint(h,expectedPid,expectedBorn,attempts,"corner-"+(++attempt),placement,out x,out y);
+     if(exposed)break;
+    }
+   }
+   Diagnostics["boundsAfterSetup"]=Rectangle(RequireTarget(h,expectedPid,expectedBorn));Record("afterSetup",h,x,y);
+   if(!exposed||GetAncestor(WindowFromPhysicalPoint(new Point{X=x,Y=y}),2)!=h)throw new Exception("No exposed own fixture titlebar point; no input sent");
    if(!SetPhysicalCursorPos(x,y))throw new Exception("Could not position fixture mouse");
    var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
    uint sent=SendInput(2,input,Marshal.SizeOf<Input>());Diagnostics["activationInputCount"]=sent;
@@ -82,11 +131,12 @@ public class QytFixtureActivation {
    if(!restored)throw new Exception("Could not restore own fixture z-order: Win32="+restoreError);
    if(((GetWindowLongPtr(h,-20).ToInt64()&8)!=0)!=top)throw new Exception("The own fixture topmost state was not restored");
   }
-  return new{active=true,targetHandle=h.ToInt64(),foregroundBefore=before,foregroundAfter=GetForegroundWindow().ToInt64(),topmostBefore=top,restoreCallResult=restored,restoreWin32Error=restoreError,topmostAfter=(GetWindowLongPtr(h,-20).ToInt64()&8)!=0,x,y,source="Win32 SendInput OS-synthetic user-preflight click; not Parallels hardware"};
+  return new{active=true,targetHandle=h.ToInt64(),foregroundBefore=before,foregroundAfter=GetForegroundWindow().ToInt64(),topmostBefore=top,restoreCallResult=restored,restoreWin32Error=restoreError,topmostAfter=(GetWindowLongPtr(h,-20).ToInt64()&8)!=0,originalBounds=Rectangle(original),boundsAfterSetup=Rectangle(RequireTarget(h,expectedPid,expectedBorn)),x,y,source="Win32 SendInput OS-synthetic user-preflight click; not Parallels hardware"};
  }
+
 }
 '@
-try{$result=[QytFixtureActivation]::Activate($handle)}catch{
+try{$result=[QytFixtureActivation]::Activate($handle,$target.Id,[long]$parts[3])}catch{
  if($DiagnosticPath){[IO.File]::WriteAllText($DiagnosticPath,(@{error=$_.Exception.Message;observations=[QytFixtureActivation]::Diagnostics}|ConvertTo-Json -Depth 10 -Compress))}
  throw
 }
