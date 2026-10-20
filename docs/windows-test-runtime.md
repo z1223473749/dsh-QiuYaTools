@@ -80,7 +80,7 @@ wrapper 默认读取准备脚本的 manifest，并校验归档 SHA、固定 Node
 
 有限清单内的测试源码会从当前 checkout 重新传输，并以该次 `testSourceHashes` 记录实际内容；manifest 的 `sources` 记录最初打包时的快照。新增的 Win32 状态 fixture 同时加入准备与传输清单，无需把旧归档误记为包含后来的源码。
 
-需要定位真实 Host 的预览层级时，可设置 `QIUYA_WINDOWS_PREVIEW_WINDOW_DIAGNOSTIC=1`。它保留前八项 UI 前提和主 Agent 图像/Move 链，在预览第一次 UIA 观察前、UIA 后、native observe 截图后分别记录 Win32 style、owner、foreground 与实际运行文件 hash，然后停止预览按钮及后续验收。成功取证的 `report.status` 为 `diagnostic`，不能作为 UI12 通过；该模式拒绝同时运行安装生命周期。
+需要定位真实 Host 的预览层级时，可设置 `QIUYA_WINDOWS_PREVIEW_WINDOW_DIAGNOSTIC=1`。它保留前八项 UI 前提和主 Agent 图像/Move 链。点击“悬浮实时预览”前先编译并启动只读 Win32 监视器，绑定该隔离配置唯一的 `--computer` 子进程 PID、启动时间、实际路径与 hash；同登录会话内以 10ms 请求间隔枚举包含隐藏窗口的 HWND，连续八秒记录窗口首次出现、style、owner、visible 与 foreground 的变化及实际采样间隔。之后在预览第一次 UIA 观察前、UIA 后、native observe 截图后分别记录窗口状态，然后停止预览按钮及后续验收。监视器不安装全局钩子，也不调用 UIA、窗口修改或输入 API。成功取证的 `report.status` 为 `diagnostic`，不能作为 UI12 通过；该模式拒绝同时运行安装生命周期。10ms 是请求间隔，Windows 调度可能加长实际间隔，日志记录最大采样间隙，不能据此声称捕获了间隙内的每次变化。
 
 保留的旧测试归档也可通过显式路径运行：
 

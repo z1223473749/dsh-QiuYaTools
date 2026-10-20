@@ -321,7 +321,25 @@ try {
     await writeFile(join(output, 'agent-image-adapter-evidence.json'), JSON.stringify(images, null, 2))
     await screenshot('agent-computer-image')
     await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
-    await page.getByRole('button', { name: '悬浮实时预览', exact: true }).click()
+    let previewTimeline
+    if (windowStateDiagnostic) {
+      const ready = join(output, 'preview-window-timeline-ready.json')
+      const path = join(output, 'preview-window-timeline.json')
+      await rm(ready, { force: true }); await rm(path, { force: true })
+      const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+      // Compile, bind the exact disposable-profile --computer process and enter
+      // the 10ms read-only loop before opening the native preview. No UIA client
+      // arrives until this bounded first-show trace has completed.
+      previewTimeline = nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-window-timeline-windows.ps1'), '-ProfileRoot', profileHome, '-ReadyPath', ready, '-OutputPath', path])
+      let timelineError
+      previewTimeline.catch(error => { timelineError = error })
+      await waitFor(async () => {
+        if (timelineError) throw timelineError
+        return readFile(ready, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return undefined; throw error })
+      }, 'The profile-bound read-only preview timeline did not become ready', 20000)
+    }
+    try { await page.getByRole('button', { name: '悬浮实时预览', exact: true }).click() }
+    finally { if (previewTimeline) await previewTimeline }
     await sleep(1000)
     const nativeStatus = await page.evaluate(async sessionId => {
       const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
@@ -376,7 +394,7 @@ try {
       assert.match(text, /\d+\s*ms/u, 'The live preview must display a successful frame latency')
       if (windowStateDiagnostic) {
         diagnosticComplete = true
-        return { diagnostic: true, stages: windowStages, boundary: 'Read-only preview phases after the first eight UI prerequisites and real main-Agent Move; no preview controls/manual actions or later cases are run.' }
+        return { diagnostic: true, timeline: JSON.parse(await readFile(join(output, 'preview-window-timeline.json'), 'utf8')), stages: windowStages, boundary: 'The pre-click 10ms Win32 timeline and three read-only preview phases follow the first eight UI prerequisites and real main-Agent Move; no preview controls/manual actions or later cases are run.' }
       }
     }
     for (const [button, state] of [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['停止', 'stopped']]) {
