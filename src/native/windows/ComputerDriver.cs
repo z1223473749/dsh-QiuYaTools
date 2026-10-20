@@ -29,20 +29,49 @@ internal sealed class ComputerDriver : IDisposable
     private readonly HashSet<uint> heldMouse = new();
     private bool disposed;
     private bool inputCleanupFailed;
+    private int physicalCleanupPending;
+    private int leaseAcquiring;
+    private long physicalGeneration;
+    private long pendingPhysicalEpoch;
+    private readonly AutoResetEvent physicalWake = new(false);
+    private readonly Thread physicalCleanupThread;
+    private int physicalCleanupStopping;
+    private int disposeStarted;
     private readonly PhysicalInputMonitor physicalInput;
-    internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null) { writeInputs = inputWriter ?? (inputs => Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Native.INPUT>())); desktopLease = inputWriter == null ? new DesktopLeaseGuard() : null; physicalInput = new PhysicalInputMonitor(OnPhysicalInput); }
+    internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null)
+    {
+        writeInputs = inputWriter ?? WriteNativeInputs; desktopLease = inputWriter == null ? new DesktopLeaseGuard() : null;
+        physicalCleanupThread = new Thread(() => { while (true) { physicalWake.WaitOne(); if (Volatile.Read(ref physicalCleanupStopping) != 0) return; CleanupPhysicalInput(Interlocked.Exchange(ref pendingPhysicalEpoch, 0)); } }) { IsBackground = true, Name = "QiuYaTools owned input cleanup" };
+        physicalCleanupThread.Start(); physicalInput = new PhysicalInputMonitor(OnPhysicalInput);
+    }
+    private uint WriteNativeInputs(Native.INPUT[] inputs)
+    {
+        var release = InputTrace.Enabled && inputs.Any(input => input.Type == 0 && (input.Data.Mouse.Flags & (4 | 16 | 64)) != 0);
+        if (release) InputTrace.Mark("send-up-start", lastEpoch);
+        var result = Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Native.INPUT>());
+        if (release) InputTrace.Mark("send-up-end", lastEpoch, result);
+        return result;
+    }
     private void OnPhysicalInput(bool ownWindow, bool emergency)
     {
-        long previous;
-        lock (inputLock) {
-            previous = epoch;
-            if (previous == 0 || disposed || (ownWindow && !emergency && actionGate.CurrentCount != 0)) return;
-            epoch = 0;
-            try { ClearHeld(); desktopLease?.Release(); } catch (NativeFailure) { /* Preserve owned state; never throw through a native hook callback. */ }
-        }
-        Program.Emit(new { @event = "humanInput", epoch = previous });
+        // A low-level hook must never wait for the input lock, SendInput, the journal or stdout.
+        if (Volatile.Read(ref disposed) || (ownWindow && !emergency && actionGate.CurrentCount != 0)) return;
+        if (Volatile.Read(ref epoch) == 0 && Volatile.Read(ref leaseAcquiring) == 0) return;
+        Interlocked.Increment(ref physicalGeneration);
+        if (Interlocked.CompareExchange(ref physicalCleanupPending, 1, 0) != 0) { Interlocked.Exchange(ref epoch, 0); return; }
+        var previous = Interlocked.Exchange(ref epoch, 0);
+        Interlocked.Exchange(ref pendingPhysicalEpoch, previous); physicalWake.Set();
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
+    private void CleanupPhysicalInput(long previous)
+    {
+        var cleaned = false;
+        try {
+            lock (inputLock) { Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release(); cleaned = true; }
+        } catch { lock (inputLock) { inputCleanupFailed = true; Interlocked.Exchange(ref epoch, 0); } }
+        try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
+        finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
+    }
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
     internal object[] Targets()
     {
         var targets = new List<object>();
@@ -167,24 +196,39 @@ internal sealed class ComputerDriver : IDisposable
         var requested = Epoch(request);
         lock (inputLock) {
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
+            if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
+            if (Volatile.Read(ref physicalCleanupPending) != 0) throw new NativeFailure("human-input-pending", "Wait for interrupted input to finish releasing before reconnecting");
             if (disposed || requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Lease epoch is stale");
-            ClearHeld(); desktopLease?.Release(); desktopLease?.Acquire(); epoch = requested; lastEpoch = requested;
+            Volatile.Write(ref leaseAcquiring, 1);
+            var generation = Volatile.Read(ref physicalGeneration);
+            try {
+                ClearHeld(); desktopLease?.Release(); desktopLease?.Acquire(); Interlocked.Exchange(ref epoch, requested);
+                if (Volatile.Read(ref physicalCleanupPending) != 0 || Volatile.Read(ref physicalGeneration) != generation) {
+                    Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release();
+                    throw new NativeFailure("human-input-pending", "Physical input interrupted acquisition; reconnect after release");
+                }
+                lastEpoch = requested;
+            } finally { Volatile.Write(ref leaseAcquiring, 0); }
         }
         return new { epoch = requested, acquired = true };
     }
     internal object Release(JsonElement request)
     {
         var requested = Epoch(request);
+        InputTrace.Mark("release-enter", requested);
         lock (inputLock) {
+            InputTrace.Mark("release-lock-acquired", requested);
             if (epoch == requested) { epoch = 0; ClearHeld(); desktopLease?.Release(); }
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
         }
+        InputTrace.Mark("release-return", requested);
         return new { epoch = requested, released = true };
     }
     private void Check(long requested)
     {
         if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
-        if (disposed || epoch == 0 || epoch != requested) throw new NativeFailure("stale-epoch", "Input lease has been revoked");
+        if (disposed || Volatile.Read(ref epoch) == 0 || Volatile.Read(ref epoch) != requested) throw new NativeFailure("stale-epoch", "Input lease has been revoked");
+        if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; input has stopped");
     }
     private void Send(long requested, params Native.INPUT[] inputs)
     {
@@ -378,8 +422,17 @@ internal sealed class ComputerDriver : IDisposable
     }
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref disposeStarted, 1) != 0) return;
+        Volatile.Write(ref disposed, true); Interlocked.Exchange(ref epoch, 0);
         try { lock (inputLock) { disposed = true; epoch = 0; ClearHeld(); desktopLease?.Release(); } }
-        finally { try { captureBroker.Dispose(); } finally { physicalInput.Dispose(); desktopLease?.Dispose(); } }
+        finally {
+            try { captureBroker.Dispose(); }
+            finally {
+                physicalInput.Dispose(); Volatile.Write(ref physicalCleanupStopping, 1); physicalWake.Set();
+                if (physicalCleanupThread.Join(1500)) physicalWake.Dispose();
+                desktopLease?.Dispose();
+            }
+        }
     }
 }
 

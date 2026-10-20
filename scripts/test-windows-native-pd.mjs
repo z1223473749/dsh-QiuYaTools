@@ -14,7 +14,7 @@ const prlctl = process.env.QIUYA_PRLCTL || '/Applications/Parallels Desktop.app/
 const helperPath = resolve(process.env.QIUYA_WINDOWS_HELPER || fileURLToPath(new URL('../lib/native/win32-arm64/qiuya-windows.exe', import.meta.url)))
 const helper = await readFile(helperPath)
 const endurance = process.env.QIUYA_WINDOWS_TEST_KIND === 'endurance'
-const fixture = await readFile(new URL(endurance ? '../src/native/windows/native-endurance.ps1' : process.env.QIUYA_WINDOWS_TEST_KIND === 'capture' ? '../src/native/windows/capture-e2e.ps1' : '../src/native/windows/native-e2e.ps1', import.meta.url))
+const fixture = await readFile(new URL(endurance ? '../src/native/windows/native-endurance.ps1' : process.env.QIUYA_WINDOWS_TEST_KIND === 'capture' ? '../src/native/windows/capture-e2e.ps1' : process.env.QIUYA_WINDOWS_TEST_KIND === 'pause' ? '../src/native/windows/pause-latency-e2e.ps1' : '../src/native/windows/native-e2e.ps1', import.meta.url))
 const key = randomUUID()
 const output = resolve(process.env.QIUYA_WINDOWS_TEST_OUTPUT || join(tmpdir(), `qiuya-windows-native-${key}`))
 await mkdir(output, { recursive: true })

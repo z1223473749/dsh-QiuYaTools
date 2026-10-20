@@ -77,6 +77,7 @@ internal sealed class NativeContext : ApplicationContext
                 try {
                     using var document = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 32 });
                     var request = document.RootElement.Clone();
+                    if (InputTrace.Enabled && request.TryGetProperty("op", out var tracedOp) && tracedOp.ValueKind == JsonValueKind.String && tracedOp.GetString() == "release") InputTrace.Mark("stdin-release-read", request.TryGetProperty("epoch", out var tracedEpoch) && tracedEpoch.ValueKind == JsonValueKind.Number && tracedEpoch.TryGetInt64(out var value) ? value : 0);
                     dispatcher.BeginInvoke((Action)(() => _ = Dispatch(request)));
                 } catch (JsonException) { /* malformed, uncorrelated transport data */ }
             }
@@ -92,6 +93,7 @@ internal sealed class NativeContext : ApplicationContext
         else return;
         try {
             var op = Program.Text(request, "op", 64);
+            if (op == "release") InputTrace.Mark("dispatch-release", request.TryGetProperty("epoch", out var tracedEpoch) && tracedEpoch.ValueKind == JsonValueKind.Number && tracedEpoch.TryGetInt64(out var value) ? value : 0);
             object? result;
             if (computer == null) result = await windows.Session(op, request, requestId);
             else result = op switch {
