@@ -39,8 +39,8 @@ export async function packageCandidate(platform, architecture, output = join(roo
       await stat(join(stage, 'lib', 'native', `win32-${architecture}`, 'qiuya-windows.exe'))
       const manifestPath = join(stage, 'lib/native/windows-manifest.json')
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+      if (manifest.version !== pkg.version) throw new Error('Windows native manifest version does not match the package; rebuild the native helpers')
       manifest.artifacts = manifest.artifacts.filter(asset => asset.architecture === architecture)
-      manifest.version = pkg.version
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
     }
     else {

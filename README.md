@@ -6,6 +6,8 @@
 
 ## 安装
 
+本次 Windows 候选版请安装对应的 `dsh-qiuya-tools-win32-arm64.tgz` 或 `dsh-qiuya-tools-win32-x64.tgz`；步骤与架构选择见[安装包说明](docs/computer-use-guide.md)。下方 npm 包名和通用 `dsh-qiuya-tools.tgz` 下载入口保留为 Mac universal 分发，不包含 Windows 原生程序。
+
 1. 打开 Harness 的 **插件 → 添加插件**。
 2. 输入 npm 包名 **`dsh-qiuya-tools`**，点击安装。
 3. 点击 **立即启用**，进入 **设置 → QiuYaTools**。
