@@ -28,6 +28,7 @@ export function installSidebarBulkArchive(options: SidebarBulkArchiveOptions, do
   style.textContent = bulkArchiveCSS
   doc.head.appendChild(style)
   let menu: HTMLDivElement | undefined
+  let menuSignature: string | undefined
   let openingSelectionMenu = false
   let busy = false
   let disposed = false
@@ -58,7 +59,14 @@ export function installSidebarBulkArchive(options: SidebarBulkArchiveOptions, do
   const membersAt = (row: HTMLElement): readonly ArchiveTarget[] => options.targets().get(row.dataset.rowKey ?? '') ?? []
   const insideOwnUI = (event: Event): boolean => event.target instanceof win.Node
     && menu?.contains(event.target) === true
-  const closeMenu = (): void => { menu?.remove(); menu = undefined }
+  const closeMenu = (): void => { menu?.remove(); menu = undefined; menuSignature = undefined }
+  const selectionMenuSignature = (): string => JSON.stringify([
+    [...selected.values()].map(member => [member.id, member.title]),
+    (['pin', 'rename', 'fork', 'archive', 'clear'] as const)
+      .map(key => options.t(key, key === 'archive' ? { n: selected.size } : undefined)),
+    result,
+    [...failureReasons].filter(([id]) => selected.has(id)),
+  ])
   const render = (): void => {
     for (const row of rows()) {
       const members = membersAt(row)
@@ -304,6 +312,7 @@ export function installSidebarBulkArchive(options: SidebarBulkArchiveOptions, do
     cancel.addEventListener('click', clear)
     menu.appendChild(cancel)
     doc.body.appendChild(menu)
+    menuSignature = selectionMenuSignature()
     const rect = menu.getBoundingClientRect()
     menu.style.left = `${Math.max(0, Math.min(event.clientX, win.innerWidth - rect.width))}px`
     menu.style.top = `${Math.max(0, Math.min(event.clientY, win.innerHeight - rect.height))}px`
@@ -327,7 +336,12 @@ export function installSidebarBulkArchive(options: SidebarBulkArchiveOptions, do
   }
   const refresh = (): void => {
     if (disposed) return
-    if (!busy) { selection.reconcile(options.targets()); closeMenu() }
+    if (!busy) {
+      selection.reconcile(options.targets())
+      // Session status/projection notifications also refresh the catalog. Keep
+      // an unchanged menu and its focused action usable during other activity.
+      if (menu !== undefined && menuSignature !== selectionMenuSignature()) closeMenu()
+    }
     render()
   }
   const unsubscribe = options.subscribe(refresh)

@@ -47,6 +47,7 @@ function fixture(t, archiveImplementation) {
     <div data-row-key="session:archived" role="treeitem">Archived</div>
   </div></div><div data-row-key="session:ungrouped">Outside sidebar</div><input />`
   let targets = sidebarArchiveTargets(catalog())
+  let messages = { ...bulkArchiveZh }
   let refresh
   let unsubscribeCount = 0
   const calls = []
@@ -76,7 +77,7 @@ function fixture(t, archiveImplementation) {
     targets: () => targets,
     archive: async id => { calls.push(id); await archiveImplementation?.(id) },
     subscribe: listener => { refresh = listener; return () => { unsubscribeCount++ } },
-    t: (key, params) => bulkArchiveZh[key].replace(/\{(\w+)\}/g, (_, key) => String(params?.[key])),
+    t: (key, params) => messages[key].replace(/\{(\w+)\}/g, (_, key) => String(params?.[key])),
   }, doc)
   t.after(() => { dispose(); dom.window.close() })
   const row = id => doc.querySelector(`[data-row-key="session:${id}"]`)
@@ -92,6 +93,7 @@ function fixture(t, archiveImplementation) {
     refresh: () => refresh(),
     unsubscribeCount: () => unsubscribeCount,
     replaceTargets: value => { targets = value; refresh() },
+    replaceMessages: value => { messages = value; refresh() },
     workspace: async id => {
       doc.querySelector(`[data-row-key="workspace:${id}"] button`).click()
       await flush()
@@ -313,6 +315,54 @@ test('catalog changes prune stale identities and dismiss a menu with stale targe
   f.replaceTargets(sidebarArchiveTargets(next))
   assert.deepEqual(f.marked(), ['session:b'])
   assert.equal(f.doc.querySelector('.qyt-bulk-archive-menu'), null)
+})
+
+test('unrelated list notifications preserve the open menu and focus while archiving exact selected identities', async t => {
+  const f = fixture(t)
+  f.choose('a'); f.choose('b'); f.menu('b')
+  const menu = f.doc.querySelector('.qyt-bulk-archive-menu')
+  const action = menu.querySelector('button:not(:disabled)')
+  assert.equal(f.doc.activeElement, action)
+  f.refresh()
+  const next = catalog()
+  next.sessions.find(item => item.id === 'c').title = 'Unselected session changed'
+  f.replaceTargets(sidebarArchiveTargets(next))
+  f.refresh()
+  assert.equal(f.doc.querySelector('.qyt-bulk-archive-menu'), menu)
+  assert.equal(f.doc.activeElement, action, 'An unrelated status/catalog notification cannot steal the focused archive action')
+  action.click(); await flush()
+  assert.deepEqual(f.calls, ['a', 'b'])
+})
+
+test('a selected title or rendered locale change dismisses the menu without losing selection', t => {
+  const f = fixture(t)
+  f.choose('a'); f.choose('b'); f.menu('b')
+  const next = catalog()
+  next.sessions.find(item => item.id === 'a').title = 'Renamed selected session'
+  f.replaceTargets(sidebarArchiveTargets(next))
+  assert.equal(f.doc.querySelector('.qyt-bulk-archive-menu'), null)
+  assert.deepEqual(f.marked(), ['session:a', 'session:b'])
+  f.menu('b')
+  assert.ok(f.doc.querySelector('.qyt-bulk-archive-menu'))
+  f.replaceMessages({ ...bulkArchiveZh, archive: 'Archive selected ({n})' })
+  assert.equal(f.doc.querySelector('.qyt-bulk-archive-menu'), null)
+  assert.deepEqual(f.marked(), ['session:a', 'session:b'])
+  f.menu('b')
+  assert.match(f.doc.querySelector('.qyt-bulk-archive-menu').textContent, /Archive selected \(2\)/)
+})
+
+test('a refresh during an in-flight archive preserves the captured queue without duplicate requests', async t => {
+  let release
+  const first = new Promise(done => { release = done })
+  const f = fixture(t, async id => { if (id === 'a') await first })
+  f.choose('a'); f.choose('b'); f.menu('b'); f.run()
+  const next = catalog(); next.archivedSessionIds.push('b')
+  f.replaceTargets(sidebarArchiveTargets(next)); f.refresh()
+  assert.deepEqual(f.calls, ['a'])
+  assert.equal(f.doc.querySelector('.qyt-bulk-archive-menu'), null)
+  release(); await flush()
+  assert.deepEqual(f.calls, ['a', 'b'])
+  assert.deepEqual(f.marked(), [])
 })
 
 test('new row DOM regains selection and unloading removes marks, styles, menus, subscriptions and interception', async t => {
