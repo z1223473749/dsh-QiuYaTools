@@ -1,7 +1,7 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.5.2",
-  "description": "长文本附件、会话分窗、批量归档、计划批注和提示词建议，配合菜单增强与手绘 Q 主题，让 Harness 更顺手。",
+  "version": "0.6.0-beta.1",
+  "description": "长文本附件、会话分窗、批量归档、计划批注、提示词与 Q 主题；支持 Mac/Windows 电脑操控、悬浮实时预览、人工接管及浏览器通道。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,9 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "scripts/computer-agent.mjs",
+    "docs/computer-use-guide.md"
   ],
   "dsh": {
     "bundle": {
@@ -51,7 +53,21 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
-    "prepack": "npm run check"
+    "prepack": "npm run check",
+    "build:native:windows": "node scripts/build-windows-native.mjs",
+    "test:computer:unit": "node --test tests/computer-session.test.mjs",
+    "test:computer:host": "node --test tests/computer-tools.test.mjs tests/computer-host.test.mjs tests/computer-host-dispose.test.mjs tests/computer-native.test.mjs",
+    "test:computer:remote": "node --test tests/computer-remote.test.mjs tests/computer-remote-lifecycle.test.mjs",
+    "test:computer:web": "node scripts/test-computer-preview.mjs",
+    "test:computer:macos": "node scripts/e2e-macos-computer.mjs --evidence-dir artifacts/computer-use/macos-native",
+    "test:computer:lease:macos": "node scripts/test-macos-computer-lease.mjs --action-crash",
+    "test:computer:windows": "node scripts/test-windows-native-pd.mjs",
+    "package:candidate": "node scripts/package-candidates.mjs",
+    "test:computer:soak": "node scripts/soak-computer.mjs",
+    "test:compat": "node scripts/e2e-harness.mjs",
+    "test:compat:install": "node scripts/test-harness-install.mjs",
+    "test:computer:preflight": "node scripts/computer-preflight.mjs",
+    "test:computer:browser": "node scripts/test-computer-browser.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"
@@ -85,6 +101,7 @@
     "esbuild": "^0.25.0",
     "immer": "10.1.1",
     "jsdom": "26.1.0",
+    "playwright": "1.61.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^6.0.3",
@@ -98,5 +115,9 @@
   "bugs": {
     "url": "https://github.com/z1223473749/dsh-QiuYaTools/issues"
   },
-  "author": "QiuYa"
+  "author": "QiuYa",
+  "qiuyaNative": {
+    "protocolVersion": 1,
+    "computerUse": true
+  }
 }

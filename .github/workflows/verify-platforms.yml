@@ -1,0 +1,38 @@
+name: 双平台构建与验证
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: '8.0.426'
+      - name: 构建 Windows ARM64 与 x64 辅助程序
+        if: runner.os == 'Windows'
+        run: node scripts/build-windows-native.mjs
+      - name: 构建 Mac 通用辅助程序
+        if: runner.os == 'macOS'
+        env:
+          QIUYA_TOOLS_UNIVERSAL: '1'
+        run: npm run build
+      - name: 保存构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}
+          path: lib/
