@@ -107,7 +107,7 @@ function mount(value = {}, policy = {}) {
     container, options, mutations,
     snapshot: () => snapshot,
     failWith(error) { failure = error },
-    switch(label) { return container.querySelector(`[role="switch"][aria-label="${label}"]`) },
+    switch(label) { return container.querySelector(`:is([role="switch"], [role="checkbox"])[aria-label="${label}"]`) },
     tab(label) { return [...container.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === label) },
     select(label) { act(() => Simulate.click(this.tab(label))) },
     async toggle(label) { await act(async () => { Simulate.click(this.switch(label)) }) },
@@ -120,7 +120,7 @@ function mount(value = {}, policy = {}) {
 test('settings default every feature to on and atomically turn every feature off and on', async () => {
   const f = mount()
   try {
-    assert.equal(f.container.querySelectorAll('[role="switch"]').length, 2, 'only the master and active feature switches are mounted')
+    assert.equal(f.container.querySelectorAll('[role="switch"], [role="checkbox"]').length, 2, 'only the master and active feature controls are mounted')
     assert.ok(f.container.querySelector('.qyt-header-actions').contains(f.switch('enabled')), 'the master is in the fixed header')
     assert.equal(f.container.querySelector('.qyt-master'), null, 'there is no second master card')
     assert.equal(f.container.querySelector('.qyt-save-feedback'), null, 'there is no permanent save-explanation row')
@@ -144,7 +144,7 @@ test('settings default every feature to on and atomically turn every feature off
   } finally { f.dispose() }
 })
 
-test('each settings switch updates only its feature and the legacy master field', async () => {
+test('each feature shows a mixed master when disabled and one master click restores all tools', async () => {
   for (const [field, label] of [
     ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
     ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['sidebarToolsEnabled', 'sidebarTools'],
@@ -157,9 +157,17 @@ test('each settings switch updates only its feature and the legacy master field'
         { op: 'set', path: ['enabled'], value: true },
         { op: 'set', path: [field], value: false },
       ]])
-      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'false')
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'mixed')
       assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
       for (const other of featureFields.filter(other => other !== field)) assert.equal(f.snapshot().value[other], true)
+      assert.deepEqual(f.snapshot().value.unrelated, { preserve: true })
+      await f.toggle('enabled')
+      assert.deepEqual(f.mutations[1], [
+        { op: 'set', path: ['enabled'], value: true },
+        ...featureFields.map(field => ({ op: 'set', path: [field], value: true })),
+      ])
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'true')
+      assert.equal(f.snapshot().value.qThemeEnabled, false, 'the independent theme preference is preserved')
       assert.deepEqual(f.snapshot().value.unrelated, { preserve: true })
     } finally { f.dispose() }
   }
@@ -236,7 +244,7 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   for (const policy of [{ writable: false }, { status: 'loading' }, { status: 'unavailable' }]) {
     const f = mount(defaults, policy)
     try {
-      assert.equal([...f.container.querySelectorAll('[role="switch"], input, button[type="submit"]')].every(control => control.disabled), true)
+      assert.equal([...f.container.querySelectorAll('[role="switch"], [role="checkbox"], input, button[type="submit"]')].every(control => control.disabled), true)
       assert.equal([...f.container.querySelectorAll('[role="tab"]')].every(control => !control.disabled), true)
       await f.submit()
       assert.equal(f.mutations.length, 0)

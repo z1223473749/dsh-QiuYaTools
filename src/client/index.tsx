@@ -168,7 +168,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
             <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span></div>
             <span className="qyt-status" role={saveState === 'error' ? 'alert' : 'status'} data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(!ready ? snapshot.status === 'loading' ? 'loading' : 'unavailable' : !snapshot.writable ? 'readOnly' : saveState === 'error' ? 'saveError' : saveState === 'saving' ? 'saving' : saveState === 'saved' ? 'saved' : allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')}</span>
           </div>
-          <div className="qyt-header-actions"><span>{t('enabled')}</span><Switch className="qyt-switch" checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} /></div>
+          <div className="qyt-header-actions"><span>{t('enabled')}</span><button type="button" className="qyt-master-toggle" role="checkbox" aria-label={t('enabled')} aria-checked={allEnabled ? true : anyEnabled ? 'mixed' : false} title={t(allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')} disabled={disabled} onClick={() => { void setAllFeatures(!allEnabled) }}><span aria-hidden="true" /></button></div>
         </header>
       </div>
 

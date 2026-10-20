@@ -28,7 +28,14 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-brand > span { width: 30px; height: 30px; background: currentColor; mask-position: center; mask-size: contain; mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; }
 .qyt-heading { min-width: 0; flex: 1; }
 .qyt-header-actions { display: flex; align-items: center; gap: 9px; flex: none; margin-left: auto; padding: 7px 8px; border: 1px solid var(--qyt-ocean-line); border-radius: 10px; background: var(--qyt-art-paper); font-size: 11px; white-space: nowrap; }
-.qyt-header-actions > [role="switch"] { flex: none; }
+.qyt-master-toggle { display: inline-flex; align-items: center; flex: none; width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; background: var(--dsw-alias-interactive-bg-active); cursor: pointer; }
+.qyt-master-toggle > span { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--qyt-surface); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.qyt-master-toggle[aria-checked="true"] { justify-content: flex-end; background: var(--qyt-ocean-solid); }
+.qyt-master-toggle[aria-checked="true"] > span { background: #fff; }
+.qyt-master-toggle[aria-checked="mixed"] { justify-content: center; background: var(--qyt-selected); box-shadow: inset 0 0 0 1px var(--qyt-ocean-line); }
+.qyt-master-toggle[aria-checked="mixed"] > span::after { content: ""; width: 8px; height: 2px; border-radius: 1px; background: var(--qyt-ocean); }
+.qyt-master-toggle:focus-visible { outline: 2px solid var(--qyt-ocean-focus); outline-offset: 2px; }
+.qyt-master-toggle:disabled { opacity: .5; cursor: default; }
 .qyt-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .qyt-settings h2 { font-size: 20px; font-weight: 600; letter-spacing: -.4px; margin: 0; line-height: 1.4; }
 .qyt-settings h3, .qyt-settings h4 { margin: 0; font-weight: 600; line-height: 1.5; }
@@ -111,6 +118,9 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-theme-swatches > i:last-child { background: #fafaf8; }
 @media (forced-colors: active) {
   .qyt-header, .qyt-theme-scene { background: Canvas; box-shadow: none; }
+  .qyt-master-toggle { border: 1px solid ButtonText; }
+  .qyt-master-toggle > span { border: 1px solid ButtonText; }
+  .qyt-master-toggle[aria-checked="mixed"] > span::after { background: ButtonText; }
 }
 @media (max-width: 620px) {
   .qyt-header { gap: 10px; padding-bottom: 12px; }
