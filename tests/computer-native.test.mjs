@@ -10,7 +10,7 @@ const source = (await build({ entryPoints: [new URL('../src/features/computer-us
 const { NativeCompanionDriver, computerCompanionPath } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 test.after(() => rm(directory, { recursive: true, force: true }))
 const script = join(directory, 'fixture.cjs'), records = join(directory, 'requests.jsonl')
-await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
+await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
 
 test('platform resolver selects fixed native assets and rejects unsupported architectures', () => {
   const base = new URL('file:///fixture/plugin/')
@@ -58,4 +58,17 @@ test('unsolicited preview-close events reach Host listeners and disposal rejects
 test('timeout kills a hung native worker and reports failure instead of silently replaying a request', async () => {
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [script], timeoutMs: 100 })
   try { await assert.rejects(driver.observe('target'), { code: 'NATIVE_TIMEOUT' }) } finally { driver.dispose() }
+})
+
+
+test('incompatible companion is rejected before target enumeration or input', async () => {
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [script, '--wrong-protocol'] })
+  try {
+    assert.equal((await driver.status()).available, false)
+    await assert.rejects(driver.targets(), { code: 'NATIVE_PROTOCOL_VERSION' })
+    await assert.rejects(driver.lease(50), { code: 'NATIVE_PROTOCOL_VERSION' })
+    await assert.rejects(driver.act(50, 'target', { kind: 'key', key: 'Enter' }), { code: 'NATIVE_PROTOCOL_VERSION' })
+    const lines = (await readFile(records, 'utf8')).trim().split('\n').map(JSON.parse).filter(row => row.argv.includes('--wrong-protocol'))
+    assert.deepEqual(lines.map(row => row.op), ['status'])
+  } finally { driver.dispose() }
 })

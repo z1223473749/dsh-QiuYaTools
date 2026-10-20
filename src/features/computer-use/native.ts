@@ -19,13 +19,14 @@ export class NativeCompanionDriver implements DeviceDriver {
   private buffer = ''
   private disposed = false
   private nextRequestId = 0
+  private protocol?: Promise<ComputerStatus>
   constructor(private readonly options: NativeCompanionOptions = {}) {}
   static defaultPath = computerCompanionPath
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private emit(event: NativeComputerEvent): void { for (const listener of this.listeners) { try { listener(event) } catch {} } }
   private fail(error: unknown, child = this.child): void {
     if (child && this.child !== child) return
-    this.child = undefined; this.buffer = ''
+    this.child = undefined; this.buffer = ''; this.protocol = undefined
     for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }
     this.pending.clear()
     this.emit({ event: 'disconnected' })
@@ -89,23 +90,37 @@ export class NativeCompanionDriver implements DeviceDriver {
       child.stdin.write(`${JSON.stringify({ requestId, op, ...payload })}\n`, error => { if (error) this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child) })
     })
   }
+  private compatible(): Promise<ComputerStatus> {
+    if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))
+    if (!this.protocol) this.protocol = this.rpc<ComputerStatus>('status').then(status => {
+      if (status?.protocolVersion !== 1) throw new ComputerError('NATIVE_PROTOCOL_VERSION', '执行器协议版本不匹配，请重新安装对应版本的插件。')
+      return status
+    })
+    return this.protocol
+  }
+  private async checked<T>(op: string, payload: object = {}, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted()
+    await this.compatible()
+    signal?.throwIfAborted()
+    return this.rpc<T>(op, payload, signal)
+  }
   async status(signal?: AbortSignal): Promise<ComputerStatus> {
-    try { return await this.rpc<ComputerStatus>('status', {}, signal) }
+    try { signal?.throwIfAborted(); await this.compatible(); return await this.rpc<ComputerStatus>('status', {}, signal) }
     catch (error) { if (signal?.aborted) throw error; return { available: false, platform: process.platform, message: error instanceof Error ? error.message : '执行器不可用' } }
   }
   async targets(signal?: AbortSignal): Promise<NativeTarget[]> {
-    const result = await this.rpc<NativeTarget[] | { targets: NativeTarget[] }>('targets', {}, signal)
+    const result = await this.checked<NativeTarget[] | { targets: NativeTarget[] }>('targets', {}, signal)
     const targets = Array.isArray(result) ? result : result?.targets
     if (!Array.isArray(targets)) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的窗口列表无效')
     return targets
   }
-  observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
-  preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
-  lease(epoch: number, signal?: AbortSignal) { return this.rpc('lease', { epoch }, signal) }
+  observe(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId }, signal) }
+  preview(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId, preview: true }, signal) }
+  lease(epoch: number, signal?: AbortSignal) { return this.checked('lease', { epoch }, signal) }
   release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.rpc('act', { epoch, targetId, action }, signal) }
-  openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.rpc('openPreview', { url, title, sessionId }, signal) }
-  closePreview(signal?: AbortSignal) { return this.rpc('closePreview', {}, signal) }
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.checked('act', { epoch, targetId, action }, signal) }
+  openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
+  closePreview(signal?: AbortSignal) { return this.checked('closePreview', {}, signal) }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
