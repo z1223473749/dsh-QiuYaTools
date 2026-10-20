@@ -97,7 +97,7 @@ export class SessionWindowCompanion {
 
   private start(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null && !this.child.killed) return this.child
-    const child = spawn(this.executable, [], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
+    const child = spawn(this.executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
     this.child = child
     const lines = createInterface({ input: child.stdout })
     lines.on('line', line => {
