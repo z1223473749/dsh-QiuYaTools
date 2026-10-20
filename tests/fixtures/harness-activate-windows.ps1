@@ -86,7 +86,11 @@ public class QytFixtureActivation {
   var priorDpi=SetThreadDpiAwarenessContext(new IntPtr(-4));
   if(priorDpi==IntPtr.Zero)throw new Exception("Could not use physical coordinates for this fixture thread");
   try{return ActivatePhysical(h,expectedPid,expectedBorn);}
-  finally{SetThreadDpiAwarenessContext(priorDpi);}
+  finally{
+   var restored=SetThreadDpiAwarenessContext(priorDpi);bool success=restored!=IntPtr.Zero;int error=success?0:Marshal.GetLastWin32Error();
+   Diagnostics["dpiRestore"]=new{callResult=success,returnedContext=restored.ToInt64(),win32Error=error};
+   if(!success)throw new Exception("Could not restore fixture thread DPI context: Win32="+error);
+  }
  }
  static object ActivatePhysical(IntPtr h,int expectedPid,long expectedBorn) {
   var original=RequireTarget(h,expectedPid,expectedBorn);int width=original.Right-original.Left,height=original.Bottom-original.Top;
@@ -126,6 +130,7 @@ public class QytFixtureActivation {
    for(int n=0;n<20&&GetForegroundWindow()!=h;n++)System.Threading.Thread.Sleep(50);
    if(GetForegroundWindow()!=h)throw new Exception("User fixture click did not activate its own target");
   }finally{
+   RequireTarget(h,expectedPid,expectedBorn);
    restored=SetWindowPos(h,new IntPtr(top?-1:-2),0,0,0,0,1|2|16);restoreError=restored?0:Marshal.GetLastWin32Error();
    Diagnostics["restore"]=new{callResult=restored,win32Error=restoreError,originalTopmost=top};Record("afterRestore",h,x,y);
    if(!restored)throw new Exception("Could not restore own fixture z-order: Win32="+restoreError);
