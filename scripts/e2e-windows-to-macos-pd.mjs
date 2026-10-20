@@ -1,0 +1,61 @@
+/** Real Windows public RemoteComputerDriver -> Mac native fixture. Input waits for an explicit local test gate. */
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { spawn,execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { createInterface } from 'node:readline'
+import { mkdir,readFile,writeFile,stat } from 'node:fs/promises'
+import { join,resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { randomUUID,randomBytes,createHash } from 'node:crypto'
+import { pathToFileURL,fileURLToPath } from 'node:url'
+import { build } from 'esbuild'
+const run=promisify(execFile),vm=process.env.QIUYA_PD_VM,host=process.env.QIUYA_PD_HOST_IP
+if(!vm||!/^[a-f0-9-]{36}$/iu.test(vm)||!host||!/^\d+\.\d+\.\d+\.\d+$/u.test(host))throw new Error('Set QIUYA_PD_VM and QIUYA_PD_HOST_IP for the authorized test VM')
+const prlctl=process.env.QIUYA_PRLCTL||'/Applications/Parallels Desktop.app/Contents/MacOS/prlctl'
+const output=resolve(process.env.QIUYA_REVERSE_REMOTE_OUTPUT||join(tmpdir(),`qiuya-windows-to-macos-${randomUUID()}`)),key=randomUUID(),token=randomBytes(32).toString('hex')
+await mkdir(output,{recursive:true});const gate=join(output,'begin-input')
+// A locked login session cannot be a successful foreground input test. Preserve
+// an explicit blocked report before launching either platform's test processes.
+const session=await run('/usr/bin/swift',['-e','import CoreGraphics; let session = CGSessionCopyCurrentDictionary() as? [String:Any]; print((session?["CGSSessionScreenIsLocked"] as? Bool) == true ? "locked" : "unlocked")'],{timeout:20000})
+if(session.stdout.trim()!=='unlocked'){
+ const report={status:'blocked',passed:false,checks:[],reason:'The Mac owner must unlock the interactive desktop before this reverse input test.',actualInput:false,testedAt:new Date().toISOString()}
+ await writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({status:'blocked',output}));process.exit(2)
+}
+if(!process.env.QIUYA_WINDOWS_NODE_ROOT)throw new Error('Set QIUYA_WINDOWS_NODE_ROOT to the verified guest Node runtime; no historical temporary directory is assumed')
+const bundle=join(output,'remote.mjs');await build({stdin:{contents:"export{RemoteComputerDriver,createComputerAgentServer}from'./src/features/computer-use/remote.ts';export{NativeCompanionDriver}from'./src/features/computer-use/native.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,platform:'node',format:'esm',outfile:bundle})
+const {NativeCompanionDriver,createComputerAgentServer}=await import(pathToFileURL(bundle).href)
+const contents=join(output,'QiuYaTools Reverse Fixture.app','Contents');await mkdir(join(contents,'MacOS'),{recursive:true})
+await writeFile(join(contents,'Info.plist'),'<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.qiuya.tools.reverse-remote.fixture</string><key>CFBundleName</key><string>QiuYaTools Reverse Fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>')
+const executable=join(contents,'MacOS','fixture');await run('/usr/bin/swiftc',['-swift-version','5','-framework','AppKit','-module-cache-path','/private/tmp/qiuya-remote-swift-cache',fileURLToPath(new URL('../src/native/macos/fixtures/ComputerFixture.swift',import.meta.url)),'-o',executable],{timeout:60000})
+const fixture=spawn(executable,[],{stdio:['pipe','pipe','pipe']});fixture.stderr.resume();const queued=[],waiting=[]
+const lines=createInterface({input:fixture.stdout});lines.on('line',line=>{try{const value=JSON.parse(line),job=waiting.shift();if(job)job(value);else queued.push(value)}catch{}})
+const nextState=()=>new Promise((done,reject)=>{if(queued.length){done(queued.shift());return};const timer=setTimeout(()=>reject(new Error('Mac fixture state timed out')),5000);waiting.push(value=>{clearTimeout(timer);done(value)})})
+const ready=await nextState(),snapshot=async()=>{fixture.stdin.write('snapshot\n');return nextState()}
+const driver=new NativeCompanionDriver({executable:fileURLToPath(new URL('../lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer',import.meta.url))})
+const agent=await createComputerAgentServer(driver,{token,host,port:0})
+const guestBase=process.env.QIUYA_WINDOWS_NODE_ROOT
+const node=`${guestBase}\\node-v22.23.3-win-arm64\\node.exe`,guestRoot=`${guestBase}\\reverse-${key}`
+const quote=value=>`'${value.replaceAll("'","''")}'`
+async function ps(code,timeout=30000){return(await run(prlctl,['exec',vm,'powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{timeout,killSignal:'SIGKILL',maxBuffer:24*1024*1024})).stdout.trim()}
+let checkpoint=false
+const files=new Map([['remote.mjs',await readFile(bundle)]])
+const server=createServer(async(request,response)=>{try{const parts=request.url.split('/');if(parts[1]!==key){response.writeHead(404).end();return}if(parts[2]==='state'){response.setHeader('Content-Type','application/json');response.end(JSON.stringify(await snapshot()));return}if(parts[2]==='begin'){response.end(await stat(gate).then(()=> 'go',()=> 'wait'));return}if(parts[2]==='checkpoint'&&request.method==='POST'){let body='';for await(const part of request){body+=part;if(body.length>65536)throw new Error('Checkpoint limit')};await writeFile(join(output,'capture-checkpoint.json'),body);checkpoint=true;response.end('ok');return}const file=request.method==='GET'&&files.get(parts[2]);if(!file){response.writeHead(404).end();return}response.writeHead(200,{'Content-Length':file.length});response.end(file)}catch{response.writeHead(500).end('fixture unavailable')}})
+await new Promise((done,reject)=>{server.once('error',reject);server.listen(0,host,done)})
+const base=`http://${host}:${server.address().port}/${key}`
+files.set('config.json',Buffer.from(JSON.stringify({endpoint:agent.endpoint,token,fixturePid:fixture.pid,points:ready.points,fixtureBase:base})))
+files.set('client.mjs',Buffer.from(`import assert from'node:assert/strict';import{readFile,writeFile}from'node:fs/promises';import{dirname,join}from'node:path';import{fileURLToPath}from'node:url';import{RemoteComputerDriver}from'./remote.mjs';const dir=dirname(fileURLToPath(import.meta.url)),c=JSON.parse(await readFile(join(dir,'config.json'),'utf8')),checks=[],driver=new RemoteComputerDriver({endpoint:c.endpoint,token:c.token,clientId:'windows-to-macos-fixture',allowInsecurePrivateNetwork:true,heartbeatMs:300}),check=id=>checks.push({id,passed:true}),state=async()=>{const r=await fetch(c.fixtureBase+'/state');return r.json()},delay=ms=>new Promise(r=>setTimeout(r,ms));try{assert.equal(process.platform,'win32');assert.equal(process.arch,'arm64');const status=await driver.status();assert.equal(status.platform,'darwin');assert.equal(status.available,true);check('REVERSE-WIN-CLIENT-MAC-STATUS');const target=(await driver.targets()).find(t=>t.pid===c.fixturePid&&t.title.includes('E2E Fixture'));assert.ok(target);check('REVERSE-MAC-TARGET');let frame=await driver.observe(target.id);assert.ok(frame.elements.includes('Fixture'));assert.equal(Buffer.from(frame.imageBase64,'base64').readUInt16BE(),0xffd8);await writeFile(join(dir,'reverse-fixture.jpg'),Buffer.from(frame.imageBase64,'base64'));check('REVERSE-CAPTURE-AX');await fetch(c.fixtureBase+'/checkpoint',{method:'POST',body:JSON.stringify({stage:'capture-only-passed',platform:process.platform,architecture:process.arch,checks})});let go=false;for(let i=0;i<1800;i++){if(await(await fetch(c.fixtureBase+'/begin')).text()==='go'){go=true;break};await delay(300)}assert.ok(go,'Explicit Mac input gate was not opened');frame=await driver.observe(target.id);const point=name=>({x:(c.points[name].x-frame.geometry.x)*frame.width/frame.geometry.width,y:(c.points[name].y-frame.geometry.y)*frame.height/frame.geometry.height});await driver.lease(1);await driver.act(1,target.id,{kind:'click',...point('button')});await delay(100);assert.equal((await state()).counts.clicks,1);check('REVERSE-ACTUAL-MAC-CLICK');await driver.act(1,target.id,{kind:'click',...point('text')});await driver.act(1,target.id,{kind:'type',text:'Windows to Mac 中文🙂'});await delay(150);assert.equal((await state()).text,'Windows to Mac 中文🙂');check('REVERSE-ACTUAL-MAC-UNICODE');await driver.act(1,target.id,{kind:'key',key:'CMD+A'});await driver.act(1,target.id,{kind:'type',text:'replaced'});assert.equal((await state()).text,'replaced');check('REVERSE-MAC-SHORTCUT');await driver.release(1);await assert.rejects(driver.act(1,target.id,{kind:'key',key:'Enter'}),e=>e.code==='CONTROL_CHANGED');check('REVERSE-RELEASE-FENCE');await driver.lease(2);await driver.act(2,target.id,{kind:'type',text:' resumed'});assert.equal((await state()).text,'replaced resumed');check('REVERSE-RESUME');await driver.release(2);const preview=await driver.preview(target.id);assert.equal(preview.elements,'');check('REVERSE-PREVIEW');await writeFile(join(dir,'report.json'),JSON.stringify({passed:true,checks,platform:process.platform,architecture:process.arch,remotePlatform:status.platform,privateTestEndpoint:true},null,2))}catch(error){await writeFile(join(dir,'report.json'),JSON.stringify({passed:false,checks,error:error.message,stack:error.stack},null,2));process.exitCode=1}finally{await driver.dispose().catch(()=>{})}`))
+let task
+try{
+ await ps(`New-Item -ItemType Directory -Force ${quote(guestRoot)}|Out-Null`)
+ for(const name of files.keys())await ps(`$c=[Net.WebClient]::new();$c.Proxy=$null;$c.DownloadFile(${quote(base+'/'+name)},${quote(guestRoot+'\\'+name)})`)
+ const user=await ps(`(Get-Process explorer -IncludeUserName|Where-Object SessionId -gt 0|Select-Object -First 1).UserName`);task=`QiuYaTools-reverse-${key}`
+ await ps(`$a=New-ScheduledTaskAction -Execute ${quote(node)} -Argument ${quote('"'+guestRoot+'\\client.mjs"')};$p=New-ScheduledTaskPrincipal -UserId ${quote(user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 12);Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
+ console.log(JSON.stringify({stage:'setup-complete',output,gate,guestRoot}))
+ let reported=false
+ for(let i=0;i<450;i++){const value=await ps(`if(Test-Path ${quote(guestRoot+'\\report.json')}){[Convert]::ToBase64String([IO.File]::ReadAllBytes(${quote(guestRoot+'\\report.json')}))}`);if(value){await writeFile(join(output,'report.json'),Buffer.from(value,'base64'));reported=true;break}if(checkpoint){checkpoint=false;console.log(JSON.stringify({stage:'capture-only-passed-waiting-for-input-gate',gate}))};await new Promise(done=>setTimeout(done,1000))}
+ if(!reported)throw new Error('Reverse remote client did not produce a report')
+ for(const name of ['reverse-fixture.jpg']){const value=await ps(`if(Test-Path ${quote(guestRoot+'\\'+name)}){[Convert]::ToBase64String([IO.File]::ReadAllBytes(${quote(guestRoot+'\\'+name)}))}`);if(value)await writeFile(join(output,name),Buffer.from(value,'base64'))}
+ const report=JSON.parse(await readFile(join(output,'report.json'),'utf8'));await writeFile(join(output,'environment.json'),JSON.stringify({vm,guestRoot,clientNode:node,nativeHelperSha256:createHash('sha256').update(await readFile(fileURLToPath(new URL('../lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer',import.meta.url)))).digest('hex'),remoteFixturePid:fixture.pid,inputGate:gate,pairedPrivateNetwork:true},null,2));console.log(JSON.stringify({passed:report.passed,checks:report.checks.length,output}));if(!report.passed)process.exitCode=1
+}catch(error){await writeFile(join(output,'orchestration-error.json'),JSON.stringify({error:error.message,stack:error.stack},null,2));console.error(JSON.stringify({error:error.message,output}));process.exitCode=1}
+finally{if(task)await ps(`Stop-ScheduledTask -TaskName ${quote(task)} -ErrorAction SilentlyContinue;Unregister-ScheduledTask -TaskName ${quote(task)} -Confirm:$false -ErrorAction SilentlyContinue`).catch(()=>{});await agent.close().catch(()=>{});await driver.dispose().catch(()=>{});fixture.stdin.end('quit\n');fixture.kill();lines.close();server.closeAllConnections();await new Promise(done=>server.close(done))}
