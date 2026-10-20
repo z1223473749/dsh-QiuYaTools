@@ -11,6 +11,10 @@ import { build } from 'esbuild'
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const minutes = Number(arg('--minutes', '30')), faults = Number(arg('--faults', '5'))
+const imageMemory = process.argv.includes('--image-memory'), seconds = Number(arg('--seconds', '60'))
+assert.ok(!imageMemory || Number.isFinite(seconds) && seconds >= 10 && seconds <= 180)
+const imageModes = arg('--image-modes', 'production').split(',')
+assert.ok(!imageMemory || imageModes.length > 0 && imageModes.length <= 3 && new Set(imageModes).size === imageModes.length && imageModes.every(mode => ['data-url', 'object-url-revoke', 'bitmap-canvas', 'production'].includes(mode)))
 assert.ok(Number.isFinite(minutes) && minutes > 0 && minutes <= 120)
 assert.ok(Number.isSafeInteger(faults) && faults >= 0 && faults <= 50)
 const vm = process.env.QIUYA_PD_VM, host = process.env.QIUYA_PD_HOST_IP
@@ -27,8 +31,10 @@ async function ps(code, timeout = 45000) {
 }
 const key = randomUUID(), helperPath = resolve(process.env.QIUYA_WINDOWS_HELPER || join(root, 'lib/native/win32-arm64/qiuya-windows.exe'))
 const frozenRuntime = arg('--runtime-bundle')
-const compiled = frozenRuntime ? undefined : await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts'; export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
-const files = new Map([
+const compiled = frozenRuntime || imageMemory ? undefined : await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts'; export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
+const previewBuild = imageMemory ? await build({ entryPoints: [join(root, 'src/features/computer-use/preview-page.ts')], bundle: true, write: false, platform: 'node', format: 'esm' }) : undefined
+const previewHtml = previewBuild ? (await import(`data:text/javascript;base64,${Buffer.from(previewBuild.outputFiles[0].text).toString('base64')}`)).computerPreviewPage : undefined
+const files = imageMemory ? new Map([['image-memory.mjs', await readFile(join(root, 'scripts/test-preview-image-memory.mjs'))], ['preview.html', Buffer.from(previewHtml)]]) : new Map([
   ['runtime.mjs', frozenRuntime ? await readFile(resolve(frozenRuntime)) : Buffer.from(compiled.outputFiles[0].text)],
   ['soak-computer.mjs', await readFile(join(root, 'scripts/soak-computer.mjs'))],
   ['computer-soak-evidence.mjs', await readFile(join(root, 'scripts/computer-soak-evidence.mjs'))],
@@ -62,7 +68,7 @@ try {
   files.set('launch.mjs', Buffer.from(`
 import{readFile,writeFile}from'node:fs/promises';import{dirname,join}from'node:path';import{pathToFileURL,fileURLToPath}from'node:url';
 const base=dirname(fileURLToPath(import.meta.url));process.env.PATH=dirname(process.execPath)+';'+process.env.PATH;
-try{process.argv=[process.execPath,join(base,'soak-computer.mjs'),'--runtime',join(base,'runtime.mjs'),'--fixture',join(base,'windows-soak-fixture.ps1'),'--native',join(base,'qiuya-windows.exe'),'--minutes',${JSON.stringify(String(minutes))},'--faults',${JSON.stringify(String(faults))},'--output',join(base,'evidence')];await import(pathToFileURL(process.argv[1]).href)}
+try{process.argv=${imageMemory ? `[process.execPath,join(base,'image-memory.mjs'),'--html',join(base,'preview.html'),'--seconds',${JSON.stringify(String(seconds))},'--modes',${JSON.stringify(imageModes.join(','))},'--output',join(base,'evidence')]` : `[process.execPath,join(base,'soak-computer.mjs'),'--runtime',join(base,'runtime.mjs'),'--fixture',join(base,'windows-soak-fixture.ps1'),'--native',join(base,'qiuya-windows.exe'),'--minutes',${JSON.stringify(String(minutes))},'--faults',${JSON.stringify(String(faults))},'--output',join(base,'evidence')]`};await import(pathToFileURL(process.argv[1]).href)}
 catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:error.message,stack:error.stack}));process.exitCode=1}
 finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:process.exitCode||0}))}
 `))
@@ -71,11 +77,11 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   await transfer('start.ps1')
   task = `QiuYaTools-renderer-soak-${key}`
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${win32.join(guestRoot, 'start.ps1')}"`
-  await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(minutes) + 10}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
-  const environment = { vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node, minutes, faults, renderer: 'installed Edge headless shared production preview frontend, not native WebView2', runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-source', helperPath, inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), startedAt: new Date().toISOString() }
+  await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(imageMemory ? seconds * imageModes.length / 60 : minutes) + 10}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
+  const environment = { vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node, kind: imageMemory ? 'pure-browser-image-memory-diagnosis' : 'native-renderer-endurance', minutes: imageMemory ? undefined : minutes, faults: imageMemory ? 0 : faults, renderer: 'installed Edge headless shared production preview frontend, not native WebView2', runtimeBundle: imageMemory ? 'current-production-preview-html' : frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-source', helperPath: imageMemory ? null : helperPath, imageMemory, nativeOps: imageMemory ? 0 : undefined, secondsPerMode: imageMemory ? seconds : undefined, imageModes: imageMemory ? imageModes : undefined, inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), startedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
-  console.error(JSON.stringify({ stage: 'interactive-renderer-soak-started', guestRoot, minutes, faults, output }))
-  const deadline = Date.now() + minutes * 60000 + 240000
+  console.error(JSON.stringify(imageMemory ? { stage: 'interactive-image-memory-diagnosis-started', guestRoot, secondsPerMode: seconds, modes: imageModes, faults: 0, nativeOps: 0, output } : { stage: 'interactive-renderer-soak-started', guestRoot, minutes, faults, output }))
+  const deadline = Date.now() + (imageMemory ? seconds * imageModes.length * 1000 : minutes * 60000) + 240000
   let lastProgress
   while (Date.now() < deadline) {
     const state = await ps(`$ErrorActionPreference='Stop';$c=${quote(win32.join(guestRoot, 'completed.json'))};$p=${quote(win32.join(guestRoot, 'evidence/progress.json'))};if(Test-Path $c){@{completed=[IO.File]::ReadAllText($c)}|ConvertTo-Json -Compress}elseif(Test-Path $p){$f=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{$r=[IO.StreamReader]::new($f);@{progress=$r.ReadToEnd()}|ConvertTo-Json -Compress}finally{$f.Dispose()}}`)
@@ -91,7 +97,7 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   if (!completed) throw new Error('Windows renderer soak exceeded its bounded deadline')
   for (const folder of ['', 'evidence']) {
     const directory = win32.join(guestRoot, folder)
-    const listing = JSON.parse(await ps(`ConvertTo-Json -InputObject @(Get-ChildItem ${quote(directory)} -File -ErrorAction SilentlyContinue|Where-Object Name -match '\\.(json|log|err|jpg|png)$'|Select-Object -ExpandProperty Name) -Compress`))
+    const listing = JSON.parse(await ps(`ConvertTo-Json -InputObject @(Get-ChildItem ${quote(directory)} -File -ErrorAction SilentlyContinue|Where-Object Name -match '\\.(json|log|err|jpg|png|html)$'|Select-Object -ExpandProperty Name) -Compress`))
     for (const name of listing) {
       assert.match(name, /^[a-zA-Z0-9_.-]+$/u)
       const bytes = await ps(`$f=[IO.File]::Open(${quote(win32.join(directory, name))},[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete));try{$m=[IO.MemoryStream]::new();$f.CopyTo($m);[Convert]::ToBase64String($m.ToArray());$m.Dispose()}finally{$f.Dispose()}`)
@@ -99,7 +105,7 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
     }
   }
   const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
-  console.log(JSON.stringify({ status: report.status, exitCode: completed.exitCode, output, frames: report.frames, elapsedMs: report.elapsedMs, uniqueFps: report.uniqueFps, endToEndFps: report.endToEndFps, latencyP95Ms: report.latencyP95Ms, invalid: report.invalidTimestamps, faults: report.faults?.length }, null, 2))
+  console.log(JSON.stringify({ status: report.status, exitCode: completed.exitCode, output, frames: report.frames, elapsedMs: report.elapsedMs, uniqueFps: report.uniqueFps, endToEndFps: report.endToEndFps, latencyP95Ms: report.latencyP95Ms, invalid: report.invalidTimestamps, faults: report.faults?.length, nativeOps: report.nativeOps, arms: report.arms?.map(arm => ({ mode: arm.mode, loaded: arm.loaded, maxBrowserWorkingSetBytes: arm.maxBrowserWorkingSetBytes, maxRendererWorkingSetBytes: arm.maxRendererWorkingSetBytes })) }, null, 2))
   if (report.status !== 'passed' || completed.exitCode !== 0) process.exitCode = 1
 } catch (error) {
   await writeFile(join(output, 'orchestration-error.json'), JSON.stringify({ status: 'failed', error: error.message, guestRoot, completed }, null, 2)); console.error(error.message); process.exitCode = 1
