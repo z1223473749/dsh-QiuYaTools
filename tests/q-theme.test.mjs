@@ -29,7 +29,7 @@ function formFixture(value = { qThemeEnabled: false }, status = 'ready') {
 }
 
 function fixture(t, { enabled = false, marker, dark = false, sharedForm } = {}) {
-  const dom = new JSDOM('<!doctype html><html data-platform="darwin"><head><style data-native-theme>body{--dsw-alias-bg-base:#fff;--dsw-alias-state-error-primary:#d31d34;--dsw-alias-state-success-primary:#198251;--dsw-alias-state-warn-primary:#9b640a;--dsw-alias-code-diff-added:#d4f4dd;--dsw-alias-markdown-code-block:#f8f8f8}body[data-ds-dark-theme]{--dsw-alias-markdown-code-block:#191919}.shiki span{color:#7851a9}</style></head><body style="--host-layer: preserved; color: rgb(11, 22, 33)"><div id="root"><div data-slot="sidebar"><aside>Sidebar</aside></div><main data-slot="main.conversation"><section>Conversation</section></main><div data-composer-card>Composer</div><pre class="shiki"><span>highlighted</span></pre></div></body></html>')
+  const dom = new JSDOM('<!doctype html><html data-platform="darwin"><head><style data-native-theme>body{--dsw-alias-bg-base:#fff;--dsw-alias-state-error-primary:#d31d34;--dsw-alias-state-success-primary:#198251;--dsw-alias-state-warn-primary:#9b640a;--dsw-alias-code-diff-added:#d4f4dd;--dsw-alias-markdown-code-block:#f8f8f8}body[data-ds-dark-theme]{--dsw-alias-markdown-code-block:#191919}.shiki span{color:#7851a9}</style></head><body style="--host-layer: preserved; color: rgb(11, 22, 33)"><div id="root"><div data-slot="sidebar"><aside>Sidebar</aside></div><main data-slot="main.conversation"><section data-phase="active"><div data-conversation-scroll>Conversation</div></section></main><div data-composer-card>Composer</div><pre class="shiki"><span>highlighted</span></pre></div></body></html>')
   t.after(() => dom.window.close())
   const doc = dom.window.document
   if (marker !== undefined) doc.body.setAttribute('data-qyt-q-theme', marker)
@@ -187,6 +187,51 @@ function allRules(rules) {
   return [...rules].flatMap(rule => rule.cssRules ? allRules(rule.cssRules) : [rule])
 }
 
+test('theme illustration is embedded and withdrawn with the theme without external image requests', t => {
+  const f = fixture(t, { enabled: true })
+  const cleanup = f.install()
+  const installed = f.styles()[0].textContent
+  assert.ok(!installed.includes('__QYT_OCEAN_SCENE__'), 'the actual packaged image replaces the build placeholder')
+  const urls = [...installed.matchAll(/url\("([^"]+)"\)/gu)].map(match => match[1])
+  assert.equal(urls.length, 1)
+  assert.ok(urls.every(url => url.startsWith('data:image/webp;base64,')), 'no remote image request or unresolvable asset path')
+  cleanup()
+  assert.equal(f.styles().length, 0)
+})
+
+test('the approved illustrated sidebar keeps its own art opacity and selected-row treatment', t => {
+  const f = fixture(t, { enabled: true })
+  f.install()
+  assert.equal(f.token('--qyt-q-chrome'), 'rgba(229, 239, 234, .95)')
+  assert.equal(f.token('--qyt-q-sidebar-wash'), 'rgba(229, 239, 234, .80)')
+  assert.equal(f.token('--qyt-q-sidebar'), '#e5efea')
+  const rules = allRules(f.styles()[0].sheet.cssRules)
+  const sidebar = rules.find(rule => rule.selectorText === 'body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child')
+  assert.ok(sidebar)
+  assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, auto 310px')
+  assert.ok(sidebar.style.getPropertyValue('background-image').includes('var(--qyt-ocean-art)'))
+  const selected = rules.find(rule => rule.selectorText?.includes('[data-row-key^="session:"][aria-selected="true"]'))
+  assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-sea)')
+})
+
+test('the translucent reading paper keeps text readable over any background image color', t => {
+  for (const dark of [false, true]) {
+    const f = fixture(t, { enabled: true, dark })
+    f.install()
+    const match = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([.\d]+)\)$/u.exec(f.token('--qyt-q-paper'))
+    assert.ok(match)
+    const [r, g, b, alpha] = match.slice(1).map(Number)
+    // Luminance is monotonic in each channel. Black/white extremes bound
+    // every possible pixel in the illustration, including future artwork.
+    for (const backdrop of [0, 255]) {
+      const surface = '#' + [r, g, b].map(channel => Math.round(channel * alpha + backdrop * (1 - alpha)).toString(16).padStart(2, '0')).join('')
+      for (const ink of ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']) {
+        assert.ok(contrast(f.token(ink), surface) >= 4.5, `${dark ? 'dark' : 'light'} ${ink} on composited paper`)
+      }
+    }
+  }
+})
+
 test('native conversation tabs get one light pill treatment and lose their underline without affecting plugin tabs', t => {
   const f = fixture(t, { enabled: true })
   const native = f.doc.querySelector('[data-native-theme]')
@@ -225,7 +270,17 @@ test('native conversation tabs get one light pill treatment and lose their under
 })
 
 test('stylesheet is a reversible token/semantic-surface layer without destructive content resets', () => {
-  assert.doesNotMatch(css, /!important|\b(?:filter|font-family|font-size|line-height|position|z-index|animation)\s*:/u)
+  assert.doesNotMatch(css, /!important|(?:^|[;{])\s*(?:filter|font-family|font-size|line-height|animation)\s*:/u)
+  const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
+  try {
+    const sheet = dom.window.document.createElement('style'); sheet.textContent = css; dom.window.document.head.append(sheet)
+    for (const rule of allRules(sheet.sheet.cssRules)) {
+      if (!rule.style) continue
+      if (rule.style.getPropertyValue('position') || rule.style.getPropertyValue('z-index') || rule.style.getPropertyValue('backdrop-filter') || rule.style.getPropertyValue('-webkit-backdrop-filter')) {
+        assert.ok(rule.selectorText.includes('[data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before'), 'glass is confined to the decoration, never a native fixed-tooltip ancestor')
+      }
+    }
+  } finally { dom.window.close() }
   assert.doesNotMatch(css, /--(?:shiki|dsw-alias-(?:state-(?:error|success|warn)|code-diff|file-diff|markdown-code))/u)
   assert.match(css, /body\[data-qyt-q-theme="ocean"\]\[data-ds-dark-theme\]/u)
   assert.match(css, /@media \(forced-colors: active\)/u)

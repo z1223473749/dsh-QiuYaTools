@@ -1,25 +1,38 @@
-/* Q Ocean: warm paper, graphite ink and a restrained sea-glass accent.
+/* Q Ocean: an illustrated sea outside the quiet paper reading surface.
    The native presenter still owns light/dark preference. Semantic message,
    diff and syntax palettes stay under their original owners. */
 body[data-qyt-q-theme="ocean"] {
+  --qyt-ocean-art: url("__QYT_OCEAN_SCENE__");
   --qyt-q-sea: #116d83;
   --qyt-q-sea-hover: #0b586e;
   --qyt-q-ink: #24282b;
   --qyt-q-secondary: #53595f;
-  --qyt-q-muted: #5d656c;
+  --qyt-q-muted: #535d62;
   --qyt-q-base: #fafaf8;
   --qyt-q-surface: #ffffff;
   --qyt-q-raised: #f1f2f1;
-  --qyt-q-sidebar: #eef2f1;
-  --qyt-q-selected: #e7efef;
+  --qyt-q-sidebar: #e5efea;
+  --qyt-q-selected: #d6e7e1;
   --qyt-q-line: #d9dedc;
   --qyt-q-mist: rgba(154, 189, 188, .11);
   --qyt-q-shadow: rgba(27, 37, 42, .09);
   --qyt-q-shadow-float: rgba(27, 37, 42, .14);
-  --qyt-q-tab-fill: #ffffff;
+  --qyt-q-tab-fill: #e8f1eb;
   --qyt-q-tab-ink: #225e6d;
   --qyt-q-tab-line: rgba(32, 40, 44, .11);
   --qyt-q-focus-line: rgba(17, 109, 131, .38);
+  --qyt-q-paper: rgba(250, 250, 248, .88);
+  --qyt-q-chrome: rgba(229, 239, 234, .95);
+  --qyt-q-sidebar-wash: rgba(229, 239, 234, .80);
+  --qyt-q-sidebar-caption: #3d4b4d;
+  --qyt-q-art-wash: rgba(250, 250, 248, .25);
+  --qyt-q-hero-wash: rgba(250, 250, 248, .12);
+  --qyt-q-composer-fill: rgba(235, 246, 239, .94);
+  --qyt-q-composer-dock: rgba(235, 246, 239, .18);
+  --qyt-q-stat-fill: rgba(235, 246, 239, .92);
+  --qyt-q-sky-glow: rgba(153, 197, 182, .25);
+  --qyt-q-sand-glow: rgba(237, 217, 179, .18);
+
 
   --dsw-alias-bg-base: var(--qyt-q-base);
   --dsw-alias-bg-layer-1: #f6f7f5;
@@ -64,13 +77,9 @@ body[data-qyt-q-theme="ocean"] {
   --dsw-alias-scrollbar-bg-l2: #cbd2cf;
   --dsw-alias-scrollbar-hover-l1: #b5bfbb;
   --dsw-alias-scrollbar-hover-l2: #aab6b0;
-  --dsw-specific-sidebar-fill: var(--qyt-q-sidebar);
-  --dsw-specific-sidebar-nav-item-hover: #e7ece9;
-  --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
-  --dsw-specific-sidebar-nav-item-active-accent: #dce9e9;
   --dsw-specific-input-major: var(--qyt-q-surface);
   --dsw-specific-selector: #edf1ee;
-  --dsw-specific-bubble: #f0f2f1;
+  --dsw-specific-bubble: #eaf0e8;
   --dsw-specific-bubble-highlight: #dce9e9;
   --dsw-specific-tip: #f1f4f1;
   --dsw-menu-surface-fill: rgba(255, 255, 254, .985);
@@ -90,8 +99,8 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --qyt-q-base: #1b1e22;
   --qyt-q-surface: #252a2f;
   --qyt-q-raised: #2d3338;
-  --qyt-q-sidebar: #1d2428;
-  --qyt-q-selected: #303e43;
+  --qyt-q-sidebar: #202e2f;
+  --qyt-q-selected: #2b4040;
   --qyt-q-line: #41494f;
   --qyt-q-mist: rgba(130, 167, 168, .045);
   --qyt-q-shadow: rgba(0, 0, 0, .20);
@@ -100,6 +109,18 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --qyt-q-tab-ink: #cbe2e8;
   --qyt-q-tab-line: rgba(255, 255, 255, .09);
   --qyt-q-focus-line: rgba(142, 198, 210, .40);
+  --qyt-q-paper: rgba(27, 30, 34, .90);
+  --qyt-q-chrome: rgba(25, 42, 44, .95);
+  --qyt-q-sidebar-wash: rgba(25, 42, 44, .89);
+  --qyt-q-sidebar-caption: #bac3c6;
+  --qyt-q-art-wash: rgba(19, 35, 39, .75);
+  --qyt-q-hero-wash: rgba(17, 31, 35, .70);
+  --qyt-q-composer-fill: rgba(33, 50, 47, .94);
+  --qyt-q-composer-dock: rgba(30, 47, 44, .22);
+  --qyt-q-stat-fill: rgba(33, 50, 47, .94);
+  --qyt-q-sky-glow: rgba(57, 100, 88, .18);
+  --qyt-q-sand-glow: rgba(119, 107, 77, .10);
+
 
   --dsw-alias-bg-layer-1: #202529;
   --dsw-alias-bg-module-platform: #292f34;
@@ -128,8 +149,6 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --dsw-alias-scrollbar-bg-l2: #4c565d;
   --dsw-alias-scrollbar-hover-l1: #626e76;
   --dsw-alias-scrollbar-hover-l2: #6c7981;
-  --dsw-specific-sidebar-nav-item-hover: #293338;
-  --dsw-specific-sidebar-nav-item-active-accent: #35474e;
   --dsw-specific-selector: #313a3e;
   --dsw-specific-bubble: #2a3034;
   --dsw-specific-bubble-highlight: #3b4d54;
@@ -138,15 +157,55 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --dsw-alias-menu-group-header-fill: rgba(44, 50, 55, .99);
 }
 
-/* Keep reading surfaces quiet; the sea mist belongs to the side chrome. */
+/* The native roots own layout and scrolling. These are background layers only:
+   no positioned overlays, listeners or images that can intercept a drag. */
 body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child {
-  background: linear-gradient(155deg, var(--qyt-q-mist), transparent 48%), var(--qyt-q-sidebar);
+  --dsw-alias-label-secondary: var(--qyt-q-sidebar-caption);
+  --dsw-alias-label-tertiary: var(--qyt-q-sidebar-caption);
+  --dsw-alias-label-caption: var(--qyt-q-sidebar-caption);
+  --dsw-specific-sidebar-fill: var(--qyt-q-sidebar);
+  --dsw-specific-sidebar-nav-item-hover: #e7ece9;
+  --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
+  --dsw-specific-sidebar-nav-item-active-accent: #c7dfd6;
+  background-color: var(--qyt-q-sidebar);
+  background-image: linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%), var(--qyt-ocean-art);
+  background-position: center, right bottom;
+  background-size: 100% 100%, auto 310px;
+  background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child {
-  background: var(--qyt-q-base);
+body[data-qyt-q-theme="ocean"][data-ds-dark-theme] [data-slot="sidebar"] > :first-child {
+  --dsw-specific-sidebar-nav-item-hover: #293338;
+  --dsw-specific-sidebar-nav-item-active-accent: #35474e;
 }
-body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
-  background-color: var(--dsw-alias-bg-layer-1);
+body[data-qyt-q-theme="ocean"] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
+  background: var(--qyt-q-selected);
+  box-shadow: inset 3px 0 var(--qyt-q-sea);
+  border-radius: 10px;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
+  --qyt-q-canvas-image: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 65%), radial-gradient(ellipse at 90% 10%, var(--qyt-q-sand-glow), transparent 58%), linear-gradient(var(--qyt-q-art-wash), var(--qyt-q-art-wash)), var(--qyt-ocean-art);
+  --qyt-q-canvas-size: 100% 100%, 100% 100%, 100% 100%, min(1120px, calc(var(--dsh-conversation-column-width, 100vw) * 1.2)) auto;
+  background-color: var(--qyt-q-base);
+  background-image: var(--qyt-q-canvas-image);
+  background-position: center, center, center, right bottom;
+  background-size: var(--qyt-q-canvas-size);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="hero"] {
+  background-image: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 68%), radial-gradient(ellipse at 90% 12%, var(--qyt-q-sand-glow), transparent 60%), linear-gradient(180deg, transparent 0%, var(--qyt-q-hero-wash) 55%, var(--qyt-q-art-wash) 100%), var(--qyt-ocean-art);
+}
+/* A quiet paper column follows the native content width. Art stays visible in
+   the side margins; even the smallest viewport keeps opaque text surfaces. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll] {
+  background-image: linear-gradient(90deg, transparent, var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)), var(--qyt-q-paper) min(calc(100% - 12px), calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 20px)), transparent);
+  background-size: 100% max(0px, calc(100% - var(--dsh-composer-height, 160px)));
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header {
+  background: linear-gradient(110deg, var(--qyt-q-chrome), var(--qyt-q-paper) 75%);
+  border-bottom-color: var(--qyt-q-line);
 }
 
 /* A floating writing surface with a neutral hairline and diffuse depth.
@@ -159,12 +218,53 @@ body[data-qyt-q-theme="ocean"] [data-composer-card] {
 body[data-qyt-q-theme="ocean"] [data-composer-card]:focus-within {
   box-shadow: 0 10px 30px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--qyt-q-focus-line);
 }
+/* The seat and its gaps reveal the canvas directly. Only the actual input
+   card and individual statistics receive surfaces; native layout owns height. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] {
+  background: transparent;
+}
+/* Replay the exact canvas beneath the dock. This is visually continuous
+   with the page, while hiding scrolled text instead of making it ghost
+   through the input and gaps. The native sticky seat remains the stack owner. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--qyt-q-base);
+  background-image: var(--qyt-q-canvas-image);
+  background-position: center, center, center, right bottom;
+  background-size: var(--qyt-q-canvas-size);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
+  background: var(--qyt-q-composer-fill);
+  border-color: var(--qyt-q-focus-line);
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > [data-slot="conversation.composer.dock"] > :is([data-composer-stat="activity"], [data-composer-stat="usage"]) > :is(button, span),
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > span > button[aria-haspopup="dialog"] {
+  background: var(--qyt-q-stat-fill);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  box-shadow: 0 1px 4px var(--qyt-q-shadow);
+}
+
+body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
+  background-color: var(--dsw-alias-bg-layer-1);
+}
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"][role="dialog"] {
   border-radius: 20px;
   background-color: var(--qyt-q-surface);
 }
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav {
-  background: linear-gradient(155deg, var(--qyt-q-mist), transparent 55%), var(--dsw-alias-bg-layer-1);
+  background-color: var(--qyt-q-sidebar);
+  background-image: linear-gradient(180deg, var(--qyt-q-sidebar), var(--qyt-q-sidebar-wash)), var(--qyt-ocean-art);
+  background-size: 100% 100%, auto 260px;
+  background-position: center, right bottom;
+  background-repeat: no-repeat;
 }
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
   background-color: var(--qyt-q-selected);
@@ -221,9 +321,15 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
 }
 
 @media (forced-colors: active) {
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before { content: none; }
   body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child,
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child,
   body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav,
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="hero"],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card],
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header,
   body[data-qyt-q-theme="ocean"] [data-composer-card] {
     background: Canvas;
     box-shadow: none;

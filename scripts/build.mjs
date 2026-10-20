@@ -5,7 +5,8 @@ import { buildSessionWindowHelper } from '../src/features/session-windows/build-
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const menuIcon = await readFile(new URL('../assets/icon-menu.png', import.meta.url))
 const colorIcon = await readFile(new URL('../assets/icon-color.webp', import.meta.url))
-await writeFile(new URL('../src/client/brand-assets.ts', import.meta.url), `// Generated from assets/ by scripts/build.mjs before bundling.\nexport const MONO_ICON_DATA_URL: string = ${JSON.stringify(`data:image/png;base64,${menuIcon.toString('base64')}`)}\nexport const COLOR_ICON_DATA_URL: string = ${JSON.stringify(`data:image/webp;base64,${colorIcon.toString('base64')}`)}\n`)
+const oceanScene = await readFile(new URL('../assets/q-ocean-scene.webp', import.meta.url))
+await writeFile(new URL('../src/client/brand-assets.ts', import.meta.url), `// Generated from assets/ by scripts/build.mjs before bundling.\nexport const MONO_ICON_DATA_URL: string = ${JSON.stringify(`data:image/png;base64,${menuIcon.toString('base64')}`)}\nexport const COLOR_ICON_DATA_URL: string = ${JSON.stringify(`data:image/webp;base64,${colorIcon.toString('base64')}`)}\nexport const OCEAN_SCENE_DATA_URL: string = ${JSON.stringify(`data:image/webp;base64,${oceanScene.toString('base64')}`)}\n`)
 await mkdir('lib', { recursive: true })
 await build({
   entryPoints: ['src/index.ts'], outfile: 'lib/index.js', bundle: true,

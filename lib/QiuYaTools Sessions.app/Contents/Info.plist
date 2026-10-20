@@ -6,8 +6,8 @@
   <key>CFBundleDisplayName</key><string>QiuYaTools Session Windows</string>
   <key>CFBundleExecutable</key><string>qiuya-session-window</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>0.4.1</string>
-  <key>CFBundleShortVersionString</key><string>0.4.1</string>
+  <key>CFBundleVersion</key><string>0.5.0</string>
+  <key>CFBundleShortVersionString</key><string>0.5.0</string>
   <key>LSUIElement</key><false/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>

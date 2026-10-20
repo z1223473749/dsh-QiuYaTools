@@ -13,7 +13,10 @@
   overflow: hidden;
   border: 1px solid var(--qyt-ocean-line);
   border-radius: 18px;
-  background: radial-gradient(ellipse at 12% 0%, color-mix(in srgb, #9acbd0 12%, transparent), transparent 62%), var(--dsw-alias-bg-layer-2);
+  background-color: var(--dsw-alias-bg-layer-2);
+  background-image: linear-gradient(120deg, var(--qyt-art-paper), var(--qyt-art-wash)), var(--qyt-ocean-art);
+  background-size: cover;
+  background-position: right center;
 }
 .qyt-about-brandline { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 22px; min-width: 0; }
 .qyt-about-art { position: relative; flex: none; width: 108px; height: 108px; z-index: 1; }
@@ -70,3 +73,4 @@
   .qyt-about-story { padding-top: 13px; }
 }
 @media (prefers-reduced-motion: reduce) { .qyt-about-link { transition: none; } }
+@media (forced-colors: active) { .qyt-about-hero { background: Canvas; box-shadow: none; } }

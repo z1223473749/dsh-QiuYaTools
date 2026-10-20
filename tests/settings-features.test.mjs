@@ -60,10 +60,10 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true, qThemeEnabled: false,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, sidebarToolsEnabled: true, qThemeEnabled: false,
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
-const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled']
+const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled']
 
 function mount(value = {}, policy = {}) {
   let snapshot = {
@@ -121,7 +121,10 @@ test('settings default every feature to on and atomically turn every feature off
   const f = mount()
   try {
     assert.equal(f.container.querySelectorAll('[role="switch"]').length, 2, 'only the master and active feature switches are mounted')
-    for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab']) {
+    assert.ok(f.container.querySelector('.qyt-header-actions').contains(f.switch('enabled')), 'the master is in the fixed header')
+    assert.equal(f.container.querySelector('.qyt-master'), null, 'there is no second master card')
+    assert.equal(f.container.querySelector('.qyt-save-feedback'), null, 'there is no permanent save-explanation row')
+    for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab']) {
       f.select(label)
       assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 2)
     }
@@ -130,7 +133,7 @@ test('settings default every feature to on and atomically turn every feature off
     assert.equal(f.container.querySelectorAll('input')[1].value, '15')
     await f.toggle('enabled')
     assert.equal(f.mutations.length, 1)
-    assert.equal(f.mutations[0].length, 5)
+    assert.equal(f.mutations[0].length, 6)
     assert.deepEqual(f.mutations[0][0], { op: 'set', path: ['enabled'], value: true })
     for (const field of featureFields) assert.equal(f.snapshot().value[field], false)
     assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
@@ -144,7 +147,7 @@ test('settings default every feature to on and atomically turn every feature off
 test('each settings switch updates only its feature and the legacy master field', async () => {
   for (const [field, label] of [
     ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
-    ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'],
+    ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['sidebarToolsEnabled', 'sidebarTools'],
   ]) {
     const f = mount({ ...defaults, unrelated: { preserve: true } })
     try {
@@ -259,14 +262,14 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('seven icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
+test('eight icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 7)
-    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    assert.equal(tabs.length, 8)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
     const scrolled = []
     tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
@@ -287,14 +290,14 @@ test('seven icon tabs expose labelled panels and support roving focus and scroll
       assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
-    key('ArrowLeft', 6)
+    key('ArrowLeft', 7)
     assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
-    key('ArrowLeft', 5)
+    key('ArrowLeft', 6)
     assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
-    key('ArrowRight', 6)
+    key('ArrowRight', 7)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 6)
+    key('End', 7)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }
@@ -327,7 +330,7 @@ test('About and Updates mount on first visit and keep separate instances while a
   } finally { f.dispose() }
 })
 
-test('Q Theme defaults off and persists independently from the four tools and their legacy master switch', async () => {
+test('Q Theme defaults off and persists independently from the enhancement tools and their legacy master switch', async () => {
   for (const enabled of [true, false]) {
     const initial = { ...defaults, enabled }
     delete initial.qThemeEnabled
@@ -391,7 +394,7 @@ test('scroll containment applies only to our native outlet and keeps header, mas
     assert.equal(style(tabs).flexShrink, '0')
     assert.equal(style(tabs).overflowX, 'auto', 'narrow settings keep tabs on one independently scrollable row')
     assert.equal(style(tabs).overflowY, 'hidden')
-    assert.equal(style(tabs.firstElementChild).flexShrink, '0', 'seven labels never squeeze the content into unreadable columns')
+    assert.equal(style(tabs.firstElementChild).flexShrink, '0', 'eight labels never squeeze the content into unreadable columns')
     assert.equal(style(panel).overflowY, 'auto')
     assert.equal(style(panel).minHeight, '0')
     assert.ok(fixed.contains(f.container.querySelector('h2')))

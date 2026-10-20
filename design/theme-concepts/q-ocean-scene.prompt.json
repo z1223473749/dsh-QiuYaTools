@@ -1,0 +1,16 @@
+{
+  "asset": "assets/q-ocean-scene.webp",
+  "source": "design/theme-concepts/q-ocean-scene-original.png",
+  "reference": "assets/icon-color.webp",
+  "mode": "built-in image_gen",
+  "use_case": "style-transfer",
+  "transparent_background": false,
+  "prompt": "Use case: style-transfer.\nAsset type: a serene hand-painted QiuYa ocean background for a desktop writing and chat application.\nInput image: style and character reference only. Transform the reference icon into a full wide natural environment; do not reproduce its rounded-square icon container.\nPrimary request: create a beautiful horizontal 16:9 painterly scene with the same white-haired boy sitting gently on the same friendly blue whale. Keep the gentle cream underside, deep muted blue whale and pale silver-white hair, the blue-grey loose robe and restrained coral-red sash. The whale and boy together occupy about 30 percent of the canvas, grouped in the lower-right area, with breathing room from the right edge, natural unhurried movement and subtle expression.\nScene/backdrop: an extremely pale warm-ivory sky (#fafaf7) dissolving softly into mist over sea-glass turquoise water. A few soft cloud banks and one or two broad, restrained watercolor wave shapes. The left, center, and upper two-thirds are mostly spacious near-white mist, deliberately quiet enough to hold interface text. Include just a few faint warm golden sunlit flecks, not sparkles or stars.\nStyle/medium: tender hand-drawn animation picture-book watercolor and gouache, organic pigment texture, delicate edges and thoughtful composition matching the reference's warm illustrated personality. Clearly drawn and recognizable boy and whale, yet low saturation and gentle contrast.\nLighting/mood: calm early morning diffused light, luminous, airy, comfortable to look at for hours, subtly magical without visual clutter.\nConstraints: opaque complete natural background, no transparency. No text, no border, no logo, no card, no UI mockup. No other characters or creatures. No dense waves, no repetitive pattern, no sharp or dark high-contrast outlines, no starry sky, no dramatic sun, no harsh white bloom. Avoid a flat generic gradient; retain restrained painterly atmosphere and delicate texture. The original icon remains unchanged; this is a separate matching background asset.",
+  "encoding": {
+    "format": "webp",
+    "width": 1600,
+    "quality": 74,
+    "effort": 6,
+    "operations": "Non-destructive proportional resize and encoding only; original retained."
+  }
+}

@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { Preferences } from '../shared.ts'
 import css from './q-theme.css'
+import { OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 
 const ATTRIBUTE = 'data-qyt-q-theme'
 interface ThemeMount {
@@ -50,7 +51,7 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>): () 
       const style = doc.createElement('style')
       style.dataset.plugin = 'dsh-qiuya-tools'
       style.dataset.qytQTheme = 'ocean'
-      style.textContent = css
+      style.textContent = css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
       mount = { body: doc.body, style, previous: doc.body.getAttribute(ATTRIBUTE), owners: new Set() }
       doc.head.append(style)
       doc.body.setAttribute(ATTRIBUTE, 'ocean')

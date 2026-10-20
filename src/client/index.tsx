@@ -16,7 +16,7 @@ import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { installQTheme } from './q-theme.ts'
-import { MONO_ICON_DATA_URL } from './brand-assets.ts'
+import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
 import { zh, en, type LocaleKey } from './locales.ts'
 import css from './styles.css'
@@ -43,6 +43,7 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
   { field: 'bulkArchiveEnabled', tab: 'bulkArchiveTab', label: 'bulkArchive', hint: 'bulkArchiveHint', steps: ['bulkArchiveSelect', 'bulkArchiveSelected', 'bulkArchiveWorkspace'] },
   { field: 'planCommentsEnabled', tab: 'planCommentsTab', label: 'planComments', hint: 'planCommentsHint', steps: ['planCommentsSelection', 'planCommentsCard', 'planCommentsSubmit'] },
+  { field: 'sidebarToolsEnabled', tab: 'sidebarToolsTab', label: 'sidebarTools', hint: 'sidebarToolsHint', steps: ['sidebarToolsPin', 'sidebarToolsUnread', 'sidebarToolsCopy', 'sidebarToolsWorkspace'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
@@ -57,6 +58,7 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
         : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
           : name === 'planCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
+            : name === 'sidebarToolsEnabled' ? <><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/><path d="m20.5 19.5 2 2"/></>
             : name === 'qTheme' ? <><path d="M12 3a9 9 0 1 0 0 18h1.4a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5h1a4 4 0 0 0 4-4C21 6.7 17 3 12 3Z"/><path d="M7.5 11h.01M9 7.5h.01M13 7h.01M16.5 9h.01" strokeWidth="3"/></>
               : name === 'updates' ? <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11.5-1.5L20 8M4 16l2.5 2.5A7 7 0 0 0 18 17"/></>
                 : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>}
@@ -164,22 +166,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
           <span className="qyt-brand" aria-hidden="true"><span style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }} /></span>
           <div className="qyt-heading">
             <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span></div>
-            <span className="qyt-status" data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : snapshot.status === 'loading' ? 'loading' : 'unavailableState')}</span>
+            <span className="qyt-status" role={saveState === 'error' ? 'alert' : 'status'} data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(!ready ? snapshot.status === 'loading' ? 'loading' : 'unavailable' : !snapshot.writable ? 'readOnly' : saveState === 'error' ? 'saveError' : saveState === 'saving' ? 'saving' : saveState === 'saved' ? 'saved' : allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')}</span>
           </div>
+          <div className="qyt-header-actions"><span>{t('enabled')}</span><Switch className="qyt-switch" checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} /></div>
         </header>
-
-        <div className="qyt-card qyt-master qyt-toggle-row">
-          <div><div className="qyt-label">{t('enabled')}</div><p className="qyt-muted">{t('enabledHint')}</p></div>
-          <Switch className="qyt-switch" checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} />
-        </div>
-        <p className="qyt-feedback qyt-save-feedback" role={saveState === 'error' ? 'alert' : 'status'}>
-          {snapshot.status === 'loading' ? t('loading')
-            : !ready ? t('unavailable')
-              : !snapshot.writable ? t('readOnly')
-                : saveState === 'saving' ? t('saving')
-                  : saveState === 'error' ? t('saveError')
-                    : saveState === 'saved' ? t('saved') : t('persistence')}
-        </p>
       </div>
 
       <div className="qyt-tabs" role="tablist" aria-label={t('features')} aria-orientation="horizontal">
@@ -197,7 +187,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 <p className="qyt-muted">{t('qThemeHint')}</p>
               </div>
               <div className="qyt-card qyt-theme-card">
-                <div className="qyt-theme-title"><h4>{t('qThemePreview')}</h4><span className="qyt-theme-name">Ocean</span></div>
+                <div className="qyt-theme-title"><h4>{t('qThemePreview')}</h4><span className="qyt-theme-name">Q Ocean · 鲸与海</span></div>
                 <div className="qyt-theme-preview" role="img" aria-label={t('qThemePreviewDescription')}>
                   <div className="qyt-theme-scene" aria-hidden="true"><div className="qyt-preview-sidebar"><span className="qyt-preview-brand" style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }}/><i/><i/><i/></div><div className="qyt-preview-main"><div className="qyt-preview-top"><span/><i/></div><div className="qyt-preview-bubble qyt-preview-user"><span/><span/></div><div className="qyt-preview-bubble qyt-preview-answer"><span/><span/><span/></div><div className="qyt-preview-composer"><span/><i/></div></div></div>
                 </div>
@@ -243,7 +233,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-qiuya-tools'
-    style.textContent = css
+    style.textContent = css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
     document.head.append(style)
     return () => { style.remove() }
   })
