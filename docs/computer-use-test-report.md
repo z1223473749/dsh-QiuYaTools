@@ -17,8 +17,8 @@
 
 | 检查 | 实际结果与边界 | 原始证据 |
 | --- | --- | --- |
-| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**531/531**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-native-webview-check.log) |
-| Windows 完整 Node 检查 | passed（历史源码）：真实Windows Node22.23.3，**521总数、517 passed、0 failed、4 skipped**，仅跳过依赖Swift/lipo的Mac检查；当前新增长稳及批量菜单回归后的Windows全量尚待重跑，不能记为531已通过 | [报告](../artifacts/computer-use/windows-unit-dual-runtime-final/report.json)、[日志](../artifacts/computer-use/windows-unit-dual-runtime-final/unit.log) |
+| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**533/533**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-lifecycle-webview-check.log) |
+| Windows 完整 Node 检查 | passed：源码快照`3a4dcd2`，真实Windows ARM64 Node22.23.3，**533总数、529 passed、0 failed、4 skipped**；仅跳过依赖Swift/lipo的Mac检查，含批量菜单及最新进程生命周期回归 | [报告](../artifacts/computer-use/windows-unit-lifecycle-webview-final/report.json)、[日志](../artifacts/computer-use/windows-unit-lifecycle-webview-final/unit.log) |
 | 真实 Chromium 预览 | passed：**17/17**，确定性 driver；覆盖坐标、光标、接管、文字、继续/停止、位图释放、坏 JPEG、迟到解码、旧手势、迟到自动暂停 | [报告](../artifacts/computer-use/preview-web/report.json) |
 | Windows ARM64 原生 | passed：当前正式ARM64 helper `42889f9c…` **52/52**，真实桌面输入、UIA、WebView2、租约、崩溃与 guardian、持续可见预览；个别注入 writer 故障检查不使用真实 OS 输入 | [报告](../artifacts/computer-use/windows-native-pinning-final/report.json) |
 | Windows Node 隐藏启动 | passed：真实ARM64 Node `windowsHide:true` 启动当前 `42889f9c…` helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-pinning-final/report.json) |
@@ -36,7 +36,7 @@
 | Windows 微软拼音 | passed：**5/5**，PD 硬件扫描码进入已安装微软拼音，实际提交“你好”，Enter/Tab/Escape/Ctrl+Enter不误发送/接受建议 | [报告](../artifacts/computer-use/windows-ime-final/report.json) |
 | x64 在 ARM Windows 仿真 | passed（分项范围）：当前正式x64 helper `3f0073ba…` 原生52/52，真实x64 Node隐藏5/5；历史 `3b2dda6e…` 的截图8/8保留原代次。当前x64包另有真实x64 Node Host12/12及安装5/5；这些均不覆盖原生x64硬件 | [当前原生/Node/remote矩阵](../artifacts/computer-use/windows-pinning-native-matrix.json)、[历史截图](../artifacts/computer-use/windows-x64-emulation-capture-final/report.json) |
 
-当前正式PE与tgz的验收分开记录：[原生矩阵](../artifacts/computer-use/windows-pinning-native-matrix.json)绑定两架构52/52及对应Node隐藏5/5、ARM64 remote15/15；当前ARM64与x64包分别另有Host12/12及安装5/5，测试进程已退出且无保留租约。Mac当前完整check为531/531；此前528/528是console清理修复前的历史快照，后续console归属/清理测试仍在迭代，须以新的实际fullcheck追加最终计数。
+当前正式PE与tgz的验收分开记录：[原生矩阵](../artifacts/computer-use/windows-pinning-native-matrix.json)绑定两架构52/52及对应Node隐藏5/5、ARM64 remote15/15；当前ARM64与x64包分别另有Host12/12及安装5/5，测试进程已退出且无保留租约。Mac当前完整check为533/533；Windows同源码快照533项中529通过、4个Mac-only跳过、0失败。此前531/531、528/528和Windows521项报告均保留为原代次快照。
 
 当前x64手动输入通过一次SetValue，并在一次Current.Value只读观察中85.3236ms匹配；本轮原位暴露点(808,133)已可用，没有走corner移动fallback。两架构本轮都不能声称验证了该移动分支。两架构主Agent仍使用确定性本地provider，证明真实SDK工具与图片运输，不代表真实视觉推理。
 
@@ -73,13 +73,19 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 ## 5. 性能、资源与修复证据
 
-### 当前1280×720原生WebView2首轮短测：failed
+### 当前1280×720原生WebView2：60秒通过，30分钟进行中；早期失败保留
 
 [首轮实际报告](../artifacts/computer-use/windows-webview2-720p-smoke/report.json)为**failed**：WinForms生产helper `42889f9c…` 中的真实WebView2，经生产capture/Host/预览canvas；30,073ms、300个不同源时钟帧，包含1次helper终止和显式重开/CDP重连。完整壁钟 **9.9757 FPS < 10**，即使首末有效帧区间10.0979FPS也不能替代完整时段门槛；P95 **96ms**、0invalid、0wrongDimensions，WS峰 **1,411,133,440字节**低于原1.5GiB门槛，Node峰73,416,704字节。画面时钟读取独立于native/Host frame ID，6个热身帧排除、14个迟到旧代通知忽略；没有降低门槛或把接近10改成通过。
 
 清理另有独立失败：[inner cleanup](../artifacts/computer-use/windows-webview2-720p-smoke/cleanup-verification.json)把runner仍在使用的conhost PID10996误当作应提前退出的普通子进程，随后强制终止，inner=false；[outer verdict](../artifacts/computer-use/windows-webview2-720p-smoke/outer-cleanup-verdict.json)中4,704字符PowerShell经EncodedCommand执行失败，[delivery](../artifacts/computer-use/windows-webview2-720p-smoke/delivery-verdict.json)仍false。[事后简单复查](../artifacts/computer-use/windows-webview2-720p-smoke/post-run-cleanup-verification.json)48个身份均已消失，只证明该次快照，没有替代outer自然清理验收。原始失败文件保持原样。
 
-测试工具正在精确绑定runner实际GetConsoleWindow对应console host，将其自然退出检查延至runner退出后，outer仍要求自然gone；较大PowerShell改为更早经短File命令传输。修正后的60秒/1故障同门槛短测尚待结果，原生WebView2 **30分钟/5故障仍未通过验收**。[页面像素证据](../artifacts/computer-use/windows-webview2-720p-smoke/native-webview2-page.png)来自实际原生页面：source/captured JPEG/canvas backing均1280×720，但Form仍600×420缩放显示，不是物理720p viewport，也没有scroll/drag endurance负载。
+第二轮[60秒报告](../artifacts/computer-use/windows-webview2-720p-console-smoke/report.json)仍为failed：60,032ms、768帧、完整时段12.7932FPS、P95 51ms、0坏帧、1恢复，画面门槛通过，但清理没有通过。GetConsoleWindow在本环境返回的消息窗口归属Node本身，不能据此绑定实际conhost；该错误推断已从测试代码移除。outer还暴露空列表被解析成null条目的问题，现已修复；原失败不改写。
+
+[独立生命周期实测](../artifacts/computer-use/windows-node-console-lifecycle-proof/lifecycle-summary.json)也证伪了“CreateNoWindow会消除conhost”：同一自有Node的20次采样均见直接conhost，Node自然运行6,104ms后相关精确身份均退出，全程无kill/GUI输入。原report.passed=false对应被证伪的无conhost假设，不是电脑操控功能失败。当前测试只把同快照已归属、精确出生时间/系统完整路径/直接父关系均校验的runner控制台基础进程延至runner退出后复查；它仍计入资源、追踪及最后自然退出检查。其他native/WebView2/source必须先退出；任何强制清理或残留都会使delivery失败。较大PowerShell通过活动UUID文件及SHA校验的短File命令传输，未改系统策略。
+
+修正后的[60秒/1故障](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/report.json)整链passed：60,092ms、797帧、完整时段13.2630FPS、P95 40ms、0invalid/0wrongDimensions；Node RSS峰71,905,280B、自有WS峰1,459,101,696B，未放宽原门槛。[inner清理](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/cleanup-verification.json)、[runner退出后49身份核验](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/post-run-cleanup-verification.json)、[outer自然退出](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/outer-cleanup-verdict.json)及[delivery](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/delivery-verdict.json)均通过，exit0、stdout/stderr复制完成，无强制清理。这是短测，**30分钟/5故障目前进行中，尚未判定**。
+
+[页面像素证据](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/native-webview2-page.png)来自实际原生页面：source/captured JPEG/canvas backing均1280×720，但Form仍600×420缩放显示，不是物理720p viewport，也没有scroll/drag endurance负载。正式helper SHA为`42889f9c…`，生产Host/预览bundle SHA为`ef496e8d…`；测试owner carrier不替代真实Harness SDK认证，包的UI12另验。
 
 仅清理语义的[实际Session0预检](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight-2/report.json)**6/6通过**，无GUI、无input：自有15秒寿命Node child验证精确身份query、birth+1跳过、wrongpath拒绝且原child仍活、exact pinned Kill/Wait及退出后查询。此前[SystemTemp staging失败](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight/report.json)保留，当次没有启动child/GUI。另有[HTTP/File AST预检](../artifacts/computer-use/windows-webview2-cleanup-review/powershell-parse-http.json)3个源脚本解析通过、执行进程操作0；它们不证明实际WebView长稳或自然清理已经通过。
 
@@ -99,7 +105,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 门槛未放宽：≥10完整时段唯一帧/秒，源时钟到完成绘制P95≤500ms，0坏/过旧时间戳，5次受控helper终止后显式重启，0逐帧附件写入；Node RSS≤512MiB，整个自有进程树 WorkingSet sum≤**1,610,612,736字节**，直接native≤1、native树≤4。进程统计包含采样PowerShell/conhost，按同快照PID+创建时间排除PID复用；精确测试helper路径保留孤儿。PrivatePageCount只是原始观察，不另设阈值，WS被trim不能证明私有提交回收。
 
-原生WebView2＋1280×720首轮30秒实测因完整壁钟FPS和清理失败，详细结果见前段；修正runner后的短测及正式30分钟尚待结果。这份历史Edge报告不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
+原生WebView2＋1280×720首轮30秒实测因完整壁钟FPS和清理失败，详细结果见前段；修正runner后的60秒整链已通过，正式30分钟进行中。这份历史Edge报告不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
 
 ### 首轮完整renderer：failed，保留原记录
 
@@ -193,7 +199,7 @@ node scripts/e2e-harness.mjs --package /absolute/candidate.tgz
 node scripts/test-harness-install.mjs --package /absolute/candidate.tgz --old-package /absolute/previous.tgz
 ```
 
-Windows PD入口：[原生runner](../scripts/test-windows-native-pd.mjs)、[宿主与安装runner](../scripts/e2e-windows-harness-pd.mjs)、[长稳runner](../scripts/soak-windows-pd.mjs)、[跨电脑文件](../scripts/e2e-windows-exchange-pd.mjs)。长稳与GUI测试的短租约必须按已导出的guest测量起点协调，避免互相抢桌面。
+Windows PD入口：[原生runner](../scripts/test-windows-native-pd.mjs)、[宿主与安装runner](../scripts/e2e-windows-harness-pd.mjs)、[原生WebView2/720p长稳runner](../scripts/soak-webview2-windows-pd.mjs)（历史共享Edge runner为`scripts/soak-windows-pd.mjs`）、[跨电脑文件](../scripts/e2e-windows-exchange-pd.mjs)。长稳与GUI测试的短租约必须按已导出的guest测量起点协调，避免互相抢桌面。
 
 历史 `ab9d9b12…` 包的真实窗口证据（不是当前新包的UI复验）：
 
