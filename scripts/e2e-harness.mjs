@@ -4,8 +4,8 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
 
@@ -21,7 +21,7 @@ const candidateSHA256 = candidate ? createHash('sha256').update(await readFile(r
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
 const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
-const tests = [], errors = [], screenshots = []
+const tests = [], errors = [], screenshots = [], windowRpc = []
 let host, browser, page, driver
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
@@ -56,22 +56,60 @@ async function waitFor(predicate, message, milliseconds = 15000) {
   while (Date.now() < until) { const result = await predicate(); if (result) return result; await sleep(100) }
   throw new Error(message)
 }
-const editor = () => page.locator('[data-composer-input][contenteditable="true"]').first()
+async function waitForInputWindow() {
+  const faults = JSON.parse(arg('--input-faults-json', '[]'))
+  assert.ok(Array.isArray(faults) && faults.length <= 12 && faults.every(value => typeof value === 'string' && Number.isFinite(Date.parse(value))), '--input-faults-json must contain explicit scheduled test fault times')
+  // Another isolated renderer endurance test can restart its own helper at
+  // fixed times. Never begin this real desktop input case near that test's
+  // short recovery lease; wait without holding any native input lease.
+  for (;;) {
+    const blocked = faults.map(Date.parse).sort((a, b) => a - b).find(at => Date.now() >= at - 120000 && Date.now() < at + 20000)
+    if (!blocked) return
+    const until = blocked + 20000
+    console.log(`WAIT native-input-slot until ${new Date(until).toISOString()}`)
+    await sleep(Math.max(1, until - Date.now()))
+  }
+}
+const editor = () => page.locator('[data-composer-input][contenteditable="true"]:visible').first()
 const row = label => page.locator('[data-row-key^="session:"]').filter({ hasText: label }).first()
 async function openSettings() {
   await page.getByRole('button', { name: '账号菜单', exact: true }).click()
   await page.getByRole('menuitem', { name: 'QiuYaTools', exact: true }).click()
   await page.getByRole('heading', { name: 'QiuYa 增强工具箱', exact: true }).waitFor()
 }
-async function newSession(label) {
+async function blankSession() {
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
-  // The public action asynchronously opens its blank Session and restores its
-  // editor. Wait for that transition before simulating the human's first text.
-  await sleep(450)
-  await editor().fill(label); await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  // Observe both public DOM bindings after the asynchronous Session transition;
+  // a fixed delay can type into the previous Session while draft restoration is
+  // still running on a busy guest.
+  let signature, stableAt = Date.now()
+  const sessionId = await waitFor(async () => {
+    const state = await page.evaluate(() => {
+    const body = document.querySelector('[data-conversation-content][data-content-phase="hero"]')
+    const selected = document.querySelector('[data-row-key^="session:"][aria-selected="true"]')
+    const input = body?.querySelector('[data-composer-input][contenteditable="true"]')
+    const id = body?.getAttribute('data-conversation-session')
+    return id && selected?.getAttribute('data-row-key') === 'session:' + id && !selected.draggable && input?.getClientRects().length && getComputedStyle(input).visibility === 'visible' ? { id, text: input.textContent, phase: input.getAttribute('data-phase') } : null
+    })
+    const next = JSON.stringify(state)
+    if (next !== signature) { signature = next; stableAt = Date.now() }
+    return state?.text === '' && Date.now() - stableAt >= 750 ? state.id : undefined
+  }, 'The public blank Session and its empty composer did not settle')
+  return sessionId
+}
+async function newSession(label) {
+  const blank = await blankSession()
+  assert.match(blank, /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,159}$/u)
+  const region = page.locator(`[data-conversation-content][data-conversation-session="${blank}"]:visible`)
+  const input = region.locator('[data-composer-input][contenteditable="true"]')
+  await input.pressSequentially(label, { delay: 8 })
+  await waitFor(async () => await input.innerText() === label && await region.getByRole('button', { name: '发送消息', exact: true }).isEnabled(), 'The settled Session draft did not become sendable')
+  await region.getByRole('button', { name: '发送消息', exact: true }).click()
   await page.getByText(`已完成本地测试回复：${label}`, { exact: true }).waitFor({ timeout: 15000 })
   await row(label).waitFor()
-  return (await row(label).getAttribute('data-row-key')).slice('session:'.length)
+  const id = (await row(label).getAttribute('data-row-key')).slice('session:'.length)
+  assert.equal(id, blank, 'The first prompt must enter the exact settled blank Session')
+  return id
 }
 async function menu(label) { await row(label).click({ button: 'right' }); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).waitFor() }
 try {
@@ -92,8 +130,11 @@ try {
     host = spawn(cli[0], [...cli.slice(1), '--profile', 'web', '--patch', overlay, '--no-open', '--port', '0'], { env, cwd: root, stdio: ['pipe', 'pipe', 'pipe'] })
     let log = ''; let exited = false
     const accept = chunk => { log += chunk }; host.stdout.on('data', accept); host.stderr.on('data', accept); host.once('exit', () => { exited = true })
-    url = await waitFor(() => { if (exited) throw new Error(log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>')); return log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0] }, 'Isolated Harness did not start', 45000)
-    await writeFile(join(output, 'host-startup.log'), log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>'))
+    try {
+      url = await waitFor(() => { if (exited) throw new Error(log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>')); return log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0] }, 'Isolated Harness did not start', 90000)
+    } finally {
+      await writeFile(join(output, 'host-startup.log'), log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>'))
+    }
   }
   browser = await chromium.launch({ channel: arg('--browser', 'chrome'), headless: !process.argv.includes('--headed') })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
@@ -101,6 +142,14 @@ try {
   await context.addInitScript(() => { window.__e2eClipboard = null; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { async writeText(text) { window.__e2eClipboard = text } } }) })
   await context.route('**/*', route => { const requestURL = new URL(route.request().url()); return ['http:', 'https:'].includes(requestURL.protocol) && !['127.0.0.1', 'localhost'].includes(requestURL.hostname) ? route.abort() : route.continue() })
   page = await context.newPage(); page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(15000)
+  page.on('response', response => {
+    const endpoint = new URL(response.url()).pathname
+    if (!endpoint.startsWith('/api/qiuya-tools.session-windows.')) return
+    void response.json().then(envelope => {
+      const payload = response.request().postDataJSON()?.payload
+      windowRpc.push({ endpoint, status: response.status(), result: envelope.result, ...(payload ? { request: { sessionId: payload.sessionId, source: payload.source, action: payload.action } } : {}) })
+    }).catch(() => {})
+  })
   await page.goto(url)
   const onboarding = page.getByRole('button', { name: '继续', exact: true })
   await onboarding.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
@@ -166,7 +215,27 @@ try {
     const executable = arg('--native', process.platform === 'darwin' ? join(root, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer') : join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`))
     driver = new NativeCompanionDriver({ executable, args: process.platform === 'win32' ? ['--computer'] : [] })
     await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
-    const target = await waitFor(async () => (await driver.targets()).find(target => target.title.includes(alpha)), 'Native session window did not appear', 35000)
+    let ownedTargets = []
+    let target
+    try {
+      target = await waitFor(async () => {
+        const targets = await driver.targets()
+        ownedTargets = targets.filter(target => target.title.includes(alpha) || process.platform === 'win32' && target.appId.toLowerCase().startsWith(profileHome.toLowerCase() + '\\'))
+        return targets.find(target => target.title.includes(alpha))
+      }, 'Native session window did not appear', 35000)
+    } finally {
+      await writeFile(join(output, 'independent-window-targets.json'), JSON.stringify({ alpha, targets: ownedTargets }, null, 2))
+      if (process.platform === 'win32') {
+        const owned = await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-owned-windows.ps1'), '-ProfileRoot', profileHome])
+        await writeFile(join(output, 'independent-os-windows.json'), owned)
+      }
+      if (!target) for (const [index, item] of ownedTargets.entries()) {
+        const observation = await driver.observe(item.id).catch(() => undefined)
+        if (!observation) continue
+        await writeFile(join(output, `independent-window-debug-${index}.jpg`), Buffer.from(observation.imageBase64, 'base64'))
+        await writeFile(join(output, `independent-window-debug-${index}.json`), JSON.stringify({ target: item, elements: observation.elements }, null, 2))
+      }
+    }
     independentTarget = target
     const observation = await driver.observe(target.id)
     await writeFile(join(output, 'independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
@@ -176,7 +245,40 @@ try {
     assert.equal(second.length, 1); assert.equal(second[0].id, target.id)
     return { targetId: target.id, pid: target.pid, screenshotWidth: observation.width }
   })
+  if (process.argv.includes('--drag-window-e2e')) await test('trusted-browser-drag-to-native-window', async () => {
+    const betaId = (await row(beta).getAttribute('data-row-key')).slice('session:'.length)
+    await page.evaluate(sessionId => {
+      window.__e2eDragFacts = []
+      for (const kind of ['dragstart', 'drop', 'dragend']) document.addEventListener(kind, event => {
+        const source = event.target instanceof Element ? event.target.closest('[data-row-key^="session:"]')?.getAttribute('data-row-key') : null
+        if (kind === 'dragstart' && source === 'session:' + sessionId && event.isTrusted) window.__e2eDraggedSession = sessionId
+        if (window.__e2eDraggedSession === sessionId) window.__e2eDragFacts.push({ kind, isTrusted: event.isTrusted, clientX: event.clientX, clientY: event.clientY, dropEffect: event.dataTransfer?.dropEffect })
+        if (kind === 'dragend') window.__e2eDraggedSession = null
+      }, true)
+    }, betaId)
+    const bounds = await row(beta).boundingBox(), viewport = page.viewportSize()
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(bounds.x + bounds.width + 35, bounds.y + bounds.height / 2, { steps: 12 })
+    await page.mouse.move(viewport.width * 0.6, viewport.height * 0.45, { steps: 15 })
+    await page.mouse.move(viewport.width * 0.6 + 4, viewport.height * 0.45 + 4)
+    await sleep(250); await page.mouse.up()
+    const facts = await page.evaluate(() => window.__e2eDragFacts)
+    await writeFile(join(output, 'drag-browser-events.json'), JSON.stringify(facts, null, 2))
+    const target = await waitFor(async () => (await driver.targets()).find(target => target.title.includes(beta)), 'The real browser drag did not reveal its native session window', 35000)
+    assert.ok(facts.some(event => event.kind === 'dragstart' && event.isTrusted), 'The browser must generate an actual trusted dragstart')
+    assert.ok(facts.some(event => event.kind === 'drop' && event.isTrusted), 'The browser must generate an actual trusted drop')
+    await waitFor(() => windowRpc.some(request => request.request?.sessionId === betaId && request.request.source === 'drag' && request.result?.value?.opened), 'The dragged native window did not acknowledge its exact session', 35000)
+    const rpc = windowRpc.filter(request => request.request?.sessionId === betaId && request.request.source === 'drag')
+    assert.ok(rpc.some(request => request.request.action === 'prepare' && request.result?.ok))
+    assert.ok(rpc.some(request => request.request.action !== 'prepare' && request.result?.value?.opened))
+    const observation = await driver.observe(target.id)
+    await writeFile(join(output, 'drag-native-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
+    await writeFile(join(output, 'drag-native-window-evidence.json'), JSON.stringify({ kind: 'real browser drag outside sidebar; not OS desktop HID drag', facts, rpc, target }, null, 2))
+    return { targetId: target.id, trustedDrag: true, boundary: 'client outside sidebar, not physical desktop drop' }
+  })
   await test('computer-main-agent-tools-and-image-adapter-pipeline', async () => {
+    await waitForInputWindow()
     assert.ok(independentTarget && alphaId, 'The fixture session window must exist before computer control')
     await row(alpha).click(); await sleep(300); await openSettings()
     await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
@@ -190,8 +292,24 @@ try {
     await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes('ready'), 'Computer session did not become ready')
     await screenshot('computer-authorized')
     await page.getByRole('button', { name: '关闭', exact: true }).click()
-    await editor().fill('E2E:computer-move'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
-    await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).waitFor({ timeout: 25000 })
+    if (process.platform === 'win32') {
+      await editor().fill('E2E:computer-move')
+      const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome]))
+      assert.equal(activation.active, true)
+      await writeFile(join(output, 'fixture-user-activation.json'), JSON.stringify(activation, null, 2))
+      // Keep the fixture user's foreground target. DOM input submits the main
+      // Agent request without focusing another desktop/browser window.
+      await page.evaluate(() => {
+        const send = [...document.querySelectorAll('button')].find(button => button.getAttribute('aria-label') === '发送消息' || button.title === '发送消息')
+        if (!send || send.disabled) throw new Error('Fixture composer send button was not ready')
+        send.click()
+      })
+    } else { await editor().fill('E2E:computer-move'); await page.getByRole('button', { name: '发送消息', exact: true }).click() }
+    try { await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).waitFor({ timeout: 25000 }) }
+    finally {
+      const records = (await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+      await writeFile(join(output, 'agent-computer-adapter-requests.json'), JSON.stringify(records.filter(record => record.sessionId === alphaId && record.marker === 'E2E:computer-move'), null, 2))
+    }
     const requests = (await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
     const images = requests.filter(request => request.sessionId === alphaId && request.marker === 'E2E:computer-move' && request.imageBlocks.length > 0)
     assert.ok(images.length, 'The main Agent adapter must actually receive image blocks after the computer tool')
@@ -221,10 +339,21 @@ try {
       assert.match(text, /\d+\s*ms/u, 'The live preview must display a successful frame latency, not just an empty image element')
       assert.equal(nativeStatus.preview.httpStatus, 200)
     } else {
-      preview = await waitFor(async () => (await driver.targets()).find(target => target.title.startsWith('QiuYaTools · 电脑操控')), 'Native floating preview did not appear')
+      preview = await waitFor(async () => (await driver.targets()).find(target => target.title.startsWith('QiuYaTools · 电脑操控') && target.appId.toLowerCase().startsWith(profileHome.toLowerCase() + '\\')), 'Native floating preview did not appear')
       const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
-      windowsPreview = button => nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-preview-windows.ps1'), '-WindowId', preview.id, ...(button ? ['-Button', button] : [])])
-      const controls = JSON.parse(await windowsPreview())
+      windowsPreview = (button, options = []) => nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-preview-windows.ps1'), '-WindowId', preview.id, ...(button ? ['-Button', button] : []), ...options])
+      // WebView2 enables its renderer accessibility tree after the first UIA
+      // client arrives. Wait for the actual controls and successful frame.
+      let controls
+      const attempts = []
+      for (let attempt = 0; attempt < 3; attempt++) {
+        controls = JSON.parse(await windowsPreview())
+        attempts.push(controls)
+        const text = controls.labels.join('\n')
+        if (['暂停', '接管', '继续', '停止', '实时电脑画面'].every(label => text.includes(label)) && /\d+\s*ms/u.test(text)) break
+        await sleep(750)
+      }
+      await writeFile(join(output, 'floating-preview-uia-attempts.json'), JSON.stringify(attempts, null, 2))
       await writeFile(join(output, 'floating-preview-evidence.json'), JSON.stringify(controls, null, 2))
       const previewImage = await driver.observe(preview.id)
       await writeFile(previewPath, Buffer.from(previewImage.imageBase64, 'base64'))
@@ -238,8 +367,53 @@ try {
         const receipt = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', join(output, `preview-control-${state}.jpg`), button]))
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
-      else await windowsPreview(button)
+      else {
+        const receipt = JSON.parse(await windowsPreview(button))
+        assert.equal(receipt.pressed, true)
+        await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
+      }
       await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes(state), `Computer ${button} did not enter ${state}`)
+      if (state === 'humanControl' && windowsPreview && process.argv.includes('--manual-preview-e2e')) {
+        const marker = `E2E:manual-preview-${suffix}-你好`
+        const evidence = { marker, mouseSource: 'Win32 SendInput OS-synthetic; not Parallels hardware', receipts: [], actions: [], states: [] }
+        const completed = kind => waitFor(async () => {
+          const current = await page.evaluate(async sessionId => {
+            const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+            return (await response.json()).result.value.sessions.find(value => value.sessionId === sessionId)
+          }, alphaId)
+          const previous = evidence.states.at(-1)
+          if (JSON.stringify(previous) !== JSON.stringify(current)) evidence.states.push(current)
+          if (current?.lastAction?.action.kind === kind && current.lastAction.phase === 'failed') throw new Error(`The real native preview ${kind} failed: ${current.error?.code ?? ''} ${current.error?.message ?? ''}`)
+          return current?.lastAction?.phase === 'completed' && current.lastAction.action.kind === kind ? current.lastAction : undefined
+        }, `The real native preview ${kind} did not complete`)
+        try {
+          evidence.receipts.push(JSON.parse(await windowsPreview('', ['-Operation', 'click-image', '-ImageLabel', '实时电脑画面', '-X', '0.5', '-Y', '0.85'])))
+          evidence.actions.push(await completed('click'))
+          const footer = JSON.parse(await windowsPreview('', ['-Operation', 'set-text', '-TextLabel', '接管后输入文字', '-Text', marker]))
+          evidence.receipts.push(footer)
+          assert.equal(footer.clicked, true, 'The user must actually activate the own preview footer before typing')
+          assert.equal(footer.textValue, marker)
+          evidence.receipts.push(JSON.parse(await windowsPreview('输入', ['-MouseButton'])))
+          evidence.actions.push(await completed('type'))
+          evidence.receipts.push(JSON.parse(await windowsPreview('Enter', ['-MouseButton'])))
+          evidence.actions.push(await completed('key'))
+          await page.getByText(`已完成本地测试回复：${marker}`, { exact: true }).waitFor({ timeout: 20000 })
+          evidence.actualTargetSubmission = true
+          const after = await driver.observe(independentTarget.id)
+          await writeFile(join(output, 'manual-preview-target-result.jpg'), Buffer.from(after.imageBase64, 'base64'))
+          const floatingAfter = await driver.observe(preview.id)
+          await writeFile(join(output, 'manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64'))
+        } finally {
+          if (!evidence.actualTargetSubmission) {
+            evidence.failurePreview = await windowsPreview().then(JSON.parse).catch(error => ({ error: error.message }))
+            for (const [name, targetId] of [['target', independentTarget.id], ['floating', preview.id]]) {
+              const failed = await driver.observe(targetId).catch(() => undefined)
+              if (failed) await writeFile(join(output, `manual-preview-failed-${name}.jpg`), Buffer.from(failed.imageBase64, 'base64'))
+            }
+          }
+          await writeFile(join(output, 'manual-preview-input-evidence.json'), JSON.stringify(evidence, null, 2))
+        }
+      }
     }
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     return { preview, adapterRequestsWithImages: images.length, imageBlocks: images.flatMap(request => request.imageBlocks).length,
@@ -253,15 +427,14 @@ try {
     await screenshot('archived')
   })
   await test('plan-review-comment-and-draft-preservation', async () => {
-    await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
-    await sleep(450)
+    await blankSession()
     await editor().fill('/plan on'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
     await waitFor(async () => (await page.locator('body').innerText()).includes('计划模式已开启') || (await page.getByRole('button', { name: /计划模式已开启/u }).count()) > 0, 'Plan mode did not activate')
     await editor().fill('E2E:plan'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
     await sleep(100)
     await editor().fill('E2E original draft must survive')
     await page.locator('[data-plan-review-surface]').waitFor({ timeout: 15000 })
-    const paragraph = page.getByText('检查真实会话和插件菜单。', { exact: true }).last()
+    const paragraph = page.locator('[data-rightbar-col]').getByText('检查真实会话和插件菜单。', { exact: true }).first()
     await paragraph.waitFor(); await paragraph.evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })) })
     await page.getByPlaceholder('输入评论…').fill('E2E 请增加真实回归测试')
     await page.getByRole('button', { name: '保存', exact: true }).click()
@@ -270,9 +443,80 @@ try {
     assert.equal(await editor().innerText(), 'E2E original draft must survive')
     await screenshot('plan-comments')
   })
+  if (process.argv.includes('--file-exchange-e2e')) await test('packaged-file-exchange-real-host-upload-download-and-no-overwrite', async () => {
+    assert.ok(candidate, 'File exchange must use the exact installed candidate bundle')
+    const bundled = await nativeCommand(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xOf', resolve(candidate), 'package/lib/computer-agent.js'])
+    const modulePath = join(temporary, 'candidate-computer-agent.mjs')
+    await writeFile(modulePath, bundled)
+    const { createComputerAgentServer } = await import(pathToFileURL(modulePath).href)
+    const directory = join(temporary, 'manual-file-exchange'); await mkdir(directory)
+    const calls = { status: 0, targets: 0, observe: 0, lease: 0, release: 0, act: 0, preview: 0 }
+    const forbidden = name => async () => { calls[name]++; throw new Error('The file-only fixture forbids native ' + name) }
+    // The final package supplies the actual authenticated HTTP/FS implementation.
+    // This fixture grants no desktop lease or input capability to that server.
+    const fileOnly = {
+      async status() { calls.status++; return { available: true, permissions: {}, capabilities: { capture: false, input: false } } },
+      async targets() { calls.targets++; return [] },
+      observe: forbidden('observe'), lease: forbidden('lease'), release: forbidden('release'), act: forbidden('act'),
+      openPreview: forbidden('preview'), closePreview: forbidden('preview'), async dispose() {},
+    }
+    const pairing = randomUUID() + randomUUID()
+    const server = await createComputerAgentServer(fileOnly, { token: pairing, exchangeDirectory: directory })
+    const evidence = { candidateSHA256, source: 'actual packaged server + real Harness SDK owner route + React file input + browser download',
+      boundary: 'status/targets-only stub; no native screenshot, input, lease, or external model capability claimed', calls }
+    try {
+      await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
+      const enable = page.getByRole('checkbox', { name: '启用', exact: true }); if (!await enable.isChecked()) await enable.click()
+      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('remote')
+      await page.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
+      await page.getByLabel('配对密钥', { exact: true }).fill(pairing)
+      await page.getByRole('checkbox', { name: /允许通过受信任的私有网络连接/u }).check()
+      await page.getByRole('button', { name: '连接所选环境', exact: true }).click()
+      const pane = page.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')
+      await pane.waitFor()
+      await pane.getByRole('button', { name: '检查并刷新交换目录', exact: true }).click()
+      const picker = pane.locator('input[type="file"]'); await picker.waitFor()
+      const name = 'E2E-共享-你好-' + randomUUID().slice(0, 8) + '.bin', bytes = Buffer.alloc(8 * 1024 * 1024)
+      for (let index = 0; index < bytes.length; index++) bytes[index] = (index * 13 + 37) % 251
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      await picker.setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes })
+      await pane.getByText('文件已上传至远端专用交换目录。', { exact: true }).waitFor({ timeout: 60000 })
+      assert.deepEqual(await readFile(join(directory, name)), bytes)
+      const fileRow = pane.locator('p').filter({ hasText: name })
+      const downloading = page.waitForEvent('download')
+      await fileRow.getByRole('button', { name: '下载', exact: true }).click()
+      const download = await downloading, saved = join(temporary, 'downloaded-file.bin')
+      assert.equal(download.suggestedFilename(), name)
+      await download.saveAs(saved)
+      assert.deepEqual(await readFile(saved), bytes)
+      await pane.getByText('文件已交给本机浏览器下载。', { exact: true }).waitFor()
+      const replacement = Buffer.from(bytes); replacement[0] ^= 128
+      await picker.setInputFiles({ name, mimeType: 'application/octet-stream', buffer: replacement })
+      await pane.getByText(/已存在同名文件/u).waitFor()
+      assert.deepEqual(await readFile(join(directory, name)), bytes)
+      Object.assign(evidence, { name, size: bytes.length, sha256, uploadedBytesVerified: true, browserDownloadVerified: true, duplicateRejectedWithoutOverwrite: true })
+      await screenshot('file-exchange-ui')
+      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('local')
+      await page.getByRole('button', { name: '连接所选环境', exact: true }).click()
+      await waitFor(async () => await page.getByRole('heading', { name: '手动文件交换', exact: true }).count() === 0, 'The file-only remote environment did not disconnect')
+      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+      assert.ok(calls.status > 0)
+      for (const key of ['observe', 'lease', 'release', 'act', 'preview']) assert.equal(calls[key], 0, 'File exchange must not invoke desktop ' + key)
+      return { size: bytes.length, unicodeFilename: true, sha256, byteVerified: true, noOverwrite: true, nativeInputCalls: 0 }
+    } finally {
+      await server.close()
+      await writeFile(join(output, 'file-exchange-ui-evidence.json'), JSON.stringify(evidence, null, 2))
+    }
+  })
   assert.equal(errors.length, 0, `Frontend errors: ${errors.join('; ')}`)
-} catch (error) { tests.push({ name: 'runner', status: 'failed', error: error.message }); console.log(`FAIL runner: ${error.message}`) }
+} catch (error) {
+  tests.push({ name: 'runner', status: 'failed', error: error.message }); console.log(`FAIL runner: ${error.message}`)
+  await screenshot('failed-runner').catch(() => {})
+  const requests = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8').catch(() => '')
+  if (requests) await writeFile(join(output, 'runner-adapter-requests.json'), JSON.stringify(requests.trim().split('\n').map(JSON.parse).slice(-40), null, 2))
+}
 finally {
+  await writeFile(join(output, 'session-window-rpc.json'), JSON.stringify(windowRpc, null, 2))
   await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
   if (host) await Promise.race([new Promise(resolve => host.once('exit', resolve)), sleep(3000).then(() => host.kill('SIGKILL'))])
   const report = { status: tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.'] }

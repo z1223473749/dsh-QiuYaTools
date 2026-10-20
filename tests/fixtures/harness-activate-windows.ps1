@@ -13,9 +13,9 @@ public class QytFixtureActivation {
  [StructLayout(LayoutKind.Sequential)]struct MouseInput{public int X,Y;public uint Data,Flags,Time;public UIntPtr Extra;}
  [StructLayout(LayoutKind.Sequential)]struct Input{public uint Type;public MouseInput Mouse;}
  [DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);
- [DllImport("user32.dll")]static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int z,uint flags);
+ [DllImport("user32.dll",SetLastError=true)]static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int z,uint flags);
  [DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")]static extern IntPtr WindowFromPoint(Point p);
+ [DllImport("user32.dll")]static extern IntPtr WindowFromPhysicalPoint(Point p);
  [DllImport("user32.dll")]static extern IntPtr GetAncestor(IntPtr h,uint flags);
  [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")]static extern IntPtr GetWindowLongPtr(IntPtr h,int index);
  [DllImport("user32.dll")]static extern bool SetPhysicalCursorPos(int x,int y);
@@ -23,18 +23,22 @@ public class QytFixtureActivation {
  public static object Activate(IntPtr h) {
   Rect bounds;if(!GetWindowRect(h,out bounds))throw new Exception("Fixture target disappeared");
   bool top=(GetWindowLongPtr(h,-20).ToInt64()&8)!=0;long before=GetForegroundWindow().ToInt64();
-  int x=(bounds.Left+bounds.Right)/2,y=bounds.Top+15;
+  int x=(bounds.Left+bounds.Right)/2,y=bounds.Top+15;bool restored=false;int restoreError=0;
   try {
    if(!SetWindowPos(h,new IntPtr(-1),0,0,0,0,1|2|16))throw new Exception("Could not uncover fixture titlebar");
    System.Threading.Thread.Sleep(100);
-   if(GetAncestor(WindowFromPoint(new Point{X=x,Y=y}),2)!=h)throw new Exception("Another window covers the fixture titlebar; no input sent");
+   if(GetAncestor(WindowFromPhysicalPoint(new Point{X=x,Y=y}),2)!=h)throw new Exception("Another window covers the fixture titlebar; no input sent");
    if(!SetPhysicalCursorPos(x,y))throw new Exception("Could not position fixture mouse");
    var input=new[]{new Input{Mouse=new MouseInput{Flags=2}},new Input{Mouse=new MouseInput{Flags=4}}};
    if(SendInput(2,input,Marshal.SizeOf<Input>())!=2)throw new Exception("Fixture activation click failed");
    for(int n=0;n<20&&GetForegroundWindow()!=h;n++)System.Threading.Thread.Sleep(50);
    if(GetForegroundWindow()!=h)throw new Exception("User fixture click did not activate its own target");
-   return new{active=true,targetHandle=h.ToInt64(),foregroundBefore=before,foregroundAfter=GetForegroundWindow().ToInt64(),x,y,source="Win32 SendInput OS-synthetic user-preflight click; not Parallels hardware"};
-  }finally{SetWindowPos(h,new IntPtr(top?-1:-2),0,0,0,0,1|2|16);}
+  }finally{
+   restored=SetWindowPos(h,new IntPtr(top?-1:-2),0,0,0,0,1|2|16);restoreError=restored?0:Marshal.GetLastWin32Error();
+   if(!restored)throw new Exception("Could not restore own fixture z-order: Win32="+restoreError);
+   if(((GetWindowLongPtr(h,-20).ToInt64()&8)!=0)!=top)throw new Exception("The own fixture topmost state was not restored");
+  }
+  return new{active=true,targetHandle=h.ToInt64(),foregroundBefore=before,foregroundAfter=GetForegroundWindow().ToInt64(),topmostBefore=top,restoreCallResult=restored,restoreWin32Error=restoreError,topmostAfter=(GetWindowLongPtr(h,-20).ToInt64()&8)!=0,x,y,source="Win32 SendInput OS-synthetic user-preflight click; not Parallels hardware"};
  }
 }
 '@
