@@ -6,33 +6,42 @@ import { gzipSync } from 'node:zlib'
 import { mkdtemp, readFile, readdir, rm, writeFile, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-update-host-test-'))
-await build({ entryPoints: [new URL('../src/updates/host.ts', import.meta.url).pathname], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
+await build({ entryPoints: [fileURLToPath(new URL('../src/updates/host.ts', import.meta.url))], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
 const { installPluginUpdatesHost, isGitHubAssetRedirect } = await import(pathToFileURL(join(temporary, 'host.mjs')).href)
 const repository = 'https://github.com/QiuYa/QiuYaTools'
 const checkEndpoint = 'qiuya-tools.updates.check'
 const installEndpoint = 'qiuya-tools.updates.install'
 const architecture = process.arch === 'arm64' ? 'arm64' : 'x64'
+const supportedPlatform = ['darwin', 'win32'].includes(process.platform) && ['arm64', 'x64'].includes(process.arch)
+const assetName = process.platform === 'win32' ? `dsh-qiuya-tools-win32-${architecture}.tgz` : 'dsh-qiuya-tools-darwin-universal.tgz'
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true }) })
 
 function archive(version = '1.1.0', name = 'dsh-qiuya-tools') {
-  const helper = Buffer.alloc(56)
-  helper.writeUInt32LE(0xfeedfacf, 0)
-  helper.writeUInt32LE(architecture === 'arm64' ? 0x0100000c : 0x01000007, 4)
-  helper.writeUInt32LE(2, 12)
-  helper.writeUInt32LE(1, 16)
-  helper.writeUInt32LE(24, 20)
-  helper.writeUInt32LE(0x1b, 32)
-  helper.writeUInt32LE(24, 36)
+  const helper = Buffer.alloc(process.platform === 'win32' ? 1024 : 56)
+  if (process.platform === 'win32') {
+    helper.writeUInt16LE(0x5a4d); helper.writeUInt32LE(128, 60)
+    helper.writeUInt32LE(0x4550, 128); helper.writeUInt16LE(architecture === 'arm64' ? 0xaa64 : 0x8664, 132)
+    helper.writeUInt16LE(1, 134); helper.writeUInt16LE(240, 148); helper.writeUInt16LE(2, 150)
+    helper.writeUInt16LE(0x20b, 152); helper.writeUInt32LE(128, 392 + 16); helper.writeUInt32LE(512, 392 + 20)
+  } else {
+    helper.writeUInt32LE(0xfeedfacf, 0)
+    helper.writeUInt32LE(architecture === 'arm64' ? 0x0100000c : 0x01000007, 4)
+    helper.writeUInt32LE(2, 12)
+    helper.writeUInt32LE(1, 16)
+    helper.writeUInt32LE(24, 20)
+    helper.writeUInt32LE(0x1b, 32)
+    helper.writeUInt32LE(24, 36)
+  }
   const entries = [
     ['package/package.json', Buffer.from(JSON.stringify({ name, version, dsh: { bundle: { patch: './cordis.patch.yml' } } })), 0o644],
     ['package/cordis.patch.yml', Buffer.from('- insert: []\n'), 0o644],
     ['package/lib/index.js', Buffer.from('export function apply() {}'), 0o644],
     ['package/lib/client.js', Buffer.from('/* browser bundle */'), 0o644],
-    ['package/lib/QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', helper, 0o755],
+    [process.platform === 'win32' ? `package/lib/native/win32-${architecture}/qiuya-windows.exe` : 'package/lib/QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', helper, 0o755],
   ]
   const chunks = []
   for (const [path, content, mode] of entries) {
@@ -71,7 +80,7 @@ async function fixture(t, extra = {}) {
       if (key === 'profileContext') return { dir: directory }
       if (key === 'pluginManager' && managerAvailable) return {
         async installBundle(spec, options) {
-          calls.push({ spec, options, bytes: await readFile(spec.slice('file:'.length)) })
+          calls.push({ spec, options, bytes: await readFile(new URL(spec)) })
           if (extra.install) return extra.install(spec, options)
           return { changed: true, application: 'restart-required', bundle: 'dsh-qiuya-tools', version: releaseVersion }
         },
@@ -87,9 +96,9 @@ async function fixture(t, extra = {}) {
       id: 1, tag_name: `v${releaseVersion}`, draft: false, prerelease: false,
       url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/1',
       html_url: `${repository}/releases/tag/v${releaseVersion}`, published_at: '2026-10-20T10:00:00Z',
-      assets: [{ id: 2, name: 'dsh-qiuya-tools-darwin-universal.tgz', state: 'uploaded', size: packageBytes.length,
+      assets: [{ id: 2, name: assetName, state: 'uploaded', size: packageBytes.length,
         url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/assets/2',
-        browser_download_url: `${repository}/releases/download/v${releaseVersion}/dsh-qiuya-tools-darwin-universal.tgz`,
+        browser_download_url: `${repository}/releases/download/v${releaseVersion}/${assetName}`,
         digest: `sha256:${digest}` }],
     }))
     if (assetMode === 'evil-redirect') return new Response(null, { status: 302, headers: { location: 'https://evil.test/package.tgz' } })
@@ -140,19 +149,19 @@ test('updates remain read-only until explicit installation and expose unavailabl
   const result = await f.call(checkEndpoint)
   assert.equal(result.status, 'available')
   assert.equal(result.release.version, '1.1.0')
-  assert.equal(result.canInstall, process.platform === 'darwin')
+  assert.equal(result.canInstall, supportedPlatform)
   assert.equal('asset' in result.release, false)
   assert.deepEqual(await readdir(f.directory), [])
   f.setManager(false)
   const unavailable = await f.call(checkEndpoint)
   assert.equal(unavailable.canInstall, false)
-  if (process.platform === 'darwin') assert.equal(unavailable.problem.code, 'manager-unavailable')
+  if (supportedPlatform) assert.equal(unavailable.problem.code, 'manager-unavailable')
   const missing = await fixture(t, { options: { repository: undefined } })
   assert.equal((await missing.call(checkEndpoint)).status, 'not-configured')
   assert.equal(missing.network.length, 0)
 })
 
-test('an explicit update validates bytes and delegates an immutable file package to the official manager', { skip: process.platform !== 'darwin' }, async t => {
+test('an explicit update validates bytes and delegates an immutable file package to the official manager', { skip: !supportedPlatform }, async t => {
   const f = await fixture(t)
   await f.call(checkEndpoint)
   f.setAssetMode('github-redirect')
@@ -173,7 +182,7 @@ test('an explicit update validates bytes and delegates an immutable file package
   assert.equal(f.calls.length, 1)
 })
 
-test('digest mismatches, unsafe redirects, changed releases and invalid packages never invoke installation', { skip: process.platform !== 'darwin' }, async t => {
+test('digest mismatches, unsafe redirects, changed releases and invalid packages never invoke installation', { skip: !supportedPlatform }, async t => {
   for (const mode of ['corrupt', 'evil-redirect']) {
     const f = await fixture(t)
     f.setAssetMode(mode)
@@ -192,10 +201,10 @@ test('digest mismatches, unsafe redirects, changed releases and invalid packages
   assert.equal(invalid.calls.length, 0)
 })
 
-test('updates refuse cache symlinks and preserve profile files when the official manager fails', { skip: process.platform !== 'darwin' }, async t => {
+test('updates refuse cache symlinks and preserve profile files when the official manager fails', { skip: !supportedPlatform }, async t => {
   const f = await fixture(t)
   const outside = await mkdtemp(join(temporary, 'outside-'))
-  await symlink(outside, join(f.directory, 'qiuya-tools-updates'))
+  await symlink(outside, join(f.directory, 'qiuya-tools-updates'), process.platform === 'win32' ? 'junction' : 'dir')
   assert.equal((await f.call(installEndpoint, { version: '1.1.0' })).problem.code, 'profile-unavailable')
   assert.equal(f.calls.length, 0)
   assert.deepEqual(await readdir(outside), [])

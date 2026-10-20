@@ -61,7 +61,7 @@ export class SessionWindowCompanion {
   private sequence = 0
   private disposed = false
   private readonly pending = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>()
-  constructor(private readonly executable: string) {}
+  constructor(private readonly executable: string, private readonly args: readonly string[] = []) {}
 
   async open(value: object): Promise<void> {
     return this.send('open', value)
@@ -97,7 +97,7 @@ export class SessionWindowCompanion {
 
   private start(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null && !this.child.killed) return this.child
-    const child = spawn(this.executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
+    const child = spawn(this.executable, [...this.args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
     this.child = child
     const lines = createInterface({ input: child.stdout })
     lines.on('line', line => {
@@ -148,12 +148,12 @@ export class SessionWindowCompanion {
 }
 
 /** Root waits only for connection and webServer. Session readers are resolved on the authenticated call. */
-export function installSessionWindowsHost(ctx: Context, enabled: () => boolean): () => void {
+export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, companionOptions?: { executable: string; args?: readonly string[] }): () => void {
   const services = ctx as unknown as HostServices
   // A normal .app bundle gives AppKit, LaunchServices and accessibility tools
   // one stable identity while stdin still carries the private launch facts.
-  const executable = sessionWindowExecutable(import.meta.url)
-  const companion = new SessionWindowCompanion(executable)
+  const executable = companionOptions?.executable ?? sessionWindowExecutable(import.meta.url)
+  const companion = new SessionWindowCompanion(executable, companionOptions?.args)
   // A cancel can arrive while exact target validation is awaiting persistence.
   // Keep its intent here so that late validation cannot resurrect a hidden view.
   let preparation: { id: string; generation: number } | undefined

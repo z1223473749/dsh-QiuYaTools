@@ -22,13 +22,14 @@ const contractModule = { exports: {} }
 vm.runInNewContext(source, { module: contractModule, exports: contractModule.exports })
 const contract = contractModule.exports
 await build({ entryPoints: [fileURLToPath(new URL('src/features/session-windows/host.ts', root))], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
-const { SessionWindowCompanion, installSessionWindowsHost, sessionWindowStoreIdentifier } = await import(pathToFileURL(join(temporary, 'host.mjs')).href)
+const { SessionWindowCompanion, installSessionWindowsHost: installHost, sessionWindowStoreIdentifier } = await import(pathToFileURL(join(temporary, 'host.mjs')).href)
 const fixtureDirectory = join(temporary, SESSION_WINDOW_APP_NAME, 'Contents', 'MacOS')
 await mkdir(fixtureDirectory, { recursive: true })
 const fixture = join(fixtureDirectory, 'qiuya-session-window')
 const records = join(temporary, 'records.jsonl')
 await writeFile(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const rl = require('node:readline').createInterface({ input: process.stdin }); rl.on('line', line => { const value = JSON.parse(line); fs.appendFileSync(${JSON.stringify(records)}, JSON.stringify({ ...value, pid: process.pid, argv: process.argv.slice(2) })+'\\n'); process.stdout.write(JSON.stringify({requestId:value.requestId,ok:true})+'\\n'); }); rl.on('close',()=>process.exit(0));\n`)
 await chmod(fixture, 0o755)
+const installSessionWindowsHost = (ctx, enabled) => installHost(ctx, enabled, { executable: process.execPath, args: [fixture] })
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true }) })
 
@@ -56,7 +57,7 @@ test('tear-out excludes accepted drops, Escape, and Chromium empty cancellation 
 })
 
 test('companion shares one process and carries authenticated URL only through stdin', async () => {
-  const companion = new SessionWindowCompanion(fixture)
+  const companion = new SessionWindowCompanion(process.execPath, [fixture])
   try {
     await companion.open({ sessionId: 'one', url: 'http://127.0.0.1:19387/?token=fixture-only' })
     await companion.open({ sessionId: 'two', url: 'http://127.0.0.1:19387/?token=fixture-only' })
@@ -76,11 +77,11 @@ test('companion startup failure rejects without an unhandled Host stream error',
 
 test('drag preparation and cancellation share the helper without cancellation starting a new process', async () => {
   const before = (await readFile(records, 'utf8')).trim().split('\n').length
-  const dormant = new SessionWindowCompanion(fixture)
+  const dormant = new SessionWindowCompanion(process.execPath, [fixture])
   try { await dormant.cancel('not-created') }
   finally { dormant.dispose() }
   assert.equal((await readFile(records, 'utf8')).trim().split('\n').length, before)
-  const companion = new SessionWindowCompanion(fixture)
+  const companion = new SessionWindowCompanion(process.execPath, [fixture])
   try {
     const target = { sessionId: 'prepared-target', url: 'http://127.0.0.1:19444/?token=fixture-only', title: 'Fixture', source: 'drag' }
     await companion.prepare(target)
@@ -115,7 +116,7 @@ function windowFetchFixture(extra = {}) {
   return { host, routes, call }
 }
 
-test('Host authority validates feature setting and existing Session before building same-Host URL', { skip: process.platform !== 'darwin' }, async () => {
+test('Host authority validates feature setting and existing Session before building same-Host URL', async () => {
   let enabled = false
   const fixture = windowFetchFixture({ sessionController: { async list() { return { items: [{ sessionId: 'real-session', title: 'Fixture' }] } } } })
   const dispose = installSessionWindowsHost(fixture.host, () => enabled)
@@ -134,7 +135,7 @@ test('Host authority validates feature setting and existing Session before build
   assert.equal(fixture.routes.size, 0)
 })
 
-test('Host prepare validates exact targets while cancel remains cleanup after settings or catalog changes', { skip: process.platform !== 'darwin' }, async () => {
+test('Host prepare validates exact targets while cancel remains cleanup after settings or catalog changes', async () => {
   let enabled = true
   let readCount = 0
   const fixture = windowFetchFixture({
@@ -155,7 +156,7 @@ test('Host prepare validates exact targets while cancel remains cleanup after se
   } finally { dispose() }
 })
 
-test('a cancel arriving during preparation validation prevents a late hidden window from being created', { skip: process.platform !== 'darwin' }, async () => {
+test('a cancel arriving during preparation validation prevents a late hidden window from being created', async () => {
   let entered
   const reading = new Promise(resolve => { entered = resolve })
   let complete
@@ -273,7 +274,7 @@ test('persistent store identities are stable and isolate exact Sessions and cano
   const otherProfile = join(temporary, 'profile-two')
   const alias = join(temporary, 'profile-alias')
   await mkdir(profile); await mkdir(otherProfile)
-  await symlink(profile, alias, 'dir')
+  await symlink(profile, alias, process.platform === 'win32' ? 'junction' : 'dir')
   const identifier = await sessionWindowStoreIdentifier('session-one', profile)
   assert.match(identifier, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
   assert.equal(await sessionWindowStoreIdentifier('session-one', profile), identifier)
@@ -510,7 +511,7 @@ test('Client retries a startup status failure and updates a mounted menu instead
   assert.equal(scheduled.size, 0)
 })
 
-test('exact Host route uses the browser owner reader without a root SessionController', { skip: process.platform !== 'darwin' }, async () => {
+test('exact Host route uses the browser owner reader without a root SessionController', async () => {
   let listed = 0
   const controller = { async list() { listed++; return { items: [{ sessionId: 'peer-session', title: 'Peer fixture' }] } } }
   const fixture = windowFetchFixture({ get: () => undefined })
@@ -525,7 +526,7 @@ test('exact Host route uses the browser owner reader without a root SessionContr
   } finally { dispose() }
 })
 
-test('Host resolves optional profileContext through get and sends only a hashed profile identity over stdin', { skip: process.platform !== 'darwin' }, async () => {
+test('Host resolves optional profileContext through get and sends only a hashed profile identity over stdin', async () => {
   const profile = join(temporary, 'profile-one')
   let providedProfile = { dir: profile }
   const live = { id: 'profile-scoped', header: { id: 'profile-scoped' }, seq: 2 }
@@ -571,7 +572,7 @@ test('built native helper supports its promised Mac architectures and macOS 13',
   assert.ok(minimums.every(minimum => minimum === '13.0' || minimum === '13.0.0'))
 })
 
-test('live target validation uses the exact Session and current blank unit without scanning the catalog', { skip: process.platform !== 'darwin' }, async () => {
+test('live target validation uses the exact Session and current blank unit without scanning the catalog', async () => {
   let lists = 0
   let stats = 0
   const live = { id: 'live-session', header: { id: 'live-session', cwd: '/fixture' }, seq: 9 }
@@ -591,7 +592,7 @@ test('live target validation uses the exact Session and current blank unit witho
   } finally { dispose() }
 })
 
-test('cold target validation stats only the requested identity and rejects missing, blank, or mismatched headers', { skip: process.platform !== 'darwin' }, async () => {
+test('cold target validation stats only the requested identity and rejects missing, blank, or mismatched headers', async () => {
   const requested = []
   let lists = 0
   let current = { header: { id: 'cold-session', cwd: '/fixture' }, eventCount: 12 }
@@ -618,7 +619,7 @@ test('cold target validation stats only the requested identity and rejects missi
   } finally { dispose() }
 })
 
-test('cancellation before or during exact target metadata reads never launches a native window', { skip: process.platform !== 'darwin' }, async () => {
+test('cancellation before or during exact target metadata reads never launches a native window', async () => {
   let reads = 0
   const aborted = new AbortController()
   aborted.abort()
