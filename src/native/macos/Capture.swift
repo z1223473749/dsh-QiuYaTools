@@ -47,32 +47,48 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
     private var identity: String?
     private var frame: CGRect?
     private var generation = 0
+    private var shareableWindows: [CGWindowID: SCWindow] = [:]
     private let outputQueue = DispatchQueue(label: "com.qiuya.tools.computer-use.capture", qos: .userInitiated)
 
-    func targets() async throws -> [(NativeTarget, SCWindow)] {
+    func targets() throws -> [NativeTarget] {
         guard CGPreflightScreenCaptureAccess() else { throw ComputerError("SCREEN_RECORDING_REQUIRED", "Enable Screen Recording for QiuYaTools Computer in System Settings, then restart the helper.") }
-        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-        return content.windows.compactMap { window in
-            guard window.isOnScreen, window.windowLayer == 0, window.frame.width >= 40, window.frame.height >= 40,
-                  let application = window.owningApplication, application.processID != getpid(),
-                  !application.bundleIdentifier.isEmpty else { return nil }
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            throw ComputerError("TARGETS_UNAVAILABLE", "The current window list is unavailable.")
+        }
+        return windows.compactMap { info in
+            guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: Any], let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.width >= 40, frame.height >= 40,
+                  let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != getpid(),
+                  let windowId = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let application = NSRunningApplication(processIdentifier: pid), !application.isTerminated,
+                  let appId = application.bundleIdentifier, !appId.isEmpty else { return nil }
             let screen = NSScreen.screens.first { screen in
                 // NSScreen uses a bottom-left origin; Quartz and SCWindow use top-left.
                 let mainHeight = NSScreen.screens.first?.frame.height ?? 0
                 let quartz = CGRect(x: screen.frame.minX, y: mainHeight - screen.frame.maxY, width: screen.frame.width, height: screen.frame.height)
-                return quartz.intersects(window.frame)
+                return quartz.intersects(frame)
             }
-            let target = NativeTarget(id: "mac-window:\(window.windowID)", appId: application.bundleIdentifier,
-                                      title: window.title ?? application.applicationName, pid: application.processID,
-                                      windowId: window.windowID, frame: window.frame, scale: Double(screen?.backingScaleFactor ?? 1))
-            return (target, window)
-        }.sorted { ($0.0.appId, $0.0.title, $0.0.id) < ($1.0.appId, $1.0.title, $1.0.id) }
+            return NativeTarget(id: "mac-window:\(windowId)", appId: appId,
+                                title: info[kCGWindowName as String] as? String ?? application.localizedName ?? appId,
+                                pid: pid, windowId: windowId, frame: frame, scale: Double(screen?.backingScaleFactor ?? 1))
+        }.sorted { ($0.appId, $0.title, $0.id) < ($1.appId, $1.title, $1.id) }
     }
 
     func resolve(_ id: String) async throws -> (NativeTarget, SCWindow) {
         guard id.hasPrefix("mac-window:"), id.utf8.count < 100 else { throw ComputerError("INVALID_TARGET", "Invalid target identifier.") }
-        guard let target = try await targets().first(where: { $0.0.id == id }) else { throw ComputerError("TARGET_GONE", "The selected window is no longer available.") }
-        return target
+        guard let target = try targets().first(where: { $0.id == id }) else { throw ComputerError("TARGET_GONE", "The selected window is no longer available.") }
+        if let window = shareableWindows[target.windowId], window.owningApplication?.processID == target.pid,
+           window.owningApplication?.bundleIdentifier == target.appId { return (target, window) }
+        // SCShareableContent is expensive: only query it when constructing a new
+        // stream/filter, not twice for every preview frame. Quartz metadata still
+        // validates current ownership, geometry and visibility on every call.
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        shareableWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { _, new in new })
+        guard let window = shareableWindows[target.windowId], window.owningApplication?.processID == target.pid,
+              window.owningApplication?.bundleIdentifier == target.appId else { throw ComputerError("TARGET_GONE", "The selected window is not available for capture.") }
+        return (target, window)
     }
 
     func observe(_ target: NativeTarget, window: SCWindow) async throws -> (CapturedFrame, Int) {

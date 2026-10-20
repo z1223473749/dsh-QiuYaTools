@@ -109,7 +109,7 @@ import ScreenCaptureKit
         Task { @MainActor in
             do {
                 switch op {
-                case "targets": Wire.success(requestId, ["targets": try await capture.targets().map { $0.0.json }])
+                case "targets": Wire.success(requestId, ["targets": try capture.targets().map { $0.json }])
                 case "observe":
                     guard !observationBusy else { throw ComputerError("CAPTURE_BUSY", "Another frame is being prepared.") }
                     guard let id = command["targetId"] as? String else { throw ComputerError("INVALID_TARGET", "A target identifier is required.") }
