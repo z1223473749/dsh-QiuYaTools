@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
+import { ownedWindowsProcesses, installSoakClockProbe } from './computer-soak-evidence.mjs'
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const minutes = Number(arg('--minutes', '30')), expectedFaults = Number(arg('--faults', '5'))
@@ -45,10 +46,9 @@ async function ownedProcesses() {
   // A controlled parent termination can orphan a capture/guardian child. Its
   // exact executable belongs to this UUID fixture directory, so retain it even
   // when it is no longer discoverable from the live Node descendant graph.
-  const helper = `'${companion.replaceAll("'", "''")}'`
-  const code = `$ErrorActionPreference='Stop';$all=@(Get-CimInstance Win32_Process);$ids=[Collections.Generic.HashSet[int]]::new();[void]$ids.Add(${process.pid});do{$changed=$false;foreach($p in $all){if($ids.Contains([int]$p.ParentProcessId)-and $ids.Add([int]$p.ProcessId)){$changed=$true}}}while($changed);$result=@(foreach($p in $all){if($ids.Contains([int]$p.ProcessId)-or $p.ExecutablePath -eq ${helper}){$live=Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue;if($live){@{pid=[int]$p.ProcessId;parentPid=[int]$p.ParentProcessId;name=$p.Name;workingSetBytes=[long]$live.WorkingSet64;cpuSeconds=$live.CPU}}}});ConvertTo-Json -InputObject $result -Compress`
+  const code = `$ErrorActionPreference='Stop';$result=@(Get-CimInstance Win32_Process|ForEach-Object{if($_.CreationDate){@{pid=[int]$_.ProcessId;parentPid=[int]$_.ParentProcessId;name=$_.Name;createdAtTicks=$_.CreationDate.ToUniversalTime().Ticks.ToString();executablePath=$_.ExecutablePath;workingSetBytes=[long]$_.WorkingSetSize;cpuSeconds=([double]$_.KernelModeTime+[double]$_.UserModeTime)/10000000}}});ConvertTo-Json -InputObject $result -Compress`
   const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], { timeout: 15000, windowsHide: true })
-  return JSON.parse(stdout.trim())
+  return ownedWindowsProcesses(JSON.parse(stdout.trim()), process.pid, companion)
 }
 async function recordNativeArtifact() { nativeArtifacts.push({ atMs: Date.now(), sha256: createHash('sha256').update(await readFile(companion)).digest('hex') }) }
 const server = createServer(async (req, res) => {
@@ -95,23 +95,7 @@ try {
   await new Promise(done => server.listen(0, '127.0.0.1', done))
   browser = await chromium.launch(windows ? { channel: 'msedge', headless: true } : { executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true })
   const page = await browser.newPage()
-  await page.addInitScript(() => {
-    window.__soak = { frames: 0, invalid: 0, lastStamp: -1, latencies: [], first: 0, last: 0, maxFrameGapMs: 0 }
-    document.addEventListener('load', event => {
-      const img = event.target
-      if (!(img instanceof HTMLImageElement) || !img.naturalWidth) return
-      const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
-      const context = canvas.getContext('2d'); context.drawImage(img, 0, 0)
-      const scale = img.naturalWidth / 640
-      let stamp = 0
-      for (let bit = 0; bit < 32; bit++) { const p = context.getImageData(Math.round((28 + bit * 16) * scale), Math.round(32 * scale), 1, 1).data; if (p[0] + p[1] + p[2] > 384) stamp += 2 ** bit }
-      const elapsed = ((Date.now() % 2 ** 32) - stamp + 2 ** 32) % 2 ** 32
-      if (elapsed > 10000) { window.__soak.invalid++; if (!window.__soak.firstInvalidImage) window.__soak.firstInvalidImage = img.src; return }
-      if (stamp === window.__soak.lastStamp) return
-      const stats = window.__soak; stats.lastStamp = stamp; stats.frames++; const now = Date.now(); if (stats.last) stats.maxFrameGapMs = Math.max(stats.maxFrameGapMs, now - stats.last); stats.last = now; if (!stats.first) stats.first = stats.last
-      stats.latencies.push(elapsed); if (stats.latencies.length > 100000) stats.latencies.shift()
-    }, true)
-  })
+  await page.addInitScript(installSoakClockProbe)
   await page.goto(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.preview?session=soak`)
   await page.waitForFunction(() => window.__soak.frames > 5, { timeout: 20000 })
   const measurementStart = await page.evaluate(() => {
@@ -170,6 +154,8 @@ try {
   } : undefined
   const resourcesBounded = !resourceBounds || resourceBounds.maxNodeRssBytes <= resourceBounds.limits.nodeRssBytes && resourceBounds.maxOwnedTreeRssBytes <= resourceBounds.limits.ownedTreeRssBytes && resourceBounds.maxDirectNativeWorkers <= resourceBounds.limits.directNativeWorkers && resourceBounds.maxNativeTreeProcesses <= resourceBounds.limits.nativeTreeProcesses
   const result = { status: fps >= 10 && endToEndFps >= 10 && latencyP95 <= 500 && stats.invalid === 0 && faults.length === expectedFaults && attachmentWrites === 0 && resourcesBounded ? 'passed' : 'failed', kind: 'native-capture-through-real-Chromium-preview', renderer: windows ? 'installed Microsoft Edge headless; shared production preview frontend (not native WebView2 renderer)' : 'installed Google Chrome headless; shared production preview frontend', platform: process.platform, architecture: process.arch, fixtureReady, minutes, elapsedMs: Date.now() - measurementStart, frames: stats.frames, uniqueFps: fps, endToEndFps, maxFrameGapMs: stats.maxFrameGapMs, latencyP95Ms: latencyP95, invalidTimestamps: stats.invalid, idlePauseAckMs: pauses, faults, resources, resourceBounds, resourcesBounded, nativeArtifacts, captureOnlyInputReleased: true, attachmentWrites, attachmentEvidence: 'Host attachment service spy; no Agent tools or attachment renderer in this capture-only run', limitations: ['This capture endurance test does not claim in-flight input-stop latency or scroll/drag endurance; native E2E covers correctness separately.', ...(windows ? ['Edge exercises the shared preview frontend; native WebView2 floating-window controls are covered separately.'] : [])], testedAt: new Date().toISOString() }
+  result.resourceAttribution = windows ? 'Same-snapshot PID plus creation ticks; descendants must be born no earlier than their matched parent. Exact UUID helper executable paths retain orphan native workers. Resource-sampling PowerShell and its descendants remain included.' : 'Existing macOS process-name snapshot'
+  result.clockDecoder = 'One reusable canvas of image-width by one pixel; one row readback per loaded frame; source bit coordinates and timestamp validity threshold unchanged.'
   result.warmupFramesExcluded = stats.warmupFrames
   result.frameDefinition = 'Unique source clock timestamps decoded after image load and canvas draw; repeated stamps are excluded. Invalid means a decoded clock is more than 10 seconds behind or in the future. Max gap includes planned companion outage; this does not claim zero dropped source frames or physical display composition latency.'
   await writeFile(join(output, 'report.json'), JSON.stringify(result, null, 2))

@@ -31,6 +31,7 @@ const compiled = frozenRuntime ? undefined : await build({ stdin: { contents: "e
 const files = new Map([
   ['runtime.mjs', frozenRuntime ? await readFile(resolve(frozenRuntime)) : Buffer.from(compiled.outputFiles[0].text)],
   ['soak-computer.mjs', await readFile(join(root, 'scripts/soak-computer.mjs'))],
+  ['computer-soak-evidence.mjs', await readFile(join(root, 'scripts/computer-soak-evidence.mjs'))],
   ['windows-soak-fixture.ps1', await readFile(join(root, 'tests/fixtures/windows-soak-fixture.ps1'))],
   ['qiuya-windows.exe', await readFile(helperPath)],
 ])
