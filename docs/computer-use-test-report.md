@@ -2,7 +2,7 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告区分实际桌面、浏览器、确定性模型、故障注入及真实模型，不把这些证据相互替代。原始范围见 [开发计划](windows-and-computer-use-development-plan.md)，操作方式见 [使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 三个平台安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
+**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
 
 ## 1. 版本、环境及证据口径
 
@@ -17,8 +17,8 @@
 
 | 检查 | 实际结果与边界 | 原始证据 |
 | --- | --- | --- |
-| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**517/517**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-canvas-epoch-check.log) |
-| Windows 完整 Node 检查 | passed：真实 Windows Node 22.23.3，**517总数、513 passed、0 failed、4 skipped**；仅跳过依赖 Swift/lipo 的 Mac 检查，旧归档 fixture 已纳入 | [报告](../artifacts/computer-use/windows-unit-canvas-final/report.json)、[日志](../artifacts/computer-use/windows-unit-canvas-final/unit.log) |
+| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**521/521**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-dual-runtime-check.log) |
+| Windows 完整 Node 检查 | passed：真实 Windows Node 22.23.3，**521总数、517 passed、0 failed、4 skipped**；仅跳过依赖 Swift/lipo 的 Mac 检查，旧归档 fixture 已纳入 | [报告](../artifacts/computer-use/windows-unit-dual-runtime-final/report.json)、[日志](../artifacts/computer-use/windows-unit-dual-runtime-final/unit.log) |
 | 真实 Chromium 预览 | passed：**17/17**，确定性 driver；覆盖坐标、光标、接管、文字、继续/停止、位图释放、坏 JPEG、迟到解码、旧手势、迟到自动暂停 | [报告](../artifacts/computer-use/preview-web/report.json) |
 | Windows ARM64 原生 | passed：最终 helper **52/52**，真实桌面输入、UIA、WebView2、租约、崩溃与 guardian、持续可见预览；个别注入 writer 故障检查不使用真实 OS 输入 | [报告](../artifacts/computer-use/windows-native-hook-final/report.json) |
 | Windows Node 隐藏启动 | passed：真实 Node `windowsHide:true` 启动最终 helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-hook-final/report.json) |
@@ -58,15 +58,23 @@
 
 Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通过附件和adapter投影。Mac报告实际捕获3次带图请求、4个图片块；Windows最终报告同样验证带图请求和后续真实native move。测试使用本地确定性provider，没有复制真实账户凭据。这证明工具和图片运输，不证明视觉推理。
 
-真实视觉模型固定任务为 **blocked**。当前 `deepseek-flash` 配置没有本次可用图像推理证据，另一本机 `/v1/models` 返回503。不能根据模型名字、本地adapter或浏览器脚本推断完成了视觉模型定位、填写与接管后继续。
+真实视觉模型固定任务为 **blocked**。当前 `deepseek-flash` 配置没有本次可用图像推理证据，[最近本机只读模型预检](../artifacts/computer-use/model-readiness-delivery-final/report.json)的 `/v1/models` 返回503。不能根据模型名字、本地adapter或浏览器脚本推断完成了视觉模型定位、填写与接管后继续。
 
 ## 5. 性能、资源与修复证据
 
 ### 最终 Windows 30分钟源画面→renderer
 
-**尚未收尾，不计为通过。** 当前完整运行见 [进度](../artifacts/computer-use/windows-renderer-canvas-final/progress.json)；完成后在此写实际结果。
+**passed（本段明列负载）。** [最终原始报告](../artifacts/computer-use/windows-renderer-canvas-final/report.json)：实际1,801,027ms、23,025个不同源时间戳帧，完整时段**12.7844 FPS**（首末有效帧区间12.7869 FPS），源时钟到绘制完成**P95 32ms**，0坏/过旧时间戳，5次受控helper终止并显式重启，最大画面间隔2,839ms，0预览attachment写入。最后一项为Host附件服务spy，不能扩大为实际SDK数据库测量；SDK图像运输由UI12另验。
 
-链路为同一Windows来宾内：640×360、33ms带时间戳动画→最终native CaptureBroker→生产Host→生产预览页面canvas→实际Edge解码绘制。生产源码 `3c924d0`、helper `0eb1fb6a…`；运行时由相同源码独立bundle，并非直接启动tgz内整个插件。真正tgz/SDK/WebView2闭环由上一节UI12及安装5单独验证。
+61个资源采样中，Node RSS峰值**133,132,288字节**，整个自有进程树WS峰值**1,549,283,328字节**，低于1.5GiB门槛；直接native最多1个，native树最多3个。原始CPU累计时间也保留在每个进程采样中，未设CPU通过门槛。[资源汇总](../artifacts/computer-use/windows-renderer-canvas-final/resource-summary.json)按原记录绘图，不修改runner结论。
+
+私有提交没有冒充WS：总PrivatePageCount由648,323,072增至1,231,642,624字节，峰1,238,925,312；后15分钟观测范围1,179,049,984至1,238,925,312字节。它不是零增长或无限时段无泄漏证明，工作集trim也不代表提交内存回收。720p/更长运行仍需独立验证。
+
+[完成回执](../artifacts/computer-use/windows-renderer-canvas-final/completed.json)exitCode=0，无cleanup-error；[只读退出复查](../artifacts/computer-use/windows-renderer-canvas-final/cleanup-verification.json)中171个采样PID+出生身份均不再运行。[故障时间线](../artifacts/computer-use/windows-renderer-canvas-final/fault-trace.json)保留每次暂停、终止、停止、启动与继续采集。
+
+![最终Windows长稳资源趋势](../artifacts/computer-use/windows-renderer-canvas-final/resource-trend.png)
+
+链路为同一Windows来宾内：640×360、33ms带时间戳动画→最终native CaptureBroker→生产Host→生产预览页面canvas→实际Edge解码绘制。[精确输入回执](../artifacts/computer-use/windows-renderer-canvas-final/environment.json)绑定生产源码 `3c924d0`、helper `0eb1fb6a…`、runtime bundle SHA `ef496e8dec5daf16b7110265cfdcb0f065e03ec4d2ab508a5cfa333bf03cf4f2`；运行时由相同源码独立bundle，并非直接启动tgz内整个插件。真正tgz/SDK/WebView2闭环由上一节UI12及安装5单独验证。
 
 门槛未放宽：≥10完整时段唯一帧/秒，源时钟到完成绘制P95≤500ms，0坏/过旧时间戳，5次受控helper终止后显式重启，0逐帧附件写入；Node RSS≤512MiB，整个自有进程树 WorkingSet sum≤**1,610,612,736字节**，直接native≤1、native树≤4。进程统计包含采样PowerShell/conhost，按同快照PID+创建时间排除PID复用；精确测试helper路径保留孤儿。PrivatePageCount只是原始观察，不另设阈值，WS被trim不能证明私有提交回收。
 
@@ -109,7 +117,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 [Mac完整30分钟旧报告](../artifacts/computer-use/macos-soak-fixed/report.json)是 **failed**：1,800,796ms、19,691有效唯一帧、892无效/过旧时间戳、5次受控终止、0附件写入；即使P95 104ms或旧uniqueFPS达标也不能改判通过。源时间戳冻结在2026-10-20 18:02:33.511 UTC，与pmset显示器熄灭同秒，证据在 `environment-interruption/`。fixture已增加仅生命周期内的防显示器闲置休眠断言与draw遥测；没有修改全局电源或登录设置。修复后短测仍失败，最新桌面锁屏，完整重验blocked。
 
-最新[预检](../artifacts/computer-use/preflight-final-root/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5、Chrome17不替代它。
+最近[预检](../artifacts/computer-use/preflight-closeout-final/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5、Chrome17不替代它。
 
 | 未完成验收 | 状态 | 前提/范围 |
 | --- | --- | --- |
