@@ -2,37 +2,43 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告区分实际桌面、浏览器、确定性模型、故障注入及真实模型，不把这些证据相互替代。原始范围见 [开发计划](windows-and-computer-use-development-plan.md)，操作方式见 [使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。x64宿主的实际手动预览出现缺少置顶、目标遮挡输入栏的失败，正在定位；Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
+**整体尚未通过完整验收。** 当前三份安装包已重新生成，Mac当前包安装恢复5/5通过，当前Windows ARM64和x64包各真实宿主12/12及安装5/5通过；x64为真实x64 Node及helper在ARM来宾中的转译执行，不代表原生x64硬件。原生预览缺少置顶已用创建句柄时声明 `WS_EX_TOPMOST` 修复，ARM64与x64正式helper各52项原生检查及对应架构Node隐藏启动5项均通过；诊断候选与早期生产包的结果不能直接移记到当前包。批量归档的无关刷新关闭菜单缺陷已独立复现、先红后绿修复。Mac最近预检仍锁屏，新的WKWebView手动输入、完整Mac长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉任务也缺少合法owner连接前提。Excel专用加载项和macOS锁屏扩展尚未实现，不能称为“完全复刻Codex”。
 
 ## 1. 版本、环境及证据口径
 
-- 生产源码：`3c924d0`；编译产物及安装包回执：`3c6e865`。后续测试脚本、报告提交不改变这份生产包。精确文件哈希见 [delivery-manifest.json](../artifacts/delivery-manifest.json)，包校验值见 [SHA256SUMS](../artifacts/SHA256SUMS)。
+- 当前共享前端包含批量归档修复 `0b5396e`；重新构建及最终资产回执为 `38b929dee91861a29f7e1e74ff16d743377267c0`。Windows原生PE的源码及嵌入元数据绑定 `4dcb3af5881fc1d827f86bf027b632f0207abb35`。旧 `3c924d0 / 3c6e865` 的测试按其原代次保留，不能覆盖新包验收。精确文件哈希见 [delivery-manifest.json](../artifacts/delivery-manifest.json)，包校验值见 [SHA256SUMS](../artifacts/SHA256SUMS)。
 - Mac：macOS 26.6.2 / Darwin 25.6.0，Apple Silicon；主执行 Node 24.17.0，实际安装的 Harness CLI 使用自己的运行时。
 - Windows：PD 26.4.1 内 Windows 11 ARM64，真实登录用户交互桌面 **Session 1**，Node 22.23.3 ARM64；Session 0 命令成功不算 GUI 验证。
-- Windows 原生程序为 .NET 8 自包含程序，构建 SDK 8.0.426，WebView2 SDK 1.0.3912.50。ARM64 helper SHA 为 `0eb1fb6ab29370c04a8b13feb78b6c2e3a5efd80a2b4cbefd1945d88b08f2030`；x64 为 `3b2dda6eb93d8e8491326ce166b963fc556ba289500f980d7d004ff037039e83`。
+- Windows 原生程序为 .NET 8 自包含程序，构建 SDK 8.0.426，WebView2 SDK 1.0.3912.50。当前ARM64 helper为68,227,039字节，SHA `42889f9c6eda3d5971b9d33e06dc022c1d2731faad6e7b33d536995197ba4a63`；x64为72,050,776字节，SHA `3f0073ba52ff17bf2cdee9d65196b5753b7b334f497bb5f69693f8b7ea8a4594`。[正式构建回执](../artifacts/computer-use/windows-native-pinning-final-build/receipt.json)确认两架构均无诊断源码，编译输入和原SourceRevisionId已归档。
 - Windows 测试运行时从公开 npm 精确 lock 重建；lock SHA `dd08239ab518fa1bd0254774b8209853122bffe0c87c1734deab145a82e70dea`，运行时档案 SHA `d73549cd1bd3421674e648c407ed7f4517c9ca2cf4ddbf467ea23a6d123e329a`。没有复制用户 profile 或账户凭据，详见 [运行时来源说明](windows-test-runtime.md)。
 - 状态仅使用 `passed / failed / blocked / not-run`。同一行为在多个 runner 中重复出现，数量不相加成“全部通过”总数。历史失败不删除，不以最后一次绿色覆盖原记录。
 
-## 2. 最终自动回归与真实功能结果
+## 2. 当前回归与分代真实功能结果
 
 | 检查 | 实际结果与边界 | 原始证据 |
 | --- | --- | --- |
-| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**521/521**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-dual-runtime-check.log) |
-| Windows 完整 Node 检查 | passed：真实 Windows Node 22.23.3，**521总数、517 passed、0 failed、4 skipped**；仅跳过依赖 Swift/lipo 的 Mac 检查，旧归档 fixture 已纳入 | [报告](../artifacts/computer-use/windows-unit-dual-runtime-final/report.json)、[日志](../artifacts/computer-use/windows-unit-dual-runtime-final/unit.log) |
+| Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**531/531**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-native-webview-check.log) |
+| Windows 完整 Node 检查 | passed（历史源码）：真实Windows Node22.23.3，**521总数、517 passed、0 failed、4 skipped**，仅跳过依赖Swift/lipo的Mac检查；当前新增长稳及批量菜单回归后的Windows全量尚待重跑，不能记为531已通过 | [报告](../artifacts/computer-use/windows-unit-dual-runtime-final/report.json)、[日志](../artifacts/computer-use/windows-unit-dual-runtime-final/unit.log) |
 | 真实 Chromium 预览 | passed：**17/17**，确定性 driver；覆盖坐标、光标、接管、文字、继续/停止、位图释放、坏 JPEG、迟到解码、旧手势、迟到自动暂停 | [报告](../artifacts/computer-use/preview-web/report.json) |
-| Windows ARM64 原生 | passed：最终 helper **52/52**，真实桌面输入、UIA、WebView2、租约、崩溃与 guardian、持续可见预览；个别注入 writer 故障检查不使用真实 OS 输入 | [报告](../artifacts/computer-use/windows-native-hook-final/report.json) |
-| Windows Node 隐藏启动 | passed：真实 Node `windowsHide:true` 启动最终 helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-hook-final/report.json) |
-| Windows 在途拖动释放 | passed：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
-| Windows 最终实际 Harness | passed：包 `ab9d9b12…`，真实 Host/UI **12/12**，含原功能、原生窗、可信浏览器拖出、主 Agent 收图、原生预览人工操作、8MiB 文件交换 | [报告](../artifacts/harness-e2e/windows-canvas-final/report.json)、[验证边界](../artifacts/harness-e2e/windows-canvas-final/validation-notes.json) |
-| Windows x64实际Harness | failed：首轮11/12，后续诊断10/12。真实主Agent图片/原生move可执行，但预览缺少置顶，手动点击目标后footer物理命中被目标遮挡而拒绝；后续菜单超时可能级联。不能把native52当此项已通过 | [首次](../artifacts/harness-e2e/windows-x64-activation-failure/report.json)、[控制诊断](../artifacts/harness-e2e/windows-x64-control-diagnostic-failure/report.json)、[实际手动失败](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/manual-preview-input-evidence.json) |
-| Windows 最终安装恢复 | passed：ARM64 `ab9d9b12…`与x64 `54f25c87…`包，各官方管理器安装、升级保留配置、坏包恢复、回滚、重装 **5/5**；x64为ARM来宾转译 | [ARM64](../artifacts/install-e2e/windows-canvas-final/report.json)、[x64](../artifacts/install-e2e/windows-x64-final/report.json) |
-| Mac 最终安装恢复 | passed：包 `e528ed96…`，相同官方管理器流程 **5/5**；不需要解锁后的桌面输入 | [报告](../artifacts/install-e2e/macos-canvas-final/report.json) |
+| Windows ARM64 原生 | passed：当前正式ARM64 helper `42889f9c…` **52/52**，真实桌面输入、UIA、WebView2、租约、崩溃与 guardian、持续可见预览；个别注入 writer 故障检查不使用真实 OS 输入 | [报告](../artifacts/computer-use/windows-native-pinning-final/report.json) |
+| Windows Node 隐藏启动 | passed：真实ARM64 Node `windowsHide:true` 启动当前 `42889f9c…` helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-pinning-final/report.json) |
+| Windows当前x64原生复核 | passed：当前 `3f0073ba…` **52/52**。首轮执行至37项中36通过、humanInput通知断言1失败仍保留；只读排空现有stdout后在原stale reply之后20ms收到该事件，extraActions=0、extraHidInputs=0，没有改PE或重发输入 | [52项复核](../artifacts/computer-use/windows-native-x64-event-drain-final/report.json)、[首轮失败](../artifacts/computer-use/windows-native-x64-pinning-final/report.json) |
+| Windows当前x64隐藏启动 | passed：真实x64 Node22.23.3启动当前x64 helper，**5/5**；PD ARM来宾转译，不能扩展为原生x64硬件 | [报告](../artifacts/computer-use/windows-node-hidden-x64-pinning-final/report.json) |
+| Windows 在途拖动释放 | passed（置顶修复前helper的历史证据）：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
+| Windows ARM64实际Harness | passed：当前包 `5609bc04…`、实际helper `42889f9c…`，真实Host/UI **12/12**；两次原生TopMost=true、中文实际提交、主Agent图片/native动作、trusted浏览器拖出、8MiB文件交换通过，文件分支无原生输入误发。ARM64原位暴露点击点(1204,133)可用，本轮没有走corner移动fallback | [报告](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/manual-preview-input-evidence.json)、[点击前置](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/fixture-user-activation-diagnostic.json) |
+| Windows x64实际Harness | passed：当前包 `95f0c9b9…`、真实x64 Node与helper `3f0073ba…`，**12/12**、exit0；两次TopMost=true、manual中文实际目标提交/回复、主Agent确定性图片运输、trusted拖出、批量归档及8MiB文件交换通过。ARM来宾转译，非原生x64硬件；历史失败保留 | [当前报告](../artifacts/harness-e2e/windows-bulk-stable-x64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-x64-final/manual-preview-input-evidence.json)、[完成回执](../artifacts/harness-e2e/windows-bulk-stable-x64-final/completed.json) |
+| Windows安装恢复 | passed：当前ARM64 `5609bc04…` 与x64 `95f0c9b9…` 各官方管理器 **5/5**；安装/升级保留设置、坏包恢复、回滚、重装通过，x64在ARM来宾转译。上一代 `0d341525… / db8bdccc…` 的5/5仍按其原代次保留 | [当前ARM64](../artifacts/install-e2e/windows-bulk-stable-arm64-final/report.json)、[当前x64](../artifacts/install-e2e/windows-bulk-stable-x64-final/report.json) |
+| Mac当前包安装恢复 | passed：包 `58126d4a…`，相同官方管理器流程 **5/5**；不需要解锁后的桌面输入 | [报告](../artifacts/install-e2e/macos-bulk-menu-final/report.json) |
 | Mac 历史实际 Harness | passed：解锁时原功能、主 Agent 图像、原生分窗等 **10/10**；这是该次源码/候选的证据，新 canvas 在 Mac WKWebView 的手动输入没有被这份旧报告覆盖 | [报告](../artifacts/harness-e2e/macos/report.json) |
 | Mac 原生功能 | passed（历史明列范围）：**11项**实际输入与窗口检查；通用原生构建、自测通过。后续 guard 真正持有输入后的崩溃恢复另列阻塞 | [原生报告](../artifacts/computer-use/macos-native/report.json)、[同范围重跑](../artifacts/computer-use/macos-native-fast/report.json) |
 | Mac Chrome / Windows Edge | passed：各 **10项**真实浏览器通道检查；登录 profile、截图/元素、Unicode、坐标、站点许可、CDP、注册 Agent 的导航与标签页动作 | [Chrome](../artifacts/computer-use/browser-cleanup-final/summary.json)、[Edge](../artifacts/computer-use/windows-edge-final/summary.json) |
-| Mac→Windows 独立目标 | passed：最终 helper **15/15**；配对/撤权、错误凭据、协议/Origin、真实输入、互斥、释放/继续、断连与心跳 | [报告](../artifacts/computer-use/windows-remote-hook-final/report.json) |
+| Mac→Windows 独立目标 | passed：当前ARM64正式helper `42889f9c…` **15/15**；配对/撤权、错误凭据、协议/Origin、真实输入、互斥、释放/继续、断连与心跳。环境信息内嵌report，没有另造独立environment文件链接 | [报告](../artifacts/computer-use/windows-remote-pinning-final/report.json) |
 | Windows 微软拼音 | passed：**5/5**，PD 硬件扫描码进入已安装微软拼音，实际提交“你好”，Enter/Tab/Escape/Ctrl+Enter不误发送/接受建议 | [报告](../artifacts/computer-use/windows-ime-final/report.json) |
-| x64 在 ARM Windows 仿真 | passed（转译范围）：最终 x64 **原生52/52、Node隐藏启动5/5、截图8/8**；真实WebView2握手/窗口/预览及PD硬件Escape通过。Node自身ARM64，启动的helper为x64；未覆盖原生x64硬件 | [原生](../artifacts/computer-use/windows-x64-emulation-native-final/report.json)、[隐藏启动及架构说明](../artifacts/computer-use/windows-node-hidden-x64-emulation-final/coverage.json)、[截图](../artifacts/computer-use/windows-x64-emulation-capture-final/report.json) |
+| x64 在 ARM Windows 仿真 | passed（分项范围）：当前正式x64 helper `3f0073ba…` 原生52/52，真实x64 Node隐藏5/5；历史 `3b2dda6e…` 的截图8/8保留原代次。当前x64包另有真实x64 Node Host12/12及安装5/5；这些均不覆盖原生x64硬件 | [当前原生/Node/remote矩阵](../artifacts/computer-use/windows-pinning-native-matrix.json)、[历史截图](../artifacts/computer-use/windows-x64-emulation-capture-final/report.json) |
+
+当前正式PE与tgz的验收分开记录：[原生矩阵](../artifacts/computer-use/windows-pinning-native-matrix.json)绑定两架构52/52及对应Node隐藏5/5、ARM64 remote15/15；当前ARM64与x64包分别另有Host12/12及安装5/5，测试进程已退出且无保留租约。Mac当前完整check为531/531；此前528/528是console清理修复前的历史快照，后续console归属/清理测试仍在迭代，须以新的实际fullcheck追加最终计数。
+
+当前x64手动输入通过一次SetValue，并在一次Current.Value只读观察中85.3236ms匹配；本轮原位暴露点(808,133)已可用，没有走corner移动fallback。两架构本轮都不能声称验证了该移动分支。两架构主Agent仍使用确定性本地provider，证明真实SDK工具与图片运输，不代表真实视觉推理。
 
 实际悬浮窗口中的鼠标点击采用 **Win32 SendInput OS 合成事件**，不冒充 PD 物理鼠标。原生测试另有 PD 硬件 Escape 中断拖动，但“物理鼠标在按住拖动中点击自己的预览”仍未测。可信拖出为客户端浏览器内真实 trusted drag/drop，不能扩展为 OS 桌面硬件拖出。
 
@@ -43,7 +49,7 @@
 | 功能 | 已有双平台证据 | 尚未覆盖的完整矩阵 |
 | --- | --- | --- |
 | 长文本转 TXT | 实际 Host 的 ClipboardEvent→官方附件上传，阈值/纯空白/文件等逻辑回归 | OS 真剪贴板全部粘贴入口与输入法组合 |
-| 会话分窗与拖出 | 双平台原生窗、身份/复用；Windows最终包 trusted拖出→native prepare/open | 全部任务栏、贴靠、拖出取消、重启/屏幕外恢复 |
+| 会话分窗与拖出 | 双平台原生窗、身份/复用；Windows历史及上一代包trusted拖出→native prepare/open；当前ARM64包12/12亦覆盖trusted拖出 | 全部任务栏、贴靠、拖出取消、重启/屏幕外恢复 |
 | 批量归档、计划批注 | 双平台实际测试会话归档、评论提交与草稿保留 | 所有选择快捷键、复杂长计划/输入法及跨窗矩阵 |
 | 会话/工作区菜单 | 置顶、未读、复制调用与持久化 | 剪贴板使用局部 spy；Explorer 真实目录及全部盘符/UNC/长路径组合 |
 | 提示词、Q主题、设置/关于 | 实际宿主页面、持久化、Tab/Escape；真实微软拼音5项 | 全部DPI、字体、死键/AltGr、外链与跨窗矩阵 |
@@ -53,11 +59,11 @@
 
 - 文件系统/Host/React/真实HTTP **35项**已纳入双端完整回归；目录锁竞争、listen失败释放、配对轮换、迟到begin、未知commit、面板卸载均覆盖。
 - [Mac→Windows真实NTFS 10/10](../artifacts/computer-use/windows-exchange-final/report.json)：400,033字节中文文件名，Mac SHA、独立Windows Get-FileHash、下载回读一致，路径与同名拒绝、残片清理通过；原生输入/租约调用均为0。
-- Windows最终UI12包含 **8MiB** Unicode文件的真实Host/React上传、独立FS字节比较、浏览器下载字节比较、修改内容同名拒绝；该分支 observe/lease/release/act/preview计数全部0。它证明文件链，不能当作独立原生输入证明。
+- 当前ARM64 `5609bc04…` UI12及历史候选中的独立文件分支包含 **8MiB** Unicode文件的真实Host/React上传、独立FS字节比较、浏览器下载字节比较、修改内容同名拒绝；该分支 observe/lease/release/act/preview计数全部0。它证明文件链，不能当作独立原生输入证明。
 
 ## 4. 主 Agent 图像与真实模型
 
-Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通过附件和adapter投影。Mac报告实际捕获3次带图请求、4个图片块；Windows最终报告同样验证带图请求和后续真实native move。测试使用本地确定性provider，没有复制真实账户凭据。这证明工具和图片运输，不证明视觉推理。
+Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通过附件和adapter投影。Mac报告实际捕获3次带图请求、4个图片块；历史Windows `ab9d9b12…` 报告同样验证带图请求和后续真实native move；上一代 `0d341525…` 的case9亦通过。当前ARM64 `5609bc04…` 和x64 `95f0c9b9…` 均12/12通过。测试使用本地确定性provider，没有复制真实账户凭据。这证明工具和图片运输，不证明视觉推理。
 
 真实视觉固定任务仍为 **blocked**，但已经找到图片能力声明：[当前安装版能力审计](../artifacts/computer-use/model-capability-audit/report.json)确认 `deepseek-account / deepseek-flash`（显示名DeepSeek-V4.1-Flash）的官方bundled目录为`text+image`，account实时列表失败时也可fallback此目录。目录声明不证明本次账号认证、服务/配额或视觉任务成功。
 
@@ -67,7 +73,17 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 ## 5. 性能、资源与修复证据
 
-### 最终 Windows 30分钟源画面→renderer
+### 当前1280×720原生WebView2首轮短测：failed
+
+[首轮实际报告](../artifacts/computer-use/windows-webview2-720p-smoke/report.json)为**failed**：WinForms生产helper `42889f9c…` 中的真实WebView2，经生产capture/Host/预览canvas；30,073ms、300个不同源时钟帧，包含1次helper终止和显式重开/CDP重连。完整壁钟 **9.9757 FPS < 10**，即使首末有效帧区间10.0979FPS也不能替代完整时段门槛；P95 **96ms**、0invalid、0wrongDimensions，WS峰 **1,411,133,440字节**低于原1.5GiB门槛，Node峰73,416,704字节。画面时钟读取独立于native/Host frame ID，6个热身帧排除、14个迟到旧代通知忽略；没有降低门槛或把接近10改成通过。
+
+清理另有独立失败：[inner cleanup](../artifacts/computer-use/windows-webview2-720p-smoke/cleanup-verification.json)把runner仍在使用的conhost PID10996误当作应提前退出的普通子进程，随后强制终止，inner=false；[outer verdict](../artifacts/computer-use/windows-webview2-720p-smoke/outer-cleanup-verdict.json)中4,704字符PowerShell经EncodedCommand执行失败，[delivery](../artifacts/computer-use/windows-webview2-720p-smoke/delivery-verdict.json)仍false。[事后简单复查](../artifacts/computer-use/windows-webview2-720p-smoke/post-run-cleanup-verification.json)48个身份均已消失，只证明该次快照，没有替代outer自然清理验收。原始失败文件保持原样。
+
+测试工具正在精确绑定runner实际GetConsoleWindow对应console host，将其自然退出检查延至runner退出后，outer仍要求自然gone；较大PowerShell改为更早经短File命令传输。修正后的60秒/1故障同门槛短测尚待结果，原生WebView2 **30分钟/5故障仍未通过验收**。[页面像素证据](../artifacts/computer-use/windows-webview2-720p-smoke/native-webview2-page.png)来自实际原生页面：source/captured JPEG/canvas backing均1280×720，但Form仍600×420缩放显示，不是物理720p viewport，也没有scroll/drag endurance负载。
+
+仅清理语义的[实际Session0预检](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight-2/report.json)**6/6通过**，无GUI、无input：自有15秒寿命Node child验证精确身份query、birth+1跳过、wrongpath拒绝且原child仍活、exact pinned Kill/Wait及退出后查询。此前[SystemTemp staging失败](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight/report.json)保留，当次没有启动child/GUI。另有[HTTP/File AST预检](../artifacts/computer-use/windows-webview2-cleanup-review/powershell-parse-http.json)3个源脚本解析通过、执行进程操作0；它们不证明实际WebView长稳或自然清理已经通过。
+
+### 历史 Windows 640×360共享Edge前端30分钟源画面→renderer
 
 **passed（本段明列负载）。** [最终原始报告](../artifacts/computer-use/windows-renderer-canvas-final/report.json)：实际1,801,027ms、23,025个不同源时间戳帧，完整时段**12.7844 FPS**（首末有效帧区间12.7869 FPS），源时钟到绘制完成**P95 32ms**，0坏/过旧时间戳，5次受控helper终止并显式重启，最大画面间隔2,839ms，0预览attachment写入。最后一项为Host附件服务spy，不能扩大为实际SDK数据库测量；SDK图像运输由UI12另验。
 
@@ -77,13 +93,13 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 [完成回执](../artifacts/computer-use/windows-renderer-canvas-final/completed.json)exitCode=0，无cleanup-error；[只读退出复查](../artifacts/computer-use/windows-renderer-canvas-final/cleanup-verification.json)中171个采样PID+出生身份均不再运行。[故障时间线](../artifacts/computer-use/windows-renderer-canvas-final/fault-trace.json)保留每次暂停、终止、停止、启动与继续采集。
 
-![最终Windows长稳资源趋势](../artifacts/computer-use/windows-renderer-canvas-final/resource-trend.png)
+![历史640×360 Edge长稳资源趋势](../artifacts/computer-use/windows-renderer-canvas-final/resource-trend.png)
 
-链路为同一Windows来宾内：640×360、33ms带时间戳动画→最终native CaptureBroker→生产Host→生产预览页面canvas→实际Edge解码绘制。[精确输入回执](../artifacts/computer-use/windows-renderer-canvas-final/environment.json)绑定生产源码 `3c924d0`、helper `0eb1fb6a…`、runtime bundle SHA `ef496e8dec5daf16b7110265cfdcb0f065e03ec4d2ab508a5cfa333bf03cf4f2`；运行时由相同源码独立bundle，并非直接启动tgz内整个插件。真正tgz/SDK/WebView2闭环由上一节UI12及安装5单独验证。
+链路为同一Windows来宾内：640×360、33ms带时间戳动画→该代native CaptureBroker→生产Host→生产预览页面canvas→实际Edge解码绘制。[精确输入回执](../artifacts/computer-use/windows-renderer-canvas-final/environment.json)绑定生产源码 `3c924d0`、helper `0eb1fb6a…`、runtime bundle SHA `ef496e8dec5daf16b7110265cfdcb0f065e03ec4d2ab508a5cfa333bf03cf4f2`；运行时由相同源码独立bundle，并非直接启动tgz内整个插件。该代tgz/SDK/WebView2功能闭环由上一节明确标记的历史UI12及安装5单独验证，不能移作新helper的长稳结论。
 
 门槛未放宽：≥10完整时段唯一帧/秒，源时钟到完成绘制P95≤500ms，0坏/过旧时间戳，5次受控helper终止后显式重启，0逐帧附件写入；Node RSS≤512MiB，整个自有进程树 WorkingSet sum≤**1,610,612,736字节**，直接native≤1、native树≤4。进程统计包含采样PowerShell/conhost，按同快照PID+创建时间排除PID复用；精确测试helper路径保留孤儿。PrivatePageCount只是原始观察，不另设阈值，WS被trim不能证明私有提交回收。
 
-这不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
+原生WebView2＋1280×720首轮30秒实测因完整壁钟FPS和清理失败，详细结果见前段；修正runner后的短测及正式30分钟尚待结果。这份历史Edge报告不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
 
 ### 首轮完整renderer：failed，保留原记录
 
@@ -115,24 +131,32 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 - 原PrintWindow长稳约1,239秒超时，已隔离为无输入权的capture child；2.5秒超时后须1.5秒内确认退出，最多重试一次只读截图，不重放输入。集成8项、14个真实子进程故障断言、20个不同动画帧通过。
 - [采集组件30分钟](../artifacts/computer-use/windows-native-endurance-final/report.json)：1,800.052秒、20,742唯一帧、11.523FPS、采样父/worker私有内存增长4,988,928字节。平均RPC23.2521ms，最大6,420.2101ms，长尾保留。绑定早期helper `86ca7106…`，CaptureBroker此后未改，但不冒充最终包全量长稳。
-- Windows拖动期间曾因整窗避让隐藏控制栏，已改为实际指针/路径避让、无安全位置在mouse-down前拒绝；最终52项有持续可见性采样。
-- 暂停释放曾两轮P95约1秒；QPC与独立OS观察定位至同线程hook阻塞SendInput，已改专用hook消息线程及有界清理线程，最终30次mouse-up P95 21.7592ms。两条历史失败保留，首个requestToBothReplies仍约1.7秒，不与真正OS释放时间混淆。
+- Windows拖动期间曾因整窗避让隐藏控制栏，已改为实际指针/路径避让、无安全位置在mouse-down前拒绝；该代52项有持续可见性采样。
+- 暂停释放曾两轮P95约1秒；QPC与独立OS观察定位至同线程hook阻塞SendInput，已改专用hook消息线程及有界清理线程，该次30次mouse-up P95 21.7592ms。两条历史失败保留，首个requestToBothReplies仍约1.7秒，不与真正OS释放时间混淆。
 
-### x64实际宿主的置顶失败：尚未修复
+### 置顶失败的诊断链、生产修复与待完成的新包验收
 
 三次实际宿主测试均保留。首次激活前置拒绝点击，缺少当时hit的完整证据，不能事后定因；第二次Continue超时没有及时捕获原始Host状态，不能用第三次成功替代原因。第三次实际达到主Agent带图/move、暂停/继续/接管，但预览WS_EX_TOPMOST=false，点击目标后目标成为前台，footer被遮挡而安全拒绝；文件交换8MiB和安装5仍分别通过。
 
 [实际安装helper哈希](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/actual-installed-helper-hashes.json)及[隔离源码复建](../artifacts/computer-use/windows-native-source-binding/report.json)确认精确3b2二进制。源码重建须保留SDK嵌入的原SourceRevisionId，不能把新Git元数据导致的SHA变化当旧代码证据。[纯Win32/UIA最小静态对照](../artifacts/computer-use/windows-preview-topmost-direct/report.json)两架构始终topmost=true，故只说明静态初始化和该组UIA动作不复现，不代表真实Host缺陷已修。后续[首次显示时间线](../artifacts/harness-e2e/windows-x64-first-show-timeline-diagnostic/window-timeline-summary.json)在8秒中采样276次，首次hidden与首次visible均为0x10100；最大间隙148.6ms，不能排除间隙内短暂状态。
 
-进一步[独立原生诊断副本](../artifacts/harness-e2e/windows-x64-native-present-trace-diagnostic/native-presentation-summary.json)记录34条事件：preview字段和managed TopMost均为true，同一STA/WinForms线程；SetWindowPos返回true/error0，但即时及下一消息轮的原生style仍为0x10100。该次置顶请求没有实现，未观察到先置顶再由UIA/导航撤销。WINDOWPOS在base.WndProc前已出现具体insertAfter HWND，Windows可规范化该参数，不能凭此指认外部hook。诊断包0985275e…仅替换原54f包的helper和manifest，**不能算生产包新验收**；当前继续检查启动、前台及进程上下文，缺陷尚未修复。
+进一步[独立原生诊断副本](../artifacts/harness-e2e/windows-x64-native-present-trace-diagnostic/native-presentation-summary.json)记录34条事件：preview字段和managed TopMost均为true，同一STA/WinForms线程；SetWindowPos返回true/error0，但即时及下一消息轮的原生style仍为0x10100。该次置顶请求没有实现，未观察到先置顶再由UIA/导航撤销。WINDOWPOS在base.WndProc前已出现具体insertAfter HWND，Windows可规范化该参数，不能凭此指认外部hook。诊断包0985275e…仅替换原54f包的helper和manifest，**不能算生产包新验收**。随后只改变preview的CreateParams、在句柄创建时声明WS_EX_TOPMOST的[诊断候选](../artifacts/harness-e2e/windows-x64-createparams-ui12-experiment/experiment-summary.json)实际12/12通过，首次观察与手动点击目标后均置顶；候选含诊断代码，其成功不能直接记为正式包通过。
 
-原生52项的overlap setup会显式SetWindowPos(-1)，隐藏启动5项主要检查可见性，因此不能覆盖这里“真实宿主初始/接管后始终置顶”的缺口。
+生产已采用该创建参数修复，并从 `4dcb3af` 重建无诊断代码的ARM64 `42889f9c…` / x64 `3f0073ba…`，[构建回执及输入清单](../artifacts/computer-use/windows-native-pinning-final-build/receipt.json)保留版本元数据与哈希。上一代正式包ARM64 `0d341525…` [首次](../artifacts/harness-e2e/windows-pinning-arm64-activation-failure/report.json)因激活前置失败为11/12；[第二轮](../artifacts/harness-e2e/windows-pinning-arm64-archive-menu-failure/report.json)仍11/12，但电脑功能case9通过，包含两次原生置顶观察、中文输入、主Agent及真实人工预览动作，唯一失败转为case10批量归档菜单。x64 `db8bdccc…` [该轮](../artifacts/harness-e2e/windows-pinning-x64-activation-failure/report.json)因激活前置拒绝为11/12。这些包的安装恢复各5/5通过，但各旧报告不能替代当前包验收；当前ARM64和x64已各另行12/12及安装5/5通过。
+
+历史原生52项的overlap setup会显式SetWindowPos(-1)，隐藏启动5项主要检查可见性，因此不能独立替代真实宿主初始及接管后的置顶观察。当前ARM64正式PE的52项与隐藏启动5项已重跑通过；x64正式PE经只读排空stdout复核52/52通过、真实x64 Node隐藏5项通过，原生首轮37项失败保留。当前ARM64与x64新包Host各12/12及安装各5/5通过。
+
+### 批量归档无关刷新关闭菜单：独立复现并修复
+
+[可控复现](../artifacts/computer-use/bulk-archive-refresh-repro/report.json)使用生产DOM适配器：所选ID、标题和语言不变，仅调用订阅refresh，菜单消失但两行仍选中且无归档调用。SDK会因会话状态/投影/活动变化发布该列表通知，因此这是独立可复现的产品缺陷；本次Windows菜单失败未记录同一时刻的回调时间线，不能称其为唯一已证原因。
+
+修复 `0b5396e` 记录所选ID/标题、菜单展示文案及已有失败详情签名；reconcile后签名不变保留原菜单和焦点，成员失效、所选标题或展示语言变化仍关闭，busy队列语义保持。[先红日志](../artifacts/computer-use/bulk-archive-refresh-repro/regression-before-fix.log)中新增回归确实失败；[修复后22/22](../artifacts/computer-use/bulk-archive-refresh-repro/regression-after-fix.log)和[类型检查](../artifacts/computer-use/bulk-archive-refresh-repro/typecheck.log)通过。当前ARM64 `5609bc04…` 与x64 `95f0c9b9…` 新包已各实际Host12/12及安装5/5通过。这证明两架构各该轮修复后通过，仍不能倒推原Windows失败的唯一触发源。
 
 ## 6. Mac失败、阻塞及未覆盖范围
 
 [Mac完整30分钟旧报告](../artifacts/computer-use/macos-soak-fixed/report.json)是 **failed**：1,800,796ms、19,691有效唯一帧、892无效/过旧时间戳、5次受控终止、0附件写入；即使P95 104ms或旧uniqueFPS达标也不能改判通过。源时间戳冻结在2026-10-20 18:02:33.511 UTC，与pmset显示器熄灭同秒，证据在 `environment-interruption/`。fixture已增加仅生命周期内的防显示器闲置休眠断言与draw遥测；没有修改全局电源或登录设置。修复后短测仍失败，最新桌面锁屏，完整重验blocked。
 
-最近[预检](../artifacts/computer-use/preflight-after-x64-diagnostics/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5、Chrome17不替代它。
+最近[预检](../artifacts/computer-use/preflight-during-final-pinning-validation/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5项、共享Chromium预览17项及Chrome通道10项均不替代它。
 
 | 未完成验收 | 状态 | 前提/范围 |
 | --- | --- | --- |
@@ -153,11 +177,11 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 | 资产 | 字节数 | SHA256 |
 | --- | ---: | --- |
-| `dsh-qiuya-tools-darwin-universal.tgz` | 721,180 | `e528ed9663494d34fd133778ac4ec14442bb6528ba29a659dc6744f0b3d3c679` |
-| `dsh-qiuya-tools-win32-arm64.tgz` | 62,725,509 | `ab9d9b12c2757b0ee717c2f091e75d11669724df1bd9bbd46de93f47287c3f20` |
-| `dsh-qiuya-tools-win32-x64.tgz` | 66,978,296 | `54f25c87ed911ed91b293646c19da2b08dee518003dc514969c739308af176e7` |
+| `dsh-qiuya-tools-darwin-universal.tgz` | 721,303 | `58126d4a95cb9e28962b31f4144259c315eb1a6a403478d3549ef8db343a09d2` |
+| `dsh-qiuya-tools-win32-arm64.tgz` | 62,725,649 | `5609bc04963b13be517c5187821343c71c4bd5747a3dc5138e811a083a1bff14` |
+| `dsh-qiuya-tools-win32-x64.tgz` | 66,978,457 | `95f0c9b968f9e5464b71d64e505804ecefe1ac2c1cd06abc48e1f55a79328604` |
 
-这些是Harness插件tgz，不是独立OS安装器。Windows最终用户不需要.NET开发SDK，WebView2 Runtime前提及命令见 [安装指南](computer-use-guide.md)。[原生与依赖manifest](../artifacts/delivery-manifest.json)绑定精确资产，历史包另存 `artifacts/pre-memory-candidate/`。
+这些是Harness插件tgz，不是独立OS安装器。Windows最终用户不需要.NET开发SDK，WebView2 Runtime前提及命令见 [安装指南](computer-use-guide.md)。[原生与依赖manifest](../artifacts/delivery-manifest.json)绑定精确资产，置顶修复前的包和helper另存 [pre-pinning-candidate](../artifacts/pre-pinning-candidate/preservation.json)，正式置顶但批量菜单修复前的包另存 [pre-bulk-menu-candidate](../artifacts/pre-bulk-menu-candidate/preservation.json)；更早候选保留于 `artifacts/pre-memory-candidate/`。
 
 核心复现入口：
 
@@ -171,7 +195,7 @@ node scripts/test-harness-install.mjs --package /absolute/candidate.tgz --old-pa
 
 Windows PD入口：[原生runner](../scripts/test-windows-native-pd.mjs)、[宿主与安装runner](../scripts/e2e-windows-harness-pd.mjs)、[长稳runner](../scripts/soak-windows-pd.mjs)、[跨电脑文件](../scripts/e2e-windows-exchange-pd.mjs)。长稳与GUI测试的短租约必须按已导出的guest测量起点协调，避免互相抢桌面。
 
-最终真实窗口证据：
+历史 `ab9d9b12…` 包的真实窗口证据（不是当前新包的UI复验）：
 
 ![Windows实际悬浮预览](../artifacts/harness-e2e/windows-canvas-final/manual-preview-window.jpg)
 
