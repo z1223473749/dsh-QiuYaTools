@@ -89,6 +89,8 @@ try {
   [void](Good $computer 'act' @{epoch=1;targetId=$target.id;action=@{kind='click';x=$point.x;y=$point.y}})
   Start-Sleep -Milliseconds 180
   Assert ((Fixture-State).clicks -eq 1) 'WIN-NATIVE-CLICK-01'
+  $cursorFrame=Good $computer 'observe' @{targetId=$target.id;preview=$true}
+  Assert ($cursorFrame.cursor.visible -and [Math]::Abs($cursorFrame.cursor.x-$point.x) -le 1 -and [Math]::Abs($cursorFrame.cursor.y-$point.y) -le 1) 'WIN-NATIVE-LIVE-CURSOR-LOCAL-01' $cursorFrame.cursor
   $point=Element-Point $observed 'Fixture text input'
   [void](Good $computer 'act' @{epoch=1;targetId=$target.id;action=@{kind='click';x=$point.x;y=$point.y}})
   $text='QiuYa '+[char]0x4E2D+[char]0x6587+[char]::ConvertFromUtf32(0x1F642)+"`r`nline2"
@@ -220,6 +222,9 @@ try {
   Assert (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0) 'WIN-OLD-CLEANUP-PRESERVES-NEW-DOWN-01'
   $done=Read-Reply $competitor $newDrag;Assert $done.ok 'WIN-NEW-OWNER-DRAG-COMPLETES-01'
   [void](Good $competitor 'release' @{epoch=2})
+  [void][FixtureNative]::SetCursorPos(2,2)
+  $outsideCursor=Good $competitor 'observe' @{targetId=$target.id;preview=$true}
+  Assert (!$outsideCursor.cursor.visible) 'WIN-NATIVE-CURSOR-OUTSIDE-HIDDEN-01' $outsideCursor.cursor
   $result=@{passed=$true;checks=$checks;sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId;architecture=$status.architecture;events=$events.Count;uiaAttempts=$uiaAttempts;cursorProbe=$cursorProbe;unverified=@('physical HID click on own preview during drag');runtime='self-contained; WebView2 Evergreen system runtime'}
 } catch {
   $result=@{passed=$false;checks=$checks;error=$_.Exception.Message;trace=$_.ScriptStackTrace}

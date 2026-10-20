@@ -73,13 +73,20 @@ internal sealed class DesktopLeaseGuard : IDisposable
         } finally { try { File.Delete(temporary); } catch (IOException) { } }
     }
 
+    private Journal? ReadJournal()
+    {
+        // An obsolete owner's readonly probe must not block the current owner's atomic replacement.
+        using var stream = new FileStream(journalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > 1_048_576) throw new JsonException();
+        return JsonSerializer.Deserialize<Journal>(stream);
+    }
+
     private void RecoverJournal(string? expectedOwner)
     {
         if (!File.Exists(journalPath)) return;
         Journal? journal;
         try {
-            if (new FileInfo(journalPath).Length > 1_048_576) throw new JsonException();
-            journal = JsonSerializer.Deserialize<Journal>(File.ReadAllBytes(journalPath));
+            journal = ReadJournal();
             if (journal is not { Version: 1 } || !Guid.TryParseExact(journal.OwnerId, "N", out _) || journal.Keys == null || journal.Keys.Length > 32 || journal.Keys.Any(key => key > 255)
                 || journal.MouseButtons == null || journal.MouseButtons.Length > 3 || journal.MouseButtons.Any(button => button is not (0x0004 or 0x0010 or 0x0040))
                 || journal.UnicodeUnits == null || journal.UnicodeUnits.Length > 65_536) throw new JsonException();
@@ -138,10 +145,8 @@ internal sealed class DesktopLeaseGuard : IDisposable
             // An old Host cleanup must never send key-ups into a newer lease. Atomic
             // journals can be read without the lock solely to establish a different owner.
             try {
-                if (new FileInfo(guard.journalPath).Length <= 1_048_576) {
-                    var journal = JsonSerializer.Deserialize<Journal>(File.ReadAllBytes(guard.journalPath));
-                    if (journal is { Version: 1 } && Guid.TryParseExact(journal.OwnerId, "N", out _) && !string.Equals(journal.OwnerId, ownerId, StringComparison.Ordinal)) return;
-                }
+                var journal = guard.ReadJournal();
+                if (journal is { Version: 1 } && Guid.TryParseExact(journal.OwnerId, "N", out _) && !string.Equals(journal.OwnerId, ownerId, StringComparison.Ordinal)) return;
             } catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { }
             throw;
         }

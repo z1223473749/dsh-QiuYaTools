@@ -95,7 +95,8 @@ internal sealed class ComputerDriver : IDisposable
         var after = Target(targetId);
         if (after.Rect != target.Rect) throw new NativeFailure("geometry-changed", "Target moved while observing");
         observations[targetId] = target.Rect;
-        return new { targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
+        var cursorPosition = Cursor.Position;
+        return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
     }
     private static byte[] Capture((IntPtr Handle, Rectangle Rect) target)
     {
@@ -381,6 +382,7 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(IntPtr handle);
     [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetForegroundWindow(IntPtr handle);
+    [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetWindowPos(IntPtr handle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PrintWindow(IntPtr handle, IntPtr context, uint flags);
     [DllImport("user32.dll", SetLastError = true)] internal static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [StructLayout(LayoutKind.Sequential)] internal struct RECT { internal int Left, Top, Right, Bottom; internal readonly int Width => Right - Left; internal readonly int Height => Bottom - Top; }

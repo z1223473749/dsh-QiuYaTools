@@ -47,7 +47,7 @@ internal sealed class WindowManager : IDisposable
         window.Position(request);
         // A preparation receipt does not wait for in-page readiness, so Escape remains cancellable.
         _ = window.Initialize();
-        if (op == "open") { window.Show(); window.Activate(); return Deferred; }
+        if (op == "open") { window.Present(true); return Deferred; }
         await Task.CompletedTask;
         return new { prepared = true };
     }
@@ -56,7 +56,7 @@ internal sealed class WindowManager : IDisposable
         var id = Program.Text(request, "sessionId", 1024);
         var url = ValidateUrl(Program.Text(request, "url", 32768));
         var title = Program.Text(request, "title", 20_000);
-        if (previews.TryGetValue(id, out var existing)) { existing.Show(); existing.Activate(); return new { opened = true }; }
+        if (previews.TryGetValue(id, out var existing)) { existing.Present(true); return new { opened = true }; }
         CheckRuntime();
         var window = new BrowserWindow(id, url, title, "preview-runtime", false, preview: true);
         previews[id] = window;
@@ -66,7 +66,7 @@ internal sealed class WindowManager : IDisposable
         };
         await window.Initialize();
         if (window.Failed) throw new NativeFailure("preview-failed", "Preview could not load");
-        window.Show();
+        window.Present(false);
         return new { opened = true };
     }
     internal object ClosePreview(JsonElement request)
@@ -130,7 +130,7 @@ internal sealed class BrowserWindow : Form
     }
     private sealed class RestorePreviews(List<BrowserWindow> windows) : IDisposable
     {
-        public void Dispose() { foreach (var window in windows) if (!window.IsDisposed && !window.Failed) window.Show(); }
+        public void Dispose() { foreach (var window in windows) if (!window.IsDisposed && !window.Failed) window.Present(false); }
     }
     internal bool Failed { get; private set; }
     private bool ready;
@@ -163,7 +163,17 @@ internal sealed class BrowserWindow : Form
     {
         Prepared = false; Position(request); AddWaiting(requestId);
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-        Show(); Activate(); if (!ready) { deadline.Stop(); deadline.Start(); }
+        Present(true); if (!ready) { deadline.Stop(); deadline.Start(); }
+    }
+    internal void Present(bool activate)
+    {
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Show();
+        // Node windowsHide supplies STARTUPINFO/SW_HIDE. Force only this explicitly requested
+        // GUI window visible while keeping the companion's console hidden.
+        if (!Native.SetWindowPos(Handle, preview ? new IntPtr(-1) : IntPtr.Zero, 0, 0, 0, 0, 0x0040 | 0x0001 | 0x0002 | 0x0010))
+            throw new NativeFailure("window-presentation-failed", "Windows could not display the requested window");
+        if (activate) Activate();
     }
     internal async Task Initialize()
     {
