@@ -69,3 +69,44 @@ test('owner panel selects a real local file, uploads only basename/bytes and dow
     for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]
   }
 })
+
+test('switching environments during a real asynchronous digest sends no old file metadata to the new device', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://127.0.0.1/' })
+  const saved = new Map(['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
+  const subtle = crypto.subtle, ownDigest = Object.getOwnPropertyDescriptor(subtle, 'digest'), realDigest = subtle.digest
+  let release, entered = false
+  const barrier = new Promise(done => { release = done })
+  Object.defineProperty(subtle, 'digest', { configurable: true, value: async (...args) => { const result = await realDigest.apply(subtle, args); entered = true; await barrier; return result } })
+  const requests = [], ctx = { get(name) {
+    if (name === 'sessions') return { list: { getSnapshot: () => ({ ids: [], byId: {} }) } }
+    if (name === 'connection') return { rpc: { async call(_channel, _endpoint, input) {
+      requests.push(input)
+      if (input.op === 'status') return { ok: true, value: { sessions: [], allowedApps: [], native: { mode: 'remote' } } }
+      if (input.op === 'exchange') return { ok: true, value: { enabled: true, files: [], maxBytes: 8388608, chunkBytes: 131072 } }
+      throw new Error('Unexpected UI operation')
+    } } }
+  } }
+  const root = createRoot(dom.window.document.querySelector('#root'))
+  const waitFor = async predicate => { const until = Date.now() + 5000; while (!predicate()) { if (Date.now() > until) throw new Error('UI digest fixture timed out'); await act(() => new Promise(done => setTimeout(done, 5))) } }
+  try {
+    await act(async () => root.render(React.createElement(ComputerPanel, { ctx, enabled: true, onEnabled() {}, disabled: false })))
+    const select = dom.window.document.querySelector('select')
+    await act(async () => { select.value = 'remote'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
+    const refresh = [...dom.window.document.querySelectorAll('button')].find(button => button.textContent === '检查并刷新交换目录')
+    await act(async () => refresh.click())
+    const input = dom.window.document.querySelector('input[type=file]')
+    Object.defineProperty(input, 'files', { value: [new File(['private bytes'], 'private-old-device-name.txt')] })
+    await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })))
+    await waitFor(() => entered)
+    await act(async () => { select.value = 'browser'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
+    assert.equal(dom.window.document.body.textContent.includes('手动文件交换'), false)
+    await act(async () => { release(); await new Promise(done => setTimeout(done, 20)) })
+    assert.deepEqual(requests.filter(input => input.op === 'exchange').map(input => input.request.action), ['status', 'list'])
+    assert.equal(JSON.stringify(requests).includes('private-old-device-name.txt'), false)
+  } finally {
+    release(); await act(async () => root.unmount()); dom.window.close()
+    if (ownDigest) Object.defineProperty(subtle, 'digest', ownDigest); else delete subtle.digest
+    for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]
+  }
+})

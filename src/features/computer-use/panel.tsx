@@ -25,6 +25,7 @@ function FileExchangePanel({ call }: { call(op: string, extra?: object): Promise
       if (file.size > 8 * 1024 * 1024) throw new Error('单文件不能超过 8 MiB。')
       const bytes = new Uint8Array(await file.arrayBuffer()), digest = await crypto.subtle.digest('SHA-256', bytes)
       const sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+      if (!mounted.current) throw new Error('文件交换面板已关闭。')
       const begun = await request({ action: 'begin', name: file.name, size: file.size, sha256 }); id = begun.id
       if (!id) throw new Error('远端没有返回上传标识。')
       for (let offset = 0; offset < bytes.length;) {
