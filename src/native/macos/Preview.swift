@@ -6,20 +6,31 @@ import Foundation
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
+@MainActor final class PreviewWebView: WKWebView {
+    // Pause/takeover must work on the first click while another app is active.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
 
 @MainActor final class FloatingPreview: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     let window: NSPanel
     let sessionId: String
     let origin: URL
+    private let destination: URL
+    private var bootstrapping: Bool
+    private(set) var navigationState: [String: Any] = [:]
     private var notifyClose = true
     init(url: URL, title: String, sessionId: String) {
         self.origin = url; self.sessionId = sessionId
+        let navigation = Self.navigationURLs(url)
+        self.destination = navigation.destination
+        self.bootstrapping = navigation.initial != navigation.destination
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = PreviewWebView(frame: .zero, configuration: configuration)
         window = PreviewPanel(contentRect: NSRect(x: 100, y: 100, width: 640, height: 470),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
+        navigationState = ["stage": bootstrapping ? "bootstrap" : "destination", "path": navigation.initial.path]
         window.title = String(title.prefix(160))
         window.level = .floating
         window.hidesOnDeactivate = false
@@ -29,7 +40,7 @@ import Foundation
         window.minSize = NSSize(width: 360, height: 260)
         window.contentView = view
         window.delegate = self; view.navigationDelegate = self; view.uiDelegate = self
-        window.center(); view.load(URLRequest(url: url)); window.makeKeyAndOrderFront(nil)
+        window.center(); view.load(URLRequest(url: navigation.initial)); window.makeKeyAndOrderFront(nil)
     }
     func windowWillClose(_ notification: Notification) {
         if notifyClose { Wire.send(["event": "previewClosed", "sessionId": sessionId]) }
@@ -74,6 +85,49 @@ import Foundation
               url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port,
               url.user == nil, url.password == nil else { decisionHandler(.cancel); return }
         decisionHandler(.allow)
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationState["finishedPath"] = webView.url?.path ?? ""
+        webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
+            self?.navigationState["cookieCount"] = cookies.count
+        }
+        continueAfterBootstrap(webView)
+    }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // The full Harness root may wait on asynchronous Client module startup
+        // before didFinish. The committed clean-root document already owns the
+        // exchanged cookie; leave immediately instead of booting another UI.
+        continueAfterBootstrap(webView)
+    }
+    private func continueAfterBootstrap(_ webView: WKWebView) {
+        guard bootstrapping, let url = webView.url, url.path == "/",
+              URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "token" }) != true else { return }
+        // Harness exchanges its launch token only on the root index. Its 303
+        // strips the token and installs an owner cookie in this private store;
+        // API preview routes then use that cookie, never a query credential.
+        bootstrapping = false
+        navigationState["stage"] = "destination"
+        // Keep a same-origin document initiator for Harness's SameSite=Strict
+        // cookie. A second native load is treated as a new external navigation
+        // by WebKit and can omit that cookie from the API request.
+        guard let data = try? JSONSerialization.data(withJSONObject: destination.absoluteString, options: [.fragmentsAllowed]),
+              let literal = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.location.replace(\(literal))", completionHandler: nil)
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
+            navigationState["path"] = response.url?.path ?? ""
+            navigationState["httpStatus"] = response.statusCode
+        }
+        decisionHandler(.allow)
+    }
+    static func navigationURLs(_ url: URL) -> (initial: URL, destination: URL) {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let token = components.queryItems?.first(where: { $0.name == "token" }) else { return (url, url) }
+        components.queryItems = components.queryItems?.filter { $0.name != "token" }
+        let destination = components.url ?? url
+        components.path = "/"; components.queryItems = [token]; components.fragment = nil
+        return (components.url ?? url, destination)
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
     static func validatedURL(_ raw: Any?) throws -> URL {

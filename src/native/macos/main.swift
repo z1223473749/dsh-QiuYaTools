@@ -89,7 +89,8 @@ import ScreenCaptureKit
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
                 "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing"],
-                "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState])
+                "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
+                "preview": preview?.navigationState as Any? ?? NSNull()])
             return
         }
         if op == "closePreview" {

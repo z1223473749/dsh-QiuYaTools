@@ -24,6 +24,9 @@ import Foundation
         precondition(shortcut.0 == 0)
         do { _ = try parseKey("INVALID+RETURN"); preconditionFailure("Invalid modifier accepted") } catch {}
         _ = try FloatingPreview.validatedURL("http://127.0.0.1:3210/preview")
+        let navigation = FloatingPreview.navigationURLs(URL(string: "http://127.0.0.1:3210/api/preview?session=fixture&token=local-test")!)
+        precondition(navigation.initial.path == "/" && navigation.initial.query == "token=local-test", "Launch token must exchange at root")
+        precondition(navigation.destination.path == "/api/preview" && navigation.destination.query == "session=fixture", "API destination must drop launch token")
         for url in ["https://example.com", "http://127.0.0.1.evil:3000/", "file:///tmp/x", "http://user:pass@localhost:4000/", "http://localhost/"] {
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }

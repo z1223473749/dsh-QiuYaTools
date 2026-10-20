@@ -26,7 +26,14 @@ newer lease.
 
 The floating WebKit preview accepts only HTTP loopback URLs with explicit ports,
 blocks navigation to another origin, and uses an ephemeral data store. It stays
-interactive during actions. If it overlaps a requested click or drag path it
+interactive during actions and accepts the first click while another app has
+focus. Harness launch URLs first exchange their token at the root index. Once
+the clean root document commits, it navigates to the preview from that document
+so the API receives the same private store's owner cookie. The token is removed
+from the destination URL. Status exposes only navigation paths, HTTP status and
+cookie count for diagnosis, never credential values.
+
+If the preview overlaps a requested click or drag path it
 moves to an available display corner; if necessary it uses a smaller preview
 size. If no placement avoids the path, the action fails with `PREVIEW_OVERLAP`.
 Keyboard input is delivered to the target process, with Unicode/modifier state
@@ -48,6 +55,15 @@ and keyboard input, overlap relocation, live WebKit preview, drag cancellation,
 physical preview intervention, held-button release and stale-input rejection.
 The E2E script reports missing permissions without changing them. It never uses
 normal Harness profiles or existing account credentials.
+
+`scripts/e2e-harness.mjs` additionally runs the installed Harness CLI with a fresh
+`DSH_HOME`, the candidate plugin, a deterministic local model and a disposable
+Chrome profile. It verifies the main Agent's actual observe/action/observe tool
+receipts and incoming adapter image blocks. Its floating-window evidence uses
+ScreenCaptureKit, Vision OCR and physical pointer clicks on the preview's own
+controls; `HarnessWindowEvidence.swift` is a test fixture, not a shipped helper.
+This proves local transport and Host/UI integration, without claiming external
+vision-model reasoning or access to a user's existing model credentials.
 
 The real fixture was exercised on macOS 26 / Apple Silicon. Intel was compiled,
 not executed on Intel hardware. macOS 13 runtime behavior, particularly the
