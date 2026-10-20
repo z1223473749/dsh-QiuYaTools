@@ -4,10 +4,10 @@ import { build } from 'esbuild'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const directory = await mkdtemp(join(tmpdir(), 'qiuya-computer-native-'))
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/native.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/native.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { NativeCompanionDriver, computerCompanionPath } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 test.after(() => rm(directory, { recursive: true, force: true }))
 const script = join(directory, 'fixture.cjs'), records = join(directory, 'requests.jsonl')

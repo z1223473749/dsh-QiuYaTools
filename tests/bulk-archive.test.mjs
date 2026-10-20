@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -8,7 +9,7 @@ import { JSDOM } from 'jsdom'
 const bundle = await build({
   stdin: {
     contents: "export * from './src/features/bulk-archive/dom.ts'; export * from './src/features/bulk-archive/model.ts'; export * from './src/features/bulk-archive/locales.ts'; export * from './src/features/bulk-archive/index.ts'",
-    resolveDir: new URL('..', import.meta.url).pathname,
+    resolveDir: fileURLToPath(new URL('..', import.meta.url)),
     loader: 'ts',
   },
   bundle: true, write: false, platform: 'node', format: 'cjs', target: 'node22',

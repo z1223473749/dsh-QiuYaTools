@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -6,7 +7,7 @@ import { createRequire } from 'node:module'
 import * as sdk from '@deepseek-ai/dsh-tools'
 import { Context } from '@deepseek-ai/cordis'
 
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/tools.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/tools.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external' })).outputFiles[0].text
 const module = { exports: {} }, require = createRequire(import.meta.url)
 vm.runInNewContext(source, { module, exports: module.exports, Buffer, URL, require: id => id === '@deepseek-ai/dsh-tools' ? sdk : require(id) })
 const { installComputerTools } = module.exports

@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
 
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/session.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/session.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { ComputerSessionService } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 function fixture() {

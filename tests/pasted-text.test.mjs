@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
@@ -7,7 +8,7 @@ import { build } from 'esbuild'
 
 const require = createRequire(import.meta.url)
 const compiled = await build({
-  entryPoints: [new URL('../src/features/pasted-text/index.tsx', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../src/features/pasted-text/index.tsx', import.meta.url))],
   bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs', packages: 'external',
 })
 const module = { exports: {} }

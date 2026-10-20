@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
@@ -23,7 +24,7 @@ settingsStyle.textContent = '.harness-options { overflow-y: auto; }\n' + readFil
 document.head.append(settingsStyle)
 
 const compiled = await build({
-  entryPoints: [new URL('../src/client/index.tsx', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../src/client/index.tsx', import.meta.url))],
   bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs', packages: 'external',
   jsx: 'transform', loader: { '.css': 'text' },
   plugins: [{

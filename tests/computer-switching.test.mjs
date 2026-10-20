@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
 
-const source = (await build({ stdin: { contents: 'export { installComputerHost } from "./src/features/computer-use/host.ts";export { ComputerDriverRouter } from "./src/features/computer-use/driver-router.ts";', resolveDir: new URL('../', import.meta.url).pathname, sourcefile: 'computer-switching-fixture.ts' }, bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ stdin: { contents: 'export { installComputerHost } from "./src/features/computer-use/host.ts";export { ComputerDriverRouter } from "./src/features/computer-use/driver-router.ts";', resolveDir: fileURLToPath(new URL('../', import.meta.url)), sourcefile: 'computer-switching-fixture.ts' }, bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { installComputerHost, ComputerDriverRouter } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 

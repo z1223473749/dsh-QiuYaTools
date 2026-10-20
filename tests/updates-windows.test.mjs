@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { gzipSync } from 'node:zlib'
@@ -5,7 +6,7 @@ import { build } from 'esbuild'
 import { createHash } from 'node:crypto'
 
 async function load(path) {
-  const result = await build({ entryPoints: [new URL(path, import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })
+  const result = await build({ entryPoints: [fileURLToPath(new URL(path, import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 }
 const { windowsExecutableArchitecture, validateUpdateArchive } = await load('../src/updates/archive.ts')

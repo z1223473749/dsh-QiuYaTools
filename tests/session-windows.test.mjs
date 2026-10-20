@@ -17,11 +17,11 @@ import { SESSION_WINDOW_APP_NAME, SESSION_WINDOW_BUNDLE_ID, sessionWindowAppInfo
 
 const root = new URL('../', import.meta.url)
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-session-window-test-'))
-const source = (await build({ entryPoints: [new URL('src/features/session-windows/contract.ts', root).pathname], bundle: true, write: false, platform: 'node', format: 'cjs' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('src/features/session-windows/contract.ts', root))], bundle: true, write: false, platform: 'node', format: 'cjs' })).outputFiles[0].text
 const contractModule = { exports: {} }
 vm.runInNewContext(source, { module: contractModule, exports: contractModule.exports })
 const contract = contractModule.exports
-await build({ entryPoints: [new URL('src/features/session-windows/host.ts', root).pathname], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
+await build({ entryPoints: [fileURLToPath(new URL('src/features/session-windows/host.ts', root))], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
 const { SessionWindowCompanion, installSessionWindowsHost, sessionWindowStoreIdentifier } = await import(pathToFileURL(join(temporary, 'host.mjs')).href)
 const fixtureDirectory = join(temporary, SESSION_WINDOW_APP_NAME, 'Contents', 'MacOS')
 await mkdir(fixtureDirectory, { recursive: true })
@@ -175,7 +175,7 @@ test('a cancel arriving during preparation validation prevents a late hidden win
   } finally { dispose() }
 })
 
-const clientSource = (await build({ entryPoints: [new URL('src/features/session-windows/index.tsx', root).pathname], bundle: true, write: false, platform: 'browser', format: 'cjs', packages: 'external' })).outputFiles[0].text
+const clientSource = (await build({ entryPoints: [fileURLToPath(new URL('src/features/session-windows/index.tsx', root))], bundle: true, write: false, platform: 'browser', format: 'cjs', packages: 'external' })).outputFiles[0].text
 const require = createRequire(import.meta.url)
 function dragHarness() {
   const dom = new JSDOM('<body><div role="tree"><div data-row-key="session:A" draggable="true"></div><div data-row-key="session:B"></div></div><main id="conversation"></main></body>', { url: 'https://local.invalid/' })

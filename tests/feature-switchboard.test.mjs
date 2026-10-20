@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -7,7 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
 const compiled = await build({
   stdin: {
     contents: "export * from './src/client/feature-switchboard.ts'; export * from './src/shared.ts';",
-    resolveDir: new URL('../', import.meta.url).pathname, loader: 'ts',
+    resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts',
   },
   bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs',
 })

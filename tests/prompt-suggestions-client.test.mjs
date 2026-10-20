@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -7,7 +8,7 @@ import { JSDOM } from 'jsdom'
 
 const root = new URL('../', import.meta.url)
 const compiled = (await build({
-  entryPoints: [new URL('src/features/prompt-suggestions/client.ts', root).pathname],
+  entryPoints: [fileURLToPath(new URL('src/features/prompt-suggestions/client.ts', root))],
   bundle: true, write: false, platform: 'node', format: 'cjs', target: 'node22',
 })).outputFiles[0].text
 const css = await readFile(new URL('src/features/prompt-suggestions/styles.css', root), 'utf8')

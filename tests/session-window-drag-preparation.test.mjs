@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import vm from 'node:vm'
@@ -6,7 +7,7 @@ import { build } from 'esbuild'
 import { JSDOM } from 'jsdom'
 
 const require = createRequire(import.meta.url)
-const source = (await build({ entryPoints: [new URL('../src/features/session-windows/index.tsx', import.meta.url).pathname], bundle: true, write: false, platform: 'browser', format: 'cjs', packages: 'external' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/session-windows/index.tsx', import.meta.url))], bundle: true, write: false, platform: 'browser', format: 'cjs', packages: 'external' })).outputFiles[0].text
 
 function fixture() {
   const dom = new JSDOM('<body><div role="tree"><div data-row-key="session:A" draggable="true"></div><div data-row-key="session:B"></div></div><main></main></body>', { url: 'https://local.invalid/' })

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -7,7 +8,7 @@ import { JSDOM } from 'jsdom'
 
 const root = new URL('../', import.meta.url)
 const source = (await build({
-  entryPoints: [new URL('src/client/q-theme.ts', root).pathname],
+  entryPoints: [fileURLToPath(new URL('src/client/q-theme.ts', root))],
   bundle: true, write: false, platform: 'node', format: 'cjs', loader: { '.css': 'text' },
 })).outputFiles[0].text
 const css = await readFile(new URL('src/client/q-theme.css', root), 'utf8')

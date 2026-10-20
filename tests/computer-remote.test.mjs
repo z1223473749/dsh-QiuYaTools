@@ -1,9 +1,10 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { setTimeout as delay } from 'node:timers/promises'
 
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/remote.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/remote.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { RemoteComputerDriver, createComputerAgentServer, computerAgentEndpoint } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 const token = 'test-pair-token-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }

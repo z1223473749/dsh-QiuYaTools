@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
@@ -7,7 +8,7 @@ import { build } from 'esbuild'
 
 const root = new URL('../', import.meta.url)
 const source = (await build({
-  entryPoints: [new URL('src/updates/archive.ts', root).pathname],
+  entryPoints: [fileURLToPath(new URL('src/updates/archive.ts', root))],
   bundle: true, write: false, platform: 'node', format: 'esm',
 })).outputFiles[0].text
 const { validateUpdateArchive } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)

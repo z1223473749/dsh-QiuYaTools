@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
@@ -16,7 +17,7 @@ Object.assign(globalThis, {
 const { createRoot } = require('react-dom/client')
 const { Simulate } = require('react-dom/test-utils')
 const compiled = await build({
-  entryPoints: [new URL('../src/client/about.tsx', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../src/client/about.tsx', import.meta.url))],
   bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs', packages: 'external',
   jsx: 'transform', loader: { '.css': 'text' },
   plugins: [{ name: 'inline-brand-fixture', setup(builder) {

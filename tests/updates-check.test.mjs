@@ -1,10 +1,11 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
 import { build } from 'esbuild'
 
 const source = await build({
-  stdin: { contents: "export * from './src/updates/version.ts'; export * from './src/updates/release.ts'; export * from './src/updates/check.ts'", resolveDir: new URL('../', import.meta.url).pathname, loader: 'ts' },
+  stdin: { contents: "export * from './src/updates/version.ts'; export * from './src/updates/release.ts'; export * from './src/updates/check.ts'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' },
   bundle: true, write: false, platform: 'node', target: 'node22', format: 'cjs',
 })
 const module = { exports: {} }

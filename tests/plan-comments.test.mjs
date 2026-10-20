@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { setImmediate } from 'node:timers/promises'
@@ -20,7 +21,7 @@ const built = await build({
       "export { PlanReviewComposer, installPlanComments } from './src/features/plan-comments/index.tsx'",
       "export { en as messages } from './src/features/plan-comments/locales.ts'",
     ].join(';'),
-    resolveDir: new URL('..', import.meta.url).pathname, loader: 'ts',
+    resolveDir: fileURLToPath(new URL('..', import.meta.url)), loader: 'ts',
   },
   write: false, bundle: true, platform: 'node', format: 'cjs', target: 'node22', packages: 'external', jsx: 'automatic',
   plugins: [{ name: 'test-css-modules', setup(builder) {

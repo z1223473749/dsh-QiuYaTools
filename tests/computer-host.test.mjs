@@ -1,9 +1,10 @@
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { Context } from '@deepseek-ai/cordis'
 import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
-const result = await build({ entryPoints: [new URL('../src/features/computer-use/host.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })
+const result = await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/host.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })
 const { installComputerHost } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 function fixture({ enabled = true, owner = true } = {}) {
   const routes = new Map(), actions = [], target = { id: 'fixture:1', appId: 'fixture-app', title: 'Fixture', pid: 10, x: 0, y: 0, width: 100, height: 100, scale: 1 }
