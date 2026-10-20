@@ -108,6 +108,16 @@ internal sealed class BrowserWindow : Form
     private readonly List<object> waiting = new();
     internal bool IsPreview => preview;
     protected override bool ShowWithoutActivation => preview;
+    protected override CreateParams CreateParams
+    {
+        get {
+            var parameters = base.CreateParams;
+            // Declare the native style when the handle is created. A successful
+            // later SetWindowPos did not apply TOPMOST in the hidden-startup Host regression.
+            if (preview) parameters.ExStyle |= 0x00000008; // WS_EX_TOPMOST
+            return parameters;
+        }
+    }
     internal bool Prepared { get; private set; }
     internal static void UncoverPointer(IReadOnlyList<Point> trajectory)
     {
