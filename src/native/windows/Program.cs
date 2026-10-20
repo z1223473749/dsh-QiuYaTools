@@ -16,6 +16,10 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        if (args.Contains("--capture-worker-test")) { CaptureSelfTest.Worker(args); return; }
+        if (args.Contains("--capture-parent-test")) { CaptureSelfTest.Parent(); return; }
+        if (args.Contains("--capture-worker")) { CaptureBroker.RunWorker(); return; }
+        if (args.Contains("--self-test-capture")) { Program.Emit(CaptureSelfTest.Run()); return; }
         if (args.Contains("--input-guardian")) { DesktopLeaseGuard.RunGuardian(); return; }
         if (args.Contains("--self-test-input")) { Program.Emit(ComputerDriver.TestReleaseFailures()); return; }
         if (args.Contains("--release-input")) { EmergencyRelease.Run(); return; }

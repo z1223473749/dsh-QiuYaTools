@@ -15,6 +15,7 @@ internal sealed class ComputerDriver : IDisposable
     private readonly object inputLock = new();
     private static readonly SemaphoreSlim accessibilityGate = new(1, 1);
     private readonly SemaphoreSlim captureGate = new(1, 1);
+    private readonly CaptureBroker captureBroker = new();
     private readonly SemaphoreSlim actionGate = new(1, 1);
     private readonly ConcurrentDictionary<string, Rectangle> observations = new();
     private readonly HashSet<ushort> heldKeys = new();
@@ -85,12 +86,11 @@ internal sealed class ComputerDriver : IDisposable
     internal object Observe(string targetId, bool preview = false)
     {
         var target = Target(targetId);
-        // PrintWindow can hang inside another process. Keep its GDI objects owned by one bounded worker;
-        // a timed-out worker retains the gate until it actually exits, so retries never create extra capture threads.
+        // All uninterruptible GDI rendering lives in an input-free child, never the input lease owner.
         if (!captureGate.Wait(0)) throw new NativeFailure("capture-busy", "The previous target capture is still pending");
-        var capture = Task.Run(() => { try { return Capture(target); } finally { captureGate.Release(); } });
-        if (!Task.WhenAny(capture, Task.Delay(2500)).GetAwaiter().GetResult().Equals(capture)) throw new NativeFailure("capture-timeout", "The target did not finish rendering within the capture deadline");
-        var image = capture.GetAwaiter().GetResult();
+        byte[] image;
+        try { image = captureBroker.Capture(targetId); }
+        finally { captureGate.Release(); }
         var elements = preview ? "" : ReadElements(target.Handle);
         var after = Target(targetId);
         if (after.Rect != target.Rect) throw new NativeFailure("geometry-changed", "Target moved while observing");
@@ -118,6 +118,14 @@ internal sealed class ComputerDriver : IDisposable
         encoder.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 75L);
         bitmap.Save(stream, codec, encoder);
         return stream.ToArray();
+    }
+    internal static byte[] CaptureForWorker(string targetId)
+    {
+        var target = Target(targetId);
+        var image = Capture(target);
+        var after = Target(targetId);
+        if (target.Rect != after.Rect) throw new NativeFailure("geometry-changed", "Target moved while capturing");
+        return image;
     }
     private static string ReadElements(IntPtr handle)
     {
@@ -365,7 +373,7 @@ internal sealed class ComputerDriver : IDisposable
     public void Dispose()
     {
         try { lock (inputLock) { disposed = true; epoch = 0; ClearHeld(); desktopLease?.Release(); } }
-        finally { physicalInput.Dispose(); desktopLease?.Dispose(); }
+        finally { try { captureBroker.Dispose(); } finally { physicalInput.Dispose(); desktopLease?.Dispose(); } }
     }
 }
 

@@ -13,6 +13,7 @@ internal sealed class FixtureForm : Form
     private int authenticatedPreviews;
     private readonly TcpListener server = new(IPAddress.Loopback, 0);
     private readonly CancellationTokenSource serverStop = new();
+    private readonly System.Windows.Forms.Timer animation = new() { Interval = 33 };
     private int port;
     private readonly TextBox input = new() { Name = "fixture-input", Location = new Point(30, 80), Size = new Size(430, 100), Multiline = true, AccessibleName = "Fixture text input" };
     private readonly Label count = new() { Text = "Clicks: 0", Location = new Point(180, 30), AutoSize = true, AccessibleName = "Fixture click count" };
@@ -34,8 +35,22 @@ internal sealed class FixtureForm : Form
         pad.MouseDown += (_, e) => { dragStart = e.Location; pad.Capture = true; };
         pad.MouseUp += (_, e) => { if (dragStart is Point start && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 10) drags++; dragStart = null; pad.Capture = false; Save(); };
         Controls.Add(pad);
+        if (args.Contains("--fixture-animate")) {
+            var ticks = 0L;
+            var clock = new Label { Location = new Point(30, 425), Size = new Size(450, 25), AccessibleName = "Fixture animation clock" };
+            Controls.Add(clock);
+            animation.Tick += (_, _) => {
+                ticks++; clock.Text = $"Live frame {ticks} at {DateTime.UtcNow:HH:mm:ss.fff}";
+                if (output != null && ticks % 30 == 0) {
+                    var heartbeat = output + ".heartbeat.json";
+                    File.WriteAllText(heartbeat + ".tmp", JsonSerializer.Serialize(new { ticks, utc = DateTime.UtcNow.ToString("O"), pid = Environment.ProcessId }, Program.Json));
+                    File.Move(heartbeat + ".tmp", heartbeat, true);
+                }
+            };
+            animation.Start();
+        }
         server.Start(); port = ((IPEndPoint)server.LocalEndpoint).Port; _ = Serve();
-        FormClosed += (_, _) => { serverStop.Cancel(); server.Stop(); };
+        FormClosed += (_, _) => { animation.Stop(); animation.Dispose(); serverStop.Cancel(); server.Stop(); };
         Shown += (_, _) => { Activate(); Save(); };
     }
     private async Task Serve()
