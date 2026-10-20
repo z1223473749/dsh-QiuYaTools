@@ -26,9 +26,10 @@ async function ps(code, timeout = 45000) {
   return (await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], { timeout, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024 })).stdout.trim()
 }
 const key = randomUUID(), helperPath = resolve(process.env.QIUYA_WINDOWS_HELPER || join(root, 'lib/native/win32-arm64/qiuya-windows.exe'))
-const compiled = await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts'; export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
+const frozenRuntime = arg('--runtime-bundle')
+const compiled = frozenRuntime ? undefined : await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts'; export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
 const files = new Map([
-  ['runtime.mjs', Buffer.from(compiled.outputFiles[0].text)],
+  ['runtime.mjs', frozenRuntime ? await readFile(resolve(frozenRuntime)) : Buffer.from(compiled.outputFiles[0].text)],
   ['soak-computer.mjs', await readFile(join(root, 'scripts/soak-computer.mjs'))],
   ['windows-soak-fixture.ps1', await readFile(join(root, 'tests/fixtures/windows-soak-fixture.ps1'))],
   ['qiuya-windows.exe', await readFile(helperPath)],
@@ -70,7 +71,7 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   task = `QiuYaTools-renderer-soak-${key}`
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${win32.join(guestRoot, 'start.ps1')}"`
   await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(minutes) + 10}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
-  const environment = { vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node, minutes, faults, renderer: 'installed Edge headless shared production preview frontend, not native WebView2', helperPath, inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), startedAt: new Date().toISOString() }
+  const environment = { vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node, minutes, faults, renderer: 'installed Edge headless shared production preview frontend, not native WebView2', runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-source', helperPath, inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), startedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
   console.error(JSON.stringify({ stage: 'interactive-renderer-soak-started', guestRoot, minutes, faults, output }))
   const deadline = Date.now() + minutes * 60000 + 240000
