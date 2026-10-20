@@ -1,8 +1,8 @@
 # QiuYa 增强工具箱
 
-支持长文本转 TXT 附件、会话独立窗口、批量归档和计划批注，常用功能一处设置。
+支持长文本附件、会话独立窗口、批量归档、计划批注和 Q 主题，常用功能一处设置。
 
-在 **设置 → QiuYaTools** 中管理四项功能，也可从左下角账号菜单的 **QiuYaTools** 入口直接打开。当前版本 `0.4.0`，面向官方 macOS Harness `0.2.1-rc.2`。
+在 **设置 → QiuYaTools** 中管理四项功能，也可从左下角账号菜单的 **QiuYaTools** 入口直接打开。当前版本 `0.4.1`，面向官方 macOS Harness `0.2.1-rc.2`。
 
 [GitHub 开源仓库](https://github.com/z1223473749/dsh-QiuYaTools) · [下载与发布记录](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues)
 
@@ -92,7 +92,7 @@ npm pack --ignore-scripts --pack-destination artifacts
 node scripts/prepare-release.mjs
 ```
 
-生成 `artifacts/dsh-qiuya-tools-0.4.0.tgz`，并准备固定文件名 `dsh-qiuya-tools.tgz`、`dsh-qiuya-tools-darwin-universal.tgz` 和校验清单。包内含 Host、Client、中文插件信息、图标、Cordis patch、原生辅助应用和 Swift 源码。`QIUYA_TOOLS_UNIVERSAL=1` 同时编译两个 Mac 架构；普通本地构建仅编译当前架构。
+生成 `artifacts/dsh-qiuya-tools-0.4.1.tgz`，并准备固定文件名 `dsh-qiuya-tools.tgz`、`dsh-qiuya-tools-darwin-universal.tgz` 和校验清单。包内含 Host、Client、中文插件信息、图标、Cordis patch、原生辅助应用和 Swift 源码。`QIUYA_TOOLS_UNIVERSAL=1` 同时编译两个 Mac 架构；普通本地构建仅编译当前架构。
 
 推送与 `package.json` 版本一致的 `v*` 标签后，GitHub Actions 会执行完整检查、构建通用安装包并发布到 GitHub Release。插件更新器只安装正式 Release，不追随开发分支。
 

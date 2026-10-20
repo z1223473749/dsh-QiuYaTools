@@ -1,181 +1,237 @@
-/* Q Ocean is an alias-token layer, not a replacement for semantic message or
-   syntax palettes. Native data-ds-dark-theme selects both schemes immediately;
-   no system preference, inline style or third-party theme layer is rewritten. */
+/* Q Ocean: warm paper, graphite ink and a restrained sea-glass accent.
+   The native presenter still owns light/dark preference. Semantic message,
+   diff and syntax palettes stay under their original owners. */
 body[data-qyt-q-theme="ocean"] {
-  --qyt-q-sea: #13788f;
-  --qyt-q-sea-hover: #0c637a;
-  --qyt-q-ink: #173b48;
-  --qyt-q-secondary: #426370;
-  --qyt-q-muted: #4e6c77;
-  --qyt-q-base: #f7fbfc;
-  --qyt-q-surface: #fcfefe;
-  --qyt-q-raised: #f0f8fa;
-  --qyt-q-sidebar: #eaf5f7;
-  --qyt-q-selected: #d7edf2;
-  --qyt-q-line: #c6dfe6;
-  --qyt-q-glow: rgba(112, 218, 232, .12);
-  --qyt-q-shadow: rgba(23, 87, 107, .08);
+  --qyt-q-sea: #116d83;
+  --qyt-q-sea-hover: #0b586e;
+  --qyt-q-ink: #24282b;
+  --qyt-q-secondary: #53595f;
+  --qyt-q-muted: #5d656c;
+  --qyt-q-base: #fafaf8;
+  --qyt-q-surface: #ffffff;
+  --qyt-q-raised: #f1f2f1;
+  --qyt-q-sidebar: #eef2f1;
+  --qyt-q-selected: #e7efef;
+  --qyt-q-line: #d9dedc;
+  --qyt-q-mist: rgba(154, 189, 188, .11);
+  --qyt-q-shadow: rgba(27, 37, 42, .09);
+  --qyt-q-shadow-float: rgba(27, 37, 42, .14);
+  --qyt-q-tab-fill: #ffffff;
+  --qyt-q-tab-ink: #225e6d;
+  --qyt-q-tab-line: rgba(32, 40, 44, .11);
+  --qyt-q-focus-line: rgba(17, 109, 131, .38);
 
   --dsw-alias-bg-base: var(--qyt-q-base);
-  --dsw-alias-bg-layer-1: #f3fafb;
+  --dsw-alias-bg-layer-1: #f6f7f5;
   --dsw-alias-bg-layer-2: var(--qyt-q-surface);
   --dsw-alias-bg-layer-3: var(--qyt-q-raised);
-  --dsw-alias-bg-module-platform: #edf7f9;
+  --dsw-alias-bg-module-platform: #f1f3f1;
   --dsw-alias-bg-multi-select: var(--qyt-q-selected);
-  --dsw-alias-bg-overlay: #edf7f9;
-  --dsw-alias-border-l1: rgba(35, 111, 133, .08);
-  --dsw-alias-border-l2: rgba(35, 111, 133, .17);
-  --dsw-alias-border-l2-darkmode-thin: rgba(35, 111, 133, .14);
-  --dsw-alias-border-l3: rgba(35, 111, 133, .21);
-  --dsw-alias-border-l4: rgba(35, 111, 133, .29);
+  --dsw-alias-bg-overlay: #f3f5f3;
+  --dsw-alias-border-l1: rgba(32, 40, 44, .055);
+  --dsw-alias-border-l2: rgba(32, 40, 44, .10);
+  --dsw-alias-border-l2-darkmode-thin: rgba(32, 40, 44, .09);
+  --dsw-alias-border-l3: rgba(32, 40, 44, .12);
+  --dsw-alias-border-l4: rgba(32, 40, 44, .17);
   --dsw-alias-label-primary: var(--qyt-q-ink);
-  --dsw-alias-label-primary-dimmed: #234956;
-  --dsw-alias-label-primary-bluish: #17566b;
+  --dsw-alias-label-primary-dimmed: #393e42;
   --dsw-alias-label-secondary: var(--qyt-q-secondary);
   --dsw-alias-label-tertiary: var(--qyt-q-muted);
   --dsw-alias-label-caption: var(--qyt-q-muted);
   --dsw-alias-menu-icon: var(--qyt-q-secondary);
-  --dsw-alias-link: #0d7089;
-  --dsw-alias-brand-primary: var(--qyt-q-sea);
-  --dsw-alias-brand-primary-invert: var(--qyt-q-sea);
+  --dsw-alias-link: var(--qyt-q-sea);
+  --dsw-alias-brand-primary: var(--qyt-q-ink);
+  --dsw-alias-brand-primary-invert: var(--qyt-q-ink);
   --dsw-alias-brand-text: var(--qyt-q-ink);
   --dsw-alias-button-primary-fill: var(--qyt-q-sea);
   --dsw-alias-button-primary-hover: var(--qyt-q-sea-hover);
-  --dsw-alias-button-primary-dimmed: #dceef2;
+  --dsw-alias-button-primary-dimmed: #e8edec;
   --dsw-alias-button-info-fill: var(--qyt-q-sea);
   --dsw-alias-button-info-hover: var(--qyt-q-sea-hover);
   --dsw-alias-button-elevated-fill: var(--qyt-q-surface);
   --dsw-alias-button-floating-fill: var(--qyt-q-surface);
-  --dsw-alias-button-floating-hover: #e4f2f6;
-  --dsw-alias-button-ghost-active-border: #8ebac7;
-  --dsw-alias-button-ghost-active-fill: #e2f1f5;
+  --dsw-alias-button-floating-hover: #f0f3f1;
+  --dsw-alias-button-ghost-active-border: #b8c8c9;
+  --dsw-alias-button-ghost-active-fill: #edf2f1;
   --dsw-alias-button-ghost-active-hover: var(--qyt-q-selected);
-  --dsw-alias-interactive-bg-hover: rgba(28, 126, 150, .08);
-  --dsw-alias-interactive-bg-hover-accent: rgba(28, 126, 150, .14);
-  --dsw-alias-interactive-bg-hover-solid: #e3f1f5;
-  --dsw-alias-interactive-bg-active: rgba(28, 126, 150, .16);
+  --dsw-alias-interactive-bg-hover: rgba(40, 55, 61, .055);
+  --dsw-alias-interactive-bg-hover-accent: rgba(40, 55, 61, .09);
+  --dsw-alias-interactive-bg-hover-solid: #edf0ee;
+  --dsw-alias-interactive-bg-active: rgba(40, 55, 61, .105);
   --dsw-alias-state-business-primary: var(--qyt-q-sea);
   --dsw-alias-state-business-tertiary: var(--qyt-q-selected);
-  --dsw-alias-scrollbar-bg-l1: #bed5dc;
-  --dsw-alias-scrollbar-bg-l2: #b3cfd7;
-  --dsw-alias-scrollbar-hover-l1: #92b6c1;
-  --dsw-alias-scrollbar-hover-l2: #7ca7b5;
+  --dsw-alias-scrollbar-bg-l1: #d2d7d5;
+  --dsw-alias-scrollbar-bg-l2: #cbd2cf;
+  --dsw-alias-scrollbar-hover-l1: #b5bfbb;
+  --dsw-alias-scrollbar-hover-l2: #aab6b0;
   --dsw-specific-sidebar-fill: var(--qyt-q-sidebar);
-  --dsw-specific-sidebar-nav-item-hover: #e0f0f4;
+  --dsw-specific-sidebar-nav-item-hover: #e7ece9;
   --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
-  --dsw-specific-sidebar-nav-item-active-accent: #c9e9f0;
+  --dsw-specific-sidebar-nav-item-active-accent: #dce9e9;
   --dsw-specific-input-major: var(--qyt-q-surface);
-  --dsw-specific-selector: #e7f3f6;
-  --dsw-specific-bubble: #e4f3f7;
-  --dsw-specific-bubble-highlight: #c9e9f0;
-  --dsw-specific-tip: #edf7f9;
-  --dsw-menu-surface-fill: rgba(248, 253, 254, .97);
-  --dsw-alias-menu-group-header-fill: rgba(240, 249, 251, .98);
+  --dsw-specific-selector: #edf1ee;
+  --dsw-specific-bubble: #f0f2f1;
+  --dsw-specific-bubble-highlight: #dce9e9;
+  --dsw-specific-tip: #f1f4f1;
+  --dsw-menu-surface-fill: rgba(255, 255, 254, .985);
+  --dsw-alias-menu-group-header-fill: rgba(247, 248, 245, .99);
   --dsw-specific-menu: var(--dsw-menu-surface-fill);
   --dsw-alias-settings-card-fill: var(--qyt-q-surface);
   --dsw-alias-settings-card-stroke: var(--qyt-q-line);
-  --dsw-focus-ring-color: #13788f;
+  --dsw-focus-ring-color: var(--qyt-q-sea);
 }
 
 body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
-  --qyt-q-sea: #77d0df;
-  --qyt-q-sea-hover: #a1e2ec;
-  --qyt-q-ink: #e1f2f5;
-  --qyt-q-secondary: #b5d2da;
-  --qyt-q-muted: #9fc3cf;
-  --qyt-q-base: #10232d;
-  --qyt-q-surface: #19333f;
-  --qyt-q-raised: #223f4c;
-  --qyt-q-sidebar: #122b37;
-  --qyt-q-selected: #264c5c;
-  --qyt-q-line: #355a6a;
-  --qyt-q-glow: rgba(74, 175, 197, .07);
-  --qyt-q-shadow: rgba(1, 12, 20, .25);
+  --qyt-q-sea: #8ec6d2;
+  --qyt-q-sea-hover: #b5dae2;
+  --qyt-q-ink: #ececeb;
+  --qyt-q-secondary: #c0c4c8;
+  --qyt-q-muted: #a5adb3;
+  --qyt-q-base: #1b1e22;
+  --qyt-q-surface: #252a2f;
+  --qyt-q-raised: #2d3338;
+  --qyt-q-sidebar: #1d2428;
+  --qyt-q-selected: #303e43;
+  --qyt-q-line: #41494f;
+  --qyt-q-mist: rgba(130, 167, 168, .045);
+  --qyt-q-shadow: rgba(0, 0, 0, .20);
+  --qyt-q-shadow-float: rgba(0, 0, 0, .34);
+  --qyt-q-tab-fill: #30363c;
+  --qyt-q-tab-ink: #cbe2e8;
+  --qyt-q-tab-line: rgba(255, 255, 255, .09);
+  --qyt-q-focus-line: rgba(142, 198, 210, .40);
 
-  --dsw-alias-bg-layer-1: #152d39;
-  --dsw-alias-bg-module-platform: #1b3744;
-  --dsw-alias-bg-overlay: #1b3744;
-  --dsw-alias-border-l1: rgba(138, 198, 214, .10);
-  --dsw-alias-border-l2: rgba(138, 198, 214, .18);
-  --dsw-alias-border-l2-darkmode-thin: rgba(138, 198, 214, .15);
-  --dsw-alias-border-l3: rgba(138, 198, 214, .24);
-  --dsw-alias-border-l4: rgba(138, 198, 214, .34);
-  --dsw-alias-label-primary-dimmed: #c8e3e9;
-  --dsw-alias-label-primary-bluish: #b6e7f1;
-  --dsw-alias-link: #82d7e5;
-  --dsw-alias-brand-primary: #a1dfe9;
-  --dsw-alias-brand-primary-invert: #a1dfe9;
-  --dsw-alias-button-primary-fill: #a1dfe9;
-  --dsw-alias-button-primary-hover: #bdeaf0;
-  --dsw-alias-button-primary-dimmed: #284957;
-  /* Send icons are white in native Harness in both modes. Keep that fill
-     dark enough for the fixed foreground instead of using the pale accent. */
-  --dsw-alias-button-info-fill: #13788f;
-  --dsw-alias-button-info-hover: #0c637a;
-  --dsw-alias-button-floating-hover: #284957;
-  --dsw-alias-button-ghost-active-border: #527e8e;
-  --dsw-alias-button-ghost-active-fill: #244552;
-  --dsw-alias-button-ghost-active-hover: #305362;
-  --dsw-alias-interactive-bg-hover: rgba(126, 204, 222, .09);
-  --dsw-alias-interactive-bg-hover-accent: rgba(126, 204, 222, .16);
-  --dsw-alias-interactive-bg-hover-solid: #284957;
-  --dsw-alias-interactive-bg-active: rgba(126, 204, 222, .19);
-  --dsw-alias-scrollbar-bg-l1: #33515e;
-  --dsw-alias-scrollbar-bg-l2: #3c5d6a;
-  --dsw-alias-scrollbar-hover-l1: #4f7584;
-  --dsw-alias-scrollbar-hover-l2: #608897;
-  --dsw-specific-sidebar-nav-item-hover: #1c3b49;
-  --dsw-specific-sidebar-nav-item-active-accent: #2a5364;
-  --dsw-specific-selector: #24424f;
-  --dsw-specific-bubble: #1b3c4b;
-  --dsw-specific-bubble-highlight: #2a586b;
-  --dsw-specific-tip: #1c3947;
-  --dsw-menu-surface-fill: rgba(26, 53, 66, .98);
-  --dsw-alias-menu-group-header-fill: rgba(30, 60, 74, .99);
-  --dsw-focus-ring-color: #77d0df;
+  --dsw-alias-bg-layer-1: #202529;
+  --dsw-alias-bg-module-platform: #292f34;
+  --dsw-alias-bg-overlay: #2a3035;
+  --dsw-alias-border-l1: rgba(232, 237, 239, .055);
+  --dsw-alias-border-l2: rgba(232, 237, 239, .10);
+  --dsw-alias-border-l2-darkmode-thin: rgba(232, 237, 239, .08);
+  --dsw-alias-border-l3: rgba(232, 237, 239, .13);
+  --dsw-alias-border-l4: rgba(232, 237, 239, .19);
+  --dsw-alias-label-primary-dimmed: #d1d3d4;
+  --dsw-alias-button-primary-fill: #b3d4dc;
+  --dsw-alias-button-primary-hover: #cbe1e6;
+  --dsw-alias-button-primary-dimmed: #343d42;
+  /* Native send glyphs stay white in both schemes. */
+  --dsw-alias-button-info-fill: #116d83;
+  --dsw-alias-button-info-hover: #0b586e;
+  --dsw-alias-button-floating-hover: #30373b;
+  --dsw-alias-button-ghost-active-border: #58666c;
+  --dsw-alias-button-ghost-active-fill: #303a3e;
+  --dsw-alias-button-ghost-active-hover: #3a454a;
+  --dsw-alias-interactive-bg-hover: rgba(218, 229, 232, .065);
+  --dsw-alias-interactive-bg-hover-accent: rgba(218, 229, 232, .11);
+  --dsw-alias-interactive-bg-hover-solid: #343d42;
+  --dsw-alias-interactive-bg-active: rgba(218, 229, 232, .12);
+  --dsw-alias-scrollbar-bg-l1: #454e54;
+  --dsw-alias-scrollbar-bg-l2: #4c565d;
+  --dsw-alias-scrollbar-hover-l1: #626e76;
+  --dsw-alias-scrollbar-hover-l2: #6c7981;
+  --dsw-specific-sidebar-nav-item-hover: #293338;
+  --dsw-specific-sidebar-nav-item-active-accent: #35474e;
+  --dsw-specific-selector: #313a3e;
+  --dsw-specific-bubble: #2a3034;
+  --dsw-specific-bubble-highlight: #3b4d54;
+  --dsw-specific-tip: #2a3236;
+  --dsw-menu-surface-fill: rgba(39, 45, 50, .985);
+  --dsw-alias-menu-group-header-fill: rgba(44, 50, 55, .99);
 }
 
-/* Public slot boundaries and semantic surfaces add a quiet sea-light wash.
-   No hashed classes, layout changes, body-wide element resets or animations. */
+/* Keep reading surfaces quiet; the sea mist belongs to the side chrome. */
 body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child {
-  background: radial-gradient(ellipse at 0 0, var(--qyt-q-glow), transparent 58%), linear-gradient(165deg, var(--qyt-q-sidebar), var(--dsw-alias-bg-layer-1));
+  background: linear-gradient(155deg, var(--qyt-q-mist), transparent 48%), var(--qyt-q-sidebar);
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child {
-  background: radial-gradient(ellipse at 100% 0, var(--qyt-q-glow), transparent 48%), var(--qyt-q-base);
+  background: var(--qyt-q-base);
 }
 body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
   background-color: var(--dsw-alias-bg-layer-1);
 }
+
+/* A floating writing surface with a neutral hairline and diffuse depth.
+   Focus strengthens that same edge instead of adding a second heavy frame. */
 body[data-qyt-q-theme="ocean"] [data-composer-card] {
-  background: linear-gradient(135deg, var(--qyt-q-surface), var(--dsw-alias-bg-layer-1));
-  box-shadow: 0 5px 24px -12px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
+  border-radius: 22px;
+  background: var(--qyt-q-surface);
+  box-shadow: 0 8px 28px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
+}
+body[data-qyt-q-theme="ocean"] [data-composer-card]:focus-within {
+  box-shadow: 0 10px 30px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--qyt-q-focus-line);
 }
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"][role="dialog"] {
+  border-radius: 20px;
   background-color: var(--qyt-q-surface);
 }
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav {
-  background: linear-gradient(165deg, var(--dsw-alias-bg-layer-1), var(--qyt-q-sidebar));
+  background: linear-gradient(155deg, var(--qyt-q-mist), transparent 55%), var(--dsw-alias-bg-layer-1);
 }
 body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
   background-color: var(--qyt-q-selected);
   color: var(--qyt-q-ink);
 }
 body[data-qyt-q-theme="ocean"] :is([role="menu"], [role="listbox"]) {
+  border-radius: 12px;
   background-color: var(--dsw-menu-surface-fill);
   border-color: var(--dsw-alias-border-l2);
-}
-body[data-qyt-q-theme="ocean"] [role="tab"][aria-selected="true"] {
-  background-color: var(--qyt-q-selected);
-  color: var(--qyt-q-ink);
+  box-shadow: 0 14px 38px -12px var(--qyt-q-shadow-float), 0 2px 7px -3px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
 }
 
-/* Respect the operating system's explicit high-contrast palette. */
+/* Harness 0.2.1's public Session header emits this exact marker and direct
+   tab buttons. Its native active ::after is a 2px underline: retract it before
+   introducing a floating pill. No other tablist (including QiuYaTools) matches. */
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] {
+  justify-self: start;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 0 0 7px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"] {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--qyt-q-secondary);
+  box-shadow: none;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]::after {
+  content: none;
+  display: none;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:not([aria-selected="true"]):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--qyt-q-ink);
+}
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+  border-color: var(--qyt-q-tab-line);
+  background: var(--qyt-q-tab-fill);
+  color: var(--qyt-q-tab-ink);
+  box-shadow: 0 1px 3px var(--qyt-q-shadow);
+}
+body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:focus-visible {
+  outline: 2px solid var(--dsw-focus-ring-color);
+  outline-offset: -2px;
+}
+
 @media (forced-colors: active) {
   body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child,
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child,
   body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav,
   body[data-qyt-q-theme="ocean"] [data-composer-card] {
     background: Canvas;
+    box-shadow: none;
+  }
+  body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
     box-shadow: none;
   }
 }

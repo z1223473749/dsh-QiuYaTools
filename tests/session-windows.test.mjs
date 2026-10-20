@@ -327,9 +327,80 @@ test('native hidden views stay schedulable and revealing a preparation restarts 
   assert.match(timeout, /self\.timeoutGeneration == generation/)
   assert.match(timeout, /deadline: \.now\(\) \+ 30/)
   const script = join(temporary, 'visible-deadline.swift')
-  // Execute the helper's actual cancellation/generation logic. Scale only the
-  // clock interval down so the old and replacement deadlines can be observed.
-  await writeFile(script, `import Foundation\nfinal class DeadlineHarness {\nvar ready = false\nvar failed = false\nvar timeout: DispatchWorkItem?\nvar timeoutGeneration = 0\nvar failures = 0\nfunc fail(_ message: String) { failures += 1; failed = true }\n${timeout.replace('deadline: .now() + 30', 'deadline: .now() + 0.20')}\n}\nlet view = DeadlineHarness()\nview.armTimeout()\nRunLoop.main.run(until: Date().addingTimeInterval(0.10))\nview.armTimeout()\nRunLoop.main.run(until: Date().addingTimeInterval(0.14))\nassert(view.failures == 0, "the old hidden deadline must not fail the newly visible window")\nRunLoop.main.run(until: Date().addingTimeInterval(0.12))\nassert(view.failures == 1, "the replacement visible deadline still reports a real timeout")\nprint("visible-deadline-ok")\n`)
+  // Keep the native function and its full 30-second budget intact. A manual
+  // queue makes cancellation races reproducible without assuming that a loaded
+  // CI runner can resume a RunLoop before a short wall-clock deadline.
+  await writeFile(script, `
+struct DeadlineInstant {
+    let seconds: Int
+    static func now() -> DeadlineInstant { DeadlineInstant(seconds: DispatchQueue.main.clock) }
+    static func + (left: DeadlineInstant, right: Int) -> DeadlineInstant {
+        DeadlineInstant(seconds: left.seconds + right)
+    }
+}
+final class DispatchWorkItem {
+    let block: () -> Void
+    private(set) var isCancelled = false
+    init(block: @escaping () -> Void) { self.block = block }
+    func cancel() { isCancelled = true }
+    // A callback already handed to a scheduler can race cancellation. Run it
+    // anyway, so only the actual native generation guard can reject it.
+    func performEvenIfCancelled() { block() }
+}
+final class DispatchQueue {
+    struct Scheduled { let deadline: Int; let task: DispatchWorkItem }
+    static let main = DispatchQueue()
+    private(set) var clock = 0
+    private(set) var scheduled: [Scheduled] = []
+    func asyncAfter(deadline: DeadlineInstant, execute task: DispatchWorkItem) {
+        scheduled.append(Scheduled(deadline: deadline.seconds, task: task))
+    }
+    func advance(to instant: Int) {
+        assert(instant >= clock)
+        clock = instant
+        let due = scheduled.filter { $0.deadline <= instant }
+        scheduled.removeAll { $0.deadline <= instant }
+        for entry in due { entry.task.performEvenIfCancelled() }
+    }
+}
+final class DeadlineHarness {
+    var ready = false
+    var failed = false
+    var timeout: DispatchWorkItem?
+    var timeoutGeneration = 0
+    var failures = 0
+    func fail(_ message: String) { failures += 1; failed = true }
+${timeout}
+}
+let queue = DispatchQueue.main
+let view = DeadlineHarness()
+view.armTimeout()
+let hiddenTask = queue.scheduled[0].task
+assert(queue.scheduled[0].deadline == 30)
+queue.advance(to: 10)
+view.armTimeout()
+assert(hiddenTask.isCancelled, "revealing the view cancels its hidden task")
+assert(view.timeoutGeneration == 2)
+assert(queue.scheduled.map { $0.deadline } == [30, 40], "the visible task gets a complete new 30-second budget")
+queue.advance(to: 30)
+assert(view.failures == 0, "even an executed old hidden callback cannot fail the visible window")
+queue.advance(to: 39)
+assert(view.failures == 0, "the replacement task cannot fire before its full budget")
+queue.advance(to: 40)
+assert(view.failures == 1, "the replacement visible deadline still reports a real timeout")
+queue.advance(to: 100)
+assert(view.failures == 1)
+let readyView = DeadlineHarness()
+readyView.armTimeout()
+readyView.ready = true
+let failedView = DeadlineHarness()
+failedView.armTimeout()
+failedView.failed = true
+queue.advance(to: 130)
+assert(readyView.failures == 0, "a ready view ignores its pending timeout")
+assert(failedView.failures == 0, "a failed view cannot report a duplicate failure")
+print("visible-deadline-ok")
+`)
   const output = execFileSync('/usr/bin/swift', ['-module-cache-path', join(temporary, 'swift-module-cache'), script], { encoding: 'utf8', timeout: 30_000 })
   assert.equal(output.trim(), 'visible-deadline-ok')
 })

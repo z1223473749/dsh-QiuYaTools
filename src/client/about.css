@@ -1,47 +1,46 @@
 .qyt-about {
-  --qyt-ocean: color-mix(in srgb, #188fa9 82%, var(--dsw-alias-label-primary));
-  --qyt-ocean-soft: color-mix(in srgb, #3bbbd5 9%, var(--dsw-alias-bg-layer-2));
-  --qyt-ocean-line: color-mix(in srgb, #3bbbd5 23%, var(--dsw-alias-border-l3));
   display: grid;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
-  padding: 1px 0 4px;
+  padding: 1px 0 8px;
 }
 .qyt-about-hero {
   position: relative;
   isolation: isolate;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 22px;
-  min-height: 176px;
-  padding: 27px 22px;
+  display: grid;
+  gap: 20px;
+  padding: 24px;
   overflow: hidden;
   border: 1px solid var(--qyt-ocean-line);
   border-radius: 18px;
-  background: radial-gradient(ellipse at 12% 0%, color-mix(in srgb, #8ce7ed 21%, transparent), transparent 65%), linear-gradient(135deg, var(--qyt-ocean-soft), var(--dsw-alias-bg-layer-2));
+  background: radial-gradient(ellipse at 12% 0%, color-mix(in srgb, #9acbd0 12%, transparent), transparent 62%), var(--dsw-alias-bg-layer-2);
 }
+.qyt-about-brandline { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 22px; min-width: 0; }
 .qyt-about-art { position: relative; flex: none; width: 108px; height: 108px; z-index: 1; }
-.qyt-about-art img { position: relative; display: block; width: 108px; height: 108px; border-radius: 25px; box-shadow: 0 9px 25px -12px color-mix(in srgb, #21869e 65%, transparent), 0 1px 0 rgba(255,255,255,.55) inset; transform: rotate(-5deg); }
-.qyt-about-halo { position: absolute; inset: -16px; border: 1px solid color-mix(in srgb, #54c3d7 19%, transparent); border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, #75dae5 25%, transparent), transparent 70%); transform: rotate(-12deg) scaleY(.9); }
-.qyt-about-halo::after { content: ""; position: absolute; inset: 9px -7px; border: 1px dashed color-mix(in srgb, #54c3d7 20%, transparent); border-radius: 50%; transform: rotate(28deg); }
+.qyt-about-art img { position: relative; display: block; width: 108px; height: 108px; border-radius: 25px; box-shadow: 0 9px 24px -15px rgba(35,75,83,.45); transform: rotate(-4deg); }
+.qyt-about-halo { position: absolute; inset: -14px; border: 1px solid color-mix(in srgb, #7baeb5 15%, transparent); border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, #91c4cb 12%, transparent), transparent 70%); transform: rotate(-12deg) scaleY(.9); }
+.qyt-about-halo::after { content: ""; position: absolute; inset: 9px -7px; border: 1px dashed color-mix(in srgb, #7baeb5 14%, transparent); border-radius: 50%; transform: rotate(28deg); }
 .qyt-about-copy { position: relative; z-index: 1; min-width: 180px; }
-.qyt-about-eyebrow { display: inline-block; color: var(--qyt-ocean); font-size: 10px; font-weight: 500; letter-spacing: 1.1px; }
+.qyt-about-eyebrow { display: inline-block; color: var(--dsw-alias-label-secondary); font-size: 10px; font-weight: 500; letter-spacing: 1.1px; }
 .qyt-about .qyt-about-title { margin: 4px 0 0; color: var(--dsw-alias-label-primary); font-size: 27px; font-weight: 650; letter-spacing: -1px; line-height: 1.3; }
 .qyt-about-title > span { color: var(--qyt-ocean); }
 .qyt-about .qyt-about-tagline { margin-top: 8px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.65; }
 .qyt-about-sky { position: absolute; inset: 0; pointer-events: none; }
-.qyt-about-spark { position: absolute; width: 12px; height: 12px; background: color-mix(in srgb, #35abc4 48%, transparent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
+.qyt-about-spark { position: absolute; width: 12px; height: 12px; background: color-mix(in srgb, #5e9da8 32%, transparent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
 .qyt-about-spark-one { top: 20px; right: 22px; transform: rotate(12deg); }
-.qyt-about-spark-two { bottom: 28px; left: 20px; width: 9px; height: 9px; opacity: .6; transform: rotate(-10deg); }
-.qyt-about-dot { position: absolute; top: 31px; right: 52px; width: 3px; height: 3px; border-radius: 50%; background: #67c6d8; opacity: .55; box-shadow: 12px 17px 0 #67c6d8, -14px -16px 0 #67c6d8; }
-.qyt-about-sea { position: absolute; z-index: -1; inset: auto 0 0; height: 45px; overflow: hidden; pointer-events: none; }
-.qyt-about-sea::before, .qyt-about-sea::after { content: ""; position: absolute; left: -15%; bottom: -95px; width: 140%; height: 120px; border-radius: 50% 50% 0 0; background: color-mix(in srgb, #45bbd0 13%, transparent); transform: rotate(-4deg); }
-.qyt-about-sea::after { left: -30%; bottom: -105px; width: 170%; background: color-mix(in srgb, #58bfce 15%, transparent); transform: rotate(4deg); }
+.qyt-about-spark-two { bottom: 28px; left: 16px; width: 8px; height: 8px; opacity: .45; transform: rotate(-10deg); }
+.qyt-about-dot { position: absolute; top: 31px; right: 52px; width: 3px; height: 3px; border-radius: 50%; background: #7aafb7; opacity: .4; box-shadow: 12px 17px 0 #7aafb7, -14px -16px 0 #7aafb7; }
+.qyt-about-sea { position: absolute; z-index: -1; inset: auto 0 0; height: 38px; overflow: hidden; pointer-events: none; }
+.qyt-about-sea::before, .qyt-about-sea::after { content: ""; position: absolute; left: -15%; bottom: -100px; width: 140%; height: 120px; border-radius: 50% 50% 0 0; background: color-mix(in srgb, #6fa8b0 6%, transparent); transform: rotate(-4deg); }
+.qyt-about-sea::after { left: -30%; bottom: -109px; width: 170%; background: color-mix(in srgb, #6fa8b0 7%, transparent); transform: rotate(4deg); }
+.qyt-about-story { position: relative; z-index: 1; min-width: 0; padding-top: 17px; border-top: 1px solid var(--qyt-ocean-line); }
+.qyt-about .qyt-about-story h4 { margin: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 550; }
+.qyt-about .qyt-about-story p { margin-top: 7px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.7; }
+.qyt-about-features { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.qyt-about-features span { padding: 4px 9px; border-radius: 999px; color: var(--dsw-alias-label-secondary); background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, var(--dsw-alias-bg-layer-2)); font-size: 10px; line-height: 1.5; }
 .qyt-about-links { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0; padding: 0 2px; }
-.qyt-about-link { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 5px 12px; border-radius: 9px; color: inherit; text-decoration: none; transition: background .12s; }
-.qyt-about-link + .qyt-about-link { border-left: 1px solid var(--dsw-alias-border-l3); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.qyt-about-link { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 5px 10px; border-radius: 9px; color: inherit; text-decoration: none; transition: background .12s; }
+.qyt-about-link + .qyt-about-link { border-left: 1px solid var(--qyt-ocean-line); border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .qyt-about-link:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .qyt-about-link-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; border-radius: 10px; color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
 .qyt-about-link-copy { display: grid; min-width: 0; gap: 4px; }
@@ -57,17 +56,17 @@
 .qyt-about-footer a svg { width: 12px; height: 12px; }
 .qyt-about a:focus-visible { outline: 2px solid var(--qyt-ocean); outline-offset: 3px; border-radius: 6px; }
 @media (max-width: 620px) {
-  .qyt-about-hero { flex-direction: column; gap: 20px; padding: 24px 16px 26px; }
+  .qyt-about-hero { padding: 20px 16px; }
+  .qyt-about-brandline { flex-direction: column; gap: 20px; }
   .qyt-about-copy { min-width: 0; text-align: center; }
   .qyt-about .qyt-about-title { font-size: 26px; }
-  .qyt-about-link { gap: 8px; padding-right: 9px; padding-left: 9px; }
+  .qyt-about-link { gap: 7px; padding-right: 7px; padding-left: 7px; }
   .qyt-about-link-icon { width: 26px; height: 28px; }
   .qyt-about-link small { font-size: 9px; }
 }
+@media (max-height: 560px) {
+  .qyt-about { gap: 13px; }
+  .qyt-about-hero { gap: 16px; padding-top: 18px; padding-bottom: 18px; }
+  .qyt-about-story { padding-top: 13px; }
+}
 @media (prefers-reduced-motion: reduce) { .qyt-about-link { transition: none; } }
-
-.qyt-about-story { padding:0 10px; }
-.qyt-about .qyt-about-story h4 { font-size:13px; font-weight:550; margin:0; }
-.qyt-about .qyt-about-story p { font-size:11px; color:var(--dsw-alias-label-secondary); margin-top:7px; line-height:1.7; }
-.qyt-about-features { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
-.qyt-about-features span { padding:5px 9px; border:1px solid var(--qyt-ocean-line); border-radius:7px; color:var(--qyt-ocean); background:var(--qyt-ocean-soft); font-size:10px; }

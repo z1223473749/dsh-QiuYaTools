@@ -56,6 +56,12 @@ test('About presents the chosen brand art, keeps every public entry and hides de
     assert.equal(image.getAttribute('height'), '108')
     assert.equal(image.alt, '白发少年坐在鲸鱼上')
     assert.match(f.container.querySelector('.qyt-about-title').textContent, /QiuYaTools/)
+    const hero = f.container.querySelector('.qyt-about-hero')
+    const story = hero.querySelector('.qyt-about-story')
+    assert.ok(story, 'the story belongs to the illustrated brand card')
+    assert.equal(story.querySelector('h4').textContent, '从日常的小事开始')
+    assert.deepEqual([...story.querySelectorAll('.qyt-about-features > span')].map(chip => chip.textContent), ['长文本附件', '会话分窗', '批量归档', '计划批注'])
+    assert.equal(f.container.querySelectorAll('.qyt-about-story').length, 1, 'there is no detached story below the brand card')
     for (const selector of ['.qyt-about-sky', '.qyt-about-halo', '.qyt-about-sea']) {
       assert.equal(f.container.querySelector(selector).getAttribute('aria-hidden'), 'true')
     }
@@ -68,6 +74,8 @@ test('About presents the chosen brand art, keeps every public entry and hides de
     const website = f.container.querySelector('a[href="https://www.qiuya.cc"]')
     assert.ok(website)
     assert.match(website.textContent, /www\.qiuya\.cc/)
+    assert.equal(hero.contains(website), false, 'the website remains outside the clipped illustration decoration')
+    assert.equal(hero.contains(f.container.querySelector('nav')), false)
     for (const link of [...projectLinks, website]) {
       assert.equal(link.target, '_blank')
       assert.equal(link.rel, 'noopener noreferrer')

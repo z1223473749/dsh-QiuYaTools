@@ -72,18 +72,18 @@ test('follows native light/dark changes without writing preference, inline style
   const native = f.doc.querySelector('[data-native-theme]').textContent
   f.install()
   const style = f.styles()[0]
-  assert.equal(f.token('--qyt-q-base'), '#f7fbfc')
+  assert.equal(f.token('--qyt-q-base'), '#fafaf8')
   for (const [name, value] of [
     ['--dsw-alias-state-error-primary', '#d31d34'], ['--dsw-alias-state-success-primary', '#198251'],
     ['--dsw-alias-state-warn-primary', '#9b640a'], ['--dsw-alias-code-diff-added', '#d4f4dd'],
   ]) assert.equal(f.token(name), value)
   f.doc.body.setAttribute('data-ds-dark-theme', '')
-  assert.equal(f.token('--qyt-q-base'), '#10232d')
+  assert.equal(f.token('--qyt-q-base'), '#1b1e22')
   assert.equal(f.token('--dsw-alias-markdown-code-block'), '#191919')
   assert.equal(f.dom.window.getComputedStyle(f.doc.querySelector('.shiki span')).color, 'rgb(120, 81, 169)')
   assert.equal(f.styles()[0], style, 'a native scheme change only changes CSS matching')
   f.doc.body.removeAttribute('data-ds-dark-theme')
-  assert.equal(f.token('--qyt-q-base'), '#f7fbfc')
+  assert.equal(f.token('--qyt-q-base'), '#fafaf8')
   assert.equal(f.token('--dsw-alias-markdown-code-block'), '#f8f8f8')
   assert.equal(f.doc.body.getAttribute('style'), inline)
   assert.equal(f.doc.querySelector('[data-native-theme]').textContent, native)
@@ -129,8 +129,8 @@ test('accepted profile changes update separate client documents together', t => 
   sharedForm.update({ qThemeEnabled: true })
   assert.equal(main.styles().length, 1)
   assert.equal(window.styles().length, 1)
-  assert.equal(main.token('--qyt-q-base'), '#f7fbfc')
-  assert.equal(window.token('--qyt-q-base'), '#10232d')
+  assert.equal(main.token('--qyt-q-base'), '#fafaf8')
+  assert.equal(window.token('--qyt-q-base'), '#1b1e22')
   sharedForm.update({ qThemeEnabled: false })
   assert.equal(main.styles().length, 0)
   assert.equal(window.styles().length, 0)
@@ -167,7 +167,61 @@ test('both palettes keep small primary/secondary/muted text readable on base, ra
       }
     }
   }
-  assert.ok(contrast('#13788f', '#ffffff') >= 4.5, 'native send button keeps its fixed white icon readable')
+  assert.ok(contrast('#116d83', '#ffffff') >= 4.5, 'native send button keeps its fixed white icon readable')
+})
+
+test('reading ink and major surfaces remain neutral while sea color is reserved for accents', t => {
+  for (const dark of [false, true]) {
+    const f = fixture(t, { enabled: true, dark })
+    f.install()
+    for (const name of ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted', '--qyt-q-base', '--qyt-q-surface', '--qyt-q-raised']) {
+      const value = f.token(name)
+      const channels = [1, 3, 5].map(offset => Number.parseInt(value.slice(offset, offset + 2), 16))
+      assert.ok(Math.max(...channels) - Math.min(...channels) <= 18, `${name} should not tint reading surfaces or all text blue`)
+    }
+    assert.ok(contrast(f.token('--qyt-q-tab-ink'), f.token('--qyt-q-tab-fill')) >= 4.5)
+  }
+})
+
+function allRules(rules) {
+  return [...rules].flatMap(rule => rule.cssRules ? allRules(rule.cssRules) : [rule])
+}
+
+test('native conversation tabs get one light pill treatment and lose their underline without affecting plugin tabs', t => {
+  const f = fixture(t, { enabled: true })
+  const native = f.doc.querySelector('[data-native-theme]')
+  native.textContent += '.native-tab{padding:0 0 9px;border-radius:0;background:transparent}.native-tab::after{content:"";height:2px;background:#3964fe}.plugin-tab{border-radius:17px;padding:3px 4px;background:rgb(245,245,245)}'
+  const root = f.doc.getElementById('root')
+  const header = f.doc.createElement('div')
+  header.setAttribute('data-slot', 'conversation.session.header')
+  header.innerHTML = '<div data-conversation-tabs role="tablist"><button class="native-tab" role="tab" aria-selected="true">对话</button><button class="native-tab" role="tab" aria-selected="false">轨迹</button><button class="native-tab" role="tab" aria-selected="false">上下文</button><button class="native-tab" role="tab" aria-selected="false">编队</button></div>'
+  root.append(header)
+  const plugin = f.doc.createElement('div')
+  plugin.innerHTML = '<section class="qyt-settings"><div role="tablist"><button class="plugin-tab" role="tab" aria-selected="true">Q 主题</button></div></section><div data-conversation-tabs role="tablist"><button class="plugin-tab" role="tab" aria-selected="true">Different surface</button></div>'
+  root.append(plugin)
+  const pluginButtons = [...plugin.querySelectorAll('button')]
+  const original = pluginButtons.map(button => ({ radius: f.dom.window.getComputedStyle(button).borderRadius, padding: f.dom.window.getComputedStyle(button).padding }))
+  f.install()
+  const active = header.querySelector('[aria-selected="true"]')
+  const computed = f.dom.window.getComputedStyle(active)
+  assert.equal(computed.borderRadius, '9px')
+  assert.equal(computed.padding, '5px 12px')
+  const rules = allRules(f.styles()[0].sheet.cssRules)
+  const tabRules = rules.filter(rule => rule.selectorText?.includes('button[role="tab"]'))
+  assert.ok(tabRules.length >= 5)
+  for (const rule of tabRules) {
+    assert.match(rule.selectorText, /\[data-slot="conversation\.session\.header"\] > \[data-conversation-tabs\]\[role="tablist"\] > button\[role="tab"\]/u)
+    const selector = rule.selectorText.replace(/::after/gu, '')
+    for (const element of f.doc.querySelectorAll(selector)) assert.ok(header.contains(element), 'theme tab styling stays inside the native Session header')
+  }
+  const underline = tabRules.find(rule => rule.selectorText.endsWith('::after'))
+  assert.equal(underline.style.getPropertyValue('content'), 'none')
+  assert.equal(underline.style.getPropertyValue('display'), 'none')
+  for (const [index, button] of pluginButtons.entries()) {
+    const style = f.dom.window.getComputedStyle(button)
+    assert.equal(style.borderRadius, original[index].radius)
+    assert.equal(style.padding, original[index].padding)
+  }
 })
 
 test('stylesheet is a reversible token/semantic-surface layer without destructive content resets', () => {
@@ -177,4 +231,5 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
   assert.match(css, /@media \(forced-colors: active\)/u)
   assert.match(css, /\[data-composer-card\]/u)
   assert.match(css, /\[data-slot="sidebar"\]/u)
+  assert.doesNotMatch(css, /body\[data-qyt-q-theme="ocean"\]\s+\[role="tab"\]/u)
 })

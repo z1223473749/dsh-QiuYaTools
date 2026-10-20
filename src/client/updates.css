@@ -1,7 +1,4 @@
 .qyt-updates {
-  --qyt-ocean: color-mix(in srgb, #188fa9 82%, var(--dsw-alias-label-primary));
-  --qyt-ocean-soft: color-mix(in srgb, #3bbbd5 9%, var(--dsw-alias-bg-layer-2));
-  --qyt-ocean-line: color-mix(in srgb, #3bbbd5 23%, var(--dsw-alias-border-l3));
   display: grid;
   gap: 18px;
   min-width: 0;
@@ -12,7 +9,7 @@
 .qyt-updates-intro > span { display:grid; place-items:center; width:40px; height:40px; border-radius:12px; color:var(--qyt-ocean); background:var(--qyt-ocean-soft); }
 .qyt-updates .qyt-updates-intro h3 { font-size:17px; margin:0; }
 .qyt-updates .qyt-updates-intro p { margin-top:4px; font-size:11px; color:var(--dsw-alias-label-secondary); }
-.qyt-about-update { min-width: 0; padding: 17px 18px 15px; border: 1px solid var(--qyt-ocean-line); border-radius: 14px; background: linear-gradient(120deg, color-mix(in srgb, #51c5dc 4%, var(--dsw-alias-bg-layer-2)), var(--dsw-alias-bg-layer-2)); }
+.qyt-about-update { min-width: 0; padding: 17px 18px 15px; border: 1px solid var(--qyt-ocean-line); border-radius: 14px; background: var(--dsw-alias-bg-layer-2); }
 .qyt-about-update-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .qyt-about-update-title > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
 .qyt-about-update-icon { display: inline-flex; color: var(--qyt-ocean); }
@@ -25,8 +22,8 @@
 .qyt-about-update-message[role="alert"]::before { background: currentColor; }
 .qyt-about-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
 .qyt-updates .qyt-about-check { padding: 6px 12px; border-color: var(--qyt-ocean-line); color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
-.qyt-updates .qyt-about-check:hover:enabled { background: color-mix(in srgb, #3bbbd5 15%, var(--dsw-alias-bg-layer-2)); }
-.qyt-updates .qyt-about-install, .qyt-updates .qyt-about-install:hover:enabled { padding: 6px 12px; border-color: #168aa5; background: #168aa5; color: #fff; }
+.qyt-updates .qyt-about-check:hover:enabled { background: var(--dsw-alias-interactive-bg-hover); }
+.qyt-updates .qyt-about-install { padding: 6px 12px; }
 .qyt-about-update-actions a { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 5px 0; color: var(--dsw-alias-label-secondary); font-size: 10px; text-decoration: none; }
 .qyt-about-update-actions a:hover { color: var(--qyt-ocean); }
 .qyt-about-update-actions a svg { width: 12px; height: 12px; }
