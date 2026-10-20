@@ -44,7 +44,7 @@ Shift 范围按当前可见顺序选择；Command/Ctrl 可增减单条。**仅�
 
 会话数据和功能开关连接同一 Host。批注草稿保存在各浏览器的本地存储中，主窗口与辅助窗口的批注草稿不互通；辅助窗口的本地存储还受 Host 端口对应的网页来源限制。macOS 13 的辅助窗口关闭后不保留本地批注草稿，主窗口不受影响。
 
-目前原生独立窗口支持 macOS。其他系统明确报告该能力不可用，其余功能不依赖 macOS。
+本分支原生独立窗口支持 macOS 和 Windows。Windows 使用独立的 C# / WinForms / WebView2 进程，按 Host profile 与会话的存储标识隔离用户数据目录；认证地址只通过 stdin 传递。用户无需安装 .NET SDK，仍需系统 WebView2 Runtime。不同原生架构的运行结果、文件选择/附件和真实宿主验收分别记录。
 
 ### 计划评论
 
@@ -61,6 +61,10 @@ Shift 范围按当前可见顺序选择；Command/Ctrl 可增减单条。**仅�
 ## 开发与验证
 
 Node.js `^22.19.0 || >=24`，npm；macOS 原生窗口构建还需要 Command Line Tools 的 `swiftc`。
+
+Windows 原生源码构建固定使用 .NET SDK `8.0.426` 和锁定的 WebView2 SDK `1.0.3912.50`，运行包自包含 .NET。使用 `QIUYA_DOTNET=/path/to/dotnet node scripts/build-windows-native.mjs arm64 x64` 构建。`package-candidates.mjs` 按平台分包，保留压缩 64 MiB/解压 256 MiB 的现有校验上限，并逐个核验原生组件 SHA256、协议及架构。
+
+电脑操控的授权、原生预检、配对和真实 E2E 入口见[使用指南](computer-use-guide.md)。桌面测试只在显式运行对应脚本时启动；普通 `npm run check` 不申请系统权限、不操控桌面。
 
 ```sh
 npm ci

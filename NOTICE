@@ -12,6 +12,15 @@ Schemastery and Cosmokit — https://github.com/deepseek-ai/deepseek-harness
 Copyright (c) 2021-present Shigma
 MIT-licensed schema and utility code is bundled into the Host entry.
 
+Windows platform candidates additionally redistribute a self-contained Microsoft
+.NET runtime and the Microsoft WebView2 SDK loader. Their original license and
+third-party notice files accompany the executable under lib/native/win32-ARCH/:
+DOTNET-LICENSE.txt, DOTNET-THIRD-PARTY-NOTICES.txt, WEBVIEW2-LICENSE.txt and
+WEBVIEW2-NOTICE.txt. The system WebView2 browser runtime is installed separately.
+
+Playwright is a development/test dependency and is not bundled into platform
+candidates. Browser control uses Node.js built-in WebSocket with public CDP.
+
 MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
