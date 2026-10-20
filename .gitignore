@@ -3,3 +3,6 @@ artifacts/
 *.tgz
 *.log
 .DS_Store
+.native-build/
+lib/native/
+lib/QiuYaTools Computer.app/
