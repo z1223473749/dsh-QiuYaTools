@@ -57,7 +57,7 @@ async function fixture(t, options = {}) {
   const bytes = tarball({ ...pkg, ...options.archivePackage }, options.host ?? host)
   const checksum = `${createHash('sha256').update(bytes).digest('hex')}  dsh-qiuya-tools.tgz\n`
   const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`
-  const calls = [], published = [], queries = [...options.queries ?? [absent]], latest = [...options.latest ?? [ok('0.5.1')]]
+  const calls = [], published = [], waits = [], reports = [], queries = [...options.queries ?? [absent]], latest = [...options.latest ?? [ok('0.5.1')]]
   const run = async (command, args, execution) => {
     calls.push({ command, args: [...args], execution })
     if (command === 'git') return { code: 0, stdout: options.gitSha ?? sha, stderr: '' }
@@ -80,8 +80,8 @@ async function fixture(t, options = {}) {
     }
     throw new Error('Unexpected command: ' + command)
   }
-  return { root, env, bytes, checksum, integrity, calls, published, temporaryRoot,
-    publish: () => publishNpmRelease({ root, env, run, temporaryRoot, wait: async () => {} }) }
+  return { root, env, bytes, checksum, integrity, calls, published, waits, reports, temporaryRoot,
+    publish: () => publishNpmRelease({ root, env, run, temporaryRoot, wait: async milliseconds => { waits.push(milliseconds) }, report: message => reports.push(message) }) }
 }
 
 test('all supported release paths publish the verified release bytes without rebuilding or legacy tokens', async t => {
@@ -242,7 +242,7 @@ test('an existing matching version never silently ignores an unadvanced latest t
 })
 
 test('latest lookup errors cannot accidentally downgrade or publish', async t => {
-  for (const latest of [ok('1.0.0-beta.1'), ok(null), { code: 1, stdout: JSON.stringify({ error: { code: 'E503' } }), stderr: '' }]) {
+  for (const latest of [ok('1.0.0-beta.1'), ok('0.0.0-stage'), ok(null), { code: 1, stdout: JSON.stringify({ error: { code: 'E503' } }), stderr: '' }]) {
     const f = await fixture(t, { latest: [latest] })
     await assert.rejects(f.publish())
     assert.deepEqual(f.published, [])
@@ -255,12 +255,65 @@ test('a zero publish exit is confirmed against the registry and never substitute
   assert.equal((await delayed.publish()).status, 'published')
   assert.equal(delayed.calls.filter(call => call.command === 'npm' && call.args[0] === 'publish').length, 1)
   for (const options of [
-    { queries: [absent, absent, absent, absent, absent] },
+    { queries: Array.from({ length: 47 }, () => absent) },
     { queries: [absent, ok(`sha512-${Buffer.alloc(64, 1).toString('base64')}`)] },
     { latest: [ok('0.5.1')] },
   ]) {
     const f = await fixture(t, options)
     await assert.rejects(f.publish())
+    assert.equal(f.published.length, 1)
+  }
+})
+
+test('normal scanning can return many E404 replies before the exact version becomes public', async t => {
+  const initial = await fixture(t)
+  const f = await fixture(t, { queries: [...Array.from({ length: 12 }, () => absent), ok(initial.integrity)] })
+  assert.equal((await f.publish()).status, 'published')
+  assert.equal(f.published.length, 1, 'scanning never starts another publish')
+  assert.deepEqual(f.waits, Array.from({ length: 11 }, () => 20_000))
+  assert.equal(f.reports.length, 11)
+  assert.deepEqual(await readdir(f.temporaryRoot), [])
+})
+
+test('a post-publish placeholder latest only waits until the stable target is actually visible', async t => {
+  const f = await fixture(t, { latest: [ok('0.5.1'), ...Array.from({ length: 6 }, () => ok('0.0.0-stage')), ok(pkg.version)] })
+  const result = await f.publish()
+  assert.equal(result.status, 'published')
+  assert.equal(result.distTag, 'latest')
+  assert.deepEqual(f.waits, Array.from({ length: 6 }, () => 20_000))
+  assert.equal(f.published.length, 1)
+  const publish = f.calls.find(call => call.command === 'npm' && call.args[0] === 'publish')
+  assert.equal(publish.args[publish.args.indexOf('--tag') + 1], 'latest', 'the stage placeholder is never compared as a newer release')
+  const older = await fixture(t, { latest: [ok('1.0.0'), ok('0.0.0-stage'), ok('1.0.0')] })
+  assert.equal((await older.publish()).distTag, 'version-0.5.2')
+  assert.deepEqual(older.waits, [20_000], 'older-version publication also requires a confirmed stable latest')
+})
+
+test('an unpublished version or unconfirmed latest times out after exactly 15 minutes of bounded waits', async t => {
+  for (const options of [
+    { queries: Array.from({ length: 47 }, () => absent) },
+    { latest: [ok('0.5.1'), ok('0.0.0-stage')] },
+    { latest: [ok('0.5.1')] },
+  ]) {
+    const f = await fixture(t, options)
+    await assert.rejects(f.publish(), /after 15 minutes.*rerun this workflow later/)
+    assert.equal(f.waits.length, 45)
+    assert.equal(f.waits.reduce((sum, delay) => sum + delay, 0), 15 * 60 * 1_000)
+    assert.equal(f.published.length, 1)
+    assert.deepEqual(await readdir(f.temporaryRoot), [])
+  }
+})
+
+test('post-publish malformed latest, lookup failures and different bytes still fail instead of waiting or reporting success', async t => {
+  for (const options of [
+    { latest: [ok('0.5.1'), ok('0.5.3-beta.1')] },
+    { latest: [ok('0.5.1'), ok(null)] },
+    { queries: [absent, { code: 1, stdout: JSON.stringify({ error: { code: 'E503' } }), stderr: '' }] },
+    { queries: [absent, ok(`sha512-${Buffer.alloc(64, 1).toString('base64')}`)] },
+  ]) {
+    const f = await fixture(t, options)
+    await assert.rejects(f.publish())
+    assert.equal(f.waits.length, 0)
     assert.equal(f.published.length, 1)
   }
 })

@@ -13,6 +13,8 @@ const packageName = 'dsh-qiuya-tools'
 const registry = 'https://registry.npmjs.org'
 const archiveName = 'dsh-qiuya-tools.tgz'
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u
+const confirmationAttempts = 46
+const confirmationIntervalMs = 20_000
 
 async function command(file, args, options) {
   try { return { code: 0, ...await exec(file, args, { ...options, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 }) } }
@@ -41,6 +43,7 @@ export async function publishNpmRelease({
   root = new URL('../', import.meta.url), env = process.env,
   run = command, verify = verifyPackage, temporaryRoot = tmpdir(),
   wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  report = message => console.error(message),
 } = {}) {
   const directory = root instanceof URL ? fileURLToPath(root) : resolve(root)
   const metadata = json(await readFile(join(directory, 'package.json'), 'utf8'), 'checkout package.json')
@@ -104,8 +107,11 @@ export async function publishNpmRelease({
       if (typeof value !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(value)) throw new Error('npm registry returned no valid SHA512 integrity')
       return value
     }
-    const latestVersion = async () => {
+    const latestVersion = async ({ processing = false } = {}) => {
       const value = await registryValue(packageName, 'dist-tags.latest')
+      // This exact first-publish placeholder is not a stable semver to compare.
+      // It can only keep post-publish confirmation waiting, never authorize a publish.
+      if (processing && value === '0.0.0-stage') return undefined
       if (value !== undefined && (typeof value !== 'string' || !stableVersion.test(value))) throw new Error('npm latest is not a valid stable version')
       return value
     }
@@ -138,17 +144,22 @@ export async function publishNpmRelease({
       throw new Error(`npm publish failed${npmError(result)?.code ? ` (${npmError(result).code})` : ''}`)
     }
     // Do not mistake dry-run configuration or an unconfirmed registry response for a publish.
-    // npm's public index can lag briefly; a rerun is still byte-checked and idempotent.
-    for (let attempt = 0; attempt < 4; attempt++) {
+    // npm scans accepted publishes before exposing them. Allow 45 bounded waits
+    // (15 minutes); keep checking the original bytes and the actual stable tag.
+    for (let attempt = 0; attempt < confirmationAttempts; attempt++) {
       if (compare(await publishedIntegrity())) {
-        const current = distTag === 'latest' ? await latestVersion() : undefined
-        if (distTag !== 'latest' || current && !newer(metadata.version, current)) {
+        const current = await latestVersion({ processing: true })
+        const minimumLatest = distTag === 'latest' ? metadata.version : latest
+        if (current && !newer(minimumLatest, current)) {
           return { status: 'published', version: metadata.version, integrity, distTag }
         }
       }
-      if (attempt < 3) await wait(1_000)
+      if (attempt < confirmationAttempts - 1) {
+        report(`npm is still processing ${packageName}@${metadata.version}; confirmation ${attempt + 1}/${confirmationAttempts}, retrying in 20 seconds`)
+        await wait(confirmationIntervalMs)
+      }
     }
-    throw new Error('npm publish returned success but the registry has not confirmed the archive and dist-tag; rerun this workflow')
+    throw new Error('npm accepted the publish, but after 15 minutes the registry has not confirmed the archive and stable dist-tag; processing may still be pending, so rerun this workflow later')
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }
 

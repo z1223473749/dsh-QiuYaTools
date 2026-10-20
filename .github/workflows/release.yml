@@ -61,6 +61,7 @@ jobs:
         !github.event.release.draft && !github.event.release.prerelease) ||
        github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     concurrency:
       group: npm-publish
       cancel-in-progress: false
