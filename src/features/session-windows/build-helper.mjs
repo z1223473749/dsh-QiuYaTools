@@ -8,6 +8,7 @@ export const SESSION_WINDOW_BUNDLE_ID = 'com.qiuya.tools.session-window'
 /** Stable native identity for normal Dock/window management and accessibility. */
 export function sessionWindowAppInfoPlist(version) {
   if (!/^[0-9]+(?:\.[0-9]+)*(?:[-+][A-Za-z0-9.-]+)?$/u.test(version)) throw new Error('Invalid helper bundle version')
+  const bundleVersion = version.split(/[-+]/u)[0]
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -16,8 +17,9 @@ export function sessionWindowAppInfoPlist(version) {
   <key>CFBundleDisplayName</key><string>QiuYaTools Session Windows</string>
   <key>CFBundleExecutable</key><string>qiuya-session-window</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>${version}</string>
-  <key>CFBundleShortVersionString</key><string>${version}</string>
+  <key>CFBundleVersion</key><string>${bundleVersion}</string>
+  <key>CFBundleShortVersionString</key><string>${bundleVersion}</string>
+  <key>QiuYaToolsPackageVersion</key><string>${version}</string>
   <key>LSUIElement</key><false/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>

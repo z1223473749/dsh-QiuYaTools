@@ -16,6 +16,7 @@ const defaults = {
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   qThemeEnabled: false,
+  computerUseEnabled: false,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 }

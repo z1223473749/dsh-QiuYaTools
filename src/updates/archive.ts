@@ -1,4 +1,5 @@
 import { gunzipSync } from 'node:zlib'
+import { createHash } from 'node:crypto'
 
 export interface ArchiveValidationOptions {
   packageName: string
@@ -284,5 +285,31 @@ export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidat
   if (!helper || (platform === 'darwin' && (helper.mode & 0o111) === 0)) invalid('missing executable native helper')
   const architectures = platform === 'win32' ? [windowsExecutableArchitecture(helper.bytes)] : helperArchitectures(helper.bytes)
   if (!architectures.includes(options.architecture)) invalid('native helper does not support this architecture')
+  // Legacy releases remain installable; capability-bearing releases bind every
+  // required native payload, protocol and hash to their exact package version.
+  if (manifest.qiuyaNative !== undefined) {
+    const capabilities = manifest.qiuyaNative as Record<string, unknown>
+    if (!capabilities || capabilities.protocolVersion !== 1 || capabilities.computerUse !== true) invalid('unsupported native protocol manifest')
+    const manifestPath = platform === 'darwin' ? 'package/lib/macos-manifest.json' : 'package/lib/native/windows-manifest.json'
+    const entry = files.get(manifestPath)
+    if (!entry || entry.bytes.length > MAX_METADATA_BYTES) invalid('missing native payload manifest')
+    let payloads: { version?: unknown; protocolVersion?: unknown; artifacts?: unknown }
+    try { payloads = JSON.parse(utf8(entry.bytes)) } catch { return invalid('invalid native payload manifest') }
+    if (payloads?.version !== options.version || !Array.isArray(payloads.artifacts) || payloads.artifacts.length !== (platform === 'darwin' ? 2 : 1)) invalid('native payload identity mismatch')
+    if (platform === 'darwin' && payloads.protocolVersion !== 1) invalid('unsupported native payload protocol')
+    const expected = platform === 'darwin'
+      ? ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer']
+      : [`win32-${options.architecture}/qiuya-windows.exe`]
+    for (const file of expected) {
+      const matches = payloads.artifacts.filter((asset: { file?: unknown }) => asset?.file === file)
+      if (matches.length !== 1) invalid('missing native payload identity')
+      const asset = matches[0] as { bytes?: unknown; sha256?: unknown; protocolVersion?: unknown; architecture?: unknown }
+      const native = files.get(`package/lib/${platform === 'win32' ? 'native/' : ''}${file}`)
+      if (!native || asset.bytes !== native.bytes.length || asset.sha256 !== createHash('sha256').update(native.bytes).digest('hex')) invalid('native payload integrity mismatch')
+      if (platform === 'darwin') {
+        if ((native.mode & 0o111) === 0 || !helperArchitectures(native.bytes).includes(options.architecture)) invalid('computer helper architecture mismatch')
+      } else if (asset.protocolVersion !== 1 || asset.architecture !== options.architecture || windowsExecutableArchitecture(native.bytes) !== options.architecture) invalid('native payload protocol or architecture mismatch')
+    }
+  }
   return { packageName: options.packageName, version: options.version, unpackedBytes, files: [...files.keys()], architectures }
 }

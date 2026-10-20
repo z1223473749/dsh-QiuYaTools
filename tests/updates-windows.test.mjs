@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { gzipSync } from 'node:zlib'
 import { build } from 'esbuild'
+import { createHash } from 'node:crypto'
 
 async function load(path) {
   const result = await build({ entryPoints: [new URL(path, import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })
@@ -47,4 +48,17 @@ test('Windows PE architecture and section bounds are inspected before installati
   for (const corrupt of [Buffer.alloc(1024), pe().subarray(0, 200)]) assert.throws(() => windowsExecutableArchitecture(corrupt))
   const corrupt = pe(); corrupt.writeUInt32LE(2000, 392 + 16)
   assert.throws(() => windowsExecutableArchitecture(corrupt), /section/)
+})
+
+test('computer-capable Windows package binds the matching native runtime and protocol to a single platform asset', () => {
+  const binary = pe('arm64'), version = '0.6.0-beta.1', file = 'win32-arm64/qiuya-windows.exe'
+  const native = { version, artifacts: [{ file, architecture: 'arm64', protocolVersion: 1, bytes: binary.length, sha256: createHash('sha256').update(binary).digest('hex') }] }
+  const candidate = payload => gzipSync(Buffer.concat([
+    entry('package/package.json', JSON.stringify({ name: 'dsh-qiuya-tools', version, dsh: { bundle: { patch: './cordis.patch.yml' } }, qiuyaNative: { protocolVersion: 1, computerUse: true } })),
+    entry('package/cordis.patch.yml', '- insert: []\n'), entry(`package/lib/native/${file}`, binary),
+    entry('package/lib/native/windows-manifest.json', JSON.stringify(payload)), Buffer.alloc(1024),
+  ]))
+  const options = { packageName: 'dsh-qiuya-tools', version, platform: 'win32', architecture: 'arm64' }
+  validateUpdateArchive(candidate(native), options)
+  for (const patch of [{ sha256: '0'.repeat(64) }, { protocolVersion: 99 }, { architecture: 'x64' }, { bytes: 2 }]) assert.throws(() => validateUpdateArchive(candidate({ ...native, artifacts: [{ ...native.artifacts[0], ...patch }] }), options), /native payload/)
 })
