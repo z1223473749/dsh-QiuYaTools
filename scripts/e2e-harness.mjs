@@ -13,6 +13,8 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const output = resolve(arg('--output', 'artifacts/harness-e2e'))
 const candidate = arg('--package')
+const windowStateDiagnostic = process.argv.includes('--preview-window-state-diagnostic')
+if (windowStateDiagnostic && process.platform !== 'win32') throw new Error('Window-state diagnostics require the actual Windows Host')
 const cli = JSON.parse(arg('--cli-json', JSON.stringify(['/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'])))
 if (!Array.isArray(cli) || !cli.length || !cli.every(value => typeof value === 'string')) throw new Error('--cli-json must be a nonempty JSON array')
 if (!candidate && !arg('--url')) throw new Error('Pass --package <candidate.tgz> or --url <isolated-fixture-URL>')
@@ -22,7 +24,8 @@ const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
 const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
 const tests = [], errors = [], screenshots = [], windowRpc = []
-let host, browser, page, driver
+let host, browser, page, driver, diagnosticComplete = false
+class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
   const child = spawn(cli[0], [...cli.slice(1), ...args], { env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -40,7 +43,7 @@ const nativeCommand = (command, args) => new Promise((resolve, reject) => {
 async function screenshot(name) { const path = join(output, `${name}.png`); await page.screenshot({ path }); screenshots.push(path) }
 async function test(name, operation) {
   const start = Date.now()
-  try { const details = await operation(); tests.push({ name, status: 'passed', elapsedMs: Date.now() - start, ...(details ? { details } : {}) }); console.log(`PASS ${name}`); return true }
+  try { const details = await operation(); const status = details?.diagnostic ? 'diagnostic' : 'passed'; tests.push({ name, status, elapsedMs: Date.now() - start, ...(details ? { details } : {}) }); console.log(`${status === 'passed' ? 'PASS' : 'DIAGNOSTIC'} ${name}`); return true }
   catch (error) {
     tests.push({ name, status: 'failed', elapsedMs: Date.now() - start, error: error.message })
     await screenshot(`failed-${tests.length}`).catch(() => {})
@@ -341,6 +344,14 @@ try {
     } else {
       preview = await waitFor(async () => (await driver.targets()).find(target => target.title.startsWith('QiuYaTools · 电脑操控') && target.appId.toLowerCase().startsWith(profileHome.toLowerCase() + '\\')), 'Native floating preview did not appear')
       const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+      const windowStages = []
+      const observeWindowState = async stage => {
+        const snapshot = JSON.parse(await nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-window-state-windows.ps1'), '-WindowId', preview.id, '-ProfileRoot', profileHome]))
+        const observation = { stage, target: preview, ...snapshot }
+        windowStages.push(observation)
+        await writeFile(join(output, `preview-window-${stage}.json`), JSON.stringify(observation, null, 2))
+      }
+      if (windowStateDiagnostic) await observeWindowState('before-uia')
       windowsPreview = (button, options = []) => nativeCommand(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-preview-windows.ps1'), '-WindowId', preview.id, ...(button ? ['-Button', button] : []), ...options])
       // WebView2 enables its renderer accessibility tree after the first UIA
       // client arrives. Wait for the actual controls and successful frame.
@@ -355,12 +366,18 @@ try {
       }
       await writeFile(join(output, 'floating-preview-uia-attempts.json'), JSON.stringify(attempts, null, 2))
       await writeFile(join(output, 'floating-preview-evidence.json'), JSON.stringify(controls, null, 2))
+      if (windowStateDiagnostic) await observeWindowState('after-uia')
       const previewImage = await driver.observe(preview.id)
       await writeFile(previewPath, Buffer.from(previewImage.imageBase64, 'base64'))
+      if (windowStateDiagnostic) await observeWindowState('after-native-observe')
       const text = controls.labels.join('\n')
       for (const label of ['暂停', '接管', '继续', '停止', '实时电脑画面']) assert.ok(text.includes(label), `The actual floating preview must expose ${label}`)
       assert.ok(!text.includes('unauthorized'), 'The floating preview must complete the real Harness owner-cookie bootstrap')
       assert.match(text, /\d+\s*ms/u, 'The live preview must display a successful frame latency')
+      if (windowStateDiagnostic) {
+        diagnosticComplete = true
+        return { diagnostic: true, stages: windowStages, boundary: 'Read-only preview phases after the first eight UI prerequisites and real main-Agent Move; no preview controls/manual actions or later cases are run.' }
+      }
     }
     for (const [button, state] of [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['停止', 'stopped']]) {
       if (observer) {
@@ -434,6 +451,7 @@ try {
     return { preview, adapterRequestsWithImages: images.length, imageBlocks: images.flatMap(request => request.imageBlocks).length,
       model: 'Local deterministic adapter verifies actual main-Agent image transport, not external vision reasoning' }
   })
+  if (windowStateDiagnostic) throw new PreviewWindowDiagnosticStop()
   await test('batch-archive-real-sessions', async () => {
     await row(beta).click(); await row(gamma).click({ modifiers: ['Shift'] })
     await row(beta).click({ button: 'right' })
@@ -525,18 +543,23 @@ try {
   })
   assert.equal(errors.length, 0, `Frontend errors: ${errors.join('; ')}`)
 } catch (error) {
+  if (error instanceof PreviewWindowDiagnosticStop) {
+    console.log(`DIAGNOSTIC preview window phases ${diagnosticComplete ? 'completed' : 'stopped after a failure'}; UI12 acceptance was not run`)
+  } else {
   tests.push({ name: 'runner', status: 'failed', error: error.message }); console.log(`FAIL runner: ${error.message}`)
   await screenshot('failed-runner').catch(() => {})
   const requests = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8').catch(() => '')
   if (requests) await writeFile(join(output, 'runner-adapter-requests.json'), JSON.stringify(requests.trim().split('\n').map(JSON.parse).slice(-40), null, 2))
+  }
 }
 finally {
   await writeFile(join(output, 'session-window-rpc.json'), JSON.stringify(windowRpc, null, 2))
   await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
   if (host) await Promise.race([new Promise(resolve => host.once('exit', resolve)), sleep(3000).then(() => host.kill('SIGKILL'))])
-  const report = { status: tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.'] }
+  const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length
+  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   if (!process.argv.includes('--keep-profile')) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ status: report.status, tests: tests.map(({ name, status }) => ({ name, status })), report: join(output, 'report.json') }, null, 2))
-  if (report.status !== 'passed') process.exitCode = 1
+  if (!['passed', 'diagnostic'].includes(report.status)) process.exitCode = 1
 }

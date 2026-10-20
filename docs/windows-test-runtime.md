@@ -78,6 +78,10 @@ node scripts/e2e-windows-harness-pd.mjs
 
 wrapper 默认读取准备脚本的 manifest，并校验归档 SHA、固定 Node SHA 与本仓库 lock。`environment.json` 记录实际输入 hash 及 `runtimePreparation`，以便关联候选包、helper 与 runtime。
 
+有限清单内的测试源码会从当前 checkout 重新传输，并以该次 `testSourceHashes` 记录实际内容；manifest 的 `sources` 记录最初打包时的快照。新增的 Win32 状态 fixture 同时加入准备与传输清单，无需把旧归档误记为包含后来的源码。
+
+需要定位真实 Host 的预览层级时，可设置 `QIUYA_WINDOWS_PREVIEW_WINDOW_DIAGNOSTIC=1`。它保留前八项 UI 前提和主 Agent 图像/Move 链，在预览第一次 UIA 观察前、UIA 后、native observe 截图后分别记录 Win32 style、owner、foreground 与实际运行文件 hash，然后停止预览按钮及后续验收。成功取证的 `report.status` 为 `diagnostic`，不能作为 UI12 通过；该模式拒绝同时运行安装生命周期。
+
 保留的旧测试归档也可通过显式路径运行：
 
 ```sh
