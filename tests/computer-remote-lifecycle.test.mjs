@@ -8,6 +8,11 @@ const output = (await build({ entryPoints: [fileURLToPath(new URL('../src/featur
 const { RemoteComputerDriver } = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`)
 const token = 'test-pair-token-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
+async function within(promise, milliseconds = 2000) {
+  let timer
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Expected heartbeat was not dispatched')), milliseconds) })]) }
+  finally { clearTimeout(timer) }
+}
 const reply = request => Response.json({ version: 1, requestId: request.requestId, ok: true, result: {} })
 function remote(handle, extra = {}) { return new RemoteComputerDriver({ endpoint: 'http://127.0.0.1:1', token, heartbeatMs: 10_000, fetch: async (_url, options) => handle(JSON.parse(options.body), options), ...extra }) }
 
@@ -38,7 +43,9 @@ test('a failed heartbeat from an older lease cannot disconnect a newer lease', a
     return reply(input)
   }, { heartbeatMs: 5 })
   driver.subscribe(event => events.push(event))
-  await driver.lease(1); await entered.promise
+  // Production heartbeats intentionally do not keep a process alive. This
+  // isolated fake-fetch test must own its own bounded, referenced wait timer.
+  await driver.lease(1); await within(entered.promise)
   await driver.lease(2); pending.reject(new Error('old heartbeat timeout'))
   const deadline = Date.now() + 500
   while (!newHeartbeat && Date.now() < deadline) await delay(5)

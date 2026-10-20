@@ -22,7 +22,7 @@ const defaults = {
 }
 
 function safeMembers(listing) {
-  const members = listing.trimEnd().split('\n')
+  const members = listing.trimEnd().split(/\r?\n/u)
   for (const member of members) {
     const path = member.replace(/\/$/u, '')
     if (!path.startsWith('package/') && path !== 'package'

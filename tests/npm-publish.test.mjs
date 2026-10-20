@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { gzipSync } from 'node:zlib'
@@ -197,7 +198,7 @@ test('the actual CLI runs fake gh/npm child processes and publishes only the dow
   await writeFile(join(assets, 'SHA256SUMS'), f.checksum)
   const fake = `#!${process.execPath}
 import fs from 'node:fs';import path from 'node:path';import{createHash}from'node:crypto';
-const name=path.basename(process.argv[1]),args=process.argv.slice(2),root=process.env.FIXTURE_ROOT;
+const name=process.argv[2],args=process.argv.slice(3),root=process.env.FIXTURE_ROOT;
 fs.appendFileSync(path.join(root,'commands.jsonl'),JSON.stringify({name,args,legacy:!!process.env.NODE_AUTH_TOKEN||!!process.env.NPM_TOKEN})+'\\n');
 if(name==='git')console.log(process.env.GITHUB_SHA);
 else if(name==='gh'&&args[1]==='view')console.log(${JSON.stringify(JSON.stringify(release))});
@@ -209,9 +210,14 @@ else if(name==='npm'&&args[0]==='view'){console.log(JSON.stringify({error:{code:
 else if(name==='npm'&&args[0]==='publish'){fs.copyFileSync(args[1],path.join(root,'published.tgz'));console.log('{}');}
 else{console.error('Unexpected fake command');process.exitCode=2;}
 `
-  for (const name of ['gh', 'git', 'npm']) await writeFile(join(bin, name), fake, { mode: 0o700 })
-  const result = await exec(process.execPath, [join(scripts, 'publish-npm.mjs')], {
-    cwd: f.root, env: { ...process.env, ...f.env, PATH: `${bin}:${process.env.PATH}`, FIXTURE_ROOT: f.root, NODE_AUTH_TOKEN: 'synthetic-legacy' },
+  const fakePath = join(bin, 'fake.mjs'), preload = join(bin, 'dispatch.mjs')
+  await writeFile(fakePath, fake, { mode: 0o700 })
+  // A POSIX shebang is not an executable on Windows. Dispatch only the three
+  // synthetic tools through a real Node child, keeping the actual CLI and its
+  // tar/probe subprocesses intact without shell escaping or real publishing.
+  await writeFile(preload, `import child from 'node:child_process';import{syncBuiltinESMExports}from'node:module';import{promisify}from'node:util';const original=child.execFile;function dispatch(command,args,options,callback){if(['gh','git','npm'].includes(command))return original(process.execPath,[${JSON.stringify(fakePath)},command,...args],options,callback);return original.apply(this,arguments)}dispatch[promisify.custom]=(command,args,options)=>new Promise((resolve,reject)=>dispatch(command,args,options,(error,stdout,stderr)=>{if(error){error.stdout=stdout;error.stderr=stderr;reject(error)}else resolve({stdout,stderr})}));child.execFile=dispatch;syncBuiltinESMExports();`)
+  const result = await exec(process.execPath, ['--import', pathToFileURL(preload).href, join(scripts, 'publish-npm.mjs')], {
+    cwd: f.root, env: { ...process.env, ...f.env, FIXTURE_ROOT: f.root, NODE_AUTH_TOKEN: 'synthetic-legacy' },
     encoding: 'utf8', timeout: 15_000,
   })
   assert.equal(JSON.parse(result.stdout).status, 'published')
