@@ -251,3 +251,86 @@ test('browser-only actions cannot fall through to an ordinary native driver', as
   assert.equal(f.records.some(record => record[0] === 'input'), false)
   await f.service.dispose()
 })
+
+test('latest permission intent wins queued disk writes while revoke releases native input immediately', async () => {
+  const f = fixture(), firstWrite = deferred(), entered = deferred(); let stored = [], writes = 0
+  const service = new ComputerSessionService(f.driver, { readAllowedApps: () => stored, writeAllowedApps: async ids => { if (++writes === 1) { entered.resolve(); await firstWrite.promise }; stored = [...ids] } })
+  await service.start('chat', f.target.id, { allowOnce: true })
+  const grant = service.setAppAllowed(f.target.appId, true)
+  await entered.promise
+  const revoke = service.setAppAllowed(f.target.appId, false)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(service.get('chat').state, 'stopped', 'native stop does not wait for the blocked disk write')
+  assert.equal(f.records.at(-1)[0], 'release')
+  assert.equal(service.allowedApps().includes(f.target.appId), false)
+  firstWrite.resolve(); await grant; await revoke
+  assert.deepEqual(stored, []); assert.deepEqual(service.allowedApps(), [])
+  const a = service.setAppAllowed('other-a', true), b = service.setAppAllowed('other-b', true)
+  await Promise.all([a, b]); assert.deepEqual(stored, ['other-a', 'other-b'])
+  await service.dispose(); await f.service.dispose()
+})
+
+test('a failed grant cannot resurrect authorization after a queued revoke', async () => {
+  const f = fixture(), releaseWrite = deferred(), entered = deferred(); let stored = [], writes = 0
+  const service = new ComputerSessionService(f.driver, { readAllowedApps: () => stored, writeAllowedApps: async ids => { if (++writes === 1) { entered.resolve(); await releaseWrite.promise; throw new Error('disk failed') }; stored = [...ids] } })
+  const grantRejected = assert.rejects(service.setAppAllowed(f.target.appId, true), /disk failed/)
+  await entered.promise
+  const revoked = service.setAppAllowed(f.target.appId, false)
+  releaseWrite.resolve(); await grantRejected; await revoked
+  assert.deepEqual(stored, []); assert.equal(service.allowedApps().includes(f.target.appId), false)
+  await service.dispose(); await f.service.dispose()
+})
+
+test('retrying stop releases the actual native epoch after the first release fails', async () => {
+  const f = fixture(), released = []; let nativeEpoch = 0, fail = true
+  f.driver.lease = async epoch => { nativeEpoch = epoch }
+  f.driver.release = async epoch => { released.push(epoch); if (fail) { fail = false; throw new Error('temporary release failure') }; if (nativeEpoch === epoch) nativeEpoch = 0 }
+  await f.service.start('chat', f.target.id, { allowOnce: true })
+  const granted = f.service.get('chat').epoch
+  await assert.rejects(f.service.stop('chat'), /temporary release/)
+  assert.equal(f.service.get('chat').state, 'faulted')
+  assert.ok(f.service.get('chat').epoch > granted)
+  await f.service.stop('chat')
+  assert.deepEqual(released, [granted, granted]); assert.equal(nativeEpoch, 0); assert.equal(f.service.get('chat').state, 'stopped')
+  await f.service.dispose()
+})
+
+test('uncertain start lease is cleaned before a new lease can replace it', async () => {
+  const f = fixture(), events = []; let nativeEpoch = 0, firstLease = true, firstRelease = true
+  f.driver.lease = async epoch => { events.push(['lease', epoch]); nativeEpoch = epoch; if (firstLease) { firstLease = false; throw new Error('lease reply lost') } }
+  f.driver.release = async epoch => { events.push(['release', epoch]); if (firstRelease) { firstRelease = false; throw new Error('release offline') }; if (nativeEpoch === epoch) nativeEpoch = 0 }
+  await assert.rejects(f.service.start('chat', f.target.id, { allowOnce: true }), /reply lost/)
+  const uncertain = nativeEpoch
+  await assert.rejects(f.service.start('other', f.target.id, { allowOnce: true }), { code: 'DEVICE_BUSY' })
+  await f.service.start('chat', f.target.id, { allowOnce: true })
+  assert.deepEqual(events.slice(0, 3), [['lease', uncertain], ['release', uncertain], ['release', uncertain]])
+  assert.ok(nativeEpoch > uncertain)
+  await f.service.stop('chat'); assert.equal(nativeEpoch, 0)
+  await f.service.dispose()
+})
+
+test('takeover and resume uncertain leases remain releasable after snapshot epochs advance', async () => {
+  const f = fixture(), released = []; let nativeEpoch = 0, failRelease = false, failLease = false
+  f.driver.lease = async epoch => { nativeEpoch = epoch; if (failLease) { failLease = false; throw new Error('uncertain lease') } }
+  f.driver.release = async epoch => { released.push(epoch); if (failRelease) { failRelease = false; throw new Error('release offline') }; if (nativeEpoch === epoch) nativeEpoch = 0 }
+  await f.service.start('chat', f.target.id, { allowOnce: true }); await f.service.takeover('chat')
+  const humanEpoch = nativeEpoch
+  failRelease = true; await assert.rejects(f.service.pause('chat'), /offline/)
+  await f.service.stop('chat'); assert.equal(nativeEpoch, 0); assert.deepEqual(released.slice(-2), [humanEpoch, humanEpoch])
+  await f.service.start('chat', f.target.id, { allowOnce: true }); await f.service.pause('chat')
+  failLease = true; failRelease = true
+  await assert.rejects(f.service.resume('chat'), /uncertain lease/)
+  const resumeEpoch = nativeEpoch
+  await f.service.stop('chat'); assert.equal(nativeEpoch, 0); assert.deepEqual(released.slice(-2), [resumeEpoch, resumeEpoch])
+  await f.service.dispose()
+})
+
+test('dispose always asks the driver to clean input even when a lease release fails', async () => {
+  const f = fixture(); let nativeEpoch = 0, disposed = false
+  f.driver.lease = async epoch => { nativeEpoch = epoch }
+  f.driver.release = async () => { throw new Error('release failed') }
+  f.driver.dispose = async () => { disposed = true; nativeEpoch = 0 }
+  await f.service.start('chat', f.target.id, { allowOnce: true }); await f.service.dispose()
+  assert.equal(disposed, true); assert.equal(nativeEpoch, 0)
+  await assert.rejects(f.service.start('chat', f.target.id, { allowOnce: true }), { code: 'DISPOSED' })
+})

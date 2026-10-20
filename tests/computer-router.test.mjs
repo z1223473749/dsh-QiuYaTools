@@ -61,3 +61,47 @@ test('same browser profile reconnect closes its previous owner first, and launch
   assert.equal(activeProfiles.size, 0)
   await router.dispose()
 })
+
+test('dispose retires an in-flight remote candidate and its late response cannot reinstall the backend', async () => {
+  const local = driver('local'), remote = driver('remote'), response = deferred()
+  remote.status = () => response.promise
+  const router = new ComputerDriverRouter({ local, remoteFactory: () => remote })
+  const connecting = router.useRemote({ endpoint: 'http://127.0.0.1', token: 'fixture' }), rejected = assert.rejects(connecting, { code: 'DISPOSED' })
+  await new Promise(resolve => setImmediate(resolve)); await router.dispose()
+  assert.equal(remote.calls.filter(call => call[0] === 'dispose').length, 1)
+  assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1)
+  response.resolve({ available: true }); await rejected
+  assert.equal(router.mode, 'local')
+  assert.throws(() => router.targets(), { code: 'DISPOSED' })
+})
+
+test('dispose aborts a browser launch and prevents late startup from taking ownership', async () => {
+  const local = driver('local'), launch = deferred(); let launchSignal, closed = 0
+  const router = new ComputerDriverRouter({ local, browserFactory: options => ({ profileDir: options.profileDir, options, async launch(signal) { launchSignal = signal; await launch.promise; signal.throwIfAborted() }, async close() { closed++ }, async list() { return [] }, allowedOrigins() { return options.allowedOrigins }, subscribe() { return () => {} } }) })
+  const connecting = router.useBrowser({ profileDir: '/fixture', allowedOrigins: [] }), rejected = assert.rejects(connecting, { code: 'DISPOSED' })
+  await new Promise(resolve => setImmediate(resolve)); await router.dispose()
+  assert.equal(launchSignal.aborted, true); assert.equal(closed, 1)
+  launch.resolve(); await rejected; assert.equal(closed, 1)
+})
+
+test('a newer switch supersedes a delayed connection without disposing its successful replacement', async () => {
+  const local = driver('local'), older = driver('older'), newer = driver('newer'), delayed = deferred(); let calls = 0
+  older.status = () => delayed.promise
+  const router = new ComputerDriverRouter({ local, remoteFactory: () => ++calls === 1 ? older : newer })
+  const first = router.useRemote({ endpoint: 'http://127.0.0.1', token: 'first' }), rejected = assert.rejects(first, { code: 'CONTROL_CHANGED' })
+  await router.useRemote({ endpoint: 'http://127.0.0.1', token: 'second' })
+  delayed.resolve({ available: true }); await rejected
+  assert.equal((await router.status()).name, 'newer')
+  assert.equal(older.calls.filter(call => call[0] === 'dispose').length, 1)
+  assert.equal(newer.calls.filter(call => call[0] === 'dispose').length, 0)
+  await router.dispose()
+})
+
+test('shutdown cleans local preview even if disposing the remote driver fails', async () => {
+  const local = driver('local'), remote = driver('remote')
+  remote.dispose = async () => { throw new Error('remote cleanup failed') }
+  const router = new ComputerDriverRouter({ local, remoteFactory: () => remote })
+  await router.useRemote({ endpoint: 'http://127.0.0.1', token: 'fixture' })
+  await assert.rejects(router.dispose(), /remote cleanup failed/)
+  assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1)
+})

@@ -14,6 +14,12 @@ export class ComputerSessionService {
   private readonly listeners = new Set<() => void>()
   private readonly allowed = new Set<string>()
   private readonly denied = new Set<string>()
+  private permissionTail: Promise<void> = Promise.resolve()
+  private permissionVersion = 0
+  private readonly permissionIntents = new Map<string, number>()
+  /** Native leases survive generation invalidation until release is confirmed. */
+  private readonly leases = new Map<number, string>()
+  private readonly releasing = new Map<number, Promise<void>>()
   private ownerControlVersion = 0
   private activeSession: string | undefined
   private nextEpoch = 0
@@ -53,20 +59,60 @@ export class ComputerSessionService {
   status(signal?: AbortSignal) { this.assertLive(); return this.driver.status(signal) }
   targets(signal?: AbortSignal) { this.assertLive(); return this.driver.targets(signal) }
   allowedApps(): string[] { return [...new Set([...(this.options.readAllowedApps?.() ?? []), ...this.allowed])].filter(id => !this.denied.has(id)).sort() }
-  async setAppAllowed(appId: string, allowed: boolean): Promise<void> {
+  setAppAllowed(appId: string, allowed: boolean): Promise<void> {
     this.assertLive(); requireIdentity(appId, '应用')
-    const values = new Set(this.allowedApps())
-    if (allowed) values.add(appId); else values.delete(appId)
+    const version = ++this.permissionVersion
+    this.permissionIntents.set(appId, version)
+    if (allowed && !this.allowedApps().includes(appId)) this.denied.add(appId)
+    let stopping: Promise<unknown> = Promise.resolve()
     if (!allowed) {
       // Revocation takes effect even if persisting the preference later fails.
       this.denied.add(appId); this.allowed.delete(appId)
       const affected = [...this.sessions.values()].filter(record => record.snapshot.target?.appId === appId)
-      await Promise.all(affected.map(record => this.stop(record.snapshot.sessionId)))
+      stopping = Promise.all(affected.map(record => this.stop(record.snapshot.sessionId)))
     }
-    await this.options.writeAllowedApps?.([...values].sort())
-    if (allowed) this.denied.delete(appId)
-    this.allowed.clear(); values.forEach(value => this.allowed.add(value))
     this.notify()
+    // Attach the rejection observer immediately even when an earlier disk
+    // operation is still running. The caller still receives the failure.
+    void stopping.catch(() => {})
+    const writing = this.permissionTail.catch(() => {}).then(async () => {
+      const values = new Set(this.allowedApps())
+      if (allowed) values.add(appId); else values.delete(appId)
+      await this.options.writeAllowedApps?.([...values].sort())
+      if (this.permissionIntents.get(appId) === version) {
+        if (allowed) this.denied.delete(appId)
+        this.allowed.clear(); values.forEach(value => this.allowed.add(value))
+        this.notify()
+      }
+      // Persist a deny even if native cleanup fails. A successful revoke still
+      // waits for both storage and the independent immediate input release.
+      await stopping
+    })
+    this.permissionTail = writing.catch(() => {})
+    return writing
+  }
+  private hasLease(sessionId: string): boolean { return [...this.leases.values()].includes(sessionId) }
+  private async releaseLeases(sessionId: string): Promise<void> {
+    for (const [epoch, owner] of this.leases) {
+      if (owner !== sessionId) continue
+      let pending = this.releasing.get(epoch)
+      if (!pending) {
+        pending = this.driver.release(epoch).then(() => { this.leases.delete(epoch) })
+        this.releasing.set(epoch, pending)
+        void pending.then(() => { this.releasing.delete(epoch) }, () => { this.releasing.delete(epoch) })
+      }
+      await pending
+    }
+  }
+  private async acquireLease(record: SessionRecord, epoch: number, signal?: AbortSignal): Promise<void> {
+    await this.releaseLeases(record.snapshot.sessionId)
+    signal?.throwIfAborted()
+    if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '租约建立已取消')
+    this.assertEnabled()
+    if (this.leases.size) throw new ComputerError('NATIVE_LEASE_UNRELEASED', '旧电脑输入租约尚未完成清理')
+    // Record before dispatch: a lost reply can still mean the native lease ran.
+    this.leases.set(epoch, record.snapshot.sessionId)
+    await this.driver.lease(epoch, signal)
   }
   private isAllowed(record: SessionRecord): boolean { return record.allowOnce || this.allowedApps().includes(record.snapshot.target?.appId ?? '') }
   async permittedTargets(sessionId: string, signal?: AbortSignal): Promise<NativeTarget[]> {
@@ -135,14 +181,15 @@ export class ComputerSessionService {
         if (!Number.isSafeInteger(target.pid) || target.pid <= 0 || typeof target.title !== 'string') throw new ComputerError('INVALID_TARGET', '执行器返回的应用身份无效')
         record.snapshot.target = { ...target }
         if (!this.isAllowed(record)) throw new ComputerError('APP_NOT_ALLOWED', '请先允许此应用，或从面板授权本次操作')
-        await this.driver.lease(epoch, signal)
+        await this.acquireLease(record, epoch, signal)
         signal.throwIfAborted()
         if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '开始操作已取消')
       })
       this.change(record, 'ready'); return this.get(sessionId)!
     } catch (error) {
-      if (record.snapshot.epoch === epoch) { this.invalidate(record); this.change(record, 'faulted', error); this.activeSession = undefined }
-      await this.driver.release(epoch).catch(() => {})
+      if (record.snapshot.epoch === epoch) { this.invalidate(record); this.change(record, 'faulted', error) }
+      await this.releaseLeases(sessionId).catch(() => {})
+      if (!this.hasLease(sessionId) && this.activeSession === sessionId && record.snapshot.state === 'faulted') this.activeSession = undefined
       throw error
     }
   }
@@ -220,8 +267,8 @@ export class ComputerSessionService {
           const next = await this.driver.resolveActionTarget(target, action, result, signal)
           this.fence(record, epoch, human)
           if (next === null) {
-            const released = this.invalidate(record)
-            await this.driver.release(released)
+            this.invalidate(record)
+            await this.releaseLeases(sessionId)
             record.allowOnce = false
             if (this.activeSession === sessionId) this.activeSession = undefined
             record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }
@@ -245,9 +292,9 @@ export class ComputerSessionService {
         record.previewFrames.clear()
         if (record.snapshot.lastAction?.actionId === request.actionId) { record.snapshot.lastAction = { ...record.snapshot.lastAction, phase: 'failed', at: this.clock() }; this.notify() }
         if (record.snapshot.epoch === epoch) {
-          const releasedEpoch = this.invalidate(record)
+          this.invalidate(record)
           this.change(record, 'pausing', error)
-          try { await this.driver.release(releasedEpoch); this.change(record, 'paused', error) } catch (releaseError) { this.change(record, 'faulted', releaseError) }
+          try { await this.releaseLeases(sessionId); this.change(record, 'paused', error) } catch (releaseError) { this.change(record, 'faulted', releaseError) }
         }
         throw error
       }
@@ -264,13 +311,16 @@ export class ComputerSessionService {
     if (record.transition) return record.transition.then(() => this.transition(sessionId, state))
     if (record.snapshot.state === 'stopped') return Promise.resolve(this.get(sessionId)!)
     if (record.snapshot.state === state) return Promise.resolve(this.get(sessionId)!)
-    const epoch = this.invalidate(record)
+    this.invalidate(record)
     this.change(record, state === 'stopped' ? 'stopping' : state === 'humanControl' ? 'handingOver' : 'pausing')
     const promise = (async () => {
       try {
-        await this.driver.release(epoch)
+        await this.releaseLeases(sessionId)
         await Promise.allSettled([...record.pending])
-        if (state === 'humanControl') await this.driver.lease(record.snapshot.epoch)
+        // A cancelled acquisition may have registered its uncertain native
+        // lease while we were waiting for its owned operation to settle.
+        await this.releaseLeases(sessionId)
+        if (state === 'humanControl') await this.acquireLease(record, record.snapshot.epoch)
         this.change(record, state)
         if (state === 'stopped') { record.allowOnce = false; if (this.activeSession === sessionId) this.activeSession = undefined }
         return this.get(sessionId)!
@@ -307,12 +357,12 @@ export class ComputerSessionService {
         record.snapshot.target = { ...current, ...observation.geometry }
         const { imageBase64: _, elements: _elements, mediaType: _mediaType, ...metadata } = observation
         record.snapshot.lastObservation = metadata
-        await this.driver.lease(epoch, signal)
+        await this.acquireLease(record, epoch, signal)
         signal.throwIfAborted()
         if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '继续操作已取消')
       })
       this.change(record, 'ready'); return this.get(sessionId)!
-    } catch (error) { await this.driver.release(epoch).catch(() => {}); if (record.snapshot.epoch === epoch) this.change(record, 'faulted', error); throw error }
+    } catch (error) { await this.releaseLeases(sessionId).catch(() => {}); if (record.snapshot.epoch === epoch) this.change(record, 'faulted', error); throw error }
   }
   dispose(): Promise<void> {
     if (this.disposing) return this.disposing
@@ -320,7 +370,7 @@ export class ComputerSessionService {
     const stopping = [...this.sessions.keys()].map(id => this.stop(id))
     this.disposed = true
     this.disposing = (async () => {
-      try { await Promise.allSettled(stopping) } finally { this.listeners.clear(); await this.driver.dispose?.() }
+      try { await Promise.allSettled([...stopping, this.permissionTail]) } finally { this.listeners.clear(); await this.driver.dispose?.() }
     })()
     return this.disposing
   }

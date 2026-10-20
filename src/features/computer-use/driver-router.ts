@@ -12,6 +12,13 @@ export class ComputerDriverRouter implements DeviceDriver {
   private unLocal: () => void
   private readonly remoteFactory: (options: RemoteComputerOptions) => DeviceDriver
   private readonly browserFactory: (options: BrowserOptions) => BrowserSession
+  private disposed = false
+  private generation = 0
+  private readonly candidates = new Set<DeviceDriver>()
+  private readonly controllers = new Set<AbortController>()
+  private readonly retirement = new WeakMap<DeviceDriver, Promise<void>>()
+  private readonly retiring = new Set<Promise<void>>()
+  private disposing?: Promise<void>
   mode: 'local' | 'remote' | 'browser' = 'local'
   constructor(options: { local?: DeviceDriver; remoteFactory?: (options: RemoteComputerOptions) => DeviceDriver; browserFactory?: (options: BrowserOptions) => BrowserSession } = {}) {
     this.local = options.local ?? new NativeCompanionDriver()
@@ -22,50 +29,89 @@ export class ComputerDriverRouter implements DeviceDriver {
   }
   private emit(event: NativeComputerEvent) { for (const listener of this.listeners) listener(event) }
   subscribe(listener: (event: NativeComputerEvent) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  async useLocal() {
-    this.unsubscribe?.(); this.unsubscribe = undefined
-    if (this.current !== this.local) await this.current.dispose?.()
-    this.current = this.local; this.mode = 'local'
+  private assertLive() { if (this.disposed) throw new ComputerError('DISPOSED', '电脑执行器路由已关闭') }
+  private assertGeneration(generation: number) { this.assertLive(); if (this.generation !== generation) throw new ComputerError('CONTROL_CHANGED', '设备连接已被更新的请求替代') }
+  private retire(driver: DeviceDriver): Promise<void> {
+    const previous = this.retirement.get(driver); if (previous) return previous
+    const pending = Promise.resolve().then(async () => { await driver.dispose?.() })
+    this.retirement.set(driver, pending); this.retiring.add(pending)
+    void pending.then(() => { this.retiring.delete(pending) }, () => { this.retiring.delete(pending) })
+    return pending
   }
-  async useRemote(options: RemoteComputerOptions) {
-    const next = this.remoteFactory(options)
-    try { await next.status() } catch (error) { await next.dispose?.(); throw error }
-    this.unsubscribe?.()
-    if (this.current !== this.local) await this.current.dispose?.()
-    this.current = next; this.mode = 'remote'; this.unsubscribe = next.subscribe?.(event => this.emit(event))
+  private async switching(run: (generation: number, signal: AbortSignal) => Promise<void>, signal?: AbortSignal): Promise<void> {
+    this.assertLive(); signal?.throwIfAborted()
+    const generation = ++this.generation
+    for (const controller of this.controllers) controller.abort(new ComputerError('CONTROL_CHANGED', '连接请求已被替代'))
+    const controller = new AbortController(); this.controllers.add(controller)
+    const abort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
+    try { await run(generation, controller.signal) }
+    finally { this.controllers.delete(controller); signal?.removeEventListener('abort', abort) }
   }
-  async useBrowser(options: BrowserOptions, initialUrl?: string, signal?: AbortSignal) {
-    const browser = this.browserFactory(options)
-    if (this.current instanceof BrowserDeviceDriver && this.current.browser.profileDir === browser.profileDir && this.current.browser.options.cdpEndpoint === options.cdpEndpoint) {
-      const previous = this.current
-      this.unsubscribe?.(); this.unsubscribe = undefined; this.current = this.local; this.mode = 'local'
-      await previous.dispose()
-    }
-    const next = new BrowserDeviceDriver(browser)
-    try {
-      await browser.launch(signal)
-      if (initialUrl) await browser.open(initialUrl, signal)
-      await next.status(signal)
-    } catch (error) { await next.dispose(); throw error }
-    this.unsubscribe?.()
-    if (this.current !== this.local) await this.current.dispose?.()
-    this.current = next; this.mode = 'browser'; this.unsubscribe = next.subscribe(event => this.emit(event))
+  private async fallbackLocal(generation: number): Promise<void> {
+    this.assertGeneration(generation)
+    const previous = this.current
+    this.unsubscribe?.(); this.unsubscribe = undefined; this.current = this.local; this.mode = 'local'
+    if (previous !== this.local) await this.retire(previous)
+    this.assertGeneration(generation)
   }
-  status(signal?: AbortSignal) { const current = this.current, mode = this.mode; return current.status(signal).then(status => ({ ...status, mode })) }
-  targets(signal?: AbortSignal) { return this.current.targets(signal) }
-  observe(targetId: string, signal?: AbortSignal) { return this.current.observe(targetId, signal) }
-  preview(targetId: string, signal?: AbortSignal) { return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
-  lease(epoch: number, signal?: AbortSignal) { return this.current.lease(epoch, signal) }
-  release(epoch: number, signal?: AbortSignal) { return this.current.release(epoch, signal) }
+  useLocal() { return this.switching(async generation => { await this.fallbackLocal(generation) }) }
+  useRemote(options: RemoteComputerOptions) {
+    return this.switching(async (generation, signal) => {
+      const next = this.remoteFactory(options); this.candidates.add(next)
+      try {
+        await next.status(signal); signal.throwIfAborted(); this.assertGeneration(generation)
+        await this.fallbackLocal(generation); signal.throwIfAborted()
+        this.current = next; this.mode = 'remote'; this.unsubscribe = next.subscribe?.(event => this.emit(event))
+      } catch (error) { await this.retire(next); throw error }
+      finally { this.candidates.delete(next) }
+    })
+  }
+  useBrowser(options: BrowserOptions, initialUrl?: string, signal?: AbortSignal) {
+    return this.switching(async (generation, operationSignal) => {
+      const browser = this.browserFactory(options), next = new BrowserDeviceDriver(browser)
+      this.candidates.add(next)
+      try {
+        if (this.current instanceof BrowserDeviceDriver && this.current.browser.profileDir === browser.profileDir && this.current.browser.options.cdpEndpoint === options.cdpEndpoint) await this.fallbackLocal(generation)
+        operationSignal.throwIfAborted(); this.assertGeneration(generation)
+        await browser.launch(operationSignal)
+        if (initialUrl) await browser.open(initialUrl, operationSignal)
+        await next.status(operationSignal); operationSignal.throwIfAborted(); this.assertGeneration(generation)
+        await this.fallbackLocal(generation); operationSignal.throwIfAborted()
+        this.current = next; this.mode = 'browser'; this.unsubscribe = next.subscribe(event => this.emit(event))
+      } catch (error) { await this.retire(next); throw error }
+      finally { this.candidates.delete(next) }
+    }, signal)
+  }
+  status(signal?: AbortSignal) { this.assertLive(); const current = this.current, mode = this.mode; return current.status(signal).then(status => ({ ...status, mode })) }
+  targets(signal?: AbortSignal) { this.assertLive(); return this.current.targets(signal) }
+  observe(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.observe(targetId, signal) }
+  preview(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
+  lease(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.lease(epoch, signal) }
+  release(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.release(epoch, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) {
+    this.assertLive()
     if (this.mode !== 'browser' && ['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(action.kind)) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '浏览器专用操作需要先连接浏览器通道。')
     return this.current.act(epoch, targetId, action, signal)
   }
   async resolveActionTarget(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal) {
+    this.assertLive()
     if (!this.current.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前操作环境不支持浏览器导航。')
     return this.current.resolveActionTarget(target, action, result, signal)
   }
-  openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.local.openPreview(url, title, sessionId, signal) }
-  closePreview(signal?: AbortSignal) { return this.local.closePreview(signal) }
-  async dispose() { this.unsubscribe?.(); this.unLocal(); if (this.current !== this.local) await this.current.dispose?.(); await this.local.dispose?.(); this.listeners.clear() }
+  openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { this.assertLive(); return this.local.openPreview(url, title, sessionId, signal) }
+  closePreview(signal?: AbortSignal) { this.assertLive(); return this.local.closePreview(signal) }
+  dispose(): Promise<void> {
+    if (this.disposing) return this.disposing
+    this.disposed = true; this.generation++
+    for (const controller of this.controllers) controller.abort(new ComputerError('DISPOSED', '电脑执行器路由已关闭'))
+    this.unsubscribe?.(); this.unLocal(); this.listeners.clear()
+    const all = new Set([...this.candidates, this.current, this.local])
+    this.disposing = (async () => {
+      const results = await Promise.allSettled([...all].map(driver => this.retire(driver)).concat([...this.retiring]))
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      if (failure) throw failure.reason
+    })()
+    return this.disposing
+  }
 }
