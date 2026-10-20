@@ -14,11 +14,11 @@
 | P3 主Agent与图像 | blocked（真实模型） | 双端实际SDK工具、附件与adapter运输通过；Mac实际3次带图请求/4图片块，Windows最终Host亦有带图与native动作。确定性provider不证明视觉推理；当前缺少已证实可用的图像模型 |
 | P4A Mac原生执行器 | blocked | ARM64历史原生11项、通用构建/自测通过；新guard只读/互斥/转移/空租约崩溃恢复4项通过。真实按住后崩溃恢复未完成，最新桌面锁屏；Intel与最低系统未实测 |
 | P4B Windows原生执行器 | passed（列明范围） | PD Windows11 ARM64最终helper 52/52、实际Node隐藏启动5/5；真正按住后mouse-up 30次P95 21.7592ms/最大24.1073ms；截图8项含14项子进程故障及20不同动画帧。x64 helper在ARM来宾转译下完整52+隐藏5通过，仍不是原生x64硬件 |
-| P5 悬浮实时预览 | blocked（Mac完整验收） | Chromium生产前端17/17；Windows最终包真实WebView2手动预览/四按钮及中文输入通过。位图资源、旧手势、迟到解码与自动暂停竞态已修复。最终Windows renderer30分钟passed，23,025帧、12.7844FPS、P9532ms、0invalid、5故障恢复，WS峰1,549,283,328字节低于1.5GiB；仅640×360共享前端；Mac长稳failed后被锁屏阻塞，新canvas的WKWebView需解锁重验 |
+| P5 悬浮实时预览 | failed / blocked | Chromium生产前端17/17；Windows最终包真实WebView2手动预览/四按钮及中文输入通过。位图资源、旧手势、迟到解码与自动暂停竞态已修复。最终Windows renderer30分钟passed，23,025帧、12.7844FPS、P9532ms、0invalid、5故障恢复，WS峰1,549,283,328字节低于1.5GiB；仅640×360共享前端；Mac长稳failed后被锁屏阻塞，新canvas的WKWebView需解锁重验；x64实际Host接管后预览未置顶导致footer被遮挡，仍在定位 |
 | P6 独立环境 | blocked（反向实机） | Mac→Windows最终原生15/15，配对/撤权/心跳通过。手动文件交换35项、真实NTFS10/10、实际Host UI 8MiB上传/下载与同名拒绝通过，文件分支native调用为0。Windows→Mac因Mac锁屏未发送输入，不用回环替代第二目标 |
 | P7 浏览器通道 | passed | Mac Chrome与Windows Edge各10项实际浏览器检查；独立持久profile、显式CDP、站点许可、导航/标签页、Agent注册及失败释放回归。没有随包日常profile浏览器扩展，真实视觉推理由P3另验 |
-| P8 安装与更新 | passed（本地测试包范围） | 最终Mac包e528ed96…与Windows ARM64包ab9d9b12…各官方管理器安装/升级保留设置/坏包恢复/回滚/重装5/5。三包严格版本/协议/架构/hash/大小及隔离Host加载通过。CI未远程执行，正式签名、公证、公开发布not-run |
-| P9 完整验收 | failed / blocked | 历史失败保留；Mac长稳failed，后续Mac输入、反向目标与真实模型blocked。Windows最终640×360共享renderer长稳已passed，原生WebView2/720p/滚动拖动长稳未验；不能报告整体完成 |
+| P8 安装与更新 | passed（本地测试包范围） | 最终Mac包e528ed96…、Windows ARM64包ab9d9b12…与x64包54f25c87…各官方管理器安装/升级保留设置/坏包恢复/回滚/重装5/5。三包严格版本/协议/架构/hash/大小及隔离Host加载通过。CI未远程执行，正式签名、公证、公开发布not-run |
+| P9 完整验收 | failed / blocked | 历史失败保留；x64实际Host预览置顶失败尚未修复；Mac长稳failed，后续Mac输入、反向目标与真实模型blocked。Windows最终640×360共享renderer长稳已passed，原生WebView2/720p/滚动拖动长稳未验；不能报告整体完成 |
 | P10 Excel与锁屏扩展 | not-run，未实现 | 专用Excel加载项、macOS锁屏操控需独立实现和对应Office/系统会话环境；普通点击不替代专用扩展 |
 
 ## 主要修复及其依据
@@ -34,6 +34,8 @@
 - 发布校验原生版本、协议、架构与hash；Windows分架构产包，未提高64MiB压缩上限。三个最终资产及各native组件SHA见delivery-manifest。
 
 ## 长稳结果与当前阻塞
+
+x64真实Node宿主首轮11/12，诊断轮10/12。已抓到手动点击目标后浮层WS_EX_TOPMOST=false、footer被目标遮挡而拒绝；初次激活与第二次Continue的历史原因未完全确定，不用重跑通过补造。实际安装helper和冻结源码可逐字节绑定，最小静态Win32/UIA对照两架构均置顶，继续定位真实Host首次demote阶段。
 
 1. Windows最终30分钟源画面→Edge renderer passed：1,801,027ms、23,025帧、完整时段12.7844FPS、P9532ms、0无效、5终止/显式重启、0附件spy写入，Node RSS峰133,132,288B，自有WS峰1,549,283,328B<1.5GiB。61份资源采样及私有提交趋势保留，完成回执exit0，171个采样进程身份事后均已退出。负载仅640×360的共享Edge前端，不代替原生WebView2/720p/滚动拖动长稳。
 2. 历史Windows renderer完整30分钟画面指标通过但资源failed：既有PID复用误归属，也有真实自有进程超限。统计修复和图片/Blob对照后，采用位图释放修复；保留所有失败报告。旧native采集组件30分钟passed不是最终renderer全量证明。

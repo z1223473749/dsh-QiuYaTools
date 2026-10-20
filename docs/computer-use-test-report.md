@@ -2,7 +2,7 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告区分实际桌面、浏览器、确定性模型、故障注入及真实模型，不把这些证据相互替代。原始范围见 [开发计划](windows-and-computer-use-development-plan.md)，操作方式见 [使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
+**整体尚未通过完整验收。** 三份安装包已经生成；最终 Windows ARM64 包的实际宿主 12/12、安装恢复 5/5通过，Mac 最终包安装恢复 5/5通过。x64宿主的实际手动预览出现失去置顶、目标遮挡输入栏的失败，正在定位；Mac 最近预检实测锁屏，新的 WKWebView 手动输入、完整 Mac 长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉模型也缺少可用前提。Excel 专用加载项和 macOS 锁屏扩展尚未实现，不能称为“完全复刻 Codex”。
 
 ## 1. 版本、环境及证据口径
 
@@ -24,7 +24,8 @@
 | Windows Node 隐藏启动 | passed：真实 Node `windowsHide:true` 启动最终 helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-hook-final/report.json) |
 | Windows 在途拖动释放 | passed：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
 | Windows 最终实际 Harness | passed：包 `ab9d9b12…`，真实 Host/UI **12/12**，含原功能、原生窗、可信浏览器拖出、主 Agent 收图、原生预览人工操作、8MiB 文件交换 | [报告](../artifacts/harness-e2e/windows-canvas-final/report.json)、[验证边界](../artifacts/harness-e2e/windows-canvas-final/validation-notes.json) |
-| Windows 最终安装恢复 | passed：同一 `ab9d9b12…` 包，官方管理器安装、升级保留配置、坏包恢复、回滚、重装 **5/5** | [报告](../artifacts/install-e2e/windows-canvas-final/report.json) |
+| Windows x64实际Harness | failed：首轮11/12，后续诊断10/12。真实主Agent图片/原生move可执行，但手动点击目标后预览失去置顶，footer物理命中被目标遮挡而拒绝；后续菜单超时可能级联。不能把native52当此项已通过 | [首次](../artifacts/harness-e2e/windows-x64-activation-failure/report.json)、[控制诊断](../artifacts/harness-e2e/windows-x64-control-diagnostic-failure/report.json)、[实际手动失败](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/manual-preview-input-evidence.json) |
+| Windows 最终安装恢复 | passed：ARM64 `ab9d9b12…`与x64 `54f25c87…`包，各官方管理器安装、升级保留配置、坏包恢复、回滚、重装 **5/5**；x64为ARM来宾转译 | [ARM64](../artifacts/install-e2e/windows-canvas-final/report.json)、[x64](../artifacts/install-e2e/windows-x64-final/report.json) |
 | Mac 最终安装恢复 | passed：包 `e528ed96…`，相同官方管理器流程 **5/5**；不需要解锁后的桌面输入 | [报告](../artifacts/install-e2e/macos-canvas-final/report.json) |
 | Mac 历史实际 Harness | passed：解锁时原功能、主 Agent 图像、原生分窗等 **10/10**；这是该次源码/候选的证据，新 canvas 在 Mac WKWebView 的手动输入没有被这份旧报告覆盖 | [报告](../artifacts/harness-e2e/macos/report.json) |
 | Mac 原生功能 | passed（历史明列范围）：**11项**实际输入与窗口检查；通用原生构建、自测通过。后续 guard 真正持有输入后的崩溃恢复另列阻塞 | [原生报告](../artifacts/computer-use/macos-native/report.json)、[同范围重跑](../artifacts/computer-use/macos-native-fast/report.json) |
@@ -66,7 +67,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 **passed（本段明列负载）。** [最终原始报告](../artifacts/computer-use/windows-renderer-canvas-final/report.json)：实际1,801,027ms、23,025个不同源时间戳帧，完整时段**12.7844 FPS**（首末有效帧区间12.7869 FPS），源时钟到绘制完成**P95 32ms**，0坏/过旧时间戳，5次受控helper终止并显式重启，最大画面间隔2,839ms，0预览attachment写入。最后一项为Host附件服务spy，不能扩大为实际SDK数据库测量；SDK图像运输由UI12另验。
 
-61个资源采样中，Node RSS峰值**133,132,288字节**，整个自有进程树WS峰值**1,549,283,328字节**，低于1.5GiB门槛；直接native最多1个，native树最多3个。原始CPU累计时间也保留在每个进程采样中，未设CPU通过门槛。[资源汇总](../artifacts/computer-use/windows-renderer-canvas-final/resource-summary.json)按原记录绘图，不修改runner结论。
+资源峰值为约30秒采样所见，样本间瞬时峰未测。61个资源采样中，Node RSS峰值**133,132,288字节**，整个自有进程树WS峰值**1,549,283,328字节**，低于1.5GiB门槛；直接native最多1个，native树最多3个。原始CPU累计时间也保留在每个进程采样中，未设CPU通过门槛。[资源汇总](../artifacts/computer-use/windows-renderer-canvas-final/resource-summary.json)按原记录绘图，不修改runner结论。
 
 私有提交没有冒充WS：总PrivatePageCount由648,323,072增至1,231,642,624字节，峰1,238,925,312；后15分钟观测范围1,179,049,984至1,238,925,312字节。它不是零增长或无限时段无泄漏证明，工作集trim也不代表提交内存回收。720p/更长运行仍需独立验证。
 
@@ -112,6 +113,14 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 - [采集组件30分钟](../artifacts/computer-use/windows-native-endurance-final/report.json)：1,800.052秒、20,742唯一帧、11.523FPS、采样父/worker私有内存增长4,988,928字节。平均RPC23.2521ms，最大6,420.2101ms，长尾保留。绑定早期helper `86ca7106…`，CaptureBroker此后未改，但不冒充最终包全量长稳。
 - Windows拖动期间曾因整窗避让隐藏控制栏，已改为实际指针/路径避让、无安全位置在mouse-down前拒绝；最终52项有持续可见性采样。
 - 暂停释放曾两轮P95约1秒；QPC与独立OS观察定位至同线程hook阻塞SendInput，已改专用hook消息线程及有界清理线程，最终30次mouse-up P95 21.7592ms。两条历史失败保留，首个requestToBothReplies仍约1.7秒，不与真正OS释放时间混淆。
+
+### x64实际宿主的置顶失败：尚未修复
+
+三次实际宿主测试均保留。首次激活前置拒绝点击，缺少当时hit的完整证据，不能事后定因；第二次Continue超时没有及时捕获原始Host状态，不能用第三次成功替代原因。第三次实际达到主Agent带图/move、暂停/继续/接管，但预览WS_EX_TOPMOST=false，点击目标后目标成为前台，footer被遮挡而安全拒绝；文件交换8MiB和安装5仍分别通过。
+
+[实际安装helper哈希](../artifacts/harness-e2e/windows-x64-preview-zorder-failure/actual-installed-helper-hashes.json)及[隔离源码复建](../artifacts/computer-use/windows-native-source-binding/report.json)确认精确3b2二进制。源码重建须保留SDK嵌入的原SourceRevisionId，不能把新Git元数据导致的SHA变化当旧代码证据。[纯Win32/UIA最小静态对照](../artifacts/computer-use/windows-preview-topmost-direct/report.json)两架构始终topmost=true，故只说明静态初始化和该组UIA动作不复现，不代表真实Host缺陷已修。下一步定位认证跳转与真实Host状态中首次demote阶段。
+
+原生52项的overlap setup会显式SetWindowPos(-1)，隐藏启动5项主要检查可见性，因此不能覆盖这里“真实宿主初始/接管后始终置顶”的缺口。
 
 ## 6. Mac失败、阻塞及未覆盖范围
 
