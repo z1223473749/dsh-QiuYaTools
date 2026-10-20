@@ -199,7 +199,7 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="he
    the side margins; even the smallest viewport keeps opaque text surfaces. */
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll] {
   background-image: linear-gradient(90deg, transparent, var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)), var(--qyt-q-paper) min(calc(100% - 12px), calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 20px)), transparent);
-  background-size: 100% max(0px, calc(100% - var(--dsh-composer-height, 160px)));
+  background-size: 100% 100%;
   background-position: center top;
   background-repeat: no-repeat;
 }
@@ -223,13 +223,13 @@ body[data-qyt-q-theme="ocean"] [data-composer-card]:focus-within {
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] {
   background: transparent;
 }
-/* Replay the exact canvas beneath the dock. This is visually continuous
-   with the page, while hiding scrolled text instead of making it ghost
-   through the input and gaps. The native sticky seat remains the stack owner. */
+/* Blend the reading paper into the exact canvas over the 36px above the
+   dock. Only this decoration fades: the input, menus and statistics stay
+   crisp, with scrolled text fully covered by the time it reaches the seat. */
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: -36px 0 0;
   z-index: -1;
   pointer-events: none;
   background-color: var(--qyt-q-base);
@@ -238,6 +238,8 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   background-size: var(--qyt-q-canvas-size);
   background-attachment: fixed;
   background-repeat: no-repeat;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
+  mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
   background: var(--qyt-q-composer-fill);
