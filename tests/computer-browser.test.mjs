@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { fileURLToPath } from 'node:url'
 
-const source = (await build({ entryPoints: [new URL('../src/features/computer-use/browser.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/browser.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { BrowserSession, BrowserDeviceDriver, browserExecutableCandidates } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 
 test('browser policies deny privileged origins and nonloopback debugging without starting a process', async () => {
@@ -56,4 +57,57 @@ test('pause waits for an already issued browser input and its cleanup before ack
   await new Promise(resolve => setImmediate(resolve)); assert.equal(released, false)
   finish(); await rejected; await stopping; assert.equal(released, true)
   await driver.dispose()
+})
+
+function cdpFixture() {
+  const state = { failRelease: true, keyHeld: false, mouseHeld: false, releases: 0, downs: 0, disconnected: false }
+  const browser = new BrowserSession({ allowedOrigins: ['https://fixture.example'], cdpEndpoint: 'http://127.0.0.1:9222' })
+  browser.connection = {
+    async send(method, params) {
+      if (method === 'Target.getTargetInfo') return { targetInfo: { type: 'page', targetId: 'tab', title: 'Fixture', url: 'https://fixture.example' } }
+      if (method === 'Target.attachToTarget') return { sessionId: 'session-tab' }
+      if (method === 'Runtime.evaluate') return { result: { value: { x: 40, y: 30, width: 80, height: 60 } } }
+      if (method === 'Input.dispatchKeyEvent' && params.type === 'rawKeyDown') { state.keyHeld = true; state.downs++ }
+      if (method === 'Input.dispatchMouseEvent' && params.type === 'mousePressed') { state.mouseHeld = true; state.downs++ }
+      if (params.type === 'keyUp' || params.type === 'mouseReleased') {
+        state.releases++
+        if (state.failRelease) throw new Error('CDP release response lost')
+        if (params.type === 'keyUp') state.keyHeld = false; else state.mouseHeld = false
+      }
+      return {}
+    }, close() { state.disconnected = true },
+  }
+  return { browser, state }
+}
+
+for (const kind of ['key', 'mouse', 'selectorType']) test(`failed CDP ${kind} release blocks new leases and retains exact cleanup for a retry`, async () => {
+  const { browser, state } = cdpFixture(), driver = new BrowserDeviceDriver(browser)
+  await driver.lease(1)
+  const action = kind === 'key' ? { kind: 'key', key: 'Control+A' } : kind === 'selectorType' ? { kind: 'selectorType', selector: '#input', text: 'fixture' } : { kind: 'selectorClick', selector: '#button' }
+  await assert.rejects(driver.act(1, 'tab', action), { code: 'BROWSER_CLEANUP_FAILED' })
+  assert.equal(kind === 'key' ? state.keyHeld : state.mouseHeld, true)
+  await assert.rejects(driver.release(1), { code: 'BROWSER_CLEANUP_FAILED' })
+  await assert.rejects(driver.lease(2), { code: 'BROWSER_CLEANUP_FAILED' })
+  assert.equal(state.downs, 1, 'uncertain cleanup must not permit additional input')
+  state.failRelease = false; await driver.release(1)
+  assert.equal(state.keyHeld, false); assert.equal(state.mouseHeld, false)
+  await driver.lease(3)
+  await driver.dispose(); assert.equal(state.disconnected, true)
+})
+
+test('attached user browser keeps its cleanup channel open when disposal cannot release owned input', async () => {
+  const { browser, state } = cdpFixture(), driver = new BrowserDeviceDriver(browser)
+  await driver.lease(1)
+  await assert.rejects(driver.act(1, 'tab', { kind: 'key', key: 'Enter' }), { code: 'BROWSER_CLEANUP_FAILED' })
+  await assert.rejects(driver.dispose(), { code: 'BROWSER_CLEANUP_FAILED' })
+  assert.equal(state.disconnected, false, 'closing the CDP connection would discard the only cleanup channel')
+  state.failRelease = false; await driver.dispose()
+  assert.equal(state.keyHeld, false); assert.equal(state.disconnected, true)
+})
+
+test('a cancellation before key-down dispatch does not invent a held key or send a key-up', async () => {
+  const { browser, state } = cdpFixture()
+  await assert.rejects(browser.act('tab', { kind: 'key', key: 'Enter' }, undefined, () => { throw new Error('lease revoked') }), /lease revoked/)
+  assert.equal(state.downs, 0); assert.equal(state.releases, 0)
+  await browser.close()
 })

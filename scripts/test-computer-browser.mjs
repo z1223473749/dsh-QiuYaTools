@@ -11,7 +11,7 @@ export async function runBrowserSmoke({ browser = 'chrome', executable, artifact
   if (modulePath) moduleUrl = pathToFileURL(resolve(modulePath)).href
   else {
     const { build } = await import('esbuild')
-    const source = (await build({ stdin: { contents: 'export { BrowserSession, BrowserDeviceDriver } from "./src/features/computer-use/browser.ts";export { ComputerSessionService } from "./src/features/computer-use/session.ts";export { installComputerTools } from "./src/features/computer-use/tools.ts";', resolveDir: new URL('../', import.meta.url).pathname, sourcefile: 'browser-test-entry.ts' }, bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
+    const source = (await build({ stdin: { contents: 'export { BrowserSession, BrowserDeviceDriver } from "./src/features/computer-use/browser.ts";export { ComputerSessionService } from "./src/features/computer-use/session.ts";export { installComputerTools } from "./src/features/computer-use/tools.ts";', resolveDir: fileURLToPath(new URL('../', import.meta.url)), sourcefile: 'browser-test-entry.ts' }, bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
     moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
   }
   const { BrowserSession, BrowserDeviceDriver, ComputerSessionService, installComputerTools } = await import(moduleUrl)

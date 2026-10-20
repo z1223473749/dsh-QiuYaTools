@@ -14,6 +14,7 @@ export interface BrowserOptions {
 export interface BrowserTab { id: string; title: string; url: string; allowed: boolean }
 export type BrowserSelectorAction = { kind: 'click' | 'type' | 'scroll'; selector: string; text?: string; deltaX?: number; deltaY?: number }
 interface Pending { resolve(value: unknown): void; reject(error: unknown): void; clean(): void }
+interface OwnedBrowserInput { sessionId: string; tabId: string; method: string; params: Record<string, unknown> }
 type CdpEvent = { method: string; sessionId?: string; params?: Record<string, unknown> }
 /** Minimal public CDP transport. No arbitrary model-provided evaluate endpoint. */
 class CdpConnection {
@@ -107,6 +108,9 @@ export class BrowserSession {
   private readonly observations = new Map<string, ComputerObservation>()
   private readonly previewObservations = new Map<string, ComputerObservation>()
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
+  private readonly ownedInput = new Map<number, OwnedBrowserInput>()
+  private readonly inputReleases = new Map<number, Promise<void>>()
+  private inputSequence = 0
   private frameId = 0
   private closing = false
   constructor(readonly options: BrowserOptions) {
@@ -234,10 +238,28 @@ export class BrowserSession {
     await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.()
     const result = await this.cdp().send<{ success: boolean }>('Target.closeTarget', { targetId: tabId })
     if (!result.success) throw new ComputerError('BROWSER_CLOSE_FAILED', '无法关闭标签页')
+    for (const [id, input] of this.ownedInput) if (input.tabId === tabId) this.ownedInput.delete(id)
     this.sessions.delete(tabId); this.observations.delete(tabId); this.previewObservations.delete(tabId)
   }
   async observe(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, false) }
   async preview(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, true) }
+  private releaseInput(id: number): Promise<void> {
+    const pending = this.inputReleases.get(id); if (pending) return pending
+    const input = this.ownedInput.get(id); if (!input) return Promise.resolve()
+    const releasing = (async () => {
+      try { await this.cdp().send(input.method, input.params, input.sessionId) }
+      catch { throw new ComputerError('BROWSER_CLEANUP_FAILED', '浏览器未确认释放本插件按住的键或鼠标，请重试停止后再开始控制。') }
+      this.ownedInput.delete(id)
+    })()
+    this.inputReleases.set(id, releasing)
+    void releasing.then(() => this.inputReleases.delete(id), () => this.inputReleases.delete(id))
+    return releasing
+  }
+  async releaseInputs(): Promise<void> {
+    const results = await Promise.allSettled([...this.ownedInput.keys()].map(id => this.releaseInput(id)))
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failure) throw failure.reason
+  }
   private async capture(tabId: string, signal: AbortSignal | undefined, preview: boolean): Promise<ComputerObservation> {
     await this.permission(tabId, signal)
     const session = await this.tabSession(tabId, signal), geometry = await this.metrics(tabId, signal)
@@ -255,8 +277,9 @@ export class BrowserSession {
     if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(input.kind)) throw new ComputerError('BROWSER_DRIVER_REQUIRED', '此操作须通过电脑会话控制层执行')
     await this.permission(tabId, signal)
     const session = await this.tabSession(tabId, signal)
-    const perform = async (method: string, params: object, cleanup = false) => {
-      if (!cleanup) { signal?.throwIfAborted(); await this.permission(tabId, signal); beforeInput?.() }
+    const perform = async (method: string, params: object, beforeDispatch?: () => void) => {
+      signal?.throwIfAborted(); await this.permission(tabId, signal); beforeInput?.()
+      beforeDispatch?.()
       // An issued CDP input cannot be retracted. Await its actual response,
       // including cleanup, so release() can provide a quiescence barrier.
       return this.cdp().send(method, params, session)
@@ -273,8 +296,12 @@ export class BrowserSession {
       if (!rect || result.exceptionDetails || rect.width <= 0 || rect.height <= 0 || rect.disabled) throw new ComputerError('ELEMENT_NOT_FOUND', '未找到可操作的网站元素')
       if (input.kind === 'type') {
         if (typeof input.text !== 'string' || input.text.length > 100_000 || input.text.includes('\0')) throw new ComputerError('INVALID_ACTION', '输入文本无效')
-        try { await perform('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, x: rect.x, y: rect.y }) }
-        finally { await perform('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, x: rect.x, y: rect.y }, true).catch(() => {}) }
+        let owned: number | undefined
+        try { await perform('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, x: rect.x, y: rect.y }, () => {
+          owned = ++this.inputSequence
+          this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', button: 'left', clickCount: 1, x: rect.x, y: rect.y } })
+        }) }
+        finally { if (owned !== undefined) await this.releaseInput(owned) }
         await perform('Input.insertText', { text: input.text }); return { applied: true }
       }
       action = parseComputerAction({ kind: input.kind, x: rect.x, y: rect.y, ...(input.kind === 'scroll' ? { deltaX: input.deltaX ?? 0, deltaY: input.deltaY ?? 0 } : {}) })
@@ -294,12 +321,14 @@ export class BrowserSession {
     else if (action.kind === 'scroll') await perform('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 })
     else if (action.kind === 'click' || action.kind === 'drag') {
       await perform('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-      let down = false
+      let owned: number | undefined
       try {
-        down = true
-        await perform('Input.dispatchMouseEvent', { type: 'mousePressed', button, buttons: button === 'left' ? 1 : button === 'right' ? 2 : 4, clickCount: 1, x, y })
+        await perform('Input.dispatchMouseEvent', { type: 'mousePressed', button, buttons: button === 'left' ? 1 : button === 'right' ? 2 : 4, clickCount: 1, x, y }, () => {
+          owned = ++this.inputSequence
+          this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', button, clickCount: 1, x: action.toX ?? x, y: action.toY ?? y } })
+        })
         if (action.kind === 'drag') for (let step = 1; step <= 10; step++) await perform('Input.dispatchMouseEvent', { type: 'mouseMoved', button, buttons: button === 'left' ? 1 : button === 'right' ? 2 : 4, x: x + (action.toX! - x) * step / 10, y: y + (action.toY! - y) * step / 10 })
-      } finally { if (down) await perform('Input.dispatchMouseEvent', { type: 'mouseReleased', button, clickCount: 1, x: action.toX ?? x, y: action.toY ?? y }, true).catch(() => {}) }
+      } finally { if (owned !== undefined) await this.releaseInput(owned) }
     } else if (action.kind === 'key') {
       const pieces = action.key!.split('+'), key = pieces.pop()!, aliases: Record<string, string> = { Esc: 'Escape', Return: 'Enter', Up: 'ArrowUp', Down: 'ArrowDown', Left: 'ArrowLeft', Right: 'ArrowRight' }
       const actual = aliases[key] ?? key
@@ -308,21 +337,35 @@ export class BrowserSession {
       const codes: Record<string, number> = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32 }
       const code = codes[actual] ?? (actual.length === 1 ? actual.toUpperCase().charCodeAt(0) : undefined)
       if (code === undefined) throw new ComputerError('INVALID_KEY', '不支持的按键')
-      try { await perform('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers }) }
-      finally { await perform('Input.dispatchKeyEvent', { type: 'keyUp', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers }, true).catch(() => {}) }
+      let owned: number | undefined
+      try { await perform('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers }, () => {
+        owned = ++this.inputSequence
+        this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers } })
+      }) }
+      finally { if (owned !== undefined) await this.releaseInput(owned) }
     }
     this.observations.delete(tabId); this.previewObservations.delete(tabId)
     return { applied: true }
   }
   async close(): Promise<void> {
     this.closing = true
-    const connection = this.connection; this.connection = undefined; this.sessions.clear(); this.invalidateObservations()
+    let cleanupError: unknown
+    try { await this.releaseInputs() } catch (error) { cleanupError = error }
+    const connection = this.connection
+    if (!this.child && cleanupError) throw cleanupError
     if (this.child) {
       const child = this.child
       await connection?.send('Browser.close').catch(() => {})
-      if (child.exitCode === null) await new Promise<void>(resolve => { const timer = setTimeout(() => { child.kill(); resolve() }, 3000); child.once('exit', () => { clearTimeout(timer); resolve() }) })
+      if (child.exitCode === null && child.signalCode === null) await new Promise<void>((resolve, reject) => {
+        const kill = setTimeout(() => { child.kill('SIGKILL') }, 3000)
+        const timeout = setTimeout(() => { clean(); reject(new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器进程未确认退出。')) }, 5000)
+        const clean = () => { clearTimeout(kill); clearTimeout(timeout) }
+        child.once('exit', () => { clean(); resolve() })
+      })
       this.child = undefined
+      this.ownedInput.clear()
     }
+    this.connection = undefined; this.sessions.clear(); this.invalidateObservations()
     connection?.close(); this.listeners.clear()
   }
 }
@@ -333,6 +376,7 @@ export class BrowserDeviceDriver implements DeviceDriver {
   private activeEpoch?: number
   private readonly controllers = new Set<AbortController>()
   private readonly pending = new Set<Promise<unknown>>()
+  private readonly pendingReleases = new Set<number>()
   constructor(readonly browser: BrowserSession) {}
   subscribe(listener: (event: NativeComputerEvent) => void) { return this.browser.subscribe(listener) }
   async status(signal?: AbortSignal): Promise<ComputerStatus> { const tabs = await this.browser.list(signal); return { available: true, platform: process.platform, protocolVersion: 1, capabilities: { browser: true, capture: true, accessibility: true, input: true, backgroundInput: true, secureDesktop: false }, tabCount: tabs.length, allowedOrigins: this.browser.allowedOrigins() } }
@@ -347,16 +391,23 @@ export class BrowserDeviceDriver implements DeviceDriver {
     if (!Number.isSafeInteger(epoch) || epoch <= this.epoch) throw new ComputerError('STALE_EPOCH', '浏览器控制周期必须递增')
     this.epoch = epoch
     if (this.activeEpoch !== undefined) await this.release(this.activeEpoch)
+    if (this.pendingReleases.size) await this.finishRelease()
     if (this.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '浏览器租约已被更新的控制周期替代')
     this.activeEpoch = epoch; return { leased: true }
   }
   async release(epoch: number): Promise<unknown> {
     if (this.activeEpoch === epoch) {
+      this.pendingReleases.add(epoch)
       this.activeEpoch = undefined; this.browser.invalidateObservations?.()
       for (const controller of this.controllers) controller.abort(new ComputerError('CONTROL_CHANGED', '浏览器输入已暂停'))
-      await Promise.allSettled([...this.pending])
     }
+    if (this.pendingReleases.has(epoch) || (this.activeEpoch === undefined && this.pendingReleases.size)) await this.finishRelease()
     return { released: true }
+  }
+  private async finishRelease(): Promise<void> {
+    await Promise.allSettled([...this.pending])
+    await this.browser.releaseInputs?.()
+    this.pendingReleases.clear()
   }
   async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown> {
     const guard = () => { if (this.activeEpoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '浏览器输入租约已变化') }
@@ -387,5 +438,9 @@ export class BrowserDeviceDriver implements DeviceDriver {
   }
   async openPreview(): Promise<unknown> { throw new ComputerError('LOCAL_PREVIEW_REQUIRED', '浏览器预览应使用本机悬浮窗') }
   async closePreview(): Promise<unknown> { return undefined }
-  async dispose(): Promise<void> { if (this.activeEpoch !== undefined) await this.release(this.activeEpoch); await this.browser.close() }
+  async dispose(): Promise<void> {
+    try { if (this.activeEpoch !== undefined) await this.release(this.activeEpoch); else if (this.pendingReleases.size) await this.finishRelease() }
+    finally { await this.browser.close() }
+    this.pendingReleases.clear()
+  }
 }
