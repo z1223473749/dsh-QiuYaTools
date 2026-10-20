@@ -42,7 +42,7 @@ def main():
     for path in list(selected):
         if any(path.is_relative_to(base) for base in evidence_roots):
             selected.update(p for p in path.parent.iterdir() if p.is_file()
-                            and not p.is_symlink() and p.suffix in {".json", ".log", ".err", ".jpg", ".png"}
+                            and not p.is_symlink() and p.suffix in {".json", ".jsonl", ".log", ".err", ".jpg", ".png"}
                             and p.stat().st_size <= 16 * 1024 * 1024)
     records = []
     for path in sorted(selected):
