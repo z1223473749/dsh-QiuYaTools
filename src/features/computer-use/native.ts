@@ -11,6 +11,16 @@ export function computerCompanionPath(platform: NodeJS.Platform = process.platfo
   throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无电脑操控执行器')
 }
 interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void }
+interface NativeHeldInputs { keys: number[]; mouseButtons: string[]; unicodeUnits?: number[]; ownerId?: string }
+function ownedInputs(message: Record<string, unknown>): NativeHeldInputs | undefined {
+  if (!Array.isArray(message.keys) || message.keys.length > 256 || !message.keys.every(key => Number.isSafeInteger(key) && key >= 0 && key <= 255)) return
+  if (!Array.isArray(message.mouseButtons) || message.mouseButtons.length > 3 || !message.mouseButtons.every(button => ['left', 'right', 'middle'].includes(button))) return
+  if (message.unicodeUnits !== undefined && (!Array.isArray(message.unicodeUnits) || message.unicodeUnits.length > 1024 || !message.unicodeUnits.every(unit => Number.isSafeInteger(unit) && unit >= 0 && unit <= 65535))) return
+  if (message.ownerId !== undefined && (typeof message.ownerId !== 'string' || !/^[a-f0-9]{32}$/iu.test(message.ownerId))) return
+  return { keys: [...message.keys], mouseButtons: [...message.mouseButtons],
+    ...(message.unicodeUnits === undefined ? {} : { unicodeUnits: [...message.unicodeUnits as number[]] }),
+    ...(message.ownerId === undefined ? {} : { ownerId: message.ownerId as string }) }
+}
 /** Bounded JSONL companion transport. Requests and secrets never enter argv. */
 export class NativeCompanionDriver implements DeviceDriver {
   private child?: ChildProcessWithoutNullStreams
@@ -21,7 +31,7 @@ export class NativeCompanionDriver implements DeviceDriver {
   private nextRequestId = 0
   private protocol?: Promise<ComputerStatus>
   private retiring: Promise<void> = Promise.resolve()
-  private held: { keys: number[]; mouseButtons: string[] } = { keys: [], mouseButtons: [] }
+  private held: NativeHeldInputs = { keys: [], mouseButtons: [] }
   constructor(private readonly options: NativeCompanionOptions = {}) {}
   static defaultPath = computerCompanionPath
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -35,7 +45,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     this.pending.clear()
     this.emit({ event: 'disconnected' })
   }
-  private async retire(child: ChildProcessWithoutNullStreams, held: { keys: number[]; mouseButtons: string[] }): Promise<void> {
+  private async retire(child: ChildProcessWithoutNullStreams, held: NativeHeldInputs): Promise<void> {
     // EOF asks the independent native message loop to revoke and release first.
     // A wedged worker gets a fixed grace; Windows then uses a separate process
     // to send only the last acknowledged owned keyups/mouseups after it exits.
@@ -51,7 +61,7 @@ export class NativeCompanionDriver implements DeviceDriver {
       child.stdin.end()
     })
     const args = this.options.releaseInputArgs ?? (process.platform === 'win32' ? ['--release-input'] : undefined)
-    if (!args || !held.keys.length && !held.mouseButtons.length) return
+    if (!args || !held.keys.length && !held.mouseButtons.length && !held.unicodeUnits?.length) return
     await new Promise<void>((resolve, reject) => {
       const cleanup = spawn(this.options.executable ?? computerCompanionPath(), args, { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
       const timer = setTimeout(() => { cleanup.kill(); reject(new ComputerError('NATIVE_CLEANUP_FAILED', '故障后的按键清理超时，已阻止新的电脑输入。')) }, 2000)
@@ -82,7 +92,7 @@ export class NativeCompanionDriver implements DeviceDriver {
         try { message = JSON.parse(line) } catch { this.fail(new ComputerError('NATIVE_PROTOCOL', '执行器返回了无效 JSON'), child); child.kill(); return }
         if (!message || typeof message !== 'object') continue
         if (typeof message.event === 'string') {
-          if (message.event === 'inputHeld' && Array.isArray(message.keys) && message.keys.length <= 256 && message.keys.every(key => Number.isSafeInteger(key) && key >= 0 && key <= 255) && Array.isArray(message.mouseButtons) && message.mouseButtons.length <= 3 && message.mouseButtons.every(button => ['left', 'right', 'middle'].includes(button))) this.held = { keys: [...message.keys], mouseButtons: [...message.mouseButtons] }
+          if (message.event === 'inputHeld') { const held = ownedInputs(message); if (held) this.held = held }
           else this.emit(message as NativeComputerEvent)
           continue
         }

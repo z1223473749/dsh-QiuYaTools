@@ -91,3 +91,13 @@ test('failed emergency cleanup blocks subsequent workers and makes disposal repo
   await assert.rejects(driver.targets(), { code: 'NATIVE_CLEANUP_FAILED' })
   await assert.rejects(driver.dispose(), { code: 'NATIVE_CLEANUP_FAILED' })
 })
+
+test('emergency cleanup preserves the native owner and Unicode units while ignoring malformed held-input events', async () => {
+  const worker = join(directory, 'unicode-crash.cjs'), cleanup = join(directory, 'unicode-released.json')
+  const owned = { ownerId: 'a'.repeat(32), keys: [], mouseButtons: [], unicodeUnits: [0xd83d, 0xde00] }
+  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else{process.stdout.write(JSON.stringify({event:'inputHeld',...${JSON.stringify(owned)}})+'\\n');process.stdout.write(JSON.stringify({event:'inputHeld',ownerId:'invalid',keys:[],mouseButtons:[],unicodeUnits:[]})+'\\n',()=>process.exit(77))}})`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
+  await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
+  await driver.dispose()
+  assert.deepEqual(JSON.parse(await readFile(cleanup, 'utf8')), owned)
+})

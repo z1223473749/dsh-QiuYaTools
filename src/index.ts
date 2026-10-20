@@ -47,7 +47,7 @@ export function apply(ctx: Context, config: Config): void {
     let cleanup: (() => Promise<void>) | undefined
     child.effect(() => {
       void installComputerHost(child, () => config.enabled.get() && config.computerUseEnabled.get()).then(host => {
-        if (stopped) { void host.dispose(); return }
+        if (stopped) return host.dispose()
         cleanup = host.dispose
         child.inject(['tools', 'attachments'], tools => {
           tools.effect(() => installComputerTools(tools, host.service, { enabled: () => config.enabled.get() && config.computerUseEnabled.get() }))
