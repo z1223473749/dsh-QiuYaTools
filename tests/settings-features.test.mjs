@@ -31,9 +31,14 @@ const compiled = await build({
     setup(builder) {
       builder.onResolve({ filter: /^\.\/features\.ts$/ }, () => ({ path: 'installers', namespace: 'test-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, () => ({ contents: 'export function installFeatures() {}' }))
+      builder.onResolve({ filter: /^\.\/q-theme\.ts$/ }, () => ({ path: 'theme', namespace: 'theme-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'theme-stub' }, () => ({ contents: 'export function installQTheme() {}' }))
       builder.onResolve({ filter: /^\.\/about\.tsx$/ }, () => ({ path: 'about', namespace: 'about-stub' }))
       builder.onResolve({ filter: /^react$/, namespace: 'about-stub' }, () => ({ path: 'react', external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'about-stub' }, () => ({ contents: `import React from 'react'; export function AboutPanel({ version, ctx }) { return React.createElement('article', { 'data-about-version': version, 'data-about-context': ctx ? 'present' : 'missing' }, 'about-panel') }` }))
+      builder.onResolve({ filter: /^\.\/updates\.tsx$/ }, () => ({ path: 'updates', namespace: 'updates-stub' }))
+      builder.onResolve({ filter: /^react$/, namespace: 'updates-stub' }, () => ({ path: 'react', external: true }))
+      builder.onLoad({ filter: /.*/, namespace: 'updates-stub' }, () => ({ contents: `import React from 'react'; export function UpdatePanel({ version, ctx }) { return React.createElement('article', { 'data-updates-version': version, 'data-updates-context': ctx ? 'present' : 'missing' }, 'updates-panel') }` }))
     },
   }],
 })
@@ -42,8 +47,9 @@ vm.runInNewContext(compiled.outputFiles[0].text, {
   module, exports: module.exports,
   require(id) {
     if (id === '@deepseek-ai/dsh-client-ui-primitives') return {
-      Switch: ({ checked, disabled, label, onChange }) => React.createElement('button', {
+      Switch: ({ checked, disabled, label, onChange, className }) => React.createElement('button', {
         type: 'button', role: 'switch', disabled, 'aria-label': label, 'aria-checked': checked,
+        className,
         onClick: () => onChange(!checked),
       }),
     }
@@ -54,7 +60,7 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, qThemeEnabled: false,
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
 const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled']
@@ -179,6 +185,8 @@ test('threshold edits stay local and both limits save in one atomic namespace mu
     assert.equal(f.snapshot().value.pasteCharacterThreshold, 1000)
     f.select('sessionWindowsTab')
     f.select('aboutTab')
+    f.select('updatesTab')
+    f.select('qThemeTab')
     assert.equal(f.mutations.length, 0, 'browsing tabs never saves draft settings')
     f.select('pastedTextTab')
     assert.deepEqual([...f.container.querySelectorAll('input')].map(input => input.value), ['2000', '30'])
@@ -231,6 +239,10 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
       assert.equal(f.mutations.length, 0)
       f.select('aboutTab')
       assert.ok(f.container.querySelector('[data-about-version]'), 'About remains available while settings cannot be written')
+      f.select('updatesTab')
+      assert.ok(f.container.querySelector('[data-updates-version]'), 'Updates remain available while settings cannot be written')
+      f.select('qThemeTab')
+      assert.equal(f.switch('qTheme').disabled, true)
     } finally { f.dispose() }
   }
   const f = mount(defaults)
@@ -247,13 +259,16 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('five icon tabs expose labelled panels and support roving focus with arrows, Home and End', () => {
+test('seven icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 5)
+    assert.equal(tabs.length, 7)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    const scrolled = []
+    tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
     for (const tab of tabs) {
       assert.ok(tab.querySelector('svg[aria-hidden="true"]'), 'every tab has a decorative corresponding icon')
@@ -269,22 +284,27 @@ test('five icon tabs expose labelled panels and support roving focus with arrows
       assert.equal(tabs[expected].getAttribute('aria-selected'), 'true')
       assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
       assert.equal(f.container.querySelectorAll('[role="tabpanel"]:not([hidden])').length, 1)
+      assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
-    key('ArrowLeft', 4)
+    key('ArrowLeft', 6)
+    assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
+    key('ArrowLeft', 5)
     assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
+    key('ArrowRight', 6)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 4)
+    key('End', 6)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }
 })
 
-test('About mounts on its first visit and keeps its instance while another tab is active', () => {
+test('About and Updates mount on first visit and keep separate instances while another tab is active', () => {
   const f = mount()
   try {
     assert.equal(f.container.querySelector('[data-about-version]'), null)
+    assert.equal(f.container.querySelector('[data-updates-version]'), null)
     f.select('aboutTab')
     const about = f.container.querySelector('[data-about-version]')
     assert.ok(about)
@@ -294,7 +314,60 @@ test('About mounts on its first visit and keeps its instance while another tab i
     f.select('aboutTab')
     assert.equal(f.container.querySelector('[data-about-version]'), about)
     assert.equal(about.closest('[role="tabpanel"]').hidden, false)
+    f.select('updatesTab')
+    const updates = f.container.querySelector('[data-updates-version]')
+    assert.ok(updates)
+    f.select('qThemeTab')
+    assert.equal(f.container.querySelector('[data-updates-version]'), updates)
+    assert.equal(updates.closest('[role="tabpanel"]').hidden, true)
+    f.select('updatesTab')
+    assert.equal(f.container.querySelector('[data-updates-version]'), updates)
+    assert.equal(updates.closest('[role="tabpanel"]').hidden, false)
     assert.equal(f.mutations.length, 0)
+  } finally { f.dispose() }
+})
+
+test('Q Theme defaults off and persists independently from the four tools and their legacy master switch', async () => {
+  for (const enabled of [true, false]) {
+    const initial = { ...defaults, enabled }
+    delete initial.qThemeEnabled
+    const f = mount(initial)
+    try {
+      f.select('qThemeTab')
+      assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'false')
+      const preview = f.container.querySelector('[role="img"][aria-label="qThemePreviewDescription"]')
+      assert.ok(preview)
+      assert.equal(preview.querySelectorAll('input, button, a').length, 0, 'the color preview is decorative, without pretend settings')
+      await f.toggle('qTheme')
+      assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeEnabled'], value: true }]])
+      assert.equal(f.snapshot().value.enabled, enabled, 'enabling appearance never resumes paused tools')
+      for (const field of featureFields) assert.equal(f.snapshot().value[field], true)
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), String(enabled))
+      await f.toggle('enabled')
+      await f.toggle('enabled')
+      assert.equal(f.snapshot().value.qThemeEnabled, true, 'the four-tool master never writes the theme preference')
+      for (const operation of f.mutations.slice(1).flat()) assert.notEqual(operation.path[0], 'qThemeEnabled')
+      const before = structuredClone(f.snapshot().value)
+      await f.toggle('qTheme')
+      assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeEnabled'], value: false }])
+      assert.deepEqual(f.snapshot().value, { ...before, qThemeEnabled: false })
+    } finally { f.dispose() }
+  }
+})
+
+test('Q Theme save failures retain the current preference and allow retry without changing tool settings', async () => {
+  const f = mount({ ...defaults, enabled: false })
+  try {
+    f.select('qThemeTab')
+    f.failWith(Error('unavailable'))
+    await f.toggle('qTheme')
+    assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'false')
+    assert.match(f.container.querySelector('[role="alert"]').textContent, /saveError/)
+    assert.equal(f.snapshot().value.enabled, false)
+    f.failWith(null)
+    await f.toggle('qTheme')
+    assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'true')
+    assert.equal(f.snapshot().value.enabled, false)
   } finally { f.dispose() }
 })
 
@@ -316,6 +389,9 @@ test('scroll containment applies only to our native outlet and keeps header, mas
     assert.equal(style(section).minHeight, '0')
     assert.equal(style(fixed).flexShrink, '0')
     assert.equal(style(tabs).flexShrink, '0')
+    assert.equal(style(tabs).overflowX, 'auto', 'narrow settings keep tabs on one independently scrollable row')
+    assert.equal(style(tabs).overflowY, 'hidden')
+    assert.equal(style(tabs.firstElementChild).flexShrink, '0', 'seven labels never squeeze the content into unreadable columns')
     assert.equal(style(panel).overflowY, 'auto')
     assert.equal(style(panel).minHeight, '0')
     assert.ok(fixed.contains(f.container.querySelector('h2')))

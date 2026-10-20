@@ -2,7 +2,7 @@
 
 支持长文本转 TXT 附件、会话独立窗口、批量归档和计划批注，常用功能一处设置。
 
-在 **设置 → QiuYaTools** 中管理四项功能，也可从左下角账号菜单的 **QiuYaTools** 入口直接打开。当前版本 `0.3.0`，面向官方 macOS Harness `0.2.1-rc.2`。
+在 **设置 → QiuYaTools** 中管理四项功能，也可从左下角账号菜单的 **QiuYaTools** 入口直接打开。当前版本 `0.4.0`，面向官方 macOS Harness `0.2.1-rc.2`。
 
 [GitHub 开源仓库](https://github.com/z1223473749/dsh-QiuYaTools) · [下载与发布记录](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues)
 
@@ -19,11 +19,17 @@
 
 “启用全部功能”一次开启或关闭四项功能，每项也能独立开关。更改通过原生 ConfigForm 保存，并即时安装/释放相应功能；设置页本身始终可访问。
 
-设置页顶部的名称、版本和总开关保持固定；下方五个图标标签分别打开四项功能与“关于我们”，内容只在当前面板内滚动。切换标签会保留尚未保存的阈值和更新进度。
+整个工具箱采用青蓝海面设计。顶部的名称、版本和总开关保持固定；下方七个图标标签分别打开四项增强功能、Q主题、关于我们和版本更新。内容只在当前面板内滚动，切换标签保留阈值草稿和更新进度。
+
+### Q主题
+
+在 **Q主题** 中开启后，Harness 的侧边栏、对话区、输入框、设置和菜单会采用同一套海蓝配色，并跟随 Harness 的浅色、深色或系统设置。关闭主题即可恢复原有外观。
+
+Q主题默认关闭，开关独立保存；“启用全部功能”只控制原有四项增强功能。工具箱自身的海面设计始终保留。
 
 ### GitHub 更新
 
-打开 **关于我们 → 检查更新**，查看 GitHub 最新正式版本与发布说明。有新版时点击“更新至 v…”安装；完成后完全退出并重新打开 Harness。原有功能开关、阈值和会话保留。
+打开 **版本更新 → 检查更新**，查看 GitHub 最新正式版本与发布说明。有新版时点击“更新至 v…”安装；完成后完全退出并重新打开 Harness。原有功能开关、阈值和会话保留。
 
 更新仅使用本仓库的正式 GitHub Release，验证下载包的 SHA-256、包名、版本与原生程序架构，再交给 Harness 自带的插件安装管理器。不会自动重启应用。开发者以 `link:` 方式安装时，点击更新会把当前 profile 切换为发布包；原来的源码目录保留。
 
@@ -86,7 +92,7 @@ npm pack --ignore-scripts --pack-destination artifacts
 node scripts/prepare-release.mjs
 ```
 
-生成 `artifacts/dsh-qiuya-tools-0.3.0.tgz`，并准备固定文件名 `dsh-qiuya-tools.tgz`、`dsh-qiuya-tools-darwin-universal.tgz` 和校验清单。包内含 Host、Client、中文插件信息、图标、Cordis patch、原生辅助应用和 Swift 源码。`QIUYA_TOOLS_UNIVERSAL=1` 同时编译两个 Mac 架构；普通本地构建仅编译当前架构。
+生成 `artifacts/dsh-qiuya-tools-0.4.0.tgz`，并准备固定文件名 `dsh-qiuya-tools.tgz`、`dsh-qiuya-tools-darwin-universal.tgz` 和校验清单。包内含 Host、Client、中文插件信息、图标、Cordis patch、原生辅助应用和 Swift 源码。`QIUYA_TOOLS_UNIVERSAL=1` 同时编译两个 Mac 架构；普通本地构建仅编译当前架构。
 
 推送与 `package.json` 版本一致的 `v*` 标签后，GitHub Actions 会执行完整检查、构建通用安装包并发布到 GitHub Release。插件更新器只安装正式 Release，不追随开发分支。
 

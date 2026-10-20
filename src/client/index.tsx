@@ -14,6 +14,8 @@ import { installFeatures } from './features.ts'
 import { installAccountMenuEntry } from './account-menu.ts'
 import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
+import { UpdatePanel } from './updates.tsx'
+import { installQTheme } from './q-theme.ts'
 import { MONO_ICON_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
 import { zh, en, type LocaleKey } from './locales.ts'
@@ -35,7 +37,7 @@ type SettingsProps = PropsRuntime<'settings.section'> & PropsLocale<typeof NS> &
 type ThresholdDraft = { characters: string; lines: string }
 type FormOperations = Parameters<ConfigForm<Preferences>['mutate']>[0]
 
-type SettingsTab = FeatureField | 'about'
+type SettingsTab = FeatureField | 'qTheme' | 'about' | 'updates'
 const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey; hint: LocaleKey; steps: readonly LocaleKey[] }[] = [
   { field: 'pastedTextEnabled', tab: 'pastedTextTab', label: 'pastedText', hint: 'pastedTextHint', steps: [] },
   { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
@@ -44,7 +46,9 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
+  { id: 'qTheme', label: 'qThemeTab' },
   { id: 'about', label: 'aboutTab' },
+  { id: 'updates', label: 'updatesTab' },
 ]
 
 function SettingsIcon({ name }: { name: SettingsTab }) {
@@ -53,7 +57,9 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
         : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
           : name === 'planCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
-            : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>}
+            : name === 'qTheme' ? <><path d="M12 3a9 9 0 1 0 0 18h1.4a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5h1a4 4 0 0 0 4-4C21 6.7 17 3 12 3Z"/><path d="M7.5 11h.01M9 7.5h.01M13 7h.01M16.5 9h.01" strokeWidth="3"/></>
+              : name === 'updates' ? <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11.5-1.5L20 8M4 16l2.5 2.5A7 7 0 0 0 18 17"/></>
+                : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>}
   </svg>
 }
 
@@ -68,6 +74,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
   const [activeTab, setActiveTab] = useState<SettingsTab>('pastedTextEnabled')
   const [aboutVisited, setAboutVisited] = useState(false)
+  const [updatesVisited, setUpdatesVisited] = useState(false)
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
   const id = useId()
   const ready = snapshot.status === 'ready'
@@ -84,7 +91,9 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
 
   function activateTab(tab: SettingsTab): void {
     if (tab === 'about') setAboutVisited(true)
+    if (tab === 'updates') setUpdatesVisited(true)
     setActiveTab(tab)
+    tabs.current[TABS.findIndex(item => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
 
   function navigateTabs(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
@@ -124,6 +133,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     ])
   }
 
+  async function setThemeEnabled(value: boolean): Promise<void> {
+    await persist([{ op: 'set', path: ['qThemeEnabled'], value }])
+  }
+
   function editThreshold(field: keyof ThresholdDraft, value: string): void {
     setThresholdDraft({ ...draft, [field]: value })
     setThresholdError(null)
@@ -157,7 +170,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
 
         <div className="qyt-card qyt-master qyt-toggle-row">
           <div><div className="qyt-label">{t('enabled')}</div><p className="qyt-muted">{t('enabledHint')}</p></div>
-          <Switch checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} />
+          <Switch className="qyt-switch" checked={allEnabled} label={t('enabled')} disabled={disabled} onChange={value => { void setAllFeatures(value) }} />
         </div>
         <p className="qyt-feedback qyt-save-feedback" role={saveState === 'error' ? 'alert' : 'status'}>
           {snapshot.status === 'loading' ? t('loading')
@@ -176,11 +189,25 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
-        {tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} /> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id).map(feature => <div className="qyt-feature-panel" key={feature.field}>
+        {tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
+          : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} />
+            : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
+              <div className="qyt-card qyt-feature-summary">
+                <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name="qTheme"/></span><h3>{t('qTheme')}</h3></div><Switch className="qyt-switch" checked={preferences.qThemeEnabled === true} label={t('qTheme')} disabled={disabled} onChange={value => { void setThemeEnabled(value) }}/></div>
+                <p className="qyt-muted">{t('qThemeHint')}</p>
+              </div>
+              <div className="qyt-card qyt-theme-card">
+                <div className="qyt-theme-title"><h4>{t('qThemePreview')}</h4><span className="qyt-theme-name">Ocean</span></div>
+                <div className="qyt-theme-preview" role="img" aria-label={t('qThemePreviewDescription')}>
+                  <div className="qyt-theme-scene" aria-hidden="true"><div className="qyt-preview-sidebar"><span className="qyt-preview-brand" style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }}/><i/><i/><i/></div><div className="qyt-preview-main"><div className="qyt-preview-top"><span/><i/></div><div className="qyt-preview-bubble qyt-preview-user"><span/><span/></div><div className="qyt-preview-bubble qyt-preview-answer"><span/><span/><span/></div><div className="qyt-preview-composer"><span/><i/></div></div></div>
+                </div>
+                <div className="qyt-theme-caption"><p className="qyt-muted">{t('qThemePreviewHint')}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
+              </div>
+            </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id).map(feature => <div className="qyt-feature-panel" key={feature.field}>
           <div className="qyt-card qyt-feature-summary">
             <div className="qyt-toggle-row">
               <div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name={feature.field} /></span><h3>{t(feature.label)}</h3></div>
-              <Switch checked={isFeatureEnabled(preferences, feature.field)} label={t(feature.label)} disabled={disabled} onChange={value => { void setFeature(feature.field, value) }} />
+              <Switch className="qyt-switch" checked={isFeatureEnabled(preferences, feature.field)} label={t(feature.label)} disabled={disabled} onChange={value => { void setFeature(feature.field, value) }} />
             </div>
             <p className="qyt-muted">{t(feature.hint)}</p>
           </div>
@@ -222,6 +249,7 @@ export function apply(ctx: Context): void {
   })
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
+  ctx.effect(() => installQTheme(ctx, form))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: SETTINGS_ID,

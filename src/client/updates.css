@@ -1,0 +1,44 @@
+.qyt-updates {
+  --qyt-ocean: color-mix(in srgb, #188fa9 82%, var(--dsw-alias-label-primary));
+  --qyt-ocean-soft: color-mix(in srgb, #3bbbd5 9%, var(--dsw-alias-bg-layer-2));
+  --qyt-ocean-line: color-mix(in srgb, #3bbbd5 23%, var(--dsw-alias-border-l3));
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  padding: 1px 0 4px;
+}
+
+.qyt-updates-intro { display:flex; align-items:center; gap:12px; padding:3px 2px 6px; }
+.qyt-updates-intro > span { display:grid; place-items:center; width:40px; height:40px; border-radius:12px; color:var(--qyt-ocean); background:var(--qyt-ocean-soft); }
+.qyt-updates .qyt-updates-intro h3 { font-size:17px; margin:0; }
+.qyt-updates .qyt-updates-intro p { margin-top:4px; font-size:11px; color:var(--dsw-alias-label-secondary); }
+.qyt-about-update { min-width: 0; padding: 17px 18px 15px; border: 1px solid var(--qyt-ocean-line); border-radius: 14px; background: linear-gradient(120deg, color-mix(in srgb, #51c5dc 4%, var(--dsw-alias-bg-layer-2)), var(--dsw-alias-bg-layer-2)); }
+.qyt-about-update-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.qyt-about-update-title > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.qyt-about-update-icon { display: inline-flex; color: var(--qyt-ocean); }
+.qyt-updates .qyt-about-update h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.qyt-about-current { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
+.qyt-updates .qyt-about-update-message { position: relative; margin-top: 14px; padding-left: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.qyt-about-update-message::before { content: ""; position: absolute; top: .6em; left: 0; width: 5px; height: 5px; border-radius: 50%; background: var(--qyt-ocean); opacity: .65; }
+.qyt-about-update-message[data-state="complete"]::before { background: var(--dsw-alias-state-success-primary, #24935c); opacity: 1; }
+.qyt-updates .qyt-about-update-message[role="alert"] { color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary)); }
+.qyt-about-update-message[role="alert"]::before { background: currentColor; }
+.qyt-about-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
+.qyt-updates .qyt-about-check { padding: 6px 12px; border-color: var(--qyt-ocean-line); color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
+.qyt-updates .qyt-about-check:hover:enabled { background: color-mix(in srgb, #3bbbd5 15%, var(--dsw-alias-bg-layer-2)); }
+.qyt-updates .qyt-about-install, .qyt-updates .qyt-about-install:hover:enabled { padding: 6px 12px; border-color: #168aa5; background: #168aa5; color: #fff; }
+.qyt-about-update-actions a { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 5px 0; color: var(--dsw-alias-label-secondary); font-size: 10px; text-decoration: none; }
+.qyt-about-update-actions a:hover { color: var(--qyt-ocean); }
+.qyt-about-update-actions a svg { width: 12px; height: 12px; }
+.qyt-updates .qyt-about-update-hint { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size: 10px; line-height: 1.7; }
+.qyt-about-release { margin-top: 12px; padding: 3px 0 3px 12px; border-left: 2px solid var(--qyt-ocean-line); }
+.qyt-about-release > span { margin-right: 8px; color: var(--qyt-ocean); font-size: 10px; }
+.qyt-about-release > strong { font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.qyt-updates .qyt-about-release > p { margin-top: 6px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.qyt-updates-steps { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:10px; padding:4px 0; color:var(--dsw-alias-label-secondary); font-size:10px; }
+.qyt-updates-steps span { display:inline-flex; align-items:center; gap:6px; }
+.qyt-updates-steps b { display:grid; place-items:center; width:18px; height:18px; border-radius:50%; background:var(--qyt-ocean-soft); color:var(--qyt-ocean); font-size:9px; font-weight:500; }
+.qyt-updates-steps i { font-style:normal; opacity:.5; }
+.qyt-updates a:focus-visible { outline:2px solid var(--qyt-ocean); outline-offset:3px; border-radius:6px; }
+@media (max-width:620px) { .qyt-about-update { padding:15px; } }

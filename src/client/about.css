@@ -48,29 +48,6 @@
 .qyt-about-link strong { font-size: 12px; font-weight: 550; }
 .qyt-about-link small { color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 1.5; }
 .qyt-about-link > svg:last-child { flex: none; width: 13px; height: 13px; margin-left: auto; color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
-.qyt-about-update { min-width: 0; padding: 17px 18px 15px; border: 1px solid var(--qyt-ocean-line); border-radius: 14px; background: linear-gradient(120deg, color-mix(in srgb, #51c5dc 4%, var(--dsw-alias-bg-layer-2)), var(--dsw-alias-bg-layer-2)); }
-.qyt-about-update-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.qyt-about-update-title > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
-.qyt-about-update-icon { display: inline-flex; color: var(--qyt-ocean); }
-.qyt-about .qyt-about-update h4 { margin: 0; font-size: 13px; font-weight: 600; }
-.qyt-about-current { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
-.qyt-about .qyt-about-update-message { position: relative; margin-top: 14px; padding-left: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.qyt-about-update-message::before { content: ""; position: absolute; top: .6em; left: 0; width: 5px; height: 5px; border-radius: 50%; background: var(--qyt-ocean); opacity: .65; }
-.qyt-about-update-message[data-state="complete"]::before { background: var(--dsw-alias-state-success-primary, #24935c); opacity: 1; }
-.qyt-about .qyt-about-update-message[role="alert"] { color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary)); }
-.qyt-about-update-message[role="alert"]::before { background: currentColor; }
-.qyt-about-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
-.qyt-about .qyt-about-check { padding: 6px 12px; border-color: var(--qyt-ocean-line); color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
-.qyt-about .qyt-about-check:hover:enabled { background: color-mix(in srgb, #3bbbd5 15%, var(--dsw-alias-bg-layer-2)); }
-.qyt-about .qyt-about-install, .qyt-about .qyt-about-install:hover:enabled { padding: 6px 12px; border-color: #168aa5; background: #168aa5; color: #fff; }
-.qyt-about-update-actions a { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 5px 0; color: var(--dsw-alias-label-secondary); font-size: 10px; text-decoration: none; }
-.qyt-about-update-actions a:hover { color: var(--qyt-ocean); }
-.qyt-about-update-actions a svg { width: 12px; height: 12px; }
-.qyt-about .qyt-about-update-hint { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--dsw-alias-border-l3); color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size: 10px; line-height: 1.7; }
-.qyt-about-release { margin-top: 12px; padding: 3px 0 3px 12px; border-left: 2px solid var(--qyt-ocean-line); }
-.qyt-about-release > span { margin-right: 8px; color: var(--qyt-ocean); font-size: 10px; }
-.qyt-about-release > strong { font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
-.qyt-about .qyt-about-release > p { margin-top: 6px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .qyt-about-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 0 3px; color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size: 10px; }
 .qyt-about-footer > span { display: inline-flex; align-items: center; gap: 4px; }
 .qyt-about-footer strong { color: var(--dsw-alias-label-secondary); font-weight: 500; }
@@ -86,6 +63,11 @@
   .qyt-about-link { gap: 8px; padding-right: 9px; padding-left: 9px; }
   .qyt-about-link-icon { width: 26px; height: 28px; }
   .qyt-about-link small { font-size: 9px; }
-  .qyt-about-update { padding: 15px; }
 }
 @media (prefers-reduced-motion: reduce) { .qyt-about-link { transition: none; } }
+
+.qyt-about-story { padding:0 10px; }
+.qyt-about .qyt-about-story h4 { font-size:13px; font-weight:550; margin:0; }
+.qyt-about .qyt-about-story p { font-size:11px; color:var(--dsw-alias-label-secondary); margin-top:7px; line-height:1.7; }
+.qyt-about-features { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+.qyt-about-features span { padding:5px 9px; border:1px solid var(--qyt-ocean-line); border-radius:7px; color:var(--qyt-ocean); background:var(--qyt-ocean-soft); font-size:10px; }

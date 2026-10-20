@@ -8,6 +8,8 @@ export interface Preferences {
   sessionWindowsEnabled: boolean
   bulkArchiveEnabled: boolean
   planCommentsEnabled: boolean
+  /** Appearance is independent of the four enhancement tools and their legacy master. */
+  qThemeEnabled: boolean
   pasteCharacterThreshold: number
   pasteLineThreshold: number
 }
@@ -23,6 +25,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   sessionWindowsEnabled: true,
   bulkArchiveEnabled: true,
   planCommentsEnabled: true,
+  qThemeEnabled: false,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 })

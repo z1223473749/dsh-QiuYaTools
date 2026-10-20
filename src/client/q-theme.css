@@ -1,0 +1,181 @@
+/* Q Ocean is an alias-token layer, not a replacement for semantic message or
+   syntax palettes. Native data-ds-dark-theme selects both schemes immediately;
+   no system preference, inline style or third-party theme layer is rewritten. */
+body[data-qyt-q-theme="ocean"] {
+  --qyt-q-sea: #13788f;
+  --qyt-q-sea-hover: #0c637a;
+  --qyt-q-ink: #173b48;
+  --qyt-q-secondary: #426370;
+  --qyt-q-muted: #4e6c77;
+  --qyt-q-base: #f7fbfc;
+  --qyt-q-surface: #fcfefe;
+  --qyt-q-raised: #f0f8fa;
+  --qyt-q-sidebar: #eaf5f7;
+  --qyt-q-selected: #d7edf2;
+  --qyt-q-line: #c6dfe6;
+  --qyt-q-glow: rgba(112, 218, 232, .12);
+  --qyt-q-shadow: rgba(23, 87, 107, .08);
+
+  --dsw-alias-bg-base: var(--qyt-q-base);
+  --dsw-alias-bg-layer-1: #f3fafb;
+  --dsw-alias-bg-layer-2: var(--qyt-q-surface);
+  --dsw-alias-bg-layer-3: var(--qyt-q-raised);
+  --dsw-alias-bg-module-platform: #edf7f9;
+  --dsw-alias-bg-multi-select: var(--qyt-q-selected);
+  --dsw-alias-bg-overlay: #edf7f9;
+  --dsw-alias-border-l1: rgba(35, 111, 133, .08);
+  --dsw-alias-border-l2: rgba(35, 111, 133, .17);
+  --dsw-alias-border-l2-darkmode-thin: rgba(35, 111, 133, .14);
+  --dsw-alias-border-l3: rgba(35, 111, 133, .21);
+  --dsw-alias-border-l4: rgba(35, 111, 133, .29);
+  --dsw-alias-label-primary: var(--qyt-q-ink);
+  --dsw-alias-label-primary-dimmed: #234956;
+  --dsw-alias-label-primary-bluish: #17566b;
+  --dsw-alias-label-secondary: var(--qyt-q-secondary);
+  --dsw-alias-label-tertiary: var(--qyt-q-muted);
+  --dsw-alias-label-caption: var(--qyt-q-muted);
+  --dsw-alias-menu-icon: var(--qyt-q-secondary);
+  --dsw-alias-link: #0d7089;
+  --dsw-alias-brand-primary: var(--qyt-q-sea);
+  --dsw-alias-brand-primary-invert: var(--qyt-q-sea);
+  --dsw-alias-brand-text: var(--qyt-q-ink);
+  --dsw-alias-button-primary-fill: var(--qyt-q-sea);
+  --dsw-alias-button-primary-hover: var(--qyt-q-sea-hover);
+  --dsw-alias-button-primary-dimmed: #dceef2;
+  --dsw-alias-button-info-fill: var(--qyt-q-sea);
+  --dsw-alias-button-info-hover: var(--qyt-q-sea-hover);
+  --dsw-alias-button-elevated-fill: var(--qyt-q-surface);
+  --dsw-alias-button-floating-fill: var(--qyt-q-surface);
+  --dsw-alias-button-floating-hover: #e4f2f6;
+  --dsw-alias-button-ghost-active-border: #8ebac7;
+  --dsw-alias-button-ghost-active-fill: #e2f1f5;
+  --dsw-alias-button-ghost-active-hover: var(--qyt-q-selected);
+  --dsw-alias-interactive-bg-hover: rgba(28, 126, 150, .08);
+  --dsw-alias-interactive-bg-hover-accent: rgba(28, 126, 150, .14);
+  --dsw-alias-interactive-bg-hover-solid: #e3f1f5;
+  --dsw-alias-interactive-bg-active: rgba(28, 126, 150, .16);
+  --dsw-alias-state-business-primary: var(--qyt-q-sea);
+  --dsw-alias-state-business-tertiary: var(--qyt-q-selected);
+  --dsw-alias-scrollbar-bg-l1: #bed5dc;
+  --dsw-alias-scrollbar-bg-l2: #b3cfd7;
+  --dsw-alias-scrollbar-hover-l1: #92b6c1;
+  --dsw-alias-scrollbar-hover-l2: #7ca7b5;
+  --dsw-specific-sidebar-fill: var(--qyt-q-sidebar);
+  --dsw-specific-sidebar-nav-item-hover: #e0f0f4;
+  --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
+  --dsw-specific-sidebar-nav-item-active-accent: #c9e9f0;
+  --dsw-specific-input-major: var(--qyt-q-surface);
+  --dsw-specific-selector: #e7f3f6;
+  --dsw-specific-bubble: #e4f3f7;
+  --dsw-specific-bubble-highlight: #c9e9f0;
+  --dsw-specific-tip: #edf7f9;
+  --dsw-menu-surface-fill: rgba(248, 253, 254, .97);
+  --dsw-alias-menu-group-header-fill: rgba(240, 249, 251, .98);
+  --dsw-specific-menu: var(--dsw-menu-surface-fill);
+  --dsw-alias-settings-card-fill: var(--qyt-q-surface);
+  --dsw-alias-settings-card-stroke: var(--qyt-q-line);
+  --dsw-focus-ring-color: #13788f;
+}
+
+body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
+  --qyt-q-sea: #77d0df;
+  --qyt-q-sea-hover: #a1e2ec;
+  --qyt-q-ink: #e1f2f5;
+  --qyt-q-secondary: #b5d2da;
+  --qyt-q-muted: #9fc3cf;
+  --qyt-q-base: #10232d;
+  --qyt-q-surface: #19333f;
+  --qyt-q-raised: #223f4c;
+  --qyt-q-sidebar: #122b37;
+  --qyt-q-selected: #264c5c;
+  --qyt-q-line: #355a6a;
+  --qyt-q-glow: rgba(74, 175, 197, .07);
+  --qyt-q-shadow: rgba(1, 12, 20, .25);
+
+  --dsw-alias-bg-layer-1: #152d39;
+  --dsw-alias-bg-module-platform: #1b3744;
+  --dsw-alias-bg-overlay: #1b3744;
+  --dsw-alias-border-l1: rgba(138, 198, 214, .10);
+  --dsw-alias-border-l2: rgba(138, 198, 214, .18);
+  --dsw-alias-border-l2-darkmode-thin: rgba(138, 198, 214, .15);
+  --dsw-alias-border-l3: rgba(138, 198, 214, .24);
+  --dsw-alias-border-l4: rgba(138, 198, 214, .34);
+  --dsw-alias-label-primary-dimmed: #c8e3e9;
+  --dsw-alias-label-primary-bluish: #b6e7f1;
+  --dsw-alias-link: #82d7e5;
+  --dsw-alias-brand-primary: #a1dfe9;
+  --dsw-alias-brand-primary-invert: #a1dfe9;
+  --dsw-alias-button-primary-fill: #a1dfe9;
+  --dsw-alias-button-primary-hover: #bdeaf0;
+  --dsw-alias-button-primary-dimmed: #284957;
+  /* Send icons are white in native Harness in both modes. Keep that fill
+     dark enough for the fixed foreground instead of using the pale accent. */
+  --dsw-alias-button-info-fill: #13788f;
+  --dsw-alias-button-info-hover: #0c637a;
+  --dsw-alias-button-floating-hover: #284957;
+  --dsw-alias-button-ghost-active-border: #527e8e;
+  --dsw-alias-button-ghost-active-fill: #244552;
+  --dsw-alias-button-ghost-active-hover: #305362;
+  --dsw-alias-interactive-bg-hover: rgba(126, 204, 222, .09);
+  --dsw-alias-interactive-bg-hover-accent: rgba(126, 204, 222, .16);
+  --dsw-alias-interactive-bg-hover-solid: #284957;
+  --dsw-alias-interactive-bg-active: rgba(126, 204, 222, .19);
+  --dsw-alias-scrollbar-bg-l1: #33515e;
+  --dsw-alias-scrollbar-bg-l2: #3c5d6a;
+  --dsw-alias-scrollbar-hover-l1: #4f7584;
+  --dsw-alias-scrollbar-hover-l2: #608897;
+  --dsw-specific-sidebar-nav-item-hover: #1c3b49;
+  --dsw-specific-sidebar-nav-item-active-accent: #2a5364;
+  --dsw-specific-selector: #24424f;
+  --dsw-specific-bubble: #1b3c4b;
+  --dsw-specific-bubble-highlight: #2a586b;
+  --dsw-specific-tip: #1c3947;
+  --dsw-menu-surface-fill: rgba(26, 53, 66, .98);
+  --dsw-alias-menu-group-header-fill: rgba(30, 60, 74, .99);
+  --dsw-focus-ring-color: #77d0df;
+}
+
+/* Public slot boundaries and semantic surfaces add a quiet sea-light wash.
+   No hashed classes, layout changes, body-wide element resets or animations. */
+body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child {
+  background: radial-gradient(ellipse at 0 0, var(--qyt-q-glow), transparent 58%), linear-gradient(165deg, var(--qyt-q-sidebar), var(--dsw-alias-bg-layer-1));
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child {
+  background: radial-gradient(ellipse at 100% 0, var(--qyt-q-glow), transparent 48%), var(--qyt-q-base);
+}
+body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
+  background-color: var(--dsw-alias-bg-layer-1);
+}
+body[data-qyt-q-theme="ocean"] [data-composer-card] {
+  background: linear-gradient(135deg, var(--qyt-q-surface), var(--dsw-alias-bg-layer-1));
+  box-shadow: 0 5px 24px -12px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
+}
+body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"][role="dialog"] {
+  background-color: var(--qyt-q-surface);
+}
+body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav {
+  background: linear-gradient(165deg, var(--dsw-alias-bg-layer-1), var(--qyt-q-sidebar));
+}
+body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
+  background-color: var(--qyt-q-selected);
+  color: var(--qyt-q-ink);
+}
+body[data-qyt-q-theme="ocean"] :is([role="menu"], [role="listbox"]) {
+  background-color: var(--dsw-menu-surface-fill);
+  border-color: var(--dsw-alias-border-l2);
+}
+body[data-qyt-q-theme="ocean"] [role="tab"][aria-selected="true"] {
+  background-color: var(--qyt-q-selected);
+  color: var(--qyt-q-ink);
+}
+
+/* Respect the operating system's explicit high-contrast palette. */
+@media (forced-colors: active) {
+  body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child,
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > :first-child,
+  body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav,
+  body[data-qyt-q-theme="ocean"] [data-composer-card] {
+    background: Canvas;
+    box-shadow: none;
+  }
+}
