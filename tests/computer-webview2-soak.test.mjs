@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runInNewContext } from 'node:vm'
-import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, preciseWindowsProcessIdentity, sameWindowsProcessIdentity, windowsEmergencyCleanupIdentities, windowsPinnedProcessCommand } from '../scripts/computer-webview2-soak-evidence.mjs'
+import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, preciseWindowsProcessIdentity, sameWindowsProcessIdentity, windowsEmergencyCleanupIdentities, windowsPinnedProcessCommand, windowsRunnerConsoleProbeCommand, verifyWindowsRunnerConsoleBinding, partitionWindowsCleanupIdentities } from '../scripts/computer-webview2-soak-evidence.mjs'
 
 test('native WebView2 clocks span killed page generations, include recovery outage, and exclude warm-up', () => {
   const stats = new WebViewClockAccumulator(), now = 1792550000000
@@ -110,4 +110,23 @@ test('pinned cleanup requires exact bounded identities and never delegates termi
   assert.ok(terminate.includes('$p.WaitForExit(2000)'))
   assert.throws(() => windowsPinnedProcessCommand([{ ...identity, expectedExecutablePath: '' }]), /Invalid pinned/)
   assert.throws(() => windowsPinnedProcessCommand([identity, identity]), /Invalid pinned/)
+})
+
+
+test('only the exact Win32-bound runner console defers retirement until runner exit', () => {
+  const runner = { pid: 10, createdAtTicks: '639281324193729160', expectedExecutablePath: 'C:\\node\\node.exe' }
+  const host = { pid: 20, parentPid: 10, name: 'conhost.exe', createdAtTicks: '639281324193729179', cimCreatedAtTicks: '639281324193729170' }
+  const probe = { proof: 'GetConsoleWindow+GetWindowThreadProcessId-after-AttachConsole', runnerPid: runner.pid, runnerCreatedAtTicks: runner.createdAtTicks, consoleHwnd: '123abc', pid: host.pid, createdAtTicks: host.createdAtTicks, expectedExecutablePath: 'C:\\Windows\\System32\\conhost.exe' }
+  const bound = verifyWindowsRunnerConsoleBinding(probe, [host], runner)
+  const otherConsole = { ...host, pid: 30 }, reused = { ...host, createdAtTicks: '639281324193729189', cimCreatedAtTicks: '639281324193729180' }
+  const split = partitionWindowsCleanupIdentities([host, otherConsole, reused], bound)
+  assert.deepEqual(split.deferred, [host]); assert.deepEqual(split.immediate, [otherConsole, reused])
+  assert.deepEqual(partitionWindowsCleanupIdentities([host], null).immediate, [host], 'A name/PPID match without API proof grants no exception')
+  assert.throws(() => verifyWindowsRunnerConsoleBinding({ ...probe, consoleHwnd: '0' }, [host], runner), /unavailable/)
+  assert.throws(() => verifyWindowsRunnerConsoleBinding({ ...probe, runnerCreatedAtTicks: '639281324193729161' }, [host], runner), /unavailable/)
+  assert.throws(() => verifyWindowsRunnerConsoleBinding(probe, [reused], runner), /already owned exact/)
+  const command = windowsRunnerConsoleProbeCommand(runner)
+  assert.ok(command.includes('GetConsoleWindow')); assert.ok(command.includes('GetWindowThreadProcessId')); assert.ok(command.includes('AttachConsole'))
+  assert.ok(command.includes('SetStdHandle')); assert.ok(command.includes('$writer.WriteLine($json)'))
+  assert.doesNotMatch(command, /ShowWindow|SetForegroundWindow|SetWindowPos/u)
 })

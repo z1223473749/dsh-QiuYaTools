@@ -25,35 +25,51 @@ const prlctl = process.env.QIUYA_PRLCTL || '/Applications/Parallels Desktop.app/
 const output = resolve(arg('--output', 'artifacts/computer-use/windows-webview2-720p-soak'))
 await mkdir(output, { recursive: true })
 const quote = value => `'${value.replaceAll("'", "''")}'`
+const commandTransfers = []
+const boundedCommandFailure = error => error.commandFailure ?? { message: String(error.message ?? 'Command failed').replace(/ -EncodedCommand .*/su, ' -EncodedCommand [omitted]').slice(0, 400), code: error.code ?? null, signal: error.signal ?? null, stdout: String(error.stdout ?? '').slice(0, 2000), stderr: String(error.stderr ?? '').slice(0, 2000) }
 async function ps(code, timeout = 45000) {
   const encoded = Buffer.from(code, 'utf16le').toString('base64')
-  const invoke = async args => (await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', ...args], { timeout, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024 })).stdout.trim()
-  const short = source => {
-    const value = Buffer.from(source, 'utf16le').toString('base64')
-    assert.ok(value.length < 6000, 'PD inline command exceeds its bounded transport budget')
-    return invoke(['-EncodedCommand', value])
+  const sourceSha256 = createHash('sha256').update(code).digest('hex')
+  const record = { sourceSha256, sourceBytes: Buffer.byteLength(code), encodedChars: encoded.length, method: encoded.length < 2000 ? 'inline' : 'UUID-SHA-PS1', outcome: 'pending' }
+  commandTransfers.push(record)
+  const invoke = async (args, stage) => {
+    try { return (await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', ...args], { timeout, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024 })).stdout.trim() }
+    catch (error) {
+      const failure = new Error(`PD PowerShell ${stage} failed`)
+      failure.commandFailure = { ...boundedCommandFailure(error), stage, sourceSha256 }
+      record.outcome = 'failed'; record.failure = failure.commandFailure
+      throw failure
+    }
   }
-  if (encoded.length < 6000) return invoke(['-EncodedCommand', encoded])
+  const short = (source, stage) => {
+    const value = Buffer.from(source, 'utf16le').toString('base64')
+    assert.ok(value.length < 2000, 'PD inline command exceeds its bounded transport budget')
+    return invoke(['-EncodedCommand', value], stage)
+  }
+  if (encoded.length < 2000) { const result = await invoke(['-EncodedCommand', encoded], 'inline'); record.outcome = 'passed'; return result }
   assert.ok(guestRoot && server.listening, 'Large commands require the already created disposable guest root and UUID transfer server')
   const name = `command-${randomUUID()}.ps1`, destination = win32.join(guestRoot, name)
-  // Windows PowerShell 5 treats a UTF-8 file without BOM as legacy ANSI.
   const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(code, 'utf8')])
   const sha = createHash('sha256').update(bytes).digest('hex')
   const url = `http://${host}:${server.address().port}/${key}/${name}`
+  record.name = name; record.stagedSha256 = sha
   files.set(name, bytes)
   let answer, failure
   try {
-    await short(`$ErrorActionPreference='Stop';$c=[Net.WebClient]::new();$c.Proxy=$null;try{$c.DownloadFile(${quote(url)},${quote(destination)})}finally{$c.Dispose()};if((Get-FileHash -LiteralPath ${quote(destination)} -Algorithm SHA256).Hash.ToLowerInvariant()-ne '${sha}'){throw 'Transferred command SHA mismatch'}`)
-    answer = await invoke(['-ExecutionPolicy', 'Bypass', '-File', destination])
+    // Use variables so each long path occurs once in this short bootstrap.
+    await short(`$ErrorActionPreference='Stop';$d=${quote(destination)};$c=[Net.WebClient]::new();$c.Proxy=$null;try{$c.DownloadFile(${quote(url)},$d)}finally{$c.Dispose()};if((Get-FileHash -LiteralPath $d -Algorithm SHA256).Hash -ne '${sha}'){throw 'Transferred command SHA mismatch'}`, 'file-download')
+    answer = await invoke(['-ExecutionPolicy', 'Bypass', '-File', destination], 'file-execution')
   } catch (error) { failure = error }
   finally {
     files.delete(name)
-    try { await short(`$ErrorActionPreference='Stop';if(Test-Path -LiteralPath ${quote(destination)}){Remove-Item -LiteralPath ${quote(destination)} -Force -ErrorAction Stop}`) }
-    catch (error) { if (failure) failure.commandFileCleanupError = error.message; else failure = error }
+    try { await short(`$ErrorActionPreference='Stop';$d=${quote(destination)};if(Test-Path -LiteralPath $d){Remove-Item -LiteralPath $d -Force -ErrorAction Stop}`, 'file-removal') }
+    catch (error) { if (failure) { failure.commandFailure ??= boundedCommandFailure(failure); failure.commandFailure.fileRemovalFailure = boundedCommandFailure(error) } else failure = error }
   }
-  if (failure) throw failure
+  if (failure) { record.outcome = 'failed'; throw failure }
+  record.outcome = 'passed'
   return answer
 }
+
 const key = randomUUID(), frozenRuntime = arg('--runtime-bundle')
 const helperPath = resolve(process.env.QIUYA_WINDOWS_HELPER || join(root, `lib/native/win32-${arch}/qiuya-windows.exe`))
 const compiled = frozenRuntime ? null : await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts'; export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
@@ -100,7 +116,7 @@ try {
   task = `QiuYaTools-webview2-soak-${key}`
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${win32.join(guestRoot, 'start.ps1')}"`
   await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(minutes) + 8}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
-  environment = { kind: 'real-native-WebView2-720p-endurance', vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 6000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
+  environment = { kind: 'real-native-WebView2-720p-endurance', vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 2000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
   console.error(JSON.stringify({ stage: 'interactive-native-WebView2-started', minutes, faults, guestRoot, output }))
   const deadline = Date.now() + minutes * 60000 + 360000
@@ -134,7 +150,7 @@ try {
   console.log(JSON.stringify({ ...outerVerdict, output, frames: report.frames, elapsedMs: report.elapsedMs, endToEndFps: report.endToEndFps, latencyP95Ms: report.latencyP95Ms, invalid: report.invalidTimestamps, faults: report.faults?.length }, null, 2))
   if (outerVerdict.status !== 'passed') process.exitCode = 1
 } catch (error) {
-  await writeFile(join(output, 'orchestration-error.json'), JSON.stringify({ status: 'failed', error: error.message, guestRoot, completed }, null, 2)); console.error(error.message); process.exitCode = 1
+  await writeFile(join(output, 'orchestration-error.json'), JSON.stringify({ status: 'failed', error: boundedCommandFailure(error), guestRoot, completed }, null, 2)); console.error(error.message); process.exitCode = 1
 } finally {
   const cleanup = { naturallyClean: false, forcedRequired: false, errors: [], remaining: [], before: null, forced: null, after: null }
   if (guestRoot) {
@@ -166,7 +182,16 @@ try {
         cleanup.remaining = owned.filter(item => live.has(item.pid)); cleanup.naturallyClean = cleanup.remaining.length === 0
         if (cleanup.remaining.length) {
           cleanup.forcedRequired = true
-          cleanup.forced = JSON.parse(await ps(windowsPinnedProcessCommand(cleanup.remaining, { terminate: true })))
+          // A shared console host cannot exit while its Node client is alive.
+          // First confirm that this exact runner has exited; never kill its
+          // console as an orphan while leaving the attached runner running.
+          const root = cleanup.remaining.find(item => item.pid === runner.pid && item.createdAtTicks === runner.createdAtTicks)
+          if (root) {
+            cleanup.forcedRunner = JSON.parse(await ps(windowsPinnedProcessCommand([root], { terminate: true })))
+            if (!cleanup.forcedRunner.passed) throw new Error('Pinned runner retirement failed; no attached children were forcibly retired')
+          }
+          const children = cleanup.remaining.filter(item => item !== root)
+          cleanup.forced = JSON.parse(await ps(windowsPinnedProcessCommand(children, { terminate: true })))
           if (!cleanup.forced.passed) cleanup.errors.push('Pinned emergency retirement failed')
           cleanup.after = JSON.parse(await ps(windowsPinnedProcessCommand(cleanup.remaining)))
           if (!cleanup.after.passed) cleanup.errors.push('Pinned post-retirement verification failed')
@@ -178,13 +203,14 @@ try {
         // identity. Do not infer an identity from a PID or command-line substring.
         cleanup.errors.push('Runner exact identity checkpoint was unavailable')
       }
-    } catch (error) { cleanup.errors.push(error.message) }
+    } catch (error) { cleanup.errors.push(boundedCommandFailure(error)) }
   } else cleanup.naturallyClean = true
   if (task) {
     try { await ps(`$ErrorActionPreference='Stop';$t=Get-ScheduledTask -TaskName ${quote(task)} -ErrorAction SilentlyContinue;if($t){if($t.State -eq 'Running'){Stop-ScheduledTask -TaskName ${quote(task)} -ErrorAction Stop};Unregister-ScheduledTask -TaskName ${quote(task)} -Confirm:$false -ErrorAction Stop}`) }
-    catch (error) { cleanup.errors.push(error.message) }
+    catch (error) { cleanup.errors.push(boundedCommandFailure(error)) }
   }
   cleanup.passed = cleanup.errors.length === 0 && cleanup.remaining.length === 0
+  await writeFile(join(output, 'ps-command-transport.json'), JSON.stringify({ inlineEncodedLimit: 2000, commands: commandTransfers }, null, 2))
   await writeFile(join(output, 'outer-cleanup-verdict.json'), JSON.stringify(cleanup, null, 2))
   if (!cleanup.passed || !cleanup.naturallyClean) {
     process.exitCode = 1

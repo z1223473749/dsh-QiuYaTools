@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm, rename } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsProcessSnapshotCommand, windowsPinnedProcessCommand } from './computer-webview2-soak-evidence.mjs'
+import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsProcessSnapshotCommand, windowsPinnedProcessCommand, windowsRunnerConsoleProbeCommand, verifyWindowsRunnerConsoleBinding, partitionWindowsCleanupIdentities } from './computer-webview2-soak-evidence.mjs'
 
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (key, fallback) => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1] }
@@ -41,6 +41,7 @@ const server = createServer(async (request, response) => {
 })
 let fixture, fixtureReady, fixtureTelemetry, fixtureBuffer = '', fixtureError = '', fixtureTickAt = 0
 const oraclePending = new Map(); let oracleSequence = 0
+let runnerConsole = null
 let driver, host, page, unsubscribe, fatal, phase = 'setup', generation = 0, measurementStart = 0, report, attachmentWrites = 0
 const mark = (kind, detail = {}) => { trace.push({ atMs: Date.now(), elapsedMs: measurementStart ? Date.now() - measurementStart : null, phase, kind, ...detail }); if (trace.length > 4000) trace.shift() }
 const snapshot = () => { const value = host?.service.get(sessionId); return value ? { state: value.state, epoch: value.epoch } : null }
@@ -59,12 +60,13 @@ async function ownedProcesses() {
   const rows = await snapshotRows(), owned = track(rows, process.pid, companion)
   for (const item of owned) {
     const row = rows.find(row => row.pid === item.pid)
-    identities.set(`${item.pid}:${item.createdAtTicks}`, { pid: item.pid, createdAtTicks: item.createdAtTicks, name: item.name, expectedExecutablePath: row.executablePath })
+    const key = `${item.pid}:${item.createdAtTicks}`, previous = identities.get(key)
+    identities.set(key, { ...previous, pid: item.pid, createdAtTicks: item.createdAtTicks, name: item.name, expectedExecutablePath: row.executablePath || previous?.expectedExecutablePath })
   }
   const runner = [...identities.values()].find(item => item.pid === process.pid)
   if (!runner?.expectedExecutablePath) throw new Error('Owned runner executable identity was unavailable')
   // An atomic early ledger survives a killed Node runner before finally executes.
-  const ledger = { schemaVersion: 1, runner, companion, fixturePath, nativeData, temporaryRoot: temporary, tracked: [...identities.values()] }
+  const ledger = { schemaVersion: 1, runner, companion, fixturePath, nativeData, temporaryRoot: temporary, runnerConsole, tracked: [...identities.values()] }
   const checkpoint = join(output, 'ownership-checkpoint.next.json')
   await writeFile(checkpoint, JSON.stringify(ledger)); await rename(checkpoint, join(output, 'ownership-checkpoint.json'))
   return { rows, owned }
@@ -221,6 +223,11 @@ async function sample() {
 }
 try {
   // Persist the UUID ownership boundary before starting any native GUI child.
+  const initialOwnership = await ownedProcesses()
+  const runnerIdentity = [...identities.values()].find(item => item.pid === process.pid)
+  const binding = JSON.parse(await powershell(windowsRunnerConsoleProbeCommand(runnerIdentity)))
+  runnerConsole = verifyWindowsRunnerConsoleBinding(binding, initialOwnership.owned, runnerIdentity)
+  identities.set(`${runnerConsole.pid}:${runnerConsole.createdAtTicks}`, runnerConsole)
   await ownedProcesses()
   fixture = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', fixturePath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
   fixture.stderr.on('data', chunk => { fixtureError = (fixtureError + chunk.toString()).slice(-2000) })
@@ -342,9 +349,10 @@ try {
   unsubscribe?.()
   // Capture any disposable release/guardian child created by shutdown as well.
   try { await ownedProcesses(); for (const item of identities.values()) if (item.pid !== process.pid && !tracked.some(row => row.pid === item.pid && row.createdAtTicks === item.createdAtTicks)) tracked.push(item) } catch (error) { errors.push(error.message) }
+  const { immediate: retireBeforeRunnerExit, deferred: deferredUntilRunnerExit } = partitionWindowsCleanupIdentities(tracked, runnerConsole)
   let remaining = [], retirementVerified = false
   try {
-    await waitFor(async () => { const rows = await snapshotRows(); remaining = tracked.filter(item => rows.some(row => sameWindowsProcessIdentity(row, item))); return !remaining.length }, 'Owned WebView2/native/source process identities remained after cleanup', 15000, true)
+    await waitFor(async () => { const rows = await snapshotRows(); remaining = retireBeforeRunnerExit.filter(item => rows.some(row => sameWindowsProcessIdentity(row, item))); return !remaining.length }, 'Owned WebView2/native/source process identities remained after cleanup', 15000, true)
     retirementVerified = true
   } catch (error) { errors.push(error.message) }
   const naturallyRemaining = [...remaining]
@@ -356,7 +364,7 @@ try {
       await writeFile(join(output, 'remaining-forced-cleanup.json'), JSON.stringify(forced, null, 2))
       if (!forced.passed) errors.push('Pinned owned-process fallback cleanup failed')
     } catch (error) { errors.push(error.message) }
-    try { const rows = await snapshotRows(); remaining = tracked.filter(item => rows.some(row => sameWindowsProcessIdentity(row, item))); retirementVerified = !remaining.length } catch (error) { errors.push(error.message) }
+    try { const rows = await snapshotRows(); remaining = retireBeforeRunnerExit.filter(item => rows.some(row => sameWindowsProcessIdentity(row, item))); retirementVerified = !remaining.length } catch (error) { errors.push(error.message) }
   }
   server.closeAllConnections(); if (server.listening) await new Promise(done => server.close(done))
   if (originalEnvironment.arguments === undefined) delete process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS; else process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = originalEnvironment.arguments
@@ -365,8 +373,8 @@ try {
   // an active WebView2 data directory or hiding a cleanup failure.
   if (retirementVerified && !remaining.length) await rm(temporary, { recursive: true, force: true }).catch(error => errors.push(error.code ?? 'temporary-cleanup-failed'))
   if (errors.length) { report.status = 'failed'; report.cleanupFailures = errors; process.exitCode = 1 }
-  report.cleanup = { passed: !errors.length, trackedIdentities: tracked.length, retirementVerified, naturallyRemaining, remaining }
-  await writeFile(join(output, 'cleanup-verification.json'), JSON.stringify({ tracked, naturallyRemaining, remaining, retirementVerified, passed: !errors.length }, null, 2))
+  report.cleanup = { passed: !errors.length, trackedIdentities: tracked.length, retirementVerified, deferredUntilRunnerExit, naturallyRemaining, remaining }
+  await writeFile(join(output, 'cleanup-verification.json'), JSON.stringify({ tracked, deferredUntilRunnerExit, naturallyRemaining, remaining, retirementVerified, passed: !errors.length }, null, 2))
   await writeFile(join(output, 'frame-clock.json'), JSON.stringify({ columns: ['generation', 'sourceStamp32', 'renderCompletedEpochMs', 'latencyMs'], measurementStartMs: measurementStart, measurementEndMs: stats.end, frames: stats.frames }))
   await writeFile(join(output, 'fault-trace.json'), JSON.stringify({ events: trace }, null, 2))
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2))
