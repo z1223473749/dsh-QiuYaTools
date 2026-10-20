@@ -53,10 +53,11 @@ test('actual HTTP pairing isolates lease owners and namespaces applications to t
   await a.act(20, f.target.id, { kind: 'click', x: 5, y: 6 })
   assert.equal(f.input.length, 1)
   await a.release(20)
-  await b.lease(1)
+  await assert.rejects(b.lease(1), { code: 'STALE_EPOCH' }, 'an attempted client epoch cannot be replayed after a failed acquisition')
+  await b.lease(2)
   assert.deepEqual(f.leased, [1, 2], 'client epochs map to strictly increasing native epochs')
   await a.release(20)
-  await b.act(1, f.target.id, { kind: 'key', key: 'Enter' })
+  await b.act(2, f.target.id, { kind: 'key', key: 'Enter' })
   assert.equal(f.input.length, 2, 'old owner release cannot revoke the new owner')
 })
 
@@ -120,6 +121,66 @@ test('HTTP action cancellation triggers native release and cannot produce a succ
 test('client rejects incompatible remote protocol and never follows credential-carrying redirects', async () => {
   const driver = new RemoteComputerDriver({ endpoint: 'http://127.0.0.1:1', token, fetch: async (_url, options) => { assert.equal(options.redirect, 'error'); return Response.json({ version: 2, requestId: 1, ok: true, result: {} }) } })
   await assert.rejects(driver.status(), { code: 'VERSION_MISMATCH' }); await driver.dispose()
+})
+
+test('failed native release remains pending and retry releases the original epoch', async t => {
+  const f = await fixture(t), a = f.remote('owner'), original = f.driver.release, attempts = []; let fail = true
+  f.driver.release = async epoch => { attempts.push(epoch); if (fail) { fail = false; throw new Error('native release offline') }; return original(epoch) }
+  await a.lease(1)
+  await assert.rejects(a.release(1), /native release offline/)
+  assert.equal((await a.status()).cleanupPending, true)
+  await a.release(1)
+  assert.deepEqual(attempts, [1, 1]); assert.equal((await a.status()).cleanupPending, false)
+})
+
+test('pair rotation denies old credentials immediately and blocks new input until failed cleanup is retried', async t => {
+  const f = await fixture(t), a = f.remote('old-owner'), original = f.driver.release; let fail = true
+  f.driver.release = async epoch => { if (fail) throw new Error('native cleanup unavailable'); return original(epoch) }
+  await a.lease(1)
+  await assert.rejects(f.agent.revoke(`${token}-rotated`), /cleanup unavailable/)
+  await assert.rejects(a.status(), { code: 'PAIR_UNAUTHORIZED' })
+  const b = f.remote('new-owner', { token: `${token}-rotated` })
+  await assert.rejects(b.lease(1), /cleanup unavailable/)
+  assert.deepEqual(f.leased, [1], 'new native lease cannot replace the uncertain old lease')
+  fail = false
+  await b.lease(2)
+  assert.deepEqual(f.released, [1]); assert.deepEqual(f.leased, [1, 2])
+})
+
+test('release waits for an uncertain acquisition and fences it again after its reply arrives', async t => {
+  const f = await fixture(t), a = f.remote('owner'), entered = deferred(), finish = deferred(), original = f.driver.lease
+  f.driver.lease = async epoch => { entered.resolve(); await finish.promise; return original(epoch) }
+  const starting = a.lease(1), rejected = assert.rejects(starting, { code: 'CONTROL_CHANGED' })
+  await entered.promise
+  let acknowledged = false
+  const stopping = a.release(1).then(() => { acknowledged = true })
+  await delay(40); assert.equal(acknowledged, false)
+  finish.resolve(); await rejected; await stopping
+  assert.deepEqual(f.released, [1, 1]); assert.equal((await a.status()).cleanupPending, false)
+})
+
+test('watchdog retries failed cleanup without losing the old native epoch', async t => {
+  const f = await fixture(t, { leaseTimeoutMs: 120 }), a = f.remote('offline', { heartbeatMs: 10_000 }), original = f.driver.release; let attempts = 0
+  f.driver.release = async epoch => { if (++attempts === 1) throw new Error('temporary cleanup failure'); return original(epoch) }
+  await a.lease(1)
+  const deadline = Date.now() + 1000
+  while (!f.released.includes(1) && Date.now() < deadline) await delay(20)
+  assert.ok(attempts >= 2); assert.deepEqual(f.released, [1])
+})
+
+test('late older lease response cannot replace a newer client heartbeat/disposal epoch', async () => {
+  const delayed = deferred(), releases = []; let first
+  const remote = new RemoteComputerDriver({ endpoint: 'http://127.0.0.1:1', token, heartbeatMs: 10_000, fetch: async (_url, options) => {
+    const input = JSON.parse(options.body)
+    if (input.op === 'release') releases.push(input.payload.epoch)
+    if (input.op === 'lease' && input.payload.epoch === 11) { first = input; return delayed.promise }
+    return Response.json({ version: 1, requestId: input.requestId, ok: true, result: {} })
+  } })
+  const older = remote.lease(11), rejected = assert.rejects(older, { code: 'CONTROL_CHANGED' })
+  await remote.lease(12)
+  delayed.resolve(Response.json({ version: 1, requestId: first.requestId, ok: true, result: {} }))
+  await rejected; await remote.dispose()
+  assert.deepEqual(releases, [11, 12])
 })
 
 test('physical intervention in the guest revokes its lease and pauses the paired owner through heartbeat', async t => {

@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
+import { Context } from '@deepseek-ai/cordis'
+import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 const result = await build({ entryPoints: [new URL('../src/features/computer-use/host.ts', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'esm' })
 const { installComputerHost } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 function fixture({ enabled = true, owner = true } = {}) {
@@ -47,4 +49,32 @@ test('non-owner cannot invoke native controls or read preview', async () => {
     assert.equal(response.status, 403)
     assert.deepEqual(f.actions, [])
   } finally { await host.dispose() }
+})
+
+test('preview GET declares the body mode required by the real Connection bridge', async () => {
+  const ctx = new Context(), f = fixture()
+  const server = ctx.plugin(child => child.provide('webServer', { port: 19445 }))
+  await server.await()
+  const connection = ctx.plugin(child => { new HostConnectionService(child, [], { isAuthenticated: () => true }) })
+  await connection.await()
+  let installer
+  const plugin = ctx.plugin(child => {
+    installer = child.inject(['connection', 'webServer'], injected => {
+      injected.effect(async () => {
+        const host = await installComputerHost(injected, () => true, { driver: f.driver })
+        return () => host.dispose()
+      })
+    })
+  })
+  await plugin.await(); await installer.await()
+  try {
+    const service = ctx.get('connection'), shared = service.createSharedFetchHandler('/api')
+    const url = new URL('http://127.0.0.1:19445/api/qiuya-tools.computer.preview?session=chat-1')
+    // The actual SDK returns undefined for an omitted mode and then takes its
+    // streaming branch. A streaming body is invalid for WHATWG GET Request.
+    assert.equal(shared.requestBodyMode({ method: 'GET', url }), 'buffered')
+    const response = await shared.fetch(new Request(url), service.browserPeer)
+    assert.equal(response.status, 200)
+    assert.match(await response.text(), /id="screen"[\s\S]*id="pause"|id="pause"[\s\S]*id="screen"/u)
+  } finally { await plugin.dispose(); await connection.dispose(); await server.dispose() }
 })

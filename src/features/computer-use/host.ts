@@ -110,8 +110,20 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
       } catch (error) { return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { ...computerError(error), details: {} } } }, { headers: { 'Cache-Control': 'no-store' } }) }
     },
   }), services.connection.fetch.register({
-    path: COMPUTER_PREVIEW_PATH, methods: ['GET'],
+    // The formal Connection bridge defaults an omitted body mode to streaming.
+    // GET cannot carry that stream in WHATWG Request; explicitly buffer its
+    // empty body so the authenticated HTML route reaches this handler.
+    path: COMPUTER_PREVIEW_PATH, methods: ['GET'], requestBody: 'buffered',
     fetch: async () => owner() ? new Response(computerPreviewPage, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } }) : new Response('Forbidden', { status: 403 }),
   })]
-  return { service, async dispose() { if (disposed) return; disposed = true; clearInterval(poll); await service.dispose(); await Promise.all(unregister.map(stop => stop())) } }
+  return { service, async dispose() {
+    if (disposed) return
+    disposed = true; clearInterval(poll)
+    let failure: unknown
+    try { await service.dispose() } catch (error) { failure = error }
+    const removed = await Promise.allSettled(unregister.map(stop => Promise.resolve().then(stop)))
+    if (failure) throw failure
+    const failedRoute = removed.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failedRoute) throw failedRoute.reason
+  } }
 }

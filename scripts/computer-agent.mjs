@@ -19,8 +19,9 @@ export async function main(environment = process.env) {
   const agent = await createComputerAgentServer(driver, { token, host: environment.QIUYA_COMPUTER_HOST ?? '127.0.0.1', port })
   process.stdout.write(`Computer agent listening: ${agent.endpoint}\nPairing credentials are never printed. Default binding is loopback; use a trusted TLS or SSH tunnel for another device.\n`)
   let closing = false
-  const close = async () => { if (closing) return; closing = true; await agent.close(); driver.dispose() }
-  process.once('SIGINT', () => { void close() }); process.once('SIGTERM', () => { void close() })
+  const close = async () => { if (closing) return; closing = true; try { await agent.close() } finally { await driver.dispose() } }
+  const shutdown = () => { void close().catch(() => { process.stderr.write('Computer agent cleanup failed; inspect the native input state before reconnecting.\n'); process.exitCode = 1 }) }
+  process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown)
   return { agent, driver, close }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
