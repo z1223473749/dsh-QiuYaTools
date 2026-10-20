@@ -3,6 +3,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { installSessionWindowsHost } from './features/session-windows/host.ts'
 import { installPluginUpdatesHost } from './updates/host.ts'
+import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
 import pkg from '../package.json' with { type: 'json' }
 
@@ -14,6 +15,7 @@ export interface Config {
   bulkArchiveEnabled: Volatile<boolean>
   planCommentsEnabled: Volatile<boolean>
   sidebarToolsEnabled: Volatile<boolean>
+  promptSuggestionsEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
   pasteLineThreshold: Volatile<number>
@@ -26,6 +28,7 @@ export const Config = z.object({
   bulkArchiveEnabled: z.boolean().default(true).description('多选会话并批量归档，或归档工作区内的全部会话').volatile(),
   planCommentsEnabled: z.boolean().default(true).description('为计划添加批注并提交修改建议').volatile(),
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
+  promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
     .description('粘贴内容达到此字符数时转为 TXT 附件').volatile(),
@@ -43,5 +46,8 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.inject(['connection', 'webServer'], child => {
     child.effect(() => installSessionWindowsHost(child, () => config.enabled.get() && config.sessionWindowsEnabled.get()))
+  })
+  ctx.inject(['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'], child => {
+    child.effect(() => installPromptSuggestionsHost(child, () => config.enabled.get() && config.promptSuggestionsEnabled.get()))
   })
 }

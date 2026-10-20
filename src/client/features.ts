@@ -7,6 +7,7 @@ import { installBulkArchive } from '../features/bulk-archive/index.ts'
 import { installSessionWindows } from '../features/session-windows/index.tsx'
 import { installPlanComments } from '../features/plan-comments/index.tsx'
 import { installSidebarTools } from '../features/sidebar-tools/index.tsx'
+import { installPromptSuggestions } from '../features/prompt-suggestions/index.tsx'
 
 const dependencies: Record<FeatureField, string[]> = {
   pastedTextEnabled: ['slots'],
@@ -14,6 +15,7 @@ const dependencies: Record<FeatureField, string[]> = {
   bulkArchiveEnabled: ['locale', 'sessions', 'workspaces', 'uiWorkspace'],
   planCommentsEnabled: ['slots', 'locale', 'sessions', 'sidebarRight'],
   sidebarToolsEnabled: ['slots', 'sessions', 'workspaces', 'uiSession'],
+  promptSuggestionsEnabled: ['slots', 'locale', 'connection'],
 }
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
@@ -33,7 +35,8 @@ export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): vo
           else if (field === 'sessionWindowsEnabled') scope.effect(() => installSessionWindows(scope))
           else if (field === 'bulkArchiveEnabled') scope.effect(() => installBulkArchive(scope))
           else if (field === 'planCommentsEnabled') scope.effect(() => installPlanComments(scope))
-          else scope.effect(() => installSidebarTools(scope))
+          else if (field === 'sidebarToolsEnabled') scope.effect(() => installSidebarTools(scope))
+          else if (field === 'promptSuggestionsEnabled') scope.effect(() => installPromptSuggestions(scope))
         },
       })
       return () => fiber.dispose()

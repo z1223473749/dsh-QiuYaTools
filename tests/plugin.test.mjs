@@ -123,6 +123,10 @@ test('built client follows the Harness loader and settings contribution lifecycl
   const messages = mounted.localeNamespaces.get(options.locale)
   assert.equal(messages.zh.nav, 'QiuYaTools')
   assert.equal(messages.en.nav, 'QiuYaTools')
+  assert.equal(messages.zh.promptSuggestionsTab, '提示词')
+  assert.match(messages.zh.promptSuggestionsHint, /输入框为空.*不会自动发送/)
+  assert.match(messages.zh.promptSuggestionsAccept, /Tab.*Esc/)
+  assert.match(messages.zh.promptSuggestionsModel, /当前会话所选模型.*用量/)
   assert.deepEqual(Object.keys(messages.en).sort(), Object.keys(messages.zh).sort())
   assert.equal(styles.size, 1)
   const [style] = styles
@@ -175,9 +179,10 @@ test('host schema provides a volatile default and rejects string booleans', () =
   const paused = host.Config({ enabled: false })
   assert.equal(paused.enabled.get(), false)
   assert.equal(host.Config.simplify(paused).enabled, false, 'persistence must contain plain data')
-  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled']) assert.equal(paused[field].get(), true)
+  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']) assert.equal(paused[field].get(), true)
   assert.throws(() => host.Config({ enabled: 'false' }), /boolean/i)
   assert.throws(() => host.Config({ enabled: 'true' }), /boolean/i)
+  assert.throws(() => host.Config({ promptSuggestionsEnabled: 'false' }), /boolean/i)
 })
 
 test('host hides its generated form using the owner fiber and releases the override', () => {
@@ -202,7 +207,10 @@ test('host hides its generated form using the owner fiber and releases the overr
       })
     },
   })
-  assert.deepEqual(injections, [['connection'], ['settings'], ['connection', 'webServer']], 'optional update services and peer-scoped session readers must not block registration')
+  assert.deepEqual(injections, [
+    ['connection'], ['settings'], ['connection', 'webServer'],
+    ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
+  ], 'optional update, session and suggestion services must not block registration')
   assert.deepEqual(overrides.get(fiber), { auto: false })
   for (const dispose of effects.reverse()) dispose()
   assert.equal(overrides.size, 0)

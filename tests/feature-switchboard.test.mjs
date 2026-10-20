@@ -49,11 +49,12 @@ test('feature switchboard waits for configuration, inherits new flags, and honor
     await f.board.update(undefined)
     assert.equal(f.count(), 0)
     await f.board.update({})
-    assert.equal(f.count(), 5, 'new and upgraded profiles inherit every feature as enabled')
+    assert.equal(f.count(), FEATURE_FIELDS.length, 'new and upgraded profiles inherit every feature as enabled')
+    assert.equal(f.active.get('promptSuggestionsEnabled'), 1, 'upgrades enable prompt suggestions by default')
     await f.board.update({ enabled: false })
     assert.equal(f.count(), 0)
     await f.board.update({ enabled: true, bulkArchiveEnabled: false })
-    assert.equal(f.count(), 4)
+    assert.equal(f.count(), FEATURE_FIELDS.length - 1)
     assert.equal(f.active.get('bulkArchiveEnabled'), 0)
     await f.board.update(undefined)
     assert.equal(f.count(), 0, 'unavailable settings withdraw all features')
@@ -65,7 +66,7 @@ test('threshold-only changes preserve each feature fiber without reinstalling li
   try {
     await f.board.update({ ...DEFAULT_PREFERENCES })
     await f.board.update({ ...DEFAULT_PREFERENCES, pasteCharacterThreshold: 2000, pasteLineThreshold: 30 })
-    assert.equal(f.count(), 5)
+    assert.equal(f.count(), FEATURE_FIELDS.length)
     assert.equal([...f.starts.values()].every(count => count === 1), true)
     assert.equal(f.events.some(([event]) => event === 'stop-start'), false)
   } finally { await f.board.dispose() }
@@ -151,7 +152,7 @@ test('a startup failure leaves earlier registrations owned and a later update ca
     assert.equal(active.size, 1)
     fail = false
     await board.update(DEFAULT_PREFERENCES)
-    assert.equal(active.size, 5)
+    assert.equal(active.size, FEATURE_FIELDS.length)
   } finally { await board.dispose() }
   assert.equal(active.size, 0)
 })

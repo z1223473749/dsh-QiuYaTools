@@ -60,10 +60,10 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true, sidebarToolsEnabled: true, qThemeEnabled: false,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, qThemeEnabled: false,
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
-const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled']
+const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']
 
 function mount(value = {}, policy = {}) {
   let snapshot = {
@@ -124,7 +124,7 @@ test('settings default every feature to on and atomically turn every feature off
     assert.ok(f.container.querySelector('.qyt-header-actions').contains(f.switch('enabled')), 'the master is in the fixed header')
     assert.equal(f.container.querySelector('.qyt-master'), null, 'there is no second master card')
     assert.equal(f.container.querySelector('.qyt-save-feedback'), null, 'there is no permanent save-explanation row')
-    for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab']) {
+    for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab']) {
       f.select(label)
       assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 2)
     }
@@ -133,7 +133,7 @@ test('settings default every feature to on and atomically turn every feature off
     assert.equal(f.container.querySelectorAll('input')[1].value, '15')
     await f.toggle('enabled')
     assert.equal(f.mutations.length, 1)
-    assert.equal(f.mutations[0].length, 6)
+    assert.equal(f.mutations[0].length, featureFields.length + 1)
     assert.deepEqual(f.mutations[0][0], { op: 'set', path: ['enabled'], value: true })
     for (const field of featureFields) assert.equal(f.snapshot().value[field], false)
     assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
@@ -148,6 +148,7 @@ test('each feature shows a mixed master when disabled and one master click resto
   for (const [field, label] of [
     ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
     ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['sidebarToolsEnabled', 'sidebarTools'],
+    ['promptSuggestionsEnabled', 'promptSuggestions'],
   ]) {
     const f = mount({ ...defaults, unrelated: { preserve: true } })
     try {
@@ -184,6 +185,19 @@ test('a legacy paused profile can be activated through an individual feature swi
       { op: 'set', path: ['sessionWindowsEnabled'], value: true },
     ])
     assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'true')
+  } finally { f.dispose() }
+})
+
+test('prompt suggestions expose their trigger, keyboard behavior and model usage without writing settings', () => {
+  const f = mount()
+  try {
+    f.select('promptSuggestionsTab')
+    assert.equal(f.switch('promptSuggestions').getAttribute('aria-checked'), 'true')
+    assert.equal(f.container.querySelector('h3').textContent, 'promptSuggestions')
+    assert.deepEqual([...f.container.querySelectorAll('.qyt-guide li')].map(item => item.textContent), [
+      'promptSuggestionsWhen', 'promptSuggestionsAccept', 'promptSuggestionsModel',
+    ])
+    assert.equal(f.mutations.length, 0, 'opening the feature guide does not invoke a model or change preferences')
   } finally { f.dispose() }
 })
 
@@ -254,6 +268,8 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
       assert.ok(f.container.querySelector('[data-updates-version]'), 'Updates remain available while settings cannot be written')
       f.select('qThemeTab')
       assert.equal(f.switch('qTheme').disabled, true)
+      f.select('promptSuggestionsTab')
+      assert.equal(f.switch('promptSuggestions').disabled, true)
     } finally { f.dispose() }
   }
   const f = mount(defaults)
@@ -270,14 +286,14 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('eight icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
+test('nine icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 8)
-    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    assert.equal(tabs.length, 9)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
     const scrolled = []
     tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
@@ -298,14 +314,14 @@ test('eight icon tabs expose labelled panels and support roving focus and scroll
       assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
-    key('ArrowLeft', 7)
+    key('ArrowLeft', 8)
     assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
-    key('ArrowLeft', 6)
+    key('ArrowLeft', 7)
     assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
-    key('ArrowRight', 7)
+    key('ArrowRight', 8)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 7)
+    key('End', 8)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }
@@ -356,7 +372,7 @@ test('Q Theme defaults off and persists independently from the enhancement tools
       assert.equal(f.switch('enabled').getAttribute('aria-checked'), String(enabled))
       await f.toggle('enabled')
       await f.toggle('enabled')
-      assert.equal(f.snapshot().value.qThemeEnabled, true, 'the four-tool master never writes the theme preference')
+      assert.equal(f.snapshot().value.qThemeEnabled, true, 'the tool master never writes the theme preference')
       for (const operation of f.mutations.slice(1).flat()) assert.notEqual(operation.path[0], 'qThemeEnabled')
       const before = structuredClone(f.snapshot().value)
       await f.toggle('qTheme')
@@ -402,7 +418,7 @@ test('scroll containment applies only to our native outlet and keeps header, mas
     assert.equal(style(tabs).flexShrink, '0')
     assert.equal(style(tabs).overflowX, 'auto', 'narrow settings keep tabs on one independently scrollable row')
     assert.equal(style(tabs).overflowY, 'hidden')
-    assert.equal(style(tabs.firstElementChild).flexShrink, '0', 'eight labels never squeeze the content into unreadable columns')
+    assert.equal(style(tabs.firstElementChild).flexShrink, '0', 'nine labels never squeeze the content into unreadable columns')
     assert.equal(style(panel).overflowY, 'auto')
     assert.equal(style(panel).minHeight, '0')
     assert.ok(fixed.contains(f.container.querySelector('h2')))

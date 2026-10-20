@@ -44,6 +44,7 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'bulkArchiveEnabled', tab: 'bulkArchiveTab', label: 'bulkArchive', hint: 'bulkArchiveHint', steps: ['bulkArchiveSelect', 'bulkArchiveSelected', 'bulkArchiveWorkspace'] },
   { field: 'planCommentsEnabled', tab: 'planCommentsTab', label: 'planComments', hint: 'planCommentsHint', steps: ['planCommentsSelection', 'planCommentsCard', 'planCommentsSubmit'] },
   { field: 'sidebarToolsEnabled', tab: 'sidebarToolsTab', label: 'sidebarTools', hint: 'sidebarToolsHint', steps: ['sidebarToolsPin', 'sidebarToolsUnread', 'sidebarToolsCopy', 'sidebarToolsWorkspace'] },
+  { field: 'promptSuggestionsEnabled', tab: 'promptSuggestionsTab', label: 'promptSuggestions', hint: 'promptSuggestionsHint', steps: ['promptSuggestionsWhen', 'promptSuggestionsAccept', 'promptSuggestionsModel'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
@@ -59,6 +60,7 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
         : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
           : name === 'planCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
             : name === 'sidebarToolsEnabled' ? <><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/><path d="m20.5 19.5 2 2"/></>
+            : name === 'promptSuggestionsEnabled' ? <><path d="m4 20 4-1 11-11-3-3L5 16zM14 7l3 3M5 3v4M3 5h4M19 14v6M16 17h6"/></>
             : name === 'qTheme' ? <><path d="M12 3a9 9 0 1 0 0 18h1.4a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5h1a4 4 0 0 0 4-4C21 6.7 17 3 12 3Z"/><path d="M7.5 11h.01M9 7.5h.01M13 7h.01M16.5 9h.01" strokeWidth="3"/></>
               : name === 'updates' ? <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11.5-1.5L20 8M4 16l2.5 2.5A7 7 0 0 0 18 17"/></>
                 : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>}
