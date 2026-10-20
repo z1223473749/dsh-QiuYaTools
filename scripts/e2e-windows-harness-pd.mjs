@@ -102,7 +102,7 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   if (!completed) throw new Error('Windows installed Harness test timed out')
   for (const folder of ['', 'evidence', ...(oldPackage ? ['install-evidence'] : [])]) {
     const path = win32.join(guestRoot, folder)
-    const names = JSON.parse(await ps(`@((Get-ChildItem ${quote(path)} -File -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)|Where-Object {$_ -match '\\.(json|log|err|jpg|png)$'})|ConvertTo-Json -Compress`))
+    const names = JSON.parse(await ps(`@((Get-ChildItem ${quote(path)} -File -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)|Where-Object {$_ -match '\\.(json|jsonl|log|err|jpg|png)$'})|ConvertTo-Json -Compress`))
     const destination = join(output, folder); await mkdir(destination, { recursive: true })
     for (const name of (Array.isArray(names) ? names : [names])) {
       assert.match(name, /^[a-zA-Z0-9_.-]+$/u)

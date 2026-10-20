@@ -572,6 +572,12 @@ try {
 }
 finally {
   await writeFile(join(output, 'session-window-rpc.json'), JSON.stringify(windowRpc, null, 2))
+  if (windowStateDiagnostic) {
+    // A separately packaged diagnostic companion can emit sanitized native
+    // presentation phases. Preserve them before shutting down this own Host;
+    // the ordinary frozen candidate does not create this optional file.
+    await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + error.message) })
+  }
   await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
   if (host) await Promise.race([new Promise(resolve => host.once('exit', resolve)), sleep(3000).then(() => host.kill('SIGKILL'))])
   const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length
