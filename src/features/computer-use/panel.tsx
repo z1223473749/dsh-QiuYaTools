@@ -86,6 +86,8 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   const [chats, setChats] = useState<{ id: string; title: string }[]>([])
   const [mode, setMode] = useState<'local' | 'remote' | 'browser'>('local'), [endpointUrl, setEndpointUrl] = useState(''), [token, setToken] = useState(''), [allowPrivate, setAllowPrivate] = useState(false)
   const [browser, setBrowser] = useState<'chrome' | 'edge'>('chrome'), [origins, setOrigins] = useState(''), [initialUrl, setInitialUrl] = useState(''), [cdpEndpoint, setCdpEndpoint] = useState('')
+  const revision = useRef(0), mounted = useRef(true), performing = useRef(false)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; revision.current++ } }, [])
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
     if (!connection) throw new Error('连接尚未就绪')
@@ -94,12 +96,16 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     return response.value
   }
   const refresh = async () => {
+    const generation = revision.current
     const result = await call('status') as { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; native: NativeView | null }
+    if (!mounted.current || generation !== revision.current) return
     setSessions(result.sessions); setAllowed(result.allowedApps); setNative(result.native)
     const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
     if (catalog) setChats(catalog.ids.filter(id => catalog.byId[id]?.origin !== 'subagent').map(id => ({ id, title: catalog.byId[id].displayTitle ?? catalog.byId[id].title ?? id })))
   }
   useEffect(() => {
+    revision.current++; setTargets([]); setTargetId(''); setNative(undefined); setMessage(''); setToken(''); setEndpointUrl(''); setMode('local'); setBusy(false)
+    setFileGeneration(value => value + 1)
     if (!enabled) return
     let disposed = false
     const run = async () => { try { if (!disposed) await refresh() } catch (error) { if (!disposed) setMessage((error as Error).message) } }
@@ -107,38 +113,45 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     return () => { disposed = true; window.clearInterval(timer) }
   }, [enabled, sessionId])
   const action = async (op: string, extra = {}) => {
-    if (busy) return
+    if (performing.current) return
+    if (!sessionId) { setMessage('请先选择关联聊天。'); return }
+    performing.current = true
+    const generation = revision.current
     setBusy(true); setMessage('')
     try {
       const result = await call(op, extra)
+      if (!mounted.current || generation !== revision.current) return
       if (op === 'connect') { setTargets([]); setTargetId(''); setFileGeneration(value => value + 1) }
       if (op === 'targets') { const list = result as NativeTarget[]; setTargets(list); if (!list.some(t => t.id === targetId)) setTargetId(list[0]?.id ?? '') }
       await refresh()
-    } catch (error) { setMessage((error as Error).message) } finally { setBusy(false) }
+    } catch (error) { if (mounted.current && generation === revision.current) setMessage((error as Error).message) }
+    finally { performing.current = false; if (mounted.current && generation === revision.current) setBusy(false) }
   }
   const current = sessions.find(item => item.sessionId === sessionId)
   return <div className="qyt-feature-panel">
     <div className="qyt-card"><div className="qyt-toggle-row"><h3>电脑操控</h3><label><input type="checkbox" checked={enabled} disabled={disabled} onChange={e => onEnabled(e.target.checked)}/> 启用</label></div>
-      <p className="qyt-muted">让当前聊天操作所选应用，并通过悬浮窗查看画面、暂停或接管。当前聊天需选择支持图片输入的模型。</p>
-      {enabled && <><p>选择关联聊天和目标窗口后，本次允许该聊天操作此应用。</p>
+      <p className="qyt-muted">每个聊天都有独立的小预览、AI 指针和暂停状态，预览可随时弹出为大窗口或收回。当前聊天需选择支持图片输入的模型。</p>
+      {enabled && <><p>独立浏览器和远端环境可同时工作；操作同一台电脑时，鼠标和键盘按任务顺序执行。</p>
         <div style={{ display: 'grid', gap: 12 }}>
+          <label>关联聊天 <select value={sessionId} disabled={busy} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
           <label>操作环境 <select value={mode} onChange={e => setMode(e.target.value as 'local' | 'remote' | 'browser')}><option value="local">这台电脑</option><option value="remote">独立虚拟机或远端电脑</option><option value="browser">浏览器专用通道</option></select></label>
           {mode === 'remote' && <><label>配对地址 <input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={e => setEndpointUrl(e.target.value)}/></label><label>配对密钥 <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)}/></label><label><input type="checkbox" checked={allowPrivate} onChange={e => setAllowPrivate(e.target.checked)}/> 允许通过受信任的私有网络连接（例如本机虚拟机）</label></>}
           {mode === 'browser' && <><label>浏览器 <select value={browser} onChange={e => setBrowser(e.target.value as 'chrome' | 'edge')}><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option></select></label><label>允许的网站来源（每行一个）<textarea rows={3} value={origins} placeholder="https://example.com" onChange={e => setOrigins(e.target.value)}/></label><label>起始页面 <input type="url" value={initialUrl} placeholder="https://example.com/" onChange={e => setInitialUrl(e.target.value)}/></label><details><summary>连接已开启调试的浏览器</summary><label>本机调试地址（可选）<input type="url" value={cdpEndpoint} placeholder="http://127.0.0.1:9222" onChange={e => setCdpEndpoint(e.target.value)}/></label></details><p className="qyt-muted">默认打开独立的浏览器配置，可在其中登录。只允许列出的网站；修改后重新连接即生效。浏览器通道可在后台操作标签页。</p></>}
-          <button className="qyt-button" disabled={busy || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>连接所选环境</button>
-          {mode === 'remote' && native?.mode === 'remote' && !busy && <FileExchangePanel key={fileGeneration} call={call}/>}
-          <label>关联聊天 <select value={sessionId} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+          <button className="qyt-button" disabled={busy || !sessionId || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>为此聊天连接环境</button>
+          {sessionId && native?.mode && <p className="qyt-muted">此聊天已连接：{({ local: '这台电脑', remote: '远端电脑', browser: '独立浏览器' })[native.mode]}</p>}
+          {mode === 'remote' && native?.mode === 'remote' && !busy && <FileExchangePanel key={`${sessionId}:${fileGeneration}`} call={call}/>}
           <label>应用窗口 <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请刷新窗口列表</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title || item.appId}</option>)}</select></label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="qyt-button" disabled={busy} onClick={() => { void action('targets') }}>刷新窗口</button>
+            <button className="qyt-button" disabled={busy || !sessionId} onClick={() => { void action('targets') }}>刷新窗口</button>
             <button className="qyt-button" disabled={busy || !sessionId || !targetId} onClick={() => { void action('start', { targetId }) }}>允许本次并开始</button>
-            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('preview') }}>悬浮实时预览</button>
+            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('preview') }}>弹出大预览</button>
+            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('redock') }}>收回到聊天</button>
             {(['pause', 'takeover', 'resume', 'stop'] as const).map((op, i) => <button className="qyt-button" key={op} disabled={busy || !current} onClick={() => { void action(op) }}>{['暂停', '接管', '继续', '停止'][i]}</button>)}
           </div>
           {current && <p role="status">{current.target?.title} · {current.state}{current.error ? ` · ${current.error.message}` : ''}</p>}
         </div>
         <div><strong>系统权限</strong>{native?.permissions && Object.entries(native.permissions).map(([key, granted]) => <p key={key}>{({ screenRecording: '屏幕录制', accessibility: '辅助功能', inputMonitoring: '输入监控' } as Record<string, string>)[key] ?? key}：{granted ? '已允许' : '未允许'}</p>)}{native?.message && <p>{native.message}</p>}</div>
-        <p className="qyt-muted">Mac 需要在系统设置中允许“QiuYaTools Computer”的屏幕录制和辅助功能。Windows 桌面操作会使用当前前台输入。关闭悬浮窗将暂停任务。</p>
+        <p className="qyt-muted">Mac 需要在系统设置中允许“QiuYaTools Computer”的屏幕录制和辅助功能。Windows 桌面操作会使用当前前台输入。收回预览和切换聊天会继续后台任务；直接关闭大预览会暂停对应任务。</p>
       </>}
       {message && <p role="alert">{message}</p>}
     </div>

@@ -43,7 +43,7 @@ test('owner panel selects a real local file, uploads only basename/bytes and dow
   const waitFor = async predicate => { const until = Date.now() + 5000; while (!predicate()) { if (Date.now() > until) throw new Error('UI fixture timed out'); await act(() => new Promise(done => originalTimeout(done, 5))) } }
   try {
     await act(async () => root.render(React.createElement(ComputerPanel, { ctx, enabled: true, onEnabled() {}, disabled: false })))
-    const select = dom.window.document.querySelector('select')
+    const select = [...dom.window.document.querySelectorAll('select')].find(node => [...node.options].some(option => option.value === 'remote'))
     assert.equal(dom.window.document.body.textContent.includes('手动文件交换'), false, 'local selection must not advertise exchange')
     await act(async () => { select.value = 'remote'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
     await waitFor(() => button('检查并刷新交换目录'))
@@ -91,7 +91,7 @@ test('switching environments during a real asynchronous digest sends no old file
   const waitFor = async predicate => { const until = Date.now() + 5000; while (!predicate()) { if (Date.now() > until) throw new Error('UI digest fixture timed out'); await act(() => new Promise(done => setTimeout(done, 5))) } }
   try {
     await act(async () => root.render(React.createElement(ComputerPanel, { ctx, enabled: true, onEnabled() {}, disabled: false })))
-    const select = dom.window.document.querySelector('select')
+    const select = [...dom.window.document.querySelectorAll('select')].find(node => [...node.options].some(option => option.value === 'remote'))
     await act(async () => { select.value = 'remote'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
     const refresh = [...dom.window.document.querySelectorAll('button')].find(button => button.textContent === '检查并刷新交换目录')
     await act(async () => refresh.click())

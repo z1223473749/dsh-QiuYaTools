@@ -16,6 +16,7 @@ import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { ComputerPanel } from '../features/computer-use/panel.tsx'
+import { installInlineComputerPreview } from '../features/computer-use/inline-preview.tsx'
 import { installQTheme } from './q-theme.ts'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
@@ -256,6 +257,7 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))
+  ctx.effect(() => installInlineComputerPreview(ctx, form))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: SETTINGS_ID,

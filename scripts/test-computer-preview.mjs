@@ -37,7 +37,7 @@ try {
   const imageBase64 = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const x = c.getContext('2d'); x.fillStyle = '#174f59'; x.fillRect(0, 0, 320, 180); x.fillStyle = '#fff'; x.font = '20px sans-serif'; x.fillText('Live preview fixture', 35, 90); return c.toDataURL('image/jpeg').split(',')[1] })
   let frame = 0, liveCursor, invalidNext = false
   const driver = { status: async () => ({ available: true }), targets: async () => [target], lease: async epoch => received.push({ op: 'lease', epoch }), release: async epoch => received.push({ op: 'release', epoch }),
-    observe: async () => { if (captureFailure) throw new Error('synthetic capture failure'); return ({ targetId: target.id, frameId: String(++frame), imageBase64: invalidNext ? (invalidNext = false, 'aW52YWxpZC1qcGVn') : imageBase64, mediaType: 'image/jpeg', width: 320, height: 180, elements: '', geometry: target, ...(liveCursor ? { cursor: { ...liveCursor } } : {}) }) }, act: async (epoch, id, action) => { received.push({ op: 'act', epoch, id, action }); return {} }, openPreview: async () => ({}), closePreview: async () => {}, dispose() {} }
+    observe: async () => { if (captureFailure) throw new Error('synthetic capture failure'); return ({ targetId: target.id, frameId: String(++frame), imageBase64: invalidNext ? (invalidNext = false, 'aW52YWxpZC1qcGVn') : imageBase64, mediaType: 'image/jpeg', width: 320, height: 180, elements: '', geometry: target, ...(liveCursor ? { aiCursor: { ...liveCursor, actor: 'ai' } } : {}) }) }, act: async (epoch, id, action) => { received.push({ op: 'act', epoch, id, action }); return {} }, openPreview: async () => ({}), closePreview: async () => {}, dispose() {} }
   host = await installComputerHost({ get: name => name === 'sessions' ? { get: () => ({}) } : undefined, webServer: { port: 1 }, connection: { browserPeer: { principal: { kind: 'owner' } }, authenticatedUrl: value => value, fetch: { register(route) { routes.set(route.path, route); return async () => routes.delete(route.path) } } } }, () => true, { driver })
   await host.service.start('preview-test', target.id, { allowOnce: true })
   await new Promise(done => server.listen(0, '127.0.0.1', done))
@@ -88,13 +88,21 @@ try {
     const r = image.getBoundingClientRect(), g = stage.getBoundingClientRect()
     return getComputedStyle(cursor).display !== 'none' && Math.abs(parseFloat(cursor.style.left) - (r.left - g.left + point.x * r.width / 320)) < 1 && Math.abs(parseFloat(cursor.style.top) - (r.top - g.top + point.y * r.height / 180)) < 1
   }, position)
-  liveCursor = { x: 250, y: 40, visible: true }; await cursorAt(liveCursor)
+  liveCursor = { x: 250, y: 40, visible: true }; await cursorAt(null)
+  await page.getByRole('button', { name: '继续', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('#status').textContent === 'ready')
+  await cursorAt(liveCursor)
   liveCursor = { x: 260, y: 50, visible: true }; await cursorAt(liveCursor)
   liveCursor.visible = false; await cursorAt(null)
   liveCursor = undefined
   const dragFrame = await host.service.preview('preview-test')
-  await host.service.humanAct('preview-test', { actionId: crypto.randomUUID(), frameId: dragFrame.frameId, action: { kind: 'drag', x: 20, y: 20, toX: 240, toY: 130 } })
+  await host.service.act('preview-test', { actionId: crypto.randomUUID(), frameId: (await host.service.observe('preview-test')).frameId, action: { kind: 'drag', x: 20, y: 20, toX: 240, toY: 130 } })
   await cursorAt({ x: 240, y: 130 })
+  assert.equal(await page.locator('#cursor svg path').count(), 1)
+  await page.screenshot({ path: join(output, 'ai-arrow-preview.png') })
+  await page.getByRole('button', { name: '接管', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('#status').textContent === 'humanControl')
+  await cursorAt(null)
   await page.locator('#text').fill('实时接管 中文 ✓')
   await page.getByRole('button', { name: '输入', exact: true }).click()
   await page.waitForTimeout(200)
@@ -142,8 +150,24 @@ try {
   else { assert.equal(afterLateError.state, 'ready'); assert.equal(afterLateError.epoch, freshEpoch); assert.equal(automaticPauses[0].expectedEpoch, oldEpoch) }
   captureFailure = false; await host.service.stop('preview-race'); await racePage.close()
 
+  await host.service.start('inline-test', target.id, { allowOnce: true })
+  const inlinePage = await browser.newPage({ viewport: { width: 300, height: 180 } })
+  await inlinePage.goto(`${endpoint}/api/qiuya-tools.computer.preview?session=inline-test&view=inline`)
+  await inlinePage.waitForFunction(() => document.querySelector('#screen').width === 320)
+  assert.equal(await inlinePage.locator('header').evaluate(node => getComputedStyle(node).display), 'none')
+  await inlinePage.close(); await new Promise(done => setTimeout(done, 150))
+  assert.equal(host.service.get('inline-test').state, 'ready', 'Switching chat/unmounting its small frame must not pause background input')
+  await host.service.stop('inline-test')
+  await host.service.start('redock-test', target.id, { allowOnce: true })
+  const redockPage = await browser.newPage()
+  await redockPage.goto(`${endpoint}/api/qiuya-tools.computer.preview?session=redock-test`)
+  await redockPage.waitForFunction(() => document.querySelector('#screen').width === 320)
+  await redockPage.evaluate(() => { window.__qytPreserveSessionOnClose = true })
+  await redockPage.close(); await new Promise(done => setTimeout(done, 150))
+  assert.equal(host.service.get('redock-test').state, 'ready', 'Acknowledged explicit redock must preserve its session')
+  await host.service.stop('redock-test')
   await page.screenshot({ path: join(output, 'preview.png') })
-  await writeFile(join(output, 'report.json'), JSON.stringify({ status: reproduceOldPause ? 'reproduced' : 'passed', kind: 'real-Chromium-UI-with-deterministic-driver', stalePauseRace, tests: ['frames-rendered', 'takeover', 'scaled-click', 'live-cursor-overrides-old-action', 'cursor-moves-with-new-frames', 'off-target-cursor-hidden', 'completed-drag-fallback-at-destination', 'Unicode-input', 'resume', 'stop', 'accessible-canvas-image-role', 'bitmap-close-after-every-draw', 'real-JPEG-decode-failure-does-not-expose-frame', 'stop-fences-pending-bitmap-and-closes-it', 'control-drops-old-pointer-down', 'same-epoch-canvas-drag', ...(reproduceOldPause ? [] : ['old-frame-error-cannot-pause-new-epoch'])], frames: frame, bitmapResources, actFrames, received }, null, 2))
+  await writeFile(join(output, 'report.json'), JSON.stringify({ status: reproduceOldPause ? 'reproduced' : 'passed', kind: 'real-Chromium-UI-with-deterministic-driver', stalePauseRace, tests: ['frames-rendered', 'takeover', 'scaled-click', 'native-ai-cursor-overrides-old-action', 'ai-cursor-moves-with-new-frames', 'off-target-ai-cursor-hidden', 'human-takeover-hides-ai-arrow', 'inline-unmount-preserves-background-task', 'explicit-redock-preserves-session', 'completed-drag-fallback-at-destination', 'Unicode-input', 'resume', 'stop', 'accessible-canvas-image-role', 'bitmap-close-after-every-draw', 'real-JPEG-decode-failure-does-not-expose-frame', 'stop-fences-pending-bitmap-and-closes-it', 'control-drops-old-pointer-down', 'same-epoch-canvas-drag', ...(reproduceOldPause ? [] : ['old-frame-error-cannot-pause-new-epoch'])], frames: frame, bitmapResources, actFrames, received }, null, 2))
   console.log(`${reproduceOldPause ? '旧帧错误自动暂停竞态已复现' : '预览浏览器测试通过'}，证据：${output}`)
 } catch (error) { await writeFile(join(output, 'report.json'), JSON.stringify({ status: 'failed', reason: error.message })); throw error }
 finally { releaseOldError(); await host?.dispose(); server.closeAllConnections(); await new Promise(done => server.close(done)); await browser.close() }

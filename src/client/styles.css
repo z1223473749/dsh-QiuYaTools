@@ -138,3 +138,15 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
   .qyt-header { padding-bottom: 10px; }
   .qyt-tabs > button { padding-top: 6px; padding-bottom: 6px; gap: 3px; }
 }
+.qyt-computer-inline-anchor { position: relative; font: 12px system-ui; }
+.qyt-computer-inline-toggle { border: 1px solid #d9e5e5; background: color-mix(in srgb, Canvas 94%, #2c8d99 6%); color: CanvasText; border-radius: 8px; padding: 5px 9px; cursor: pointer; white-space: nowrap; }
+.qyt-computer-inline-card { position: absolute; right: 0; top: calc(100% + 10px); width: min(300px, calc(100vw - 28px)); z-index: 40; border: 1px solid #9bafaf55; border-radius: 12px; box-shadow: 0 9px 30px #18252c30; background: Canvas; color: CanvasText; overflow: hidden; }
+.qyt-computer-inline-title { display: flex; gap: 8px; padding: 8px 10px; align-items: center; color: color-mix(in srgb, CanvasText 70%, transparent); font-size: 11px; }
+.qyt-computer-inline-title > span:first-child { flex: 1; min-width: 0; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+.qyt-computer-inline-frame { display: block; border: 0; width: 100%; height: 180px; background: #101b20; }
+.qyt-computer-inline-actions { display: flex; align-items: center; gap: 3px; padding: 7px; }
+.qyt-computer-inline-actions > button, .qyt-computer-inline-detached > button { flex: 1; border: 1px solid #9bafaf55; border-radius: 6px; padding: 4px 5px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
+.qyt-computer-inline-actions > button:disabled { opacity: .4; cursor: default; }
+.qyt-computer-inline-detached { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px; }
+.qyt-computer-inline-detached > button { flex: none; }
+.qyt-computer-inline-card > p { margin: 0; padding: 6px 10px 9px; color: #b44242; }
