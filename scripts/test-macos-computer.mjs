@@ -14,6 +14,6 @@ const run = (command, args) => new Promise((resolve, reject) => {
 try {
   const executable = join(directory, 'native-selftest')
   await run('/usr/bin/swiftc', ['-swift-version', '5', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx13.0`, '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'ApplicationServices',
-    '-module-cache-path', '/tmp/qiuya-computer-swift-cache', ...['Protocol.swift', 'LeaseGuard.swift', 'Input.swift', 'Preview.swift', 'fixtures/NativeSelfTest.swift'].map(name => join(root, name)), '-o', executable])
+    '-module-cache-path', '/tmp/qiuya-computer-swift-cache', ...['Protocol.swift', 'LeaseGuard.swift', 'CursorOverlay.swift', 'Input.swift', 'Preview.swift', 'fixtures/NativeSelfTest.swift'].map(name => join(root, name)), '-o', executable])
   await run(executable, [])
 } finally { await rm(directory, { recursive: true, force: true }) }

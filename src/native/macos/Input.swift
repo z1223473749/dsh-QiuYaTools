@@ -27,6 +27,12 @@ final class EpochFence {
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
     private var desktopLease: DesktopLeaseGuard?
+    private(set) var leaseActor = NativeLeaseActor.ai
+    private lazy var aiPointer: AICursorOverlay = {
+        let overlay = AICursorOverlay()
+        overlay.isLeaseCurrent = { [weak self] epoch in self?.fence.active == epoch && self?.leaseActor == .ai }
+        return overlay
+    }()
     var preparePointerRegion: (([CGPoint]) throws -> Void)?
     var prepareFocus: (() -> Void)?
     private(set) var busy = false
@@ -57,16 +63,18 @@ final class EpochFence {
         if desktopLease?.ownerId != nil { try desktopLease?.record(keys: [], mouse: nil, targetPid: nil) }
     }
 
-    func lease(_ epoch: Int) throws {
+    func lease(_ epoch: Int, actor: NativeLeaseActor = .ai) throws {
         guard epoch > fence.highest else { throw ComputerError("STALE_EPOCH", "The control lease is stale.") }
         if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
         try desktopLease!.acquire()
         do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
+        aiPointer.hide(); leaseActor = actor
     }
     func release(_ epoch: Int) throws {
         let wasActive = fence.active.map { $0 <= epoch } ?? false
         fence.release(epoch)
         if wasActive || (fence.active == nil && desktopLease?.ownerId != nil) {
+            aiPointer.hide()
             try releaseHeldInput()
             try desktopLease?.release()
         }
@@ -77,12 +85,18 @@ final class EpochFence {
         do {
             let result = try await performAct(epoch: epoch, target: target, geometry: geometry, action: action, started: { ownsInput = true })
             try releaseHeldInput()
+            aiPointer.settled(epoch: epoch)
             return result
         } catch {
+            if fence.active == epoch { aiPointer.hide() }
             if ownsInput { do { try releaseHeldInput() } catch { fence.release(epoch); throw error } }
             throw error
         }
     }
+
+    func hideAICursor() { aiPointer.hide() }
+    var aiCursorState: [String: Any] { aiPointer.desktopSnapshot() }
+    func aiCursor(target: NativeTarget, geometry: FrameGeometry) -> [String: Any] { aiPointer.snapshot(target: target, geometry: geometry) }
 
     private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)
@@ -188,6 +202,10 @@ final class EpochFence {
         lastPoint = point
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         postPointer(event)
+        if leaseActor == .ai {
+            let pressed = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
+            aiPointer.posted(point, phase: pressed ? "pressed" : "moving", epoch: epoch, target: target)
+        }
     }
 
     private func postPointer(_ event: CGEvent) {
@@ -196,13 +214,14 @@ final class EpochFence {
 
     private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry) throws {
         try fence.check(epoch)
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { throw ComputerError("FOCUS_CHANGED", "The target application lost focus; input stopped.") }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The target application lost focus; input stopped.") }
         guard let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, target.windowId) as? [[String: Any]],
               let item = info.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId }),
               let bounds = item[kCGWindowBounds as String] as? [String: Any],
               let current = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               abs(current.minX - geometry.frame.minX) < 1, abs(current.minY - geometry.frame.minY) < 1,
               abs(current.width - geometry.frame.width) < 1, abs(current.height - geometry.frame.height) < 1 else {
+            aiPointer.hide()
             throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.")
         }
     }

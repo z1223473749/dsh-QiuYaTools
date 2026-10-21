@@ -18,7 +18,8 @@ import ScreenCaptureKit
     func applicationDidFinishLaunching(_ notification: Notification) {
         input.prepareFocus = { [weak self] in self?.preview?.window.resignKey() }
         input.preparePointerRegion = { [weak self] points in try self?.preview?.avoidPointerPath(points) }
-        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
+        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .mouseMoved,
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
         globalInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in self?.humanInput(event) }
         localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in self?.humanInput(event); return event }
         for code in [SIGTERM, SIGINT] {
@@ -53,11 +54,13 @@ import ScreenCaptureKit
     }
 
     private func humanInput(_ event: NSEvent) {
-        guard let epoch = input.fence.active, let cgEvent = event.cgEvent,
+        guard let cgEvent = event.cgEvent,
               cgEvent.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) else { return }
+        input.hideAICursor()
+        guard let epoch = input.fence.active else { return }
         let escape = event.type == .keyDown && event.keyCode == 53
         let previewPointer: Bool
-        if event.type != .keyDown, input.busy, let panel = preview?.window, panel.isVisible {
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type), input.busy, let panel = preview?.window, panel.isVisible {
             let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
             let rect = CGRect(x: panel.frame.minX, y: primaryHeight - panel.frame.maxY, width: panel.frame.width, height: panel.frame.height)
             previewPointer = rect.contains(cgEvent.location)
@@ -79,7 +82,7 @@ import ScreenCaptureKit
         if op == "lease" || op == "release" {
             guard let epoch = integer(command["epoch"]) else { Wire.failure(requestId, ComputerError("INVALID_EPOCH", "A nonnegative safe integer epoch is required.")); return }
             do {
-                if op == "lease" { try input.lease(epoch) } else { try input.release(epoch) }
+                if op == "lease" { try input.lease(epoch, actor: NativeLeaseActor.parse(command["actor"])) } else { try input.release(epoch) }
                 Wire.success(requestId, ["epoch": epoch, "active": input.fence.active == epoch])
             } catch { Wire.failure(requestId, error) }
             return
@@ -88,14 +91,31 @@ import ScreenCaptureKit
             Wire.success(requestId, ["platform": "darwin", "available": true, "protocolVersion": 1,
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
-                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing"],
+                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
-                "preview": preview?.navigationState as Any? ?? NSNull()])
+                "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
+                "aiCursor": input.aiCursorState, "preview": preview?.navigationState as Any? ?? NSNull()])
             return
         }
         if op == "closePreview" {
-            preview?.close(); preview = nil
-            Wire.success(requestId); return
+            let preserve: Bool
+            do { preserve = try FloatingPreview.preservesSession(command["preserveSession"]) }
+            catch { Wire.failure(requestId, error); return }
+            if preserve, let current = preview {
+                Task { @MainActor in
+                    do {
+                        try await current.closePreservingSession()
+                        if preview === current { preview = nil }
+                        Wire.success(requestId)
+                    } catch { Wire.failure(requestId, error) }
+                }
+            } else {
+                // The Host pauses only this preview's logical session. A late
+                // close for another preview must not revoke a newer input owner.
+                preview?.close(notify: !preserve); preview = nil
+                Wire.success(requestId)
+            }
+            return
         }
         if op == "openPreview" {
             do {
@@ -128,7 +148,8 @@ import ScreenCaptureKit
                         "elements": command["preview"] as? Bool == true || command["includeElements"] as? Bool == false ? "" : accessibilityText(target),
                         "geometry": ["x": target.frame.minX, "y": target.frame.minY, "width": target.frame.width, "height": target.frame.height,
                                      "scale": target.scale],
-                        "cursor": ["x": localX, "y": localY, "visible": target.frame.contains(cursor)]])
+                        "cursor": ["x": localX, "y": localY, "visible": target.frame.contains(cursor)],
+                        "aiCursor": input.aiCursor(target: target, geometry: geometry)])
                 case "act":
                     guard let epoch = integer(command["epoch"]), let id = command["targetId"] as? String,
                           let action = command["action"] as? [String: Any] else { throw ComputerError("INVALID_ACTION", "epoch, targetId and action are required.") }
@@ -149,11 +170,11 @@ import ScreenCaptureKit
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
         globalInputMonitor = nil; localInputMonitor = nil
         if let epoch = input.fence.active { try? input.release(epoch) }
-        try? input.releaseHeldInput(); preview?.close(); preview = nil
+        input.hideAICursor(); try? input.releaseHeldInput(); preview?.close(); preview = nil
         Task { @MainActor in await capture.stop(); NSApp.terminate(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
     }
-    func applicationWillTerminate(_ notification: Notification) { try? input.releaseHeldInput() }
+    func applicationWillTerminate(_ notification: Notification) { input.hideAICursor(); try? input.releaseHeldInput() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 

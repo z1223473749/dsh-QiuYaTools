@@ -37,7 +37,7 @@ export async function buildMacOSComputer({ outputDirectory = new URL('../lib/', 
   await writeFile(new URL('./Info.plist', contents), computerAppInfoPlist(pkg.version))
   const executable = fileURLToPath(new URL('./qiuya-computer', macOS))
   const architectures = universal ? ['arm64', 'x86_64'] : [process.arch === 'arm64' ? 'arm64' : 'x86_64']
-  const files = ['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'Input.swift', 'Preview.swift', 'main.swift'].map(name => fileURLToPath(new URL(`../src/native/macos/${name}`, import.meta.url)))
+  const files = ['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'CursorOverlay.swift', 'Input.swift', 'Preview.swift', 'main.swift'].map(name => fileURLToPath(new URL(`../src/native/macos/${name}`, import.meta.url)))
   const run = (command, args) => new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] })
     child.once('error', reject)

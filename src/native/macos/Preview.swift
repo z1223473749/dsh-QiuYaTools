@@ -16,9 +16,11 @@ import Foundation
     let sessionId: String
     let origin: URL
     private let destination: URL
+    private let webView: PreviewWebView
     private var bootstrapping: Bool
     private(set) var navigationState: [String: Any] = [:]
     private var notifyClose = true
+    private var closeAttempt: UUID?
     init(url: URL, title: String, sessionId: String) {
         self.origin = url; self.sessionId = sessionId
         let navigation = Self.navigationURLs(url)
@@ -27,6 +29,7 @@ import Foundation
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let view = PreviewWebView(frame: .zero, configuration: configuration)
+        webView = view
         window = PreviewPanel(contentRect: NSRect(x: 100, y: 100, width: 640, height: 470),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -45,7 +48,44 @@ import Foundation
     func windowWillClose(_ notification: Notification) {
         if notifyClose { Wire.send(["event": "previewClosed", "sessionId": sessionId]) }
     }
-    func close() { notifyClose = false; window.close() }
+    func close(notify: Bool = false) { notifyClose = notify; window.close() }
+    /// Returning to the chat preview is an explicit owner action. Do not let the
+    /// destination page's pagehide handler interpret it as a session stop.
+    func closePreservingSession() async throws {
+        guard window.isVisible, !bootstrapping, Self.isDestination(webView.url, destination), closeAttempt == nil else {
+            throw ComputerError("PREVIEW_NOT_READY", "Wait for this preview to load before returning it to chat.")
+        }
+        let attempt = UUID(); closeAttempt = attempt
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            webView.evaluateJavaScript("window.__qytPreserveSessionOnClose = true; true") { [weak self] value, error in
+                guard let self, self.closeAttempt == attempt else { return }
+                self.closeAttempt = nil
+                guard error == nil, (value as? Bool) == true, Self.isDestination(self.webView.url, self.destination), self.window.isVisible else {
+                    continuation.resume(throwing: ComputerError("PREVIEW_CLOSE_FAILED", "The preview could not confirm returning to chat.")); return
+                }
+                self.close()
+                continuation.resume()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.closeAttempt == attempt else { return }
+                self.closeAttempt = nil
+                continuation.resume(throwing: ComputerError("PREVIEW_CLOSE_TIMEOUT", "The preview did not confirm returning to chat in time."))
+            }
+        }
+    }
+    static func isDestination(_ current: URL?, _ destination: URL) -> Bool {
+        guard let current, var a = URLComponents(url: current, resolvingAgainstBaseURL: false),
+              var b = URLComponents(url: destination, resolvingAgainstBaseURL: false) else { return false }
+        a.fragment = nil; b.fragment = nil
+        return a == b
+    }
+    static func preservesSession(_ value: Any?) throws -> Bool {
+        guard let value else { return false }
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw ComputerError("INVALID_ACTION", "preserveSession must be a boolean.")
+        }
+        return number.boolValue
+    }
     /// Keep the preview usable throughout input. A real desktop preview must
     /// move away from the next click/drag rather than intercepting that input or
     /// disabling its own Pause button for the duration of an action.
