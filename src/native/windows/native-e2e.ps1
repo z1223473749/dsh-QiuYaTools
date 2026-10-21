@@ -6,7 +6,7 @@ $children = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $events = [System.Collections.Generic.List[object]]::new()
 $script:sequence = 0
 New-Item -ItemType Directory -Force $Output | Out-Null
-$env:QIUYA_TOOLS_NATIVE_DATA_DIR = Join-Path $Output 'webview-profiles'
+$env:QIUYA_TOOLS_NATIVE_DATA_DIR = Join-Path $Output 'webview-profile'
 function Assert([bool]$condition,[string]$id,[object]$detail=$null) {
   $checks.Add(@{id=$id;passed=$condition;detail=$detail})
   if (!$condition) { throw "Failed native check $id" }
