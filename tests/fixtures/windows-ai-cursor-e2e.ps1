@@ -51,24 +51,31 @@ try{
  $required=0x080800A8
  Assert ($pointer.visible -and  !$pointer.enabled -and  ($pointer.exStyle -band  $required) -eq  $required -and  $pointer.foreground -eq  [long]$f.handle) 'AI-ACTUAL-NOACTIVATE-TOPMOST-TRANSPARENT-DISABLED' $pointer
  Assert ($shown.aiCursor.actor -eq  'ai'-and $shown.aiCursor.targetId -eq  $target.id -and  [Math]::Abs($shown.aiCursor.x-$x) -le  1 -and  [Math]::Abs($shown.aiCursor.y-$y) -le  1) 'AI-TARGET-LOCAL-METADATA' $shown.aiCursor
+ $sameCursor=([QytAiOracle]::DesktopState()).cursor
+ Assert ([Math]::Abs($sameCursor.x-$px) -le 1 -and [Math]::Abs($sameCursor.y-$py) -le 1) 'AI-SAME-POINT-ACTUAL-OS-CURSOR-POSITION' $sameCursor
+ $sameScale=$pointer.dpi/96.0
+ Save 'same-point-checkpoint.json' @{phase='ai-and-os-same-point';crop=@{x=$pointer.x;y=$pointer.y;width=$pointer.width;height=$pointer.height};screen=([QytAiOracle]::DesktopState()).screen;target=@{x=$target.x;y=$target.y;width=$target.width;height=$target.height};pointer=$pointer;ai=$shown.aiCursor;real=@{x=($sameCursor.x-$target.x);y=($sameCursor.y-$target.y);visible=$true};bodyPoint=@{x=($px+[int](4*$sameScale));y=($py+[int](5*$sameScale))}}
+ $sameCapture=Until {if(Test-Path (Join-Path $Output 'same-point-go.json')){return Get-Content -LiteralPath (Join-Path $Output 'same-point-go.json') -Raw|ConvertFrom-Json}} 'Host did not capture actual co-located system and AI pointers' 30000
+ Assert $sameCapture.captured 'AI-SAME-POINT-COMPOSITE-CAPTURED-FOR-VISUAL-REVIEW' $sameCapture
  $identity=Bound $fixture;$moved=[QytAiOracle]::MoveOwn($identity.pid,$identity.createdAtTicks,$identity.expectedExecutablePath,$f.handle,([int]$f.clientX+580),([int]$f.clientY+420));Start-Sleep -Milliseconds 50
  $frame=Good $computer 'observe' @{targetId=$target.id;preview=$true};[IO.File]::WriteAllBytes((Join-Path $Output 'native-observe.jpg'),[Convert]::FromBase64String($frame.imageBase64))
  Assert ($frame.aiCursor.visible -and  $frame.cursor.visible -and  [Math]::Abs($frame.aiCursor.x-$frame.cursor.x) -gt  100 -and  [Math]::Abs($frame.aiCursor.y-$frame.cursor.y) -gt  100) 'AI-AND-REAL-OS-CURSOR-ARE-INDEPENDENT' @{ai=$frame.aiCursor;real=$frame.cursor;move=$moved}
- $scale=$pointer.dpi/96.0;$hitX=$px+[int](2*$scale);$hitY=$py+[int](15*$scale);$hit=[QytAiOracle]::Hit($hitX,$hitY)
+ # Approved SVG body (6,8) relative to shared hotspot (2,3).
+ $scale=$pointer.dpi/96.0;$hitX=$px+[int](4*$scale);$hitY=$py+[int](5*$scale);$hit=[QytAiOracle]::Hit($hitX,$hitY)
  $realPosition=([QytAiOracle]::DesktopState()).cursor
- Assert ([Math]::Abs($pointer.x+[Math]::Round(10*$scale)-$px) -le  1 -and  [Math]::Abs($pointer.y+[Math]::Round(8*$scale)-$py) -le  1 -and  [Math]::Abs($frame.cursor.x-($realPosition.x-$target.x)) -le  1 -and  [Math]::Abs($frame.cursor.y-($realPosition.y-$target.y)) -le  1) 'AI-RASTER-HOTSPOT-AND-OS-CURSOR-GEOMETRY-AGREE' @{window=$pointer;real=$realPosition}
+ Assert ([Math]::Abs($pointer.x+[Math]::Round(18*$scale)-$px) -le  1 -and  [Math]::Abs($pointer.y+[Math]::Round(16*$scale)-$py) -le  1 -and  [Math]::Abs($frame.cursor.x-($realPosition.x-$target.x)) -le  1 -and  [Math]::Abs($frame.cursor.y-($realPosition.y-$target.y)) -le  1) 'AI-RASTER-HOTSPOT-AND-OS-CURSOR-GEOMETRY-AGREE' @{window=$pointer;real=$realPosition;svgHotspot=@{x=2;y=3}}
  $nativePixels=[QytAiOracle]::NativeRegion($frame.imageBase64,($pointer.x-$target.x),($pointer.y-$target.y),$pointer.width,$pointer.height,(Join-Path $Output 'native-known-region.png'))
  Assert ($nativePixels.incorrect -eq  0 -and  $nativePixels.black -eq  0 -and  $nativePixels.white -eq  0) 'AI-NATIVE-OBSERVE-HAS-KNOWN-BACKGROUND-NO-BAKED-ARROW' $nativePixels
- Assert ($hit.root -eq  [long]$f.handle -and  $hit.pid -eq  $fixture.Id -and  $hit.physical -ne  [long]$pointer.handle) 'AI-OPAQUE-POINT-HITS-UNDERLYING-OWN-TARGET' $hit
+ Assert ($hit.root -eq  [long]$f.handle -and  $hit.pid -eq  $fixture.Id -and  $hit.physical -ne  [long]$pointer.handle) 'AI-VISIBLE-GLYPH-POINT-HITS-UNDERLYING-OWN-TARGET' $hit
  $copy=Join-Path $Output 'screen-fallback.png';[QytAiOracle]::CopyScreen($pointer.x,$pointer.y,$pointer.width,$pointer.height,$copy);$pixels=[QytAiOracle]::KnownBackground($copy,37,113,151)
  Save 'fallback-known-pixels.json' @{pixels=$pixels;window=$pointer;affinity=$pointer.affinity;api='Graphics.CopyFromScreen (same fallback primitive, not a forced PrintWindow failure)'}
  Assert ($pixels.incorrect -eq  0 -and  $pixels.black -eq  0 -and  $pixels.white -eq  0) 'AI-SCREEN-FALLBACK-HAS-KNOWN-BACKGROUND-NO-HOLE-NO-DUPLICATE' $pixels
- $screen=([QytAiOracle]::DesktopState()).screen;Save 'raster-checkpoint.json' @{phase='ai-visible';crop=@{x=$pointer.x;y=$pointer.y;width=$pointer.width;height=$pointer.height};screen=$screen;target=@{x=$target.x;y=$target.y;width=$target.width;height=$target.height};pointer=$pointer;ai=$frame.aiCursor;real=$frame.cursor;hit=$hit;opaquePoint=@{x=$hitX;y=$hitY};expectedBackground=@{r=37;g=113;b=151};foreground=[QytAiOracle]::GetForegroundWindow().ToInt64()}
+ $screen=([QytAiOracle]::DesktopState()).screen;Save 'raster-checkpoint.json' @{phase='ai-visible';crop=@{x=$pointer.x;y=$pointer.y;width=$pointer.width;height=$pointer.height};screen=$screen;target=@{x=$target.x;y=$target.y;width=$target.width;height=$target.height};pointer=$pointer;ai=$frame.aiCursor;real=$frame.cursor;hit=$hit;bodyPoint=@{x=$hitX;y=$hitY};expectedBackground=@{r=37;g=113;b=151};foreground=[QytAiOracle]::GetForegroundWindow().ToInt64()}
  $raster=Until {if(Test-Path (Join-Path $Output 'raster-go.json')){return Get-Content -LiteralPath (Join-Path $Output 'raster-go.json') -Raw|ConvertFrom-Json}} 'Host did not provide independent VM raster verdict' 30000
- Assert ($raster.passed -and  $raster.opaquePointIsArrow) 'AI-PHYSICAL-DISPLAY-ARROW-PIXELS-INDEPENDENT-OF-WDA' $raster
+ Assert ($raster.passed -and  $raster.bodyPointIsArrow) 'AI-PHYSICAL-DISPLAY-ARROW-PIXELS-INDEPENDENT-OF-WDA' $raster
  $clicks=(Fixture).clicks;$click=[QytAiOracle]::ClickOwn($identity.pid,$identity.createdAtTicks,$identity.expectedExecutablePath,$f.handle,$hitX,$hitY)
  [void](Until {if((Fixture).clicks -eq  ($clicks+1)){return $true}} 'Click-through did not reach fixture business event')
- Assert ((Fixture).clicks -eq  ($clicks+1) -and  (Good $computer 'status').aiCursor.visible) 'AI-ACTUAL-OPAQUE-AREA-CLICK-THROUGH' $click
+ Assert ((Fixture).clicks -eq  ($clicks+1) -and  (Good $computer 'status').aiCursor.visible) 'AI-ACTUAL-VISIBLE-GLYPH-AREA-CLICK-THROUGH' $click
  [void](Release $computer 1);[void](Until {if((PointerHidden $computer) -and  !(Good $computer 'status').aiCursor.visible){return $true}} 'Release did not hide pointer')
  Assert $true 'AI-PAUSE-RELEASE-HIDES-SURFACE'
  [void](Lease $computer 2);[void](Move-Ai $computer 2 ($x+40) $y);[void](Release $computer 1)
@@ -79,6 +86,20 @@ try{
  [void](Until {if((PointerHidden $computer) -and  !(Good $computer 'status').aiCursor.visible){return $true}} 'Focus loss did not hide AI pointer')
  Assert $true 'AI-FOCUS-LOSS-HIDES-SURFACE';FixtureCommand 'activate';Start-Sleep -Milliseconds 150
  Assert ((PointerHidden $computer) -and  !(Good $computer 'status').aiCursor.visible) 'AI-FOCUS-RETURN-DOES-NOT-RESURRECT-OLD-ARROW'
+ # Real WebView2 independently ACKs the fixed preserve flag through its own HTTP fixture.
+ $ownPreview='http://127.0.0.1:'+(Fixture).port+'/preview?sid='
+ [void](Good $computer 'openPreview' @{sessionId='preserved';url=($ownPreview+'preserved');title='Own preserved preview'})
+ [void](Until {if(@((Fixture).webEvents|Where-Object {$_.kind -eq 'ready' -and $_.sid -eq 'preserved'}).Count -eq 1){return $true}} 'Actual preserve test page did not load' 10000)
+ $preservedWindow=@([QytAiOracle]::Windows($computer.Id)|Where-Object {$_.title -like 'Own preserved preview*' -and $_.visible})[0]
+ Assert ($preservedWindow -and ($preservedWindow.exStyle -band 8) -ne 0) 'AI-PRESERVE-ACTUAL-WEBVIEW-IS-VISIBLE-TOPMOST' $preservedWindow
+ [void](Good $computer 'closePreview' @{sessionId='preserved';preserveSession=$true});[void](Good $computer 'status')
+ Assert (@((Fixture).webEvents|Where-Object {$_.kind -eq 'preserve-ack' -and $_.sid -eq 'preserved'}).Count -eq 1) 'AI-PRESERVE-JAVASCRIPT-ACKED-BY-INDEPENDENT-OWN-HTTP-PAGE'
+ Assert (@($events|Where-Object {$_.event -eq 'previewClosed' -and $_.sessionId -eq 'preserved'}).Count -eq 0 -and ![QytAiOracle]::IsWindow([IntPtr]$preservedWindow.handle)) 'AI-PRESERVE-CLOSE-DESTROYS-ONLY-WINDOW-WITHOUT-PAUSE-EVENT'
+ [void](Move-Ai $computer 4 $x $y);Assert ((Good $computer 'status').aiCursor.visible) 'AI-PRESERVE-SAME-LEASE-CAN-CONTINUE-ACTING'
+ [void](Good $computer 'openPreview' @{sessionId='ordinary';url=($ownPreview+'ordinary');title='Own ordinary preview'})
+ [void](Until {if(@((Fixture).webEvents|Where-Object {$_.kind -eq 'ready' -and $_.sid -eq 'ordinary'}).Count -eq 1){return $true}} 'Actual ordinary test page did not load' 10000)
+ [void](Good $computer 'closePreview' @{sessionId='ordinary'});[void](Good $computer 'status')
+ Assert (@($events|Where-Object {$_.event -eq 'previewClosed' -and $_.sessionId -eq 'ordinary'}).Count -eq 1) 'AI-ORDINARY-CLOSE-STILL-EMITS-EXACTLY-ONE-PAUSE-EVENT'
  [void](Move-Ai $computer 4 $x $y);$oldArrow=@(PointerWindows $computer)[0].handle;$tracked+=Track-Native;$computer.StandardInput.Close();Assert ($computer.WaitForExit(4000) -and  $computer.ExitCode -eq  0) 'AI-EOF-NATURAL-HELPER-EXIT'
  $active.Remove($computer.Id);Assert (![QytAiOracle]::IsWindow([IntPtr]$oldArrow)) 'AI-EOF-DESTROYS-DISPLAY-SURFACE'
  $computer=Start-Owned $Helper '--computer' 'computer-b';[void](Good $computer 'status');[void](Good $computer 'observe' @{targetId=$target.id;preview=$true});[void](Lease $computer 1);[void](Move-Ai $computer 1 $x $y)

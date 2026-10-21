@@ -39,7 +39,7 @@ async function ps(code, timeout = 30000) {
   const result = await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024 })
   return result.stdout.trim()
 }
-let guestRoot, taskName, report, captureVerdict, runError
+let guestRoot, taskName, report, captureVerdict, samePointVerdict, runError
 async function transfer(name, destination) {
   await ps(`$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';$p=${quote(destination)};$c=[Net.WebClient]::new();$c.Proxy=$null;$c.DownloadFile(${quote(`${endpoint}/${name}`)},$p);if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne  ${quote(sha(files.get(name)))}){throw 'Owned transfer hash mismatch'}`, 90000)
 }
@@ -47,7 +47,7 @@ async function ownFile(name) {
   const data = await ps(`$p=${quote(guestRoot + '\\evidence\\' + name)};if(Test-Path -LiteralPath $p){[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))}`)
   return data ? Buffer.from(data, 'base64') : null
 }
-async function actualRaster(checkpoint) {
+async function actualRaster(checkpoint, samePoint = false) {
   const temporary = join(output, 'private-vm-full-frame.png')
   try {
     await run(prlctl, ['capture', vm, '--file', temporary], { timeout: 15000, killSignal: 'SIGKILL' })
@@ -59,22 +59,28 @@ async function actualRaster(checkpoint) {
     assert.ok(crop.x >= checkpoint.target.x && crop.y >= checkpoint.target.y && crop.x + crop.width <= checkpoint.target.x + checkpoint.target.width && crop.y + crop.height <= checkpoint.target.y + checkpoint.target.height)
     const clipped = new PNG({ width: crop.width, height: crop.height })
     PNG.bitblt(image, clipped, x, y, crop.width, crop.height, 0, 0)
-    await writeFile(join(output, 'vm-arrow-own-crop.png'), PNG.sync.write(clipped))
-    let white = 0, gray = 0, background = 0, changed = 0
+    await writeFile(join(output, samePoint ? 'vm-same-point-crop.png' : 'vm-arrow-own-crop.png'), PNG.sync.write(clipped))
+    // Independent approved-color oracle: .45 #95999e over the known blue
+    // fixture, with at most .44 #51545a shadow underneath. No screenshot normalization.
+    const isBody = ([r, g, b]) => r >= 84 && r <= 103 && g >= 121 && g <= 135 && b >= 136 && b <= 158
+    let white = 0, body = 0, background = 0, changed = 0
+    let left = clipped.width, top = clipped.height, right = -1, bottom = -1
     for (let offset = 0; offset < clipped.data.length; offset += 4) {
       const [r, g, b] = clipped.data.subarray(offset, offset + 3)
-      if (r > 230 && g > 230 && b > 230) white++
-      if (Math.abs(r - g) < 24 && Math.abs(g - b) < 24 && r > 40 && r < 210) gray++
+      if (r > 230 && g > 230 && b > 230) { white++; const index = offset / 4, x = index % clipped.width, y = Math.floor(index / clipped.width); left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y) }
+      if (isBody([r, g, b])) body++
       if (r === 37 && g === 113 && b === 151) background++; else changed++
     }
-    const pointX = checkpoint.opaquePoint.x - crop.x, pointY = checkpoint.opaquePoint.y - crop.y
-    const offset = (pointY * crop.width + pointX) * 4, opaquePixel = [...clipped.data.subarray(offset, offset + 3)]
-    const opaquePointIsArrow = opaquePixel[0] > 40 && opaquePixel[0] < 220 && Math.abs(opaquePixel[0] - opaquePixel[1]) < 24 && Math.abs(opaquePixel[1] - opaquePixel[2]) < 24
-    const verdict = { passed: white > 15 && gray > 50 && background > 100 && changed > 100 && opaquePointIsArrow,
-      white, gray, background, changed, opaquePointIsArrow, opaquePixel, resolution: { width: image.width, height: image.height }, screen, crop,
+    const pointX = checkpoint.bodyPoint.x - crop.x, pointY = checkpoint.bodyPoint.y - crop.y
+    const offset = (pointY * crop.width + pointX) * 4, bodyPixel = [...clipped.data.subarray(offset, offset + 3)]
+    const bodyPointIsArrow = isBody(bodyPixel), scale = checkpoint.pointer.dpi / 96, area = scale * scale
+    const contour = { left, top, width: right - left + 1, height: bottom - top + 1 }
+    const smallContour = contour.width >= 10 * scale && contour.width <= 18 * scale && contour.height >= 11 * scale && contour.height <= 20 * scale
+    const verdict = { passed: white >= 8 * area && white <= 110 * area && body >= 15 * area && body <= 200 * area && background > 100 && changed > 100 && bodyPointIsArrow && smallContour,
+      white, body, background, changed, bodyPointIsArrow, bodyPixel, contour, approved: { svgHotspot: [2, 3], frameHotspot: [18, 16], fill: '#95999e', fillAlpha: .45, strokeAlpha: .96, strokeWidth: 1.25, shadow: '#51545a', shadowAlpha: .44, blur: 5, down: 1 }, resolution: { width: image.width, height: image.height }, screen, crop,
       mapping: 'identity physical pixels; virtual desktop origin subtracted, no resize or color normalization', entireFrameRetained: false,
       realCursor: checkpoint.real, aiCursor: checkpoint.ai }
-    await writeFile(join(output, 'vm-raster-verdict.json'), JSON.stringify(verdict, null, 2) + '\n')
+    await writeFile(join(output, samePoint ? 'vm-same-point-verdict.json' : 'vm-raster-verdict.json'), JSON.stringify(verdict, null, 2) + '\n')
     return verdict
   } finally { await rm(temporary, { force: true }) }
 }
@@ -132,10 +138,27 @@ try {
     for (let count = 0; count < 150; count++) {
       const raw = await ownFile('report.json')
       if (raw) { report = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/u, '')); await writeFile(join(output, 'report.json'), raw); break }
+      const samePoint = !samePointVerdict && await ownFile('same-point-checkpoint.json')
+      if (samePoint) {
+        const value = JSON.parse(samePoint.toString('utf8').replace(/^\uFEFF/u, '')); await writeFile(join(output, 'same-point-checkpoint.json'), samePoint)
+        samePointVerdict = await actualRaster(value, true)
+        files.set('same-point-go.json', Buffer.from(JSON.stringify({ captured: true, samePointVerdict })))
+        await transfer('same-point-go.json', guestRoot + '\\evidence\\same-point-go.json')
+      }
       const checkpoint = !captureVerdict && await ownFile('raster-checkpoint.json')
       if (checkpoint) {
         const value = JSON.parse(checkpoint.toString('utf8').replace(/^\uFEFF/u, '')); await writeFile(join(output, 'raster-checkpoint.json'), checkpoint)
         captureVerdict = await actualRaster(value)
+        if (samePointVerdict) {
+          assert.deepEqual(samePointVerdict.crop, captureVerdict.crop, 'AI glyph moved between same-point and OS-cursor-away captures')
+          const first = PNG.sync.read(await readFile(join(output, 'vm-same-point-crop.png'))), second = PNG.sync.read(await readFile(join(output, 'vm-arrow-own-crop.png')))
+          let changedPixels = 0
+          for (let offset = 0; offset < first.data.length; offset += 4) if (first.data.subarray(offset, offset + 4).some((value, index) => value !== second.data[offset + index])) changedPixels++
+          await writeFile(join(output, 'vm-system-cursor-comparison.json'), JSON.stringify({ changedPixels, samePoint: samePointVerdict.realCursor, movedAway: captureVerdict.realCursor,
+            osCursorPixelsDetectedByComparison: changedPixels > 0,
+            boundary: changedPixels > 0 ? 'Actual same-point composition differs when only the system cursor moves; inspect both original own-region crops for overlap.' : 'No system-cursor pixels were detected in this prlctl capture mode. This does not prove that the physical display or other capture APIs exclude the hardware cursor.',
+            normalization: 'none; same-sized physical-pixel RGBA crops compared exactly', entireFrameRetained: false }, null, 2))
+        }
         files.set('raster-go.json', Buffer.from(JSON.stringify(captureVerdict)))
         await transfer('raster-go.json', guestRoot + '\\evidence\\raster-go.json')
       }
@@ -144,7 +167,7 @@ try {
     assert.ok(report, 'Interactive test did not produce a bounded report')
     for (const name of ['shown-native.json', 'fallback-known-pixels.json', 'screen-fallback.png', 'native-observe.jpg', 'native-known-region.png', 'events.json', 'before-desktop.json', 'after-desktop.json', 'failure-windows.json', 'fixture-state.json']) { const bytes = await ownFile(name); if (bytes) await writeFile(join(output, name), bytes) }
     const task = JSON.parse(await ps(`$t=Get-ScheduledTask -TaskName ${quote(taskName)};$i=Get-ScheduledTaskInfo -TaskName ${quote(taskName)};@{state=$t.State.ToString();exitCode=[long]$i.LastTaskResult}|ConvertTo-Json -Compress`))
-    await writeFile(join(output, 'environment.json'), JSON.stringify({ vm, host, guestRoot, helperPath, helperSHA256, architecture, baseline: baselineResult, task, raster: captureVerdict, reportPassed: report.passed }, null, 2))
+    await writeFile(join(output, 'environment.json'), JSON.stringify({ vm, host, guestRoot, helperPath, helperSHA256, architecture, baseline: baselineResult, task, raster: captureVerdict, samePointRaster: samePointVerdict, reportPassed: report.passed }, null, 2))
     assert.equal(report.passed, true); assert.equal(task.state, 'Ready'); assert.equal(task.exitCode, 0)
     console.log(JSON.stringify({ passed: true, architecture, baseline: baselineResult?.checks, checks: report.checks.length, output }, null, 2))
   }

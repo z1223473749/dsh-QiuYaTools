@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -126,11 +128,13 @@ public static class QytAiOracle
 public sealed class QytAiFixture : Form
 {
     private readonly string root,title;private readonly Timer timer=new Timer();private readonly JavaScriptSerializer json=new JavaScriptSerializer();private Form other;private int clicks,sequence;private string last="";
+    private readonly TcpListener listener=new TcpListener(IPAddress.Loopback,0);private readonly List<object> webEvents=new List<object>();private readonly object webGate=new object();private System.Threading.Thread server;private volatile bool retiring;private int port;
     public QytAiFixture(string root,string title)
     {
         this.root=root;this.title=title;Text=title;StartPosition=FormStartPosition.Manual;Location=new System.Drawing.Point(100,100);ClientSize=new Size(720,520);FormBorderStyle=FormBorderStyle.FixedSingle;MaximizeBox=false;BackColor=Color.FromArgb(37,113,151);DoubleBuffered=true;
         other=new Form{Text=title+" focus",StartPosition=FormStartPosition.Manual,Location=new System.Drawing.Point(900,160),Size=new Size(280,220),BackColor=Color.FromArgb(161,93,51)};
-        MouseDown+=delegate{clicks++;Save();};Activated+=delegate{Save();};Deactivate+=delegate{Save();};Shown+=delegate{Activate();Save();};FormClosing+=delegate{Save();};FormClosed+=delegate{timer.Stop();other.Close();};
+        listener.Start();port=((IPEndPoint)listener.LocalEndpoint).Port;server=new System.Threading.Thread(Serve){IsBackground=true};server.Start();
+        MouseDown+=delegate{clicks++;Save();};Activated+=delegate{Save();};Deactivate+=delegate{Save();};Shown+=delegate{Activate();Save();};FormClosing+=delegate{Save();};FormClosed+=delegate{retiring=true;listener.Stop();timer.Stop();other.Close();};
         timer.Interval=20;timer.Tick+=Tick;timer.Start();
     }
     protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);using(var light=new SolidBrush(Color.FromArgb(232,220,99)))e.Graphics.FillRectangle(light,20,20,60,40);using(var dark=new SolidBrush(Color.FromArgb(56,39,108)))e.Graphics.FillRectangle(dark,100,20,60,40);}
@@ -144,8 +148,27 @@ public sealed class QytAiFixture : Form
     }
     private void Save()
     {
-        var current=Process.GetCurrentProcess();var data=new{pid=current.Id,createdAtTicks=current.StartTime.ToUniversalTime().Ticks.ToString(),expectedExecutablePath=current.MainModule.FileName,title=title,handle=IsHandleCreated?Handle.ToInt64():0,clicks=clicks,sequence=sequence,foreground=QytAiOracle.GetForegroundWindow().ToInt64(),x=Left,y=Top,width=Width,height=Height,clientX=PointToScreen(System.Drawing.Point.Empty).X,clientY=PointToScreen(System.Drawing.Point.Empty).Y,knownColor=new{r=37,g=113,b=151}};
+        object[] observed;lock(webGate){observed=webEvents.ToArray();}
+        var current=Process.GetCurrentProcess();var data=new{pid=current.Id,createdAtTicks=current.StartTime.ToUniversalTime().Ticks.ToString(),expectedExecutablePath=current.MainModule.FileName,title=title,handle=IsHandleCreated?Handle.ToInt64():0,clicks=clicks,sequence=sequence,foreground=QytAiOracle.GetForegroundWindow().ToInt64(),x=Left,y=Top,width=Width,height=Height,clientX=PointToScreen(System.Drawing.Point.Empty).X,clientY=PointToScreen(System.Drawing.Point.Empty).Y,knownColor=new{r=37,g=113,b=151},port=port,webEvents=observed};
         string destination=Path.Combine(root,"fixture-state.json"),temporary=destination+".tmp";try{File.WriteAllText(temporary,json.Serialize(data));if(File.Exists(destination))File.Replace(temporary,destination,null);else File.Move(temporary,destination);}catch(IOException){}
+    }
+    private void Serve()
+    {
+        while(!retiring){try{using(var client=listener.AcceptTcpClient()){client.ReceiveTimeout=3000;client.SendTimeout=3000;using(var stream=client.GetStream()){
+            var header=new StringBuilder();while(header.Length<8192){int next=stream.ReadByte();if(next<0)break;header.Append((char)next);if(header.ToString().EndsWith("\r\n\r\n",StringComparison.Ordinal))break;}
+            int contentLength=0;foreach(var field in header.ToString().Split('\n'))if(field.StartsWith("Content-Length:",StringComparison.OrdinalIgnoreCase)){if(!int.TryParse(field.Substring(15).Trim(),out contentLength)||contentLength<0||contentLength>1024)throw new IOException("Own HTTP body bound exceeded");}
+            for(int index=0;index<contentLength;index++)if(stream.ReadByte()<0)throw new IOException("Own HTTP body ended early");
+            var line=header.ToString().Split('\n')[0].Trim().Split(' ');var request=line.Length>1?new Uri("http://127.0.0.1"+line[1]):null;var body="ok";
+            if(request!=null){var sid=request.Query.StartsWith("?sid=",StringComparison.Ordinal)?Uri.UnescapeDataString(request.Query.Substring(5)):"";if(!System.Text.RegularExpressions.Regex.IsMatch(sid,"^[a-z0-9-]{1,40}$"))throw new IOException("Unknown own test SID");
+                if(request.AbsolutePath=="/preview"){
+                    var encoded=new JavaScriptSerializer().Serialize(sid);body="<!doctype html><meta charset=utf-8><title>Owned preview test</title><p>Own preview lifecycle</p><script>const sid="+encoded+";let preserved=false;Object.defineProperty(window,'__qytPreserveSessionOnClose',{get:()=>preserved,set:v=>{if(v===true){const r=new XMLHttpRequest();r.open('POST','/preserve-ack?sid='+encodeURIComponent(sid),false);r.send('1');if(r.status!==200)throw Error('own ACK failed');}preserved=v;}});fetch('/ready?sid='+encodeURIComponent(sid));</script>";
+                }else if(request.AbsolutePath=="/ready"||request.AbsolutePath=="/preserve-ack"){
+                    lock(webGate){webEvents.Add(new{kind=request.AbsolutePath.Substring(1),sid=sid,at=DateTime.UtcNow.ToString("o")});}
+                    if(!retiring)BeginInvoke((Action)Save);
+                }
+            }
+            var bytes=Encoding.UTF8.GetBytes(body);var headers=Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "+bytes.Length+"\r\nConnection: close\r\n\r\n");stream.Write(headers,0,headers.Length);stream.Write(bytes,0,bytes.Length);
+        }}}catch(SocketException){if(retiring)return;}catch(IOException){}catch(InvalidOperationException){if(retiring)return;}}
     }
     public static void Run(string root,string title){QytAiOracle.SetThreadDpiAwarenessContext(new IntPtr(-4));Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);Application.Run(new QytAiFixture(root,title));}
 }
