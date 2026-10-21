@@ -143,6 +143,35 @@ test('idle cleanup retains failed owners and capacity, then retries and preserve
   await f.manager.start('A', target.id, { allowOnce: true }); assert.ok(f.manager.get('A').epoch > old)
 })
 
+test('stop and pause of a retired chat are idempotent without creating a driver or disturbing a live chat', async t => {
+  let now = 1000, creations = 0
+  const f = fixture({ idleMs: 100, now: () => now, router() { creations++ } }); t.after(() => f.manager.dispose())
+  await Promise.all(['A', 'B'].map(id => f.manager.start(id, target.id, { allowOnce: true })))
+  await f.manager.stop('A'); const stopped = f.manager.get('A'), otherEpoch = f.manager.get('B').epoch
+  now += 101; await f.manager.sweep()
+  assert.deepEqual(f.manager.environments().map(row => row.sessionId), ['B'])
+  const retiredCalls = f.locals.get('A').calls.length
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await f.manager.stop('A')).state, 'stopped')
+    assert.equal((await f.manager.pause('A')).epoch, stopped.epoch)
+  }
+  assert.equal(creations, 2); assert.equal(f.locals.get('A').calls.length, retiredCalls)
+  assert.equal(f.manager.get('B').state, 'ready'); assert.equal(f.manager.get('B').epoch, otherEpoch)
+  const frame = await f.manager.observe('B'); await f.manager.act('B', request(frame.frameId))
+})
+
+test('stop of a failed retirement cannot report success until cleanup is acknowledged; another chat stays live', async t => {
+  let now = 1000, fail = true
+  const f = fixture({ idleMs: 100, now: () => now, router(id, _router, local) { if (id === 'A') local.dispose = async () => { if (fail) throw Error('synthetic owned process still alive') } } }); t.after(() => { fail = false; return f.manager.dispose() })
+  await Promise.all(['A', 'B'].map(id => f.manager.start(id, target.id, { allowOnce: true })))
+  await f.manager.stop('A'); now += 101
+  await assert.rejects(f.manager.sweep()); await assert.rejects(f.manager.stop('A'), /电脑环境退役未完成/)
+  assert.equal(f.manager.get('B').state, 'ready'); assert.equal(f.manager.environments().find(row => row.sessionId === 'A').retiring, true)
+  fail = false; assert.equal((await f.manager.pause('A')).state, 'stopped')
+  assert.equal((await f.manager.stop('A')).state, 'stopped')
+  assert.deepEqual(f.manager.environments().map(row => row.sessionId), ['B'])
+})
+
 test('dispose attempts every environment, reports failure, and a later call retries the retained driver', async () => {
   let fail = true
   const f = fixture({ router(id, _router, local) { if (id === 'A') local.dispose = async () => { local.calls.push(['dispose']); if (fail) throw Error('cleanup still active') } } })

@@ -161,10 +161,25 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   humanAct(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.humanAct(sessionId, request, signal) }
   permittedTargets(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.permittedTargets(sessionId, signal) }
   selectTarget(sessionId: string, targetId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.selectTarget(sessionId, targetId, signal) }
-  pause(sessionId: string) { return this.forSession(sessionId).service.pause(sessionId) }
+  private stopOrPause(sessionId: string, pause: boolean): Promise<ComputerSessionSnapshot> {
+    this.assertLive(); requireIdentity(sessionId, '会话')
+    const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined)
+    if (entry?.retiring) {
+      // A failed retirement is still an owner. Do not acknowledge its old
+      // stopped snapshot until the retained driver has actually retired.
+      return this.retire(entry).then(() => this.get(sessionId)!)
+    }
+    if (!entry) {
+      const previous = this.snapshots.get(sessionId)
+      if (previous && terminal(previous.state)) return Promise.resolve(structuredClone(previous))
+    }
+    const service = this.forSession(sessionId).service
+    return pause ? service.pause(sessionId) : service.stop(sessionId)
+  }
+  pause(sessionId: string) { return this.stopOrPause(sessionId, true) }
   takeover(sessionId: string) { return this.forSession(sessionId).service.takeover(sessionId) }
   resume(sessionId: string) { return this.forSession(sessionId).service.resume(sessionId) }
-  stop(sessionId: string) { return this.forSession(sessionId).service.stop(sessionId) }
+  stop(sessionId: string) { return this.stopOrPause(sessionId, false) }
   cancelFiles(sessionId?: string, all = false) {
     for (const entry of all ? this.all() : [this.existing(sessionId)].filter((value): value is Environment => !!value)) for (const controller of entry.files) controller.abort(new ComputerError('CONTROL_CHANGED', '文件交换已停止'))
   }
@@ -229,6 +244,12 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
       // rejected service promise is never evidence that native cleanup ran.
       try { await entry.driver.dispose() } catch (error) { errors.push(error) }
       failMany(errors, '电脑环境退役未完成')
+      for (const row of entry.service.list()) {
+        // No driver remains after the ACK. A previous failed stop may have
+        // left a faulted snapshot, but it no longer represents live input.
+        const stopped = { ...row, state: 'stopped' as const, updatedAt: this.now() }; delete stopped.error
+        this.snapshots.set(row.sessionId, stopped)
+      }
       entry.unsubscribe()
       if (entry.sessionId === undefined) { if (this.legacy === entry) this.legacy = undefined }
       else if (this.entries.get(entry.sessionId) === entry) this.entries.delete(entry.sessionId)
