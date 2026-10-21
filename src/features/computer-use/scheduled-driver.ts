@@ -112,10 +112,12 @@ export class ScheduledComputerDriver implements DeviceDriver {
   dispose(): Promise<void> {
     if (this.disposing) return this.disposing
     this.disposed = true; this.active?.controller.abort(new ComputerError('DISPOSED', '电脑连接已关闭')); this.active = undefined
-    this.disposing = (async () => {
+    const disposing = (async () => {
       await Promise.allSettled([...this.pending])
       try { await this.releasePhysical() } finally { await this.inner.dispose?.() }
     })()
-    return this.disposing
+    this.disposing = disposing
+    void disposing.catch(() => { if (this.disposing === disposing) this.disposing = undefined })
+    return disposing
   }
 }

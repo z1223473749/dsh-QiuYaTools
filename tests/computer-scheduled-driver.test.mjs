@@ -78,3 +78,12 @@ test('human actor is retained per logical lease and an old release cannot cancel
   await f.driver.closePreview(undefined, { preserveSession: true })
   assert.deepEqual(f.records.at(-1), ['closePreview', { preserveSession: true }]); await f.driver.dispose()
 })
+
+test('failed disposal retains a closed input fence but permits explicit cleanup retry', async () => {
+  const f = fixture('a', new ComputerInputScheduler()); let attempts = 0
+  f.inner.dispose = async () => { if (++attempts === 1) throw new Error('native cleanup not yet confirmed') }
+  await f.driver.lease(1)
+  await assert.rejects(f.driver.dispose(), /not yet confirmed/)
+  await assert.rejects(f.driver.lease(2), { code: 'DISPOSED' })
+  await f.driver.dispose(); assert.equal(attempts, 2)
+})
