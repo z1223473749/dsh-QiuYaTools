@@ -85,8 +85,8 @@ try {
   const cursorAt = position => page.waitForFunction(point => {
     const cursor = document.querySelector('#cursor'), image = document.querySelector('#screen'), stage = document.querySelector('#stage')
     if (!point) return getComputedStyle(cursor).display === 'none'
-    const r = image.getBoundingClientRect(), g = stage.getBoundingClientRect()
-    return getComputedStyle(cursor).display !== 'none' && Math.abs(parseFloat(cursor.style.left) - (r.left - g.left + point.x * r.width / 320)) < 1 && Math.abs(parseFloat(cursor.style.top) - (r.top - g.top + point.y * r.height / 180)) < 1
+    const r = image.getBoundingClientRect(), c = cursor.getBoundingClientRect()
+    return getComputedStyle(cursor).display !== 'none' && Math.abs(c.left + 2 - (r.left + point.x * r.width / 320)) < 1 && Math.abs(c.top + 3 - (r.top + point.y * r.height / 180)) < 1
   }, position)
   liveCursor = { x: 250, y: 40, visible: true }; await cursorAt(null)
   await page.getByRole('button', { name: '继续', exact: true }).click()
@@ -99,6 +99,9 @@ try {
   await host.service.act('preview-test', { actionId: crypto.randomUUID(), frameId: (await host.service.observe('preview-test')).frameId, action: { kind: 'drag', x: 20, y: 20, toX: 240, toY: 130 } })
   await cursorAt({ x: 240, y: 130 })
   assert.equal(await page.locator('#cursor svg path').count(), 1)
+  assert.deepEqual(await page.locator('#cursor').evaluate(node => { const r = node.getBoundingClientRect(); return { width: r.width, height: r.height } }), { width: 18, height: 20 })
+  assert.equal(await page.locator('#cursor svg path').getAttribute('fill-opacity'), '.45')
+  assert.equal(await page.locator('#cursor svg path').getAttribute('stroke-width'), '1.25')
   await page.screenshot({ path: join(output, 'ai-arrow-preview.png') })
   await page.getByRole('button', { name: '接管', exact: true }).click()
   await page.waitForFunction(() => document.querySelector('#status').textContent === 'humanControl')
