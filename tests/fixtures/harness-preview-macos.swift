@@ -5,6 +5,8 @@ import CoreImage
 import Darwin
 import Foundation
 import ScreenCaptureKit
+import Vision
+import CoreText
 
 private struct Failure: Error { let code: String }
 private func fail(_ code: String) -> Failure { Failure(code: code) }
@@ -118,6 +120,13 @@ private func emptyInput() -> Bool {
         && !CGEventSource.buttonState(.combinedSessionState, button: .center)
         && !(0..<128).contains { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0)) }
 }
+private func footerText(_ image: CGImage, region: CGRect = CGRect(x: 0, y: 0, width: 1, height: 0.18)) throws -> [String] {
+    let recognition = VNRecognizeTextRequest()
+    recognition.recognitionLevel = .accurate; recognition.recognitionLanguages = ["zh-Hans", "en-US"]
+    recognition.regionOfInterest = region
+    try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
+    return (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+}
 private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
     private let lock = NSLock(); private var bytes: Data?
     var data: Data? { lock.lock(); defer { lock.unlock() }; return bytes }
@@ -204,7 +213,7 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         return ["clicked": true, "x": point.x, "y": point.y, "hitWindowId": binding.previewWindowId, "hitPid": hitPid,
                 "mouseSource": "CGEvent HID tap OS-synthetic; not hardware"]
     }
-    func screenshot(_ path: String) async throws {
+    func screenshot(_ path: String) async throws -> [String] {
         guard path.hasPrefix("/"), CGPreflightScreenCaptureAccess() else { throw fail("owned-screenshot-permission-or-path") }
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         guard let window = content.windows.first(where: { $0.windowID == binding.previewWindowId && $0.owningApplication?.processID == binding.preview.pid }) else { throw fail("owned-preview-capture-unavailable") }
@@ -217,6 +226,10 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         try await stream.stopCapture(); _ = try validate()
         guard let data = writer.data else { throw fail("owned-preview-capture-timeout") }
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        guard let image = NSBitmapImageRep(data: data)?.cgImage else { throw fail("owned-preview-image-unreadable") }
+        let text = try footerText(image)
+        _ = try validate()
+        return text
     }
     func run(_ command: [String: Any]) async throws -> [String: Any] {
         let op = command["op"] as? String ?? ""
@@ -280,7 +293,10 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             result["keyboardSource"] = "CGEvent postToPid Unicode OS-synthetic; not IME"
         default: throw fail("unsupported-owned-preview-operation")
         }
-        if let output = command["output"] as? String { try await screenshot(output) }
+        if let output = command["output"] as? String {
+            result["recognizedText"] = try await screenshot(output)
+            result["recognitionRegion"] = "exact-owned-preview-bottom-18-percent"
+        }
         return result
     }
 }
@@ -300,7 +316,13 @@ private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerializa
                 guard try retirement(reparented)["retired"] as? Bool == false else { throw fail("reparenting-was-counted-as-retirement") }
                 child.waitUntilExit()
                 guard try retirement(born)["retired"] as? Bool == true else { throw fail("exited-identity-was-live") }
-                try emit(["ok": true, "result": ["projection": true, "outsideRejected": true, "identityRetirement": true, "inputEventsPosted": 0, "activationCalls": 0]]); return
+                guard let pixels = CGContext(data: nil, width: 400, height: 100, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw fail("ocr-self-test-context") }
+                pixels.setFillColor(CGColor(gray: 0, alpha: 1)); pixels.fill(CGRect(x: 0, y: 0, width: 400, height: 100))
+                let font = CTFontCreateWithName("Helvetica" as CFString, 48, nil)
+                let text = NSAttributedString(string: "38 ms", attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font, NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1)])
+                pixels.textPosition = CGPoint(x: 20, y: 25); CTLineDraw(CTLineCreateWithAttributedString(text), pixels)
+                guard let image = pixels.makeImage(), try footerText(image, region: CGRect(x: 0, y: 0, width: 1, height: 1)).contains(where: { $0.range(of: #"\d+\s*ms"#, options: .regularExpression) != nil }) else { throw fail("visible-latency-ocr-self-test-failed") }
+                try emit(["ok": true, "result": ["projection": true, "outsideRejected": true, "identityRetirement": true, "visibleLatencyRecognition": true, "inputEventsPosted": 0, "activationCalls": 0]]); return
             }
             guard CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--request", let bytes = CommandLine.arguments[2].data(using: .utf8), bytes.count <= 16384,
                   let request = try JSONSerialization.jsonObject(with: bytes) as? [String: Any], let op = request["op"] as? String,

@@ -367,9 +367,10 @@ try {
     let preview, observer, windowsPreview, observeWindowState, macPreview
     if (process.platform === 'darwin') {
       if (process.argv.includes('--manual-preview-e2e')) {
+        const { waitForOwnedMacPreview } = await import('../tests/fixtures/harness-preview-readiness.mjs')
         assert.ok(candidate && host?.pid, 'Mac manual input requires this runner’s own installed profile and Host process')
         const interactor = join(temporary, 'harness-preview-macos')
-        await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', join(root, 'tests/fixtures/harness-preview-macos.swift'), '-o', interactor])
+        await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'Vision', join(root, 'tests/fixtures/harness-preview-macos.swift'), '-o', interactor])
         const request = async value => {
           const answer = JSON.parse(await nativeCommand(interactor, ['--request', JSON.stringify(value)]))
           assert.equal(answer.ok, true, `Owned Mac preview operation failed: ${answer.error}`)
@@ -384,8 +385,14 @@ try {
         await writeFile(join(output, 'mac-preview-owned-binding.json'), JSON.stringify(bound, null, 2))
         macPreview = (op, extra = {}) => request({ op, binding: bound.binding, ...extra })
         macPreviewRetirement = () => macPreview('retirement')
-        const view = await macPreview('observe', { output: previewPath })
-        preview = { ...view, id: bound.binding.previewWindowId, pid: bound.binding.preview.pid, accessibility: view.labels, recognizedText: [] }
+        // AX may publish the buttons before a first frame and omit WebKit's
+        // small metrics text entirely. Keep the same visible latency oracle
+        // as the non-manual path, from this exact owned window's footer pixels.
+        const attempts = []
+        let view
+        try { view = await waitForOwnedMacPreview(() => macPreview('observe', { output: previewPath }), { onAttempt: value => attempts.push(value) }) }
+        finally { await writeFile(join(output, 'mac-preview-readiness-attempts.json'), JSON.stringify(attempts, null, 2)) }
+        preview = { ...view, id: bound.binding.previewWindowId, pid: bound.binding.preview.pid, accessibility: view.labels }
       } else {
         observer = join(temporary, 'harness-window-evidence')
         await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'Vision', join(root, 'src/native/macos/fixtures/HarnessWindowEvidence.swift'), '-o', observer])
