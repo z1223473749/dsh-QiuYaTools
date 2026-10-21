@@ -48,6 +48,9 @@ internal sealed class PhysicalInputMonitor : IDisposable
     {
         if (window == IntPtr.Zero) return false;
         var root = GetAncestor(window, 2);
+        // A click-through AI pointer is display-only. It must never inherit the
+        // preview's exemption from idle own-window physical-input revocation.
+        if (AiCursorOverlay.IsCursorWindow(root == IntPtr.Zero ? window : root)) return false;
         Native.GetWindowThreadProcessId(root == IntPtr.Zero ? window : root, out var pid);
         return pid == Environment.ProcessId;
     }

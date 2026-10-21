@@ -62,22 +62,27 @@ internal sealed class WindowManager : IDisposable
         previews[id] = window;
         window.FormClosed += (_, _) => {
             if (previews.GetValueOrDefault(id) == window) previews.Remove(id);
-            Program.Emit(new { @event = "previewClosed", sessionId = id });
+            if (!window.PreserveSessionOnClose) Program.Emit(new { @event = "previewClosed", sessionId = id });
         };
         await window.Initialize();
         if (window.Failed) throw new NativeFailure("preview-failed", "Preview could not load");
         window.Present(false);
         return new { opened = true };
     }
-    internal object ClosePreview(JsonElement request)
+    internal async Task<object> ClosePreview(JsonElement request)
     {
+        var preserve = false;
+        if (request.TryGetProperty("preserveSession", out var value)) {
+            if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new NativeFailure("invalid-request", "Invalid preserveSession");
+            preserve = value.GetBoolean();
+        }
         if (!request.TryGetProperty("sessionId", out _)) {
-            foreach (var window in previews.Values.ToArray()) window.Close();
+            foreach (var window in previews.Values.ToArray()) await window.ClosePreview(preserve);
         } else {
             var id = Program.Text(request, "sessionId", 1024);
-            if (previews.TryGetValue(id, out var window)) window.Close();
+            if (previews.TryGetValue(id, out var window)) await window.ClosePreview(preserve);
         }
-        return new { closed = true };
+        return new { closed = true, preserveSession = preserve };
     }
     internal static Uri ValidateUrl(string raw)
     {
@@ -107,6 +112,8 @@ internal sealed class BrowserWindow : Form
     private readonly System.Windows.Forms.Timer deadline = new() { Interval = 30_000 };
     private readonly List<object> waiting = new();
     internal bool IsPreview => preview;
+    internal bool PreserveSessionOnClose { get; private set; }
+    private Task? preserveClose;
     protected override bool ShowWithoutActivation => preview;
     protected override CreateParams CreateParams
     {
@@ -205,6 +212,30 @@ internal sealed class BrowserWindow : Form
         if (!Native.SetWindowPos(Handle, preview ? new IntPtr(-1) : IntPtr.Zero, 0, 0, 0, 0, 0x0040 | 0x0001 | 0x0002 | 0x0010))
             throw new NativeFailure("window-presentation-failed", "Windows could not display the requested window");
         if (activate) Activate();
+    }
+    internal Task ClosePreview(bool preserve)
+    {
+        if (!preview) throw new NativeFailure("invalid-request", "Only a preview can preserve its control session");
+        if (IsDisposed) return Task.CompletedTask;
+        if (!preserve) { Close(); return Task.CompletedTask; }
+        if (preserveClose is { IsFaulted: false, IsCanceled: false }) return preserveClose;
+        return preserveClose = CloseAndPreserve();
+    }
+    private async Task CloseAndPreserve()
+    {
+        try {
+            var core = web.CoreWebView2;
+            bool OwnedDocument() => core != null && web.CoreWebView2 == core && !IsDisposed && Uri.TryCreate(core.Source, UriKind.Absolute, out var current) && SameOrigin(current) && current.AbsolutePath == origin.AbsolutePath &&
+                !current.Query.TrimStart('?').Split('&').Any(part => Uri.UnescapeDataString(part.Split('=', 2)[0]) == "token");
+            if (Failed || core == null || !OwnedDocument())
+                throw new NativeFailure("preview-not-ready", "Wait for the owned preview before returning it to the chat");
+            // This fixed script runs only in this helper's validated preview.
+            // Wait for it before closing: pagehide otherwise pauses the task.
+            var result = await core.ExecuteScriptAsync("window.__qytPreserveSessionOnClose=true;window.__qytPreserveSessionOnClose===true");
+            if (result != "true" || !OwnedDocument()) throw new NativeFailure("preview-close-failed", "The preview did not confirm session preservation");
+            PreserveSessionOnClose = true;
+            Close();
+        } catch { preserveClose = null; throw; }
     }
     internal async Task Initialize()
     {

@@ -22,10 +22,14 @@ internal sealed class ComputerDriver : IDisposable
     private readonly HashSet<ushort> heldUnicode = new();
     private readonly Func<Native.INPUT[], uint> writeInputs;
     private readonly DesktopLeaseGuard? desktopLease;
+    private readonly AiCursorOverlay aiCursor;
     private readonly HashSet<ushort> journalUnicodeSuperset = new();
     private long epoch;
     private long lastEpoch;
     private IntPtr inputTarget;
+    private string? inputTargetId;
+    private Rectangle inputTargetBounds;
+    private string leaseActor = "ai";
     private readonly HashSet<uint> heldMouse = new();
     private bool disposed;
     private bool inputCleanupFailed;
@@ -41,6 +45,7 @@ internal sealed class ComputerDriver : IDisposable
     internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null)
     {
         writeInputs = inputWriter ?? WriteNativeInputs; desktopLease = inputWriter == null ? new DesktopLeaseGuard() : null;
+        aiCursor = new AiCursorOverlay(requested => !Volatile.Read(ref disposed) && Volatile.Read(ref epoch) == requested, inputWriter == null && Environment.UserInteractive);
         physicalCleanupThread = new Thread(() => { while (true) { physicalWake.WaitOne(); if (Volatile.Read(ref physicalCleanupStopping) != 0) return; CleanupPhysicalInput(Interlocked.Exchange(ref pendingPhysicalEpoch, 0)); } }) { IsBackground = true, Name = "QiuYaTools owned input cleanup" };
         physicalCleanupThread.Start(); physicalInput = new PhysicalInputMonitor(OnPhysicalInput);
     }
@@ -58,8 +63,9 @@ internal sealed class ComputerDriver : IDisposable
         if (Volatile.Read(ref disposed) || (ownWindow && !emergency && actionGate.CurrentCount != 0)) return;
         if (Volatile.Read(ref epoch) == 0 && Volatile.Read(ref leaseAcquiring) == 0) return;
         Interlocked.Increment(ref physicalGeneration);
-        if (Interlocked.CompareExchange(ref physicalCleanupPending, 1, 0) != 0) { Interlocked.Exchange(ref epoch, 0); return; }
+        if (Interlocked.CompareExchange(ref physicalCleanupPending, 1, 0) != 0) { aiCursor.Revoke(Interlocked.Exchange(ref epoch, 0)); return; }
         var previous = Interlocked.Exchange(ref epoch, 0);
+        aiCursor.Revoke(previous);
         Interlocked.Exchange(ref pendingPhysicalEpoch, previous); physicalWake.Set();
     }
     private void CleanupPhysicalInput(long previous)
@@ -71,7 +77,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, leaseActor, aiCursor = aiCursor.Snapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
     internal object[] Targets()
     {
         var targets = new List<object>();
@@ -125,7 +131,7 @@ internal sealed class ComputerDriver : IDisposable
         if (after.Rect != target.Rect) throw new NativeFailure("geometry-changed", "Target moved while observing");
         observations[targetId] = target.Rect;
         var cursorPosition = Cursor.Position;
-        return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
+        return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, aiCursor = aiCursor.Snapshot(targetId), targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
     }
     private static byte[] Capture((IntPtr Handle, Rectangle Rect) target)
     {
@@ -194,6 +200,7 @@ internal sealed class ComputerDriver : IDisposable
     internal object Lease(JsonElement request)
     {
         var requested = Epoch(request);
+        var actor = LeaseActor(request);
         lock (inputLock) {
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
             if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
@@ -202,15 +209,22 @@ internal sealed class ComputerDriver : IDisposable
             Volatile.Write(ref leaseAcquiring, 1);
             var generation = Volatile.Read(ref physicalGeneration);
             try {
+                aiCursor.Revoke(epoch);
                 ClearHeld(); desktopLease?.Release(); desktopLease?.Acquire(); Interlocked.Exchange(ref epoch, requested);
                 if (Volatile.Read(ref physicalCleanupPending) != 0 || Volatile.Read(ref physicalGeneration) != generation) {
                     Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release();
                     throw new NativeFailure("human-input-pending", "Physical input interrupted acquisition; reconnect after release");
                 }
-                lastEpoch = requested;
+                lastEpoch = requested; leaseActor = actor; aiCursor.Lease(requested, actor == "ai");
             } finally { Volatile.Write(ref leaseAcquiring, 0); }
         }
-        return new { epoch = requested, acquired = true };
+        return new { epoch = requested, acquired = true, actor };
+    }
+    internal static string LeaseActor(JsonElement request)
+    {
+        if (!request.TryGetProperty("actor", out var value)) return "ai";
+        if (value.ValueKind == JsonValueKind.String && value.GetString() is string actor && actor is "ai" or "human") return actor;
+        throw new NativeFailure("invalid-actor", "Lease actor must be ai or human");
     }
     internal object Release(JsonElement request)
     {
@@ -218,7 +232,7 @@ internal sealed class ComputerDriver : IDisposable
         InputTrace.Mark("release-enter", requested);
         lock (inputLock) {
             InputTrace.Mark("release-lock-acquired", requested);
-            if (epoch == requested) { epoch = 0; ClearHeld(); desktopLease?.Release(); }
+            if (epoch == requested) { epoch = 0; aiCursor.Revoke(requested); ClearHeld(); desktopLease?.Release(); }
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
         }
         InputTrace.Mark("release-return", requested);
@@ -232,12 +246,16 @@ internal sealed class ComputerDriver : IDisposable
     }
     private void Send(long requested, params Native.INPUT[] inputs)
     {
-        lock (inputLock) { Check(requested); if (inputTarget != IntPtr.Zero && Native.GetForegroundWindow() != inputTarget) throw new NativeFailure("foreground-changed", "Target lost foreground input ownership"); if (writeInputs(inputs) != inputs.Length) throw new NativeFailure("input-denied", "Windows refused input; the target may require a higher integrity level"); }
+        lock (inputLock) {
+            try { Check(requested); if (inputTarget != IntPtr.Zero && Native.GetForegroundWindow() != inputTarget) throw new NativeFailure("foreground-changed", "Target lost foreground input ownership"); if (writeInputs(inputs) != inputs.Length) throw new NativeFailure("input-denied", "Windows refused input; the target may require a higher integrity level"); }
+            catch { aiCursor.Hide(requested); throw; }
+        }
     }
     internal async Task<object> Act(JsonElement request)
     {
         if (!actionGate.Wait(0)) throw new NativeFailure("input-busy", "Another input action is still running");
         try { return await ActCore(request); }
+        catch { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.Hide(requested); throw; }
         finally { actionGate.Release(); }
     }
     private async Task<object> ActCore(JsonElement request)
@@ -263,7 +281,7 @@ internal sealed class ComputerDriver : IDisposable
             if (Native.GetForegroundWindow() != target.Handle) throw new NativeFailure("foreground-denied", "Activate the target window before input");
         }
         if (Target(targetId).Rect != observed) throw new NativeFailure("geometry-changed", "Target moved while activating");
-        lock (inputLock) { Check(requested); inputTarget = target.Handle; }
+        lock (inputLock) { Check(requested); inputTarget = target.Handle; inputTargetId = targetId; inputTargetBounds = target.Rect; }
         Program.Emit(new { @event = "action", phase = "started", targetId, epoch = requested, action });
         switch (kind) {
             case "move": Move(requested, target.Rect, action, "x", "y"); break;
@@ -340,7 +358,10 @@ internal sealed class ComputerDriver : IDisposable
         if (!screen.Contains(point)) throw new NativeFailure("invalid-coordinate", "Pointer is outside the visible desktop");
         var x = (int)Math.Round((point.X - screen.Left) * 65535.0 / Math.Max(1, screen.Width - 1));
         var y = (int)Math.Round((point.Y - screen.Top) * 65535.0 / Math.Max(1, screen.Height - 1));
-        Send(requested, Native.Mouse(0x0001 | 0x8000 | 0x4000, 0, x, y));
+        lock (inputLock) {
+            Send(requested, Native.Mouse(0x0001 | 0x8000 | 0x4000, 0, x, y));
+            if (inputTargetId != null) aiCursor.Move(requested, inputTargetId, inputTarget, inputTargetBounds, point);
+        }
     }
     private async Task Key(long requested, string raw)
     {
@@ -367,7 +388,7 @@ internal sealed class ComputerDriver : IDisposable
     {
         var snapshot = new { @event = "inputHeld", ownerId = desktopLease?.OwnerId, keys = heldKeys.Order().ToArray(), unicodeUnits = heldUnicode.Order().ToArray(), mouseButtons = heldMouse.Select(flag => flag switch { 0x0004 => "left", 0x0010 => "right", _ => "middle" }).Order().ToArray() };
         try { if (desktopLease?.OwnerId != null) desktopLease.Record(heldKeys, heldMouse, heldUnicode.Concat(journalUnicodeSuperset)); }
-        catch (NativeFailure) { epoch = 0; inputCleanupFailed = true; Program.Emit(snapshot); throw; }
+        catch (NativeFailure) { aiCursor.Revoke(epoch); epoch = 0; inputCleanupFailed = true; Program.Emit(snapshot); throw; }
         Program.Emit(snapshot);
     }
     private bool ReleaseKey(ushort key)
@@ -390,7 +411,7 @@ internal sealed class ComputerDriver : IDisposable
     }
     private void CleanupFailure()
     {
-        epoch = 0; inputCleanupFailed = true;
+        aiCursor.Revoke(epoch); epoch = 0; inputCleanupFailed = true;
         throw new NativeFailure("input-cleanup-failed", "Windows did not confirm all owned input releases; retire this companion before reconnecting");
     }
     private void ClearHeld()
@@ -423,12 +444,12 @@ internal sealed class ComputerDriver : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposeStarted, 1) != 0) return;
-        Volatile.Write(ref disposed, true); Interlocked.Exchange(ref epoch, 0);
+        Volatile.Write(ref disposed, true); aiCursor.Revoke(Interlocked.Exchange(ref epoch, 0));
         try { lock (inputLock) { disposed = true; epoch = 0; ClearHeld(); desktopLease?.Release(); } }
         finally {
             try { captureBroker.Dispose(); }
             finally {
-                physicalInput.Dispose(); Volatile.Write(ref physicalCleanupStopping, 1); physicalWake.Set();
+                aiCursor.Dispose(); physicalInput.Dispose(); Volatile.Write(ref physicalCleanupStopping, 1); physicalWake.Set();
                 if (physicalCleanupThread.Join(1500)) physicalWake.Dispose();
                 desktopLease?.Dispose();
             }

@@ -13,6 +13,7 @@ internal static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Contains("--self-test-ai-cursor")) { Emit(AiCursorSelfTest.Run()); return; }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -104,7 +105,7 @@ internal sealed class NativeContext : ApplicationContext
                 "release" => computer.Release(request),
                 "act" => await computer.Act(request),
                 "openPreview" => await windows.OpenPreview(request),
-                "closePreview" => windows.ClosePreview(request),
+                "closePreview" => await windows.ClosePreview(request),
                 _ => throw new NativeFailure("unknown-operation", "Unknown native operation")
             };
             // Session open waits for the verified in-page handshake and emits its own reply.
