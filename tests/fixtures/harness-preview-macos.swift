@@ -92,7 +92,9 @@ private func visit(_ root: AXUIElement) -> [AXUIElement] {
     func walk(_ node: AXUIElement, _ depth: Int) {
         guard depth < 16, values.count < 600, Date() < deadline, seen.insert(CFHash(node)).inserted else { return }
         values.append(node)
-        for child in (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(120) { walk(child, depth + 1) }
+        for key in [kAXChildrenAttribute, "AXChildrenInNavigationOrder", "AXContents"] {
+            for child in (attribute(node, key) as? [AXUIElement] ?? []).prefix(120) { walk(child, depth + 1) }
+        }
     }
     walk(root, 0); return values
 }
@@ -131,6 +133,7 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 
 @MainActor private final class Interactor {
     let binding: Binding
+    private var accessibilityActivation: [String: Int32] = [:]
     init(_ binding: Binding) { self.binding = binding }
     func validate(requirePreview: Bool = true) throws -> (CGRect?, CGRect) {
         guard try identity(binding.ancestor.pid) == binding.ancestor,
@@ -145,10 +148,27 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
         return (try preview.map(bounds), try bounds(target))
     }
-    func nodes() throws -> (CGRect, [AXUIElement]) {
-        let (preview, _) = try validate()
-        guard let preview else { throw fail("owned-preview-retired") }
-        return (preview, visit(try axWindow(binding.preview, preview)))
+    func nodes() async throws -> (CGRect, [AXUIElement]) {
+        _ = try validate()
+        let application = AXUIElementCreateApplication(binding.preview.pid)
+        AXUIElementSetMessagingTimeout(application, 0.25)
+        // WebKit lazily publishes its HTML AX tree when an accessibility
+        // client requests it. This is confined to the already-pinned test
+        // owner and never grants permissions or changes system settings.
+        for key in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
+            accessibilityActivation[key] = AXUIElementSetAttributeValue(application, key as CFString, kCFBooleanTrue).rawValue
+        }
+        var last: (CGRect, [AXUIElement])?
+        for _ in 0..<60 {
+            let (preview, _) = try validate()
+            guard let preview else { throw fail("owned-preview-retired") }
+            let elements = visit(try axWindow(binding.preview, preview))
+            last = (preview, elements)
+            if elements.contains(where: { named($0, "暂停") }) { return last! }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard let last else { throw fail("owned-preview-ax-not-ready") }
+        return last
     }
     func physicalHit(_ point: CGPoint) throws -> pid_t {
         let hit = windowRows().first { value in
@@ -209,8 +229,8 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             for _ in 0..<100 { if row(binding.previewWindowId, binding.preview.pid) == nil { return ["closed": true, "alreadyClosed": false, "elapsedMs": Date().timeIntervalSince(start) * 1000, "click": receipt] }; try await Task.sleep(nanoseconds: 20_000_000) }
             throw fail("owned-preview-did-not-retire")
         }
-        let (frame, elements) = try nodes()
-        var result: [String: Any] = ["binding": try encoded(binding), "previewFrame": jsonRect(frame), "inputEmpty": emptyInput()]
+        let (frame, elements) = try await nodes()
+        var result: [String: Any] = ["binding": try encoded(binding), "previewFrame": jsonRect(frame), "inputEmpty": emptyInput(), "accessibilityActivation": accessibilityActivation]
         switch op {
         case "observe":
             result["labels"] = elements.flatMap { node in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute(node, $0) as? String }.filter { !$0.isEmpty }.map { String($0.prefix(200)) } }
