@@ -145,6 +145,146 @@ try {
   # Deliberately cover the target with the native topmost preview; pointer input must move it visibly.
   Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class PreviewVisibility{[DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);[DllImport("user32.dll")]public static extern int GetSystemMetrics(int n);[DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);struct Rect{public int L,T,R,B;}public static string Bounds(IntPtr h){Rect r;GetWindowRect(h,out r);return r.L+","+r.T+","+r.R+","+r.B;}}'
   Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class FixtureNative{[DllImport("user32.dll",CharSet=CharSet.Unicode)]public static extern IntPtr FindWindow(string c,string t);[DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);[DllImport("user32.dll")]static extern bool GetWindowRect(IntPtr h,out Rect r);struct Rect{public int L,T,R,B;}public static int[] Center(IntPtr h){Rect r;GetWindowRect(h,out r);return new[]{(r.L+r.R)/2,(r.T+r.B)/2};}public static IntPtr Window(string t){return FindWindow(null,t);}[DllImport("user32.dll")]public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int h2,uint f);[DllImport("user32.dll")]public static extern short GetAsyncKeyState(int k);}'
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+public sealed class PreviewHoldSampler : IDisposable {
+  public sealed class State {
+    public long BeforeTicks, Ticks, Owner; public double Milliseconds, ProbeMilliseconds;
+    public int Pid, OwnerPid; public bool Window, Visible, Held, ProcessLive; public string Error;
+  }
+  public sealed class Result {
+    public long Hwnd, Owner, Frequency=Stopwatch.Frequency;
+    public int ExpectedPid, OwnerPid, Samples; public string ExpectedBorn, BeforeBorn, AfterBorn, ExpectedExecutable, BeforeExecutable, AfterExecutable, Error;
+    public bool Ready, Started, Joined, BeforeIdentity, AfterIdentity, Passed;
+    public long ReadyTicks, FirstDownTicks, FinishedTicks;
+    public State[] States;
+  }
+  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h,uint command);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+  readonly ManualResetEventSlim ready=new ManualResetEventSlim(false), done=new ManualResetEventSlim(false), stop=new ManualResetEventSlim(false);
+  readonly List<State> states=new List<State>(); readonly Result result=new Result();
+  readonly Func<State> probe; readonly Thread worker; readonly int downDeadline;
+  Process process; IntPtr handle; long expectedBorn; bool disposed, workerStarted;
+  PreviewHoldSampler(Func<State> source,int pid,long owner,int deadline) {
+    probe=source; downDeadline=deadline; result.ExpectedPid=pid; result.Owner=owner;
+    worker=new Thread(Pump); worker.IsBackground=true;
+  }
+  public static PreviewHoldSampler Start(IntPtr hwnd,int pid,long born,string executable) {
+    PreviewHoldSampler value=null;
+    try {
+      var process=Process.GetProcessById(pid);
+      try {
+        var pinned=process.SafeHandle;
+        value=new PreviewHoldSampler(null,pid,GetWindow(hwnd,4).ToInt64(),5000);
+        value.process=process; value.handle=hwnd; value.expectedBorn=born; value.result.Hwnd=hwnd.ToInt64(); value.result.ExpectedBorn=born.ToString(System.Globalization.CultureInfo.InvariantCulture); value.result.ExpectedExecutable=executable;
+        uint ownerPid=0; if(value.result.Owner!=0)GetWindowThreadProcessId(new IntPtr(value.result.Owner),out ownerPid);
+        if(value.result.Owner!=0 && ownerPid!=(uint)pid)throw new InvalidOperationException("Preview owner belongs to another process");
+        value.result.OwnerPid=(int)ownerPid;
+        value.CheckProcess(); value.Begin(); return value;
+      } catch { if(value==null)process.Dispose(); throw; }
+    } catch { if(value!=null)value.Dispose(); throw; }
+  }
+  bool CheckProcess(bool after=false) {
+    if(process==null)return true;
+    if(process.HasExited)throw new InvalidOperationException("Pinned preview companion exited");
+    var born=process.StartTime.ToUniversalTime().Ticks; var executable=process.MainModule.FileName;
+    if(after){result.AfterBorn=born.ToString(System.Globalization.CultureInfo.InvariantCulture);result.AfterExecutable=executable;}
+    else{result.BeforeBorn=born.ToString(System.Globalization.CultureInfo.InvariantCulture);result.BeforeExecutable=executable;}
+    if(born!=expectedBorn || !String.Equals(executable,result.ExpectedExecutable,StringComparison.OrdinalIgnoreCase))
+      throw new InvalidOperationException("Pinned preview companion identity changed");
+    return true;
+  }
+  State Read() {
+    var begin=Stopwatch.GetTimestamp(); State value;
+    try {
+      if(probe!=null)value=probe();
+      else {
+        uint pid,ownerPid=0; var window=IsWindow(handle); GetWindowThreadProcessId(handle,out pid);var owner=GetWindow(handle,4);
+        if(owner!=IntPtr.Zero)GetWindowThreadProcessId(owner,out ownerPid);
+        value=new State{Window=window,Pid=(int)pid,Owner=owner.ToInt64(),OwnerPid=(int)ownerPid,Visible=IsWindowVisible(handle),Held=(GetAsyncKeyState(1)&0x8000)!=0,ProcessLive=!process.HasExited};
+      }
+    } catch(Exception error) { value=new State{Error=error.GetType().FullName}; }
+    value.BeforeTicks=begin; value.Ticks=Stopwatch.GetTimestamp(); value.ProbeMilliseconds=(value.Ticks-begin)*1000.0/Stopwatch.Frequency;
+    return value;
+  }
+  bool Known(State value) { return value.Error==null && value.Window && value.Pid==result.ExpectedPid && value.Owner==result.Owner && value.OwnerPid==result.OwnerPid && value.ProcessLive; }
+  void Begin() {
+    worker.Start(); workerStarted=true;
+    if(!ready.Wait(2000))throw new TimeoutException("Preview sampler did not become ready");
+    if(!result.Ready)throw new InvalidOperationException("Preview sampler preflight failed: "+result.Error);
+  }
+  void Pump() {
+    try {
+      result.BeforeIdentity=CheckProcess(); var initial=Read();
+      if(!Known(initial)||!initial.Visible||initial.Held)throw new InvalidOperationException("Preview sampler requires the exact visible window and left button up");
+      result.Ready=true; result.ReadyTicks=Stopwatch.GetTimestamp(); ready.Set();
+      var waiting=Stopwatch.StartNew(); State current=null;
+      while(!stop.IsSet && waiting.ElapsedMilliseconds<downDeadline) {
+        current=Read();
+        if(!Known(current)) { states.Add(current); throw new InvalidOperationException("Preview identity became unknown before down"); }
+        if(current.Held)break; if(stop.Wait(2))break;
+      }
+      if(stop.IsSet)throw new OperationCanceledException("Preview sampler stopped before input");
+      if(current==null||!current.Held)throw new TimeoutException("Preview sampler did not observe actual left down");
+      result.Started=true; result.FirstDownTicks=current.Ticks;
+      while(!stop.IsSet) {
+        current.Milliseconds=(current.Ticks-result.FirstDownTicks)*1000.0/Stopwatch.Frequency; states.Add(current);
+        if(!Known(current)||!current.Held||current.Milliseconds>=200)break;
+        if(stop.Wait(10))break; current=Read();
+      }
+      if(stop.IsSet)throw new OperationCanceledException("Preview sampler stopped during observation");
+      result.AfterIdentity=CheckProcess(after:true);
+    } catch(Exception error) { result.Error=error.GetType().FullName+": "+error.Message; }
+    finally { result.FinishedTicks=Stopwatch.GetTimestamp(); result.States=states.ToArray(); ready.Set(); done.Set(); }
+  }
+  static bool Evaluate(Result value) {
+    var held=0; var valid=true;
+    foreach(var point in value.States ?? new State[0]) {
+      if(point.Error!=null || !point.Window || point.Pid!=value.ExpectedPid || point.Owner!=value.Owner || point.OwnerPid!=value.OwnerPid || !point.ProcessLive)valid=false;
+      if(point.Held && point.Milliseconds<200) { held++; if(!point.Visible)valid=false; }
+    }
+    value.Samples=held;
+    return value.Ready && value.Started && value.Joined && value.BeforeIdentity && value.AfterIdentity && value.Error==null && valid && held>=5;
+  }
+  public Result Complete() {
+    if(!done.Wait(3000))throw new TimeoutException("Preview sampler did not finish its bounded observation");
+    result.Joined=worker.Join(1000); result.Passed=Evaluate(result); return result;
+  }
+  public Result Snapshot() { return result; }
+  public void Dispose() {
+    if(disposed)return; stop.Set();
+    if(workerStarted && !worker.Join(2000))throw new TimeoutException("Preview sampler thread did not retire");
+    disposed=true; if(process!=null)process.Dispose(); ready.Dispose(); done.Dispose(); stop.Dispose();
+  }
+  public static object SelfTest() {
+    var cases=new List<string>();
+    foreach(var scenario in new[]{"visible","hidden","wrong-pid","probe-error","cancel-before-down"}) {
+      var phase=0; Func<State> source=()=> {
+        var held=Interlocked.CompareExchange(ref phase,0,0)!=0;
+        if(held && scenario=="probe-error")throw new InvalidOperationException("owned simulated read error");
+        return new State{Window=true,Visible=!held||scenario!="hidden",Held=held,ProcessLive=true,Pid=held&&scenario=="wrong-pid"?8:7,Owner=9};
+      };
+      using(var value=new PreviewHoldSampler(source,7,9,5000)) {
+        value.Begin();
+        if(scenario=="cancel-before-down")value.stop.Set(); else Interlocked.Exchange(ref phase,1);
+        var observed=value.Complete();
+        if(observed.Passed!=(scenario=="visible")||!observed.Joined)throw new InvalidOperationException("Sampler self-test failed: "+scenario);
+        cases.Add(scenario);
+      }
+    }
+    var insufficient=new Result{Ready=true,Started=true,Joined=true,BeforeIdentity=true,AfterIdentity=true,ExpectedPid=7,Owner=9,States=new[]{new State{Window=true,Visible=true,Held=true,ProcessLive=true,Pid=7,Owner=9}}};
+    if(Evaluate(insufficient))throw new InvalidOperationException("Insufficient samples were accepted");cases.Add("fewer-than-five-rejected");
+    return new{passed=true,checks=cases.Count,cases=cases.ToArray(),guiStarted=false,actualInput=false,boundary="Controlled worker/probe state tests; no Win32 cursor or GUI APIs invoked"};
+  }
+}
+'@
   $previewHandle=[FixtureNative]::Window(('QiuYaTools Overlap Preview '+[char]0x2014+' QiuYaTools'))
   Assert ($previewHandle -ne [IntPtr]::Zero -and [FixtureNative]::SetWindowPos($previewHandle,[IntPtr](-1),$observed.geometry.x,$observed.geometry.y,600,420,0x0010)) 'WIN-PREVIEW-OVERLAP-SETUP-01' @{handle=$previewHandle.ToInt64()} 
   $point=Element-Point (Good $computer 'observe' @{targetId=$target.id}) 'Fixture click button'
@@ -194,6 +334,9 @@ try {
   [void][FixtureNative]::SetWindowPos($fixtureHandle,[IntPtr]::Zero,364,118,1000,800,0x0014)
   $observed=Good $computer 'observe' @{targetId=$target.id};$point=Element-Point $observed 'Fixture drag pad'
   [void](Good $computer 'lease' @{epoch=4})
+  # Prewarm and arm a read-only sampler before the one original drag. Its 200ms
+  # window starts only when the real OS left-button state first becomes down.
+  $visibilitySampler=[PreviewHoldSampler]::Start($busyPreview,$computer.Id,$computer.StartTime.ToUniversalTime().Ticks,$computer.StartInfo.FileName)
   $id=Send-Request $computer 'act' @{epoch=4;targetId=$target.id;action=@{kind='drag';x=($point.x-180);y=$point.y;toX=($point.x+180);toY=$point.y}}
   $held=$null
   for($i=0;$i -lt 20 -and $null -eq $held;$i++){
@@ -203,9 +346,9 @@ try {
   }
   for($i=0;$i -lt 40 -and (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0);$i++){Start-Sleep -Milliseconds 5}
   Assert (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0) 'WIN-PREVIEW-BUSY-ACTUAL-DOWN-01'
-  $visibilityWatch=[Diagnostics.Stopwatch]::StartNew();$visibilitySamples=0;$stayedVisible=$true
-  while($visibilityWatch.ElapsedMilliseconds -lt 200 -and (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0)){$visibilitySamples++;if(![PreviewVisibility]::IsWindowVisible($busyPreview)){$stayedVisible=$false};Start-Sleep -Milliseconds 10}
-  Assert ($stayedVisible -and $visibilitySamples -ge 5) 'WIN-PREVIEW-LARGE-TARGET-HELD-DRAG-CONTROLS-VISIBLE-01' @{samples=$visibilitySamples;milliseconds=$visibilityWatch.ElapsedMilliseconds}
+  $visibilityResult=$visibilitySampler.Complete()
+  $visibilityResult|ConvertTo-Json -Depth 10|Set-Content (Join-Path $Output 'preview-held-samples.json') -Encoding UTF8
+  Assert ($visibilityResult.Passed -and $visibilityResult.Samples -ge 5) 'WIN-PREVIEW-LARGE-TARGET-HELD-DRAG-CONTROLS-VISIBLE-01' @{sampler=$visibilityResult;inputOwner=$held.ownerId;epoch=4;extraActions=0;extraInput=0;windowMilliseconds=200;targetIntervalMilliseconds=10}
   $center=[FixtureNative]::Center($busyPreview)
   # This is only a cursor-routing diagnostic. It is not proof of a physical HID event.
   [void][FixtureNative]::SetCursorPos($center[0],$center[1])
@@ -260,6 +403,7 @@ try {
 } catch {
   $result=@{passed=$false;checks=$checks;error=$_.Exception.Message;trace=$_.ScriptStackTrace}
 } finally {
+  if($visibilitySampler){try{$visibilitySampler.Dispose()}catch{if($result){$result.passed=$false;$result.samplerCleanupError=$_.Exception.Message}};try{$result.previewHeldSampling=$visibilitySampler.Snapshot();$visibilitySampler.Snapshot()|ConvertTo-Json -Depth 10|Set-Content (Join-Path $Output 'preview-held-samples.json') -Encoding UTF8}catch{}}
   if($held -and @($held.mouseButtons).Count -gt 0){try{$release=Start-Helper '--release-input';$release.StandardInput.WriteLine((@{keys=@($held.keys);mouseButtons=@($held.mouseButtons);unicodeUnits=@($held.unicodeUnits);ownerId=$held.ownerId}|ConvertTo-Json -Compress));$release.StandardInput.Close();[void]$release.WaitForExit(5000)}catch{}}
   foreach($child in $children){try{if(!$child.HasExited){if($child.StartInfo.RedirectStandardInput){$child.StandardInput.Close();[void]$child.WaitForExit(2000)};if(!$child.HasExited){$child.Kill()}}}catch{}}
   $result | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $Output 'report.json') -Encoding UTF8
