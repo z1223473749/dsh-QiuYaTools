@@ -406,6 +406,9 @@ enum NativeLeaseActor: String {
             let view = AICursorView(frame: .zero)
             let overlay = AICursorPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             overlay.title = "QiuYaTools AI pointer"
+            // A cursor must not linger in WindowServer's normal panel fade
+            // after its input owner has released control.
+            overlay.animationBehavior = .none
             overlay.isOpaque = false; overlay.backgroundColor = .clear; overlay.hasShadow = false
             overlay.ignoresMouseEvents = true; overlay.hidesOnDeactivate = false; overlay.isReleasedWhenClosed = false
             overlay.isFloatingPanel = true; overlay.level = .floating

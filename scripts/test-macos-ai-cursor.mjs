@@ -388,7 +388,11 @@ try {
   await driver.closePreview(); await until(() => host.service.get('native-ai-pointer').state === 'paused', 'Ordinary native close did not pause its Host session')
   assert.ok(nativeEvents.some(event => event.event === 'previewClosed' && event.sessionId === 'native-ai-pointer'))
   assert.equal((await driver.status()).leaseEpoch, null); pass('MAC-ORDINARY-CLOSE-PAUSES-EXACT-SESSION')
-  await host.service.stop('native-ai-pointer'); const stopped = await os('host-stopped'); assert.ok(empty(stopped)); assert.equal(nativeArrow(stopped).length, 0)
+  await host.service.stop('native-ai-pointer')
+  const stopStatus = await driver.status(); assert.equal(stopStatus.leaseEpoch, null); assert.equal(stopStatus.aiCursor.visible, false)
+  // AppKit's hide ACK and WindowServer's on-screen list are separate clocks.
+  // Keep the input-empty gate on every read and bound only compositor retirement.
+  await until(async () => { const stopped = await os('host-stopped'); assert.ok(empty(stopped)); return nativeArrow(stopped).length === 0 ? stopped : false }, 'Stopped AI panel remained in WindowServer after 500ms', 500)
   pass('MAC-HOST-STOP-HIDES-OVERLAY-AND-RELEASES-INPUT')
   report = { status: 'passed', checks, helperSha256, environment, nativeEvents, pagehidePauses, frameReceipts: [...frameReceipts.values()], pageEvents, captures,
     scope: 'Actual AppKit/CG/SCK native AI overlay and production Host explicit options.driver legacy service/native WK preview through a loopback test carrier',
