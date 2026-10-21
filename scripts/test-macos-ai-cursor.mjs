@@ -38,7 +38,10 @@ function endpoint(executable, args, label) {
   const lines = createInterface({ input: child.stdout })
   lines.on('line', line => {
     let value; try { value = JSON.parse(line) } catch { fatal ??= new Error(`${label} returned malformed JSON`); return }
-    transcript.push(value.result?.imageBase64 ? { ...value, result: { ...value.result, imageBase64: `[${value.result.imageBase64.length} base64 chars]` } } : value)
+    const recorded = value.result ? { ...value, result: { ...value.result } } : value
+    if (recorded.result?.imageBase64) recorded.result.imageBase64 = `[${recorded.result.imageBase64.length} base64 chars]`
+    if (recorded.result?.targets) recorded.result.targets = recorded.result.targets.filter(target => [alpha?.identity.pid, beta?.identity.pid, native?.identity.pid, secondNative?.pid].includes(target.pid))
+    transcript.push(recorded)
     const job = pending.get(value.requestId)
     if (job) { pending.delete(value.requestId); clearTimeout(job.timer); job.resolve(value) }
     else { const index = waiting.findIndex(job => job.event === value.event); if (index >= 0) { const job = waiting.splice(index, 1)[0]; clearTimeout(job.timer); job.resolve(value) } else events.push(value) }
