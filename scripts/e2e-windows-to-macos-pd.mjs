@@ -115,9 +115,12 @@ try{
  await save('client-identity.json',{pid:process.pid,platform:process.platform,architecture:process.arch,scriptSha256:createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).digest('hex')});
  config=JSON.parse(await readFile(join(dir,'config.json'),'utf8'));
  assert.equal(process.platform,'win32');assert.equal(process.arch,config.expectedArchitecture);
+ assert.equal((await fetch(config.fixtureBase+'/checkpoint',{method:'POST',body:JSON.stringify({stage:'client-started'})})).status,200);
+ let pinned=false;for(let index=0;index<100;index++){if(await(await fetch(config.fixtureBase+'/identity-ready')).text()==='go'){pinned=true;break}await delay(300)}assert.ok(pinned,'Client identity was not independently pinned before remote operations');
  driver=new RemoteComputerDriver({endpoint:config.endpoint,token:config.token,clientId:'windows-to-macos-fixture',allowInsecurePrivateNetwork:true,heartbeatMs:300});
  const status=await driver.status();assert.equal(status.platform,'darwin');assert.equal(status.available,true);check('REVERSE-WIN-CLIENT-MAC-STATUS');
- const target=(await driver.targets()).find(value=>value.pid===config.fixturePid&&value.appId===config.fixtureBundleId&&value.title==='QiuYaTools Computer E2E Fixture');assert.ok(target);check('REVERSE-MAC-TARGET');
+ const expectedAppId=driver.deviceId+':'+config.fixtureBundleId;
+ const target=(await driver.targets()).find(value=>value.pid===config.fixturePid&&value.appId===expectedAppId&&value.title==='QiuYaTools Computer E2E Fixture');assert.ok(target);check('REVERSE-MAC-TARGET');
  let frame=await driver.observe(target.id);assert.ok(frame.elements.includes('Fixture'));assert.equal(Buffer.from(frame.imageBase64,'base64').readUInt16BE(),0xffd8);await writeFile(join(dir,'reverse-fixture.jpg'),Buffer.from(frame.imageBase64,'base64'));check('REVERSE-CAPTURE-AX');
  assert.equal((await fetch(config.fixtureBase+'/checkpoint',{method:'POST',body:JSON.stringify({stage:'capture-only-passed',platform:process.platform,architecture:process.arch,checks})})).status,200);
  let go=false;for(let index=0;index<1800;index++){if(await(await fetch(config.fixtureBase+'/begin')).text()==='go'){go=true;break}await delay(300)}assert.ok(go,'Explicit Mac input gate was not opened');
@@ -175,7 +178,8 @@ try {
       if (parts.length !== 3 || parts[1] !== key) { response.writeHead(404).end(); return }
       if (parts[2] === 'state' && request.method === 'GET') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(await snapshot())); return }
       if (parts[2] === 'begin' && request.method === 'GET') { response.end(guestIdentityRecorded ? await stat(gate).then(value => value.isFile() ? 'go' : 'wait', () => 'wait') : 'wait'); return }
-      if (parts[2] === 'checkpoint' && request.method === 'POST') { let body = ''; for await (const bytes of request) { body += bytes; if (body.length > 65536) throw new Error('Checkpoint limit') }; await writeFile(join(output, 'capture-checkpoint.json'), body); checkpoint = true; response.end('ok'); return }
+      if (parts[2] === 'identity-ready' && request.method === 'GET') { response.end(guestIdentityRecorded ? 'go' : 'wait'); return }
+      if (parts[2] === 'checkpoint' && request.method === 'POST') { let body = ''; for await (const bytes of request) { body += bytes; if (body.length > 65536) throw new Error('Checkpoint limit') }; const value = JSON.parse(body); assert.ok(['client-started', 'capture-only-passed'].includes(value.stage)); await writeFile(join(output, value.stage === 'client-started' ? 'client-start-checkpoint.json' : 'capture-checkpoint.json'), body); checkpoint = value.stage; response.end('ok'); return }
       const bytes = request.method === 'GET' && files.get(parts[2])
       if (!bytes) { response.writeHead(404).end(); return }
       response.writeHead(200, { 'Content-Length': bytes.length }); response.end(bytes)
@@ -201,7 +205,7 @@ try {
   while (performance.now() < reportDeadline) {
     const value = await ps(`$p=${quote(guestRoot + '\\report.json')};if(Test-Path -LiteralPath $p){[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))}`)
     if (value) { await writeFile(join(output, 'client-report.json'), Buffer.from(value, 'base64')); clientReport = JSON.parse(Buffer.from(value, 'base64').toString('utf8')); break }
-    if (checkpoint) { checkpoint = false; await checkpointGuest(); console.log(JSON.stringify({ stage: 'capture-only-passed-waiting-for-input-gate', gate })) }
+    if (checkpoint) { const stage = checkpoint; checkpoint = false; await checkpointGuest(); console.log(JSON.stringify({ stage: stage === 'client-started' ? 'client-identity-pinned' : 'capture-only-passed-waiting-for-input-gate', gate })) }
     await delay(1000)
   }
   assert.ok(clientReport, 'Reverse remote client did not produce a report before its deadline')
