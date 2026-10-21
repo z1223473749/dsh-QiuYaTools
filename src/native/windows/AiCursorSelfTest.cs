@@ -5,6 +5,77 @@ namespace QiuYaTools.Windows;
 /** State/rendering tests use no window, input injection, focus or account. */
 internal static class AiCursorSelfTest
 {
+    internal static object PreviewStorage()
+    {
+        var cases = new List<string>();
+        void Check(bool condition, string name) { if (!condition) throw new InvalidOperationException(name); cases.Add(name); }
+        var home = Path.Combine(Path.GetTempPath(), "qyt-preview-storage-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(home, "cache"); var outside = Path.Combine(home, "outside"); string? junction = null;
+        Directory.CreateDirectory(root); Directory.CreateDirectory(outside); File.WriteAllText(Path.Combine(outside, "keep.txt"), "own-external-marker");
+        try {
+            using var first = new PreviewDataScope(root); using var second = new PreviewDataScope(root);
+            var a = first.Store("same-session"); var b = second.Store("same-session");
+            Check(a != b && Path.GetDirectoryName(a) != Path.GetDirectoryName(b), "same-chat-in-two-helpers-has-independent-data-folders");
+            Check(a == first.Store("same-session"), "same-helper-chat-reopen-retains-its-stable-hashed-path");
+            Check(Path.GetFileName(a).Length == 64 && a.Length < 128 && first.Store("../\\unsafe\0会话") != a,
+                "preview-path-is-short-and-session-identity-is-only-a-sha256-segment");
+            var uuid = Path.Combine(root, Guid.NewGuid().ToString("D")); Directory.CreateDirectory(uuid); File.WriteAllText(Path.Combine(uuid, "keep.txt"), "session-uuid");
+            PreviewDataScope.Prune(root);
+            Check(Directory.Exists(first.DirectoryPath) && Directory.Exists(second.DirectoryPath), "live-helper-scopes-are-never-pruned");
+            Check(File.ReadAllText(Path.Combine(uuid, "keep.txt")) == "session-uuid", "ordinary-session-uuid-storage-remains-untouched");
+            var cache = Path.Combine(root, a); Directory.CreateDirectory(cache);
+            using (var cancel = new CancellationTokenSource()) using (var started = new ManualResetEventSlim(false)) {
+                var writes = 0;
+                var churn = Task.Run(() => { started.Set(); while (!cancel.IsCancellationRequested) {
+                    var transient = Path.Combine(cache, "browser-transient-" + Interlocked.Increment(ref writes));
+                    File.WriteAllText(transient, "cache-write"); File.Delete(transient);
+                } });
+                if (!started.Wait(1000)) throw new IOException("Cache churn did not start");
+                try { for (var index = 0; index < 24; index++) { first.BeginningBrowser(); first.BrowserCreated(Environment.ProcessId); } }
+                finally { cancel.Cancel(); if (!churn.Wait(5000)) throw new IOException("Cache churn did not retire"); }
+                Check(writes > 0, "metadata-updates-succeed-during-concurrent-browser-cache-file-churn");
+            }
+            string retired;
+            using (var old = new PreviewDataScope(root)) { retired = old.DirectoryPath; }
+            var ownerPath = Path.Combine(retired, ".owner.json");
+            var record = JsonSerializer.Deserialize<PreviewDataScope.Manifest>(File.ReadAllText(ownerPath))!;
+            var oldIdentity = record.Owner with { Born = record.Owner.Born - 1 };
+            File.WriteAllText(ownerPath, JsonSerializer.Serialize(record with { Owner = oldIdentity, Browsers = [record.Owner] }));
+            PreviewDataScope.Prune(root); Check(Directory.Exists(retired), "retired-helper-with-an-exact-live-browser-identity-is-preserved");
+            File.WriteAllText(ownerPath, JsonSerializer.Serialize(record with { Owner = oldIdentity, Pending = 1 }));
+            PreviewDataScope.Prune(root); Check(Directory.Exists(retired), "incomplete-browser-initialization-is-unknown-and-not-collected");
+            File.WriteAllText(ownerPath, "{}"); PreviewDataScope.Prune(root);
+            Check(Directory.Exists(retired), "unverifiable-owner-manifest-is-preserved");
+            File.WriteAllText(ownerPath, JsonSerializer.Serialize(record with { Owner = oldIdentity }));
+            junction = Path.Combine(retired, "linked-outside");
+            using (var command = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                "/d /c mklink /J \"" + junction + "\" \"" + outside + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!) {
+                if (!command.WaitForExit(5000) || command.ExitCode != 0) throw new IOException("The owned junction test setup failed");
+            }
+            Check((File.GetAttributes(junction) & FileAttributes.ReparsePoint) != 0, "junction-test-uses-an-actual-ntfs-reparse-point");
+            PreviewDataScope.Prune(root);
+            Check(Directory.Exists(retired) && File.ReadAllText(Path.Combine(outside, "keep.txt")) == "own-external-marker", "any-reparse-child-preserves-the-whole-old-scope-and-external-target");
+            var refusedAncestor = false;
+            try { using var redirected = new PreviewDataScope(Path.Combine(junction, "must-not-be-created")); } catch (IOException) { refusedAncestor = true; }
+            Check(refusedAncestor && !Directory.Exists(Path.Combine(outside, "must-not-be-created")), "reparse-ancestor-is-rejected-before-creating-any-cache-folder");
+            Directory.Delete(junction); junction = null; PreviewDataScope.Prune(root);
+            Check(!Directory.Exists(retired), "verified-retired-owner-and-browser-free-scope-is-collected");
+            using (var bounded = new PreviewDataScope(root)) {
+                for (var index = 0; index < PreviewDataScope.SessionLimit; index++) bounded.Store("session-" + index);
+                var rejected = false; try { bounded.Store("one-too-many"); } catch (NativeFailure error) when (error.Code == "preview-cache-full") { rejected = true; }
+                Check(rejected, "one-helper-has-a-fixed-32-session-directory-budget");
+            }
+            var full = Path.Combine(home, "full"); Directory.CreateDirectory(full);
+            for (var index = 0; index < PreviewDataScope.ScopeLimit; index++) Directory.CreateDirectory(Path.Combine(full, PreviewDataScope.Prefix + Guid.NewGuid().ToString("N")));
+            var capped = false; try { using var excess = new PreviewDataScope(full); } catch (NativeFailure error) when (error.Code == "preview-cache-full") { capped = true; }
+            Check(capped && Directory.GetDirectories(full).Length == PreviewDataScope.ScopeLimit, "unknown-old-scopes-count-toward-a-fixed-64-scope-budget-and-fail-closed");
+            return new { passed = true, checks = cases.Count, cases, architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), guiStarted = false, actualOsInput = false,
+                boundary = "Actual filesystem, process-handle and NTFS-junction tests; not a WebView2 initialization, cookie or browser-retirement integration test." };
+        } finally {
+            if (junction != null && Directory.Exists(junction)) Directory.Delete(junction);
+            if (Directory.Exists(home)) Directory.Delete(home, true);
+        }
+    }
     internal static object Run()
     {
         var cases = new List<string>();

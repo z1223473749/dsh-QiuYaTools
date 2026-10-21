@@ -13,6 +13,7 @@ internal static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Contains("--self-test-preview-storage")) { Emit(AiCursorSelfTest.PreviewStorage()); return; }
         if (args.Contains("--self-test-ai-cursor")) { Emit(AiCursorSelfTest.Run()); return; }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();

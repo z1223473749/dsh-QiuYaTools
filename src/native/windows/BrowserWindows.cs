@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -10,6 +12,7 @@ internal sealed class WindowManager : IDisposable
     internal static readonly object Deferred = new();
     private readonly Dictionary<string, BrowserWindow> sessions = new();
     private readonly Dictionary<string, BrowserWindow> previews = new();
+    private PreviewDataScope? previewData;
     private string? prepared;
     internal async Task<object?> Session(string op, JsonElement request, object requestId)
     {
@@ -58,7 +61,8 @@ internal sealed class WindowManager : IDisposable
         var title = Program.Text(request, "title", 20_000);
         if (previews.TryGetValue(id, out var existing)) { existing.Present(true); return new { opened = true }; }
         CheckRuntime();
-        var window = new BrowserWindow(id, url, title, "preview-runtime", false, preview: true);
+        previewData ??= new PreviewDataScope(BrowserWindow.DataRoot());
+        var window = new BrowserWindow(id, url, title, previewData.Store(id), false, preview: true, previewData);
         previews[id] = window;
         window.FormClosed += (_, _) => {
             if (previews.GetValueOrDefault(id) == window) previews.Remove(id);
@@ -98,6 +102,7 @@ internal sealed class WindowManager : IDisposable
     {
         foreach (var window in sessions.Values.Concat(previews.Values).ToArray()) window.Close();
         sessions.Clear(); previews.Clear();
+        previewData?.Dispose();
     }
 }
 
@@ -107,6 +112,7 @@ internal sealed class BrowserWindow : Form
     private readonly Uri origin;
     private readonly string store;
     private readonly bool preview;
+    private readonly PreviewDataScope? previewData;
     private readonly WebView2 web = new() { Dock = DockStyle.Fill, AllowExternalDrop = true };
     private readonly Label failure = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Visible = false };
     private readonly System.Windows.Forms.Timer deadline = new() { Interval = 30_000 };
@@ -172,9 +178,9 @@ internal sealed class BrowserWindow : Form
     }
     internal bool Failed { get; private set; }
     private bool ready;
-    internal BrowserWindow(string sessionId, Uri origin, string title, string store, bool prepared, bool preview)
+    internal BrowserWindow(string sessionId, Uri origin, string title, string store, bool prepared, bool preview, PreviewDataScope? previewData = null)
     {
-        this.sessionId = sessionId; this.origin = origin; this.store = store; this.preview = preview; Prepared = prepared;
+        this.sessionId = sessionId; this.origin = origin; this.store = store; this.preview = preview; this.previewData = previewData; Prepared = prepared;
         Text = title[..Math.Min(title.Length, 200)] + " — QiuYaTools";
         StartPosition = FormStartPosition.CenterScreen;
         Size = preview ? new Size(600, 420) : new Size(1000, 800);
@@ -240,9 +246,12 @@ internal sealed class BrowserWindow : Form
     internal async Task Initialize()
     {
         try {
-            var dataRoot = Environment.GetEnvironmentVariable("QIUYA_TOOLS_NATIVE_DATA_DIR");
-            var directory = Path.Combine(string.IsNullOrWhiteSpace(dataRoot) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QiuYaTools", "WebView2") : Path.GetFullPath(dataRoot), store);
+            var directory = Path.Combine(DataRoot(), store);
             Directory.CreateDirectory(directory);
+            if (preview) PreviewDataScope.RequirePlainAncestors(directory);
+            // A crash during initialization leaves this scope deliberately uncollectable:
+            // no later helper may assume an unrecorded browser process has exited.
+            previewData?.BeginningBrowser();
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: directory);
             if (preview) {
                 var options = environment.CreateCoreWebView2ControllerOptions();
@@ -250,6 +259,7 @@ internal sealed class BrowserWindow : Form
                 options.ProfileName = "Preview" + Guid.NewGuid().ToString("N");
                 await web.EnsureCoreWebView2Async(environment, options);
             } else await web.EnsureCoreWebView2Async(environment);
+            if (previewData != null) previewData.BrowserCreated(checked((int)web.CoreWebView2.BrowserProcessId));
             if (IsDisposed) return;
             web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             web.CoreWebView2.Settings.AreHostObjectsAllowed = false;
@@ -303,6 +313,11 @@ internal sealed class BrowserWindow : Form
             web.CoreWebView2.Navigate(exchange ? new UriBuilder(origin) { Path = "/", Query = string.Join("&", tokenParts), Fragment = "" }.Uri.AbsoluteUri : origin.AbsoluteUri);
         } catch { Fail("窗口组件初始化失败，请检查 WebView2 Runtime。"); }
     }
+    internal static string DataRoot()
+    {
+        var configured = Environment.GetEnvironmentVariable("QIUYA_TOOLS_NATIVE_DATA_DIR");
+        return Path.GetFullPath(string.IsNullOrWhiteSpace(configured) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QiuYaTools", "WebView2") : configured);
+    }
     private bool SameOrigin(Uri uri) => uri.Scheme == origin.Scheme && uri.Host == origin.Host && uri.Port == origin.Port;
     private void Message(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
@@ -338,4 +353,152 @@ internal sealed class BrowserWindow : Form
         if (keyData == (Keys.Control | Keys.W)) { Close(); return true; }
         return base.ProcessCmdKey(ref message, keyData);
     }
+}
+
+/** Preview-only disposable cache. Session UUID storage is intentionally outside this namespace. */
+internal sealed class PreviewDataScope : IDisposable
+{
+    internal const int ScopeLimit = 64, SessionLimit = 32;
+    internal const string Prefix = "qyt-preview-v2-";
+    internal sealed record Identity(int Pid, long Born, string Executable)
+    {
+        internal static Identity Current(int pid)
+        {
+            using var process = Process.GetProcessById(pid);
+            _ = process.SafeHandle;
+            return new(pid, process.StartTime.ToUniversalTime().Ticks, ImagePath(process));
+        }
+        internal bool Valid => Pid > 0 && Born > 0 && Path.IsPathFullyQualified(Executable);
+        internal bool Gone()
+        {
+            if (!Valid) return false;
+            try {
+                using var process = Process.GetProcessById(Pid);
+                _ = process.SafeHandle; // Keep this process incarnation pinned while checking birth and image.
+                if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != Born) return true;
+                if (!string.Equals(ImagePath(process), Executable, StringComparison.OrdinalIgnoreCase)) return false;
+                return process.HasExited;
+            } catch (ArgumentException) { return true; }
+            catch { return false; } // Access failure or incomplete identity never means retired.
+        }
+    }
+    internal sealed record Manifest(int Version, string Scope, Identity Owner, int Pending, Identity[] Browsers);
+    private readonly string root, scope, directory;
+    private readonly FileStream lease;
+    private readonly HashSet<string> stores = new(StringComparer.Ordinal);
+    private Manifest manifest;
+    private bool disposed;
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder path, ref int size);
+    private static string ImagePath(Process process)
+    {
+        var path = new StringBuilder(32768); var size = path.Capacity;
+        if (!QueryFullProcessImageName(process.Handle, 0, path, ref size)) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return path.ToString();
+    }
+    internal string DirectoryPath => directory;
+    internal PreviewDataScope(string dataRoot)
+    {
+        root = Path.GetFullPath(dataRoot); RequirePlainAncestors(root, allowMissing: true); Directory.CreateDirectory(root); RequirePlainAncestors(root);
+        using var index = Index(root);
+        PruneLocked(root);
+        if (OwnedDirectories(root).Count >= ScopeLimit) throw new NativeFailure("preview-cache-full", "Preview cache limit reached; close previews and retire inactive preview data before retrying");
+        scope = Guid.NewGuid().ToString("N"); directory = Path.Combine(root, Prefix + scope);
+        Directory.CreateDirectory(directory); RequirePlainAncestors(directory);
+        lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        manifest = new(1, scope, Identity.Current(Environment.ProcessId), 0, []);
+        try { Save(); } catch { lease.Dispose(); throw; }
+    }
+    internal string Store(string sessionId)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sessionId))).ToLowerInvariant();
+        if (!stores.Contains(key) && stores.Count >= SessionLimit) throw new NativeFailure("preview-cache-full", "This helper has reached its preview session limit");
+        stores.Add(key); // Raw session identities are never interpreted as path segments.
+        return Path.Combine(Prefix + scope, key);
+    }
+    internal void BeginningBrowser()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this); RequirePlainAncestors(directory);
+        var live = manifest.Browsers.Where(identity => !identity.Gone()).ToArray();
+        if (live.Length >= 128 || manifest.Pending >= SessionLimit) throw new NativeFailure("preview-cache-full", "Preview browser tracking limit reached");
+        manifest = manifest with { Pending = manifest.Pending + 1, Browsers = live }; Save();
+    }
+    internal void BrowserCreated(int pid)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        var identity = Identity.Current(pid);
+        if (manifest.Pending <= 0) throw new IOException("Preview initialization identity unavailable");
+        manifest = manifest with { Pending = manifest.Pending - 1, Browsers = manifest.Browsers.Append(identity).Distinct().ToArray() }; Save();
+    }
+    private void Save()
+    {
+        RequirePlainAncestors(directory);
+        var path = Path.Combine(directory, ".owner.json"); var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        RequirePlainFile(path);
+        try {
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                JsonSerializer.Serialize(file, manifest); file.Flush(true);
+            }
+            File.Move(temporary, path, true);
+        } finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+    private static FileStream Index(string root)
+    {
+        var path = Path.Combine(root, ".qyt-preview-index.lock");
+        RequirePlainFile(path);
+        var clock = Stopwatch.StartNew();
+        while (true) {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (clock.ElapsedMilliseconds < 1000) { Thread.Sleep(20); }
+        }
+    }
+    private static List<string> OwnedDirectories(string root) => Directory.EnumerateDirectories(root, Prefix + "*")
+        .Where(path => Guid.TryParseExact(Path.GetFileName(path)[Prefix.Length..], "N", out _)).ToList();
+    private static void RequirePlainFile(string path)
+    {
+        try { if ((File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0) throw new IOException("Preview metadata path is not a plain file"); }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { }
+    }
+    internal static void Prune(string root)
+    {
+        RequirePlainAncestors(root); using var index = Index(root); PruneLocked(root);
+    }
+    private static void PruneLocked(string root)
+    {
+        foreach (var path in OwnedDirectories(root)) {
+            try {
+                RequirePlainTree(path);
+                var recordPath = Path.Combine(path, ".owner.json");
+                if (!File.Exists(recordPath) || new FileInfo(recordPath).Length > 65536) continue;
+                var record = JsonSerializer.Deserialize<Manifest>(File.ReadAllText(recordPath));
+                if (record is not { Version: 1, Pending: 0 } || record.Scope != Path.GetFileName(path)[Prefix.Length..] || record.Owner == null || !record.Owner.Valid ||
+                    record.Browsers == null || record.Browsers.Length > 128 || record.Browsers.Any(identity => identity == null || !identity.Valid)) continue;
+                // A free helper-owned lock is insufficient: its browser may outlive it.
+                using (var ownLock = new FileStream(Path.Combine(path, ".lease"), FileMode.Open, FileAccess.ReadWrite, FileShare.None)) {
+                    if (!record.Owner.Gone() || record.Browsers.Any(identity => !identity.Gone())) continue;
+                    RequirePlainTree(path);
+                }
+                // GUID scopes are never reused. Only this index owner can retire them.
+                Directory.Delete(path, true);
+            } catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { /* Unknown or active: preserve, count toward the fixed bound. */ }
+        }
+    }
+    internal static void RequirePlainAncestors(string path, bool allowMissing = false)
+    {
+        for (string? current = Path.GetFullPath(path); !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current)) {
+            try { if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new IOException("Preview cache ancestor is a reparse point"); }
+            catch (Exception error) when (allowMissing && error is FileNotFoundException or DirectoryNotFoundException) { }
+        }
+    }
+    private static void RequirePlainTree(string path)
+    {
+        RequirePlainAncestors(path); var pending = new Stack<string>(); pending.Push(path); var entries = 0;
+        while (pending.Count > 0) foreach (var child in Directory.EnumerateFileSystemEntries(pending.Pop())) {
+            var attributes = File.GetAttributes(child);
+            if ((attributes & FileAttributes.ReparsePoint) != 0 || ++entries > 100_000) throw new IOException("Preview cache tree is not safely enumerable");
+            if ((attributes & FileAttributes.Directory) != 0) pending.Push(child);
+        }
+    }
+    public void Dispose() { if (disposed) return; disposed = true; lease.Dispose(); }
 }
