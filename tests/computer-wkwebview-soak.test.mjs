@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { WKFrameReceiver, macResourceVerdict, wkPreviewInstrumentation } from '../scripts/computer-wkwebview-soak-evidence.mjs'
+import { WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, wkPreviewInstrumentation } from '../scripts/computer-wkwebview-soak-evidence.mjs'
 
 const frame = (generation, sequence, atMs) => ({ kind: 'frame', generation, sequence, atMs, stamp: atMs % 2 ** 32, width: 1280, height: 720 })
 const batch = (generation, index, events) => ({ generation, batch: index, events, transportFailures: 0, document: { visibility: 'visible' } })
@@ -33,6 +33,25 @@ test('Mac resource acceptance fails closed when XPC attribution is unverified or
   assert.equal(macResourceVerdict([{ ...sample, attribution: { complete: false } }]).passed, false)
   assert.equal(macResourceVerdict([{ ...sample, processes: [{ ...row, residentBytes: 1536 * 1024 ** 2 + 1 }] }]).passed, false)
   assert.equal(macResourceVerdict([]).passed, false)
+})
+
+test('Diagnostic WebKit candidates cannot substitute for verified owned process/resource evidence', () => {
+  const diagnostic = { pid: 123, diagnosticOnly: true, adoptedByName: false, path: '/System/Volumes/Preboot/Cryptexes/App/example/WebKit.WebContent', rowExclusion: 'unique-identity-unavailable:1' }
+  const sample = { node: { rss: 100 }, attribution: { complete: false, errors: ['owned-webcontent-not-verified'] }, processes: [{ birthMicros: '100', uniqueId: '123', residentBytes: 200 }], webKitDiagnostics: [diagnostic] }
+  assert.equal(macResourceVerdict([sample]).passed, false)
+  assert.equal(macResourceVerdict([{ ...sample, processes: [], attribution: { complete: true } }]).passed, false)
+})
+
+test('Mac cleanup schema requires exact complete gone identities and rejects unreadable or missing results', () => {
+  const identity = { pid: 123, birthMicros: '100', uniqueId: '234' }
+  const result = state => ({ passed: true, results: [{ ...identity, state }] })
+  assert.equal(macProcessCheckPassed(result('exited'), [identity]), true)
+  assert.equal(macProcessCheckPassed(result('reused-pid-skipped'), [identity]), true)
+  for (const state of ['unverified', 'alive', 'unknown']) assert.equal(macProcessCheckPassed(result(state), [identity]), false)
+  assert.equal(macProcessCheckPassed({ passed: true, results: [] }, [identity]), false)
+  assert.equal(macProcessCheckPassed(result('exited'), [{ ...identity, uniqueId: '235' }]), false)
+  assert.equal(macProcessCheckPassed({ passed: false, results: [] }, []), false)
+  assert.equal(macProcessCheckPassed({ passed: true, results: [] }, []), true)
 })
 
 test('WK instrumentation installs before production draw without rewriting production canvas code', () => {

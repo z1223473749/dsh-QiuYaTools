@@ -4,6 +4,19 @@ import { installWebViewClockProbe, WebViewClockAccumulator } from './computer-we
 
 export { WebViewClockAccumulator }
 
+/** Cleanup ACKs must cover every exact identity and contain only proven gone states. */
+export function macProcessCheckPassed(value, expected) {
+  if (value?.passed !== true || !Array.isArray(value.results) || !Array.isArray(expected) || value.results.length !== expected.length) return false
+  const key = item => Number.isSafeInteger(item?.pid) && item.pid > 0 && /^\d+$/u.test(item.birthMicros) && /^\d+$/u.test(item.uniqueId) ? `${item.pid}:${item.birthMicros}:${item.uniqueId}` : null
+  const remaining = new Set(expected.map(key))
+  if (remaining.has(null) || remaining.size !== expected.length) return false
+  for (const item of value.results) {
+    const identity = key(item)
+    if (!['exited', 'reused-pid-skipped'].includes(item.state) || !identity || !remaining.delete(identity)) return false
+  }
+  return remaining.size === 0
+}
+
 export function wkPreviewInstrumentation(html, { generation, reportPath }) {
   if (!Number.isSafeInteger(generation) || generation < 1 || !/^\/__wk_soak\/[a-f0-9-]{36}\/frames$/u.test(reportPath)) throw new Error('Invalid isolated WK probe destination')
   const source = `(${installWKFrameReporter.toString()})(${JSON.stringify({ generation, reportPath })});(${installWebViewClockProbe.toString()})(${JSON.stringify({ bindingName: '__qytWKSoakFrame', generation })});`

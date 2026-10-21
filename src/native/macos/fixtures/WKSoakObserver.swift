@@ -68,10 +68,12 @@ private func unique(_ pid: Int32) -> [UInt64]? {
     let count = buffer.withUnsafeMutableBytes { proc_pidinfo(pid, 17, 0, $0.baseAddress, Int32($0.count)) }
     return count == 56 && buffer[2] > 0 ? buffer : nil
 }
-private func row(_ pid: Int32) -> ProcessRow? {
-    guard let first = bsd(pid), first.pbi_uid == getuid(), let ids = unique(pid) else { return nil }
+private func row(_ pid: Int32, excluded: ((String) -> Void)? = nil) -> ProcessRow? {
+    guard let first = bsd(pid) else { excluded?("bsd-unavailable:\(errno)"); return nil }
+    guard first.pbi_uid == getuid() else { excluded?("different-real-uid:\(first.pbi_uid)"); return nil }
+    guard let ids = unique(pid) else { excluded?("unique-identity-unavailable:\(errno)"); return nil }
     var pathBuffer = [CChar](repeating: 0, count: 4096)
-    guard proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 else { return nil }
+    guard proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 else { excluded?("executable-path-unavailable:\(errno)"); return nil }
     let path = String(cString: pathBuffer)
     var coalition = [UInt64](repeating: 0, count: 5)
     let coalitionBytes = coalition.withUnsafeMutableBytes { proc_pidinfo(pid, 20, 0, $0.baseAddress, Int32($0.count)) }
@@ -80,7 +82,7 @@ private func row(_ pid: Int32) -> ProcessRow? {
         pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V0, $0) }
     }
     let responsibility = responsible?(pid)
-    guard let after = bsd(pid), birth(first) == birth(after), unique(pid)?[2] == ids[2] else { return nil }
+    guard let after = bsd(pid), birth(first) == birth(after), unique(pid)?[2] == ids[2] else { excluded?("identity-changed-during-read"); return nil }
     var errors: [String] = []
     if coalitionBytes != 40 { errors.append("coalition-unavailable") }
     if memory != 0 { errors.append("rusage-unavailable") }
@@ -91,6 +93,52 @@ private func row(_ pid: Int32) -> ProcessRow? {
         residentBytes: memory == 0 ? usage.ri_resident_size : nil,
         physicalFootprintBytes: memory == 0 ? usage.ri_phys_footprint : nil,
         userTime: memory == 0 ? usage.ri_user_time : nil, systemTime: memory == 0 ? usage.ri_system_time : nil, errors: errors)
+}
+// A candidate name is only a diagnostic selection. It never grants ownership or
+// changes the strict ProcessRow.kind/responsibility/coalition adoption rules.
+private func webKitDiagnostic(_ pid: Int32, _ live: ProcessRow?, _ exclusion: String?) -> [String: Any]? {
+    let first = bsd(pid), firstUnique = unique(pid)
+    var pathBuffer = [CChar](repeating: 0, count: 4096)
+    errno = 0; let pathBytes = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)); let pathError = errno
+    let path = pathBytes > 0 ? String(cString: pathBuffer) : nil
+    var nameBuffer = [CChar](repeating: 0, count: 65)
+    errno = 0; let nameBytes = proc_name(pid, &nameBuffer, 64); let nameError = errno
+    let name = nameBytes > 0 ? String(cString: nameBuffer) : nil
+    guard (path.map { URL(fileURLWithPath: $0).lastPathComponent.contains("WebKit") } ?? false) || (name?.contains("WebKit") ?? false) else { return nil }
+    var result: [String: Any] = ["pid": pid, "diagnosticOnly": true, "adoptedByName": false,
+        "selection": "executable-basename-or-proc-name; never ownership", "path": path as Any? ?? NSNull(), "procName": name as Any? ?? NSNull(),
+        "pathQuery": ["returnedBytes": pathBytes, "errno": pathError], "nameQuery": ["returnedBytes": nameBytes, "errno": nameError],
+        "rowExclusion": exclusion as Any? ?? NSNull(), "strictClassifiedKind": live?.kind as Any? ?? NSNull()]
+    if let live { result["readableProcessRow"] = live.json }
+    errno = 0
+    if let first = bsd(pid) { result["bsd"] = ["available": true, "uid": first.pbi_uid, "parentPid": first.pbi_ppid, "birthMicros": birth(first), "status": first.pbi_status] }
+    else { result["bsd"] = ["available": false, "errno": errno] }
+    var ids = [UInt64](repeating: 0, count: 7)
+    errno = 0; let idBytes = ids.withUnsafeMutableBytes { proc_pidinfo(pid, 17, 0, $0.baseAddress, Int32($0.count)) }; let idError = errno
+    var idQuery: [String: Any] = ["returnedBytes": idBytes, "expectedBytes": 56, "errno": idError]
+    if idBytes == 56 { idQuery["uniqueId"] = String(ids[2]); idQuery["parentUniqueId"] = String(ids[3]) }
+    result["uniqueIdentityQuery"] = idQuery
+    var coalitions = [UInt64](repeating: 0, count: 5)
+    errno = 0; let coalitionBytes = coalitions.withUnsafeMutableBytes { proc_pidinfo(pid, 20, 0, $0.baseAddress, Int32($0.count)) }; let coalitionError = errno
+    var coalitionQuery: [String: Any] = ["returnedBytes": coalitionBytes, "expectedBytes": 40, "errno": coalitionError]
+    if coalitionBytes == 40 { coalitionQuery["resourceCoalitionId"] = String(coalitions[0]); coalitionQuery["jetsamCoalitionId"] = String(coalitions[1]) }
+    result["coalitionQuery"] = coalitionQuery
+    if let responsible { errno = 0; let value = responsible(pid); result["responsibilityQuery"] = ["available": true, "pid": value, "errno": errno] }
+    else { result["responsibilityQuery"] = ["available": false] }
+    var usage = rusage_info_v0()
+    errno = 0
+    let memoryResult = withUnsafeMutablePointer(to: &usage) { pointer in
+        pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V0, $0) }
+    }
+    var memoryQuery: [String: Any] = ["returnCode": memoryResult, "errno": errno, "available": memoryResult == 0]
+    if memoryResult == 0 { memoryQuery["residentBytes"] = usage.ri_resident_size; memoryQuery["physicalFootprintBytes"] = usage.ri_phys_footprint }
+    result["memoryQuery"] = memoryQuery
+    if let first, let firstUnique, let after = bsd(pid), let afterUnique = unique(pid) {
+        result["diagnosticStableIdentity"] = birth(first) == birth(after) && firstUnique[2] == afterUnique[2]
+    } else { result["diagnosticStableIdentity"] = false }
+    // Memory failures remain explicit in the original row's errors. Diagnostic
+    // rows, including partial reads, are never included in resource totals.
+    return result
 }
 private func matches(_ row: ProcessRow, _ expected: Identity) -> Bool {
     row.identity.pid == expected.pid && row.identity.birthMicros == expected.birthMicros && row.identity.uniqueId == expected.uniqueId && row.identity.path == expected.path
@@ -109,7 +157,10 @@ private func snapshot(_ request: [String: Any]) throws -> [String: Any] {
     var pids = [Int32](repeating: 0, count: Int(capacity) + 1024)
     let count = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
     guard count > 0, count < pids.count else { throw failure("process-inventory-truncated") }
-    let rows = pids.prefix(Int(count)).compactMap { row($0) }
+    var exclusions: [Int32: String] = [:]
+    let rows = pids.prefix(Int(count)).compactMap { pid in row(pid, excluded: { exclusions[pid] = $0 }) }
+    let rowsByPid = Dictionary(uniqueKeysWithValues: rows.map { ($0.identity.pid, $0) })
+    let webKitDiagnostics = pids.prefix(Int(count)).compactMap { webKitDiagnostic($0, rowsByPid[$0], exclusions[$0]) }
     guard let liveRunner = rows.first(where: { matches($0, runner) }) else { throw failure("runner-identity-changed") }
     var owned: [Int32: ProcessRow] = [:], errors: [String] = []
     for expected in roots + remembered {
@@ -150,7 +201,7 @@ private func snapshot(_ request: [String: Any]) throws -> [String: Any] {
     let required = request["requireWebKit"] as? Bool ?? false
     if required && !webKit.contains(where: { $0.kind == "WebContent" }) { errors.append("owned-webcontent-not-verified") }
     if request["requireWebKit"] as? Bool == true && natives.isEmpty { errors.append("live-native-parent-not-verified") }
-    return ["processes": owned.values.sorted { $0.identity.pid < $1.identity.pid }.map { $0.json },
+    return ["processes": owned.values.sorted { $0.identity.pid < $1.identity.pid }.map { $0.json }, "webKitDiagnostics": webKitDiagnostics,
         "attribution": ["complete": errors.isEmpty, "errors": errors, "responsibilityAvailable": responsible != nil,
             "method": "exact BSD microsecond birth + proc unique/parent descendant IDs; detached WebKit responsible native PID corroborated by resource coalition; all known exact identities retained",
             "observedWebKitKinds": Array(Set(webKit.compactMap { $0.kind })).sorted(), "runnerCoalitionId": liveRunner.resourceCoalitionId as Any? ?? NSNull()]]
@@ -188,8 +239,16 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
                 let values = try identities(request["identities"])
                 let states: [[String: Any]] = values.map { expected in
                     if let live = row(expected.pid) { return ["pid": expected.pid, "birthMicros": expected.birthMicros, "uniqueId": expected.uniqueId, "state": matches(live, expected) ? "alive" : "reused-pid-skipped"] }
-                    let exists = bsd(expected.pid)
-                    return ["pid": expected.pid, "birthMicros": expected.birthMicros, "uniqueId": expected.uniqueId, "state": exists != nil && birth(exists!) == expected.birthMicros ? "unverified" : "exited"]
+                    if let current = bsd(expected.pid) {
+                        return ["pid": expected.pid, "birthMicros": expected.birthMicros, "uniqueId": expected.uniqueId,
+                            "state": birth(current) == expected.birthMicros ? "unverified" : "reused-pid-skipped"]
+                    }
+                    // Signal 0 performs existence/permission checking only. An
+                    // unreadable live process (including EPERM) is not gone.
+                    errno = 0; let probe = Darwin.kill(expected.pid, 0); let probeError = errno
+                    return ["pid": expected.pid, "birthMicros": expected.birthMicros, "uniqueId": expected.uniqueId,
+                        "state": probe != 0 && probeError == ESRCH ? "exited" : "unverified",
+                        "existenceProbe": ["result": probe, "errno": probeError]]
                 }
                 result = ["passed": states.allSatisfy { $0["state"] as? String != "alive" && $0["state"] as? String != "unverified" }, "results": states]
             case "window": result = try await window(request)

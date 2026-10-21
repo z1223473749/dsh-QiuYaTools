@@ -1,6 +1,6 @@
 /** Real macOS NSPanel/WKWebView endurance; no Chrome/Safari surrogate, no input actions. */
 import assert from 'node:assert/strict'
-import { build } from 'esbuild'
+import { build, stop as stopEsbuild } from 'esbuild'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer } from 'node:http'
@@ -10,7 +10,7 @@ import { access, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { WKFrameReceiver, macResourceVerdict, wkPreviewInstrumentation } from './computer-wkwebview-soak-evidence.mjs'
+import { WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, wkPreviewInstrumentation } from './computer-wkwebview-soak-evidence.mjs'
 
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -63,10 +63,10 @@ if (!process.argv.includes('--worker')) {
     const ledger = JSON.parse(await readFile(join(output, 'ownership-checkpoint.json'), 'utf8'))
     let after
     const identities = ledger.tracked.filter(item => item.role !== 'controller')
-    for (let attempt = 0; attempt < 30; attempt++) { after = await observe(observer, { op: 'check', identities }); if (after.passed) break; await sleep(500) }
+    for (let attempt = 0; attempt < 30; attempt++) { after = await observe(observer, { op: 'check', identities }); if (macProcessCheckPassed(after, identities)) break; await sleep(500) }
     await writeFile(join(output, 'post-run-cleanup-verification.json'), JSON.stringify(after, null, 2))
-    verdict = { status: report.status === 'blocked' ? 'blocked' : report.status === 'passed' && exitCode === 0 && report.cleanup?.passed && after.passed ? 'passed' : 'failed',
-      runnerStatus: report.status, exitCode, naturalCleanupPassed: after.passed, trackedIdentities: identities.length,
+    verdict = { status: report.status === 'blocked' ? 'blocked' : report.status === 'passed' && exitCode === 0 && report.cleanup?.passed && macProcessCheckPassed(after, identities) ? 'passed' : 'failed',
+      runnerStatus: report.status, exitCode, naturalCleanupPassed: macProcessCheckPassed(after, identities), trackedIdentities: identities.length,
       helperSha256: report.helperSha256, runtimeSha256: report.runtimeSha256, forcedCleanup: false }
   } catch (error) {
     verdict = { status: 'failed', exitCode, error: error.message }; process.exitCode = 1
@@ -79,7 +79,7 @@ if (!process.argv.includes('--worker')) {
       const ledger = JSON.parse(await readFile(join(output, 'ownership-checkpoint.json'), 'utf8'))
       const checked = await observe(observer, { op: 'check', identities: ledger.tracked.filter(item => item.role !== 'controller') })
       await writeFile(join(output, 'post-error-cleanup-verification.json'), JSON.stringify(checked, null, 2))
-      verdict.postErrorNaturalCleanupPassed = checked.passed
+      verdict.postErrorNaturalCleanupPassed = macProcessCheckPassed(checked, ledger.tracked.filter(item => item.role !== 'controller'))
     } catch { verdict.postErrorNaturalCleanupPassed = false }
   }
   finally { await writeFile(join(output, 'delivery-verdict.json'), JSON.stringify(verdict, null, 2)); await rm(temporary, { recursive: true, force: true }) }
@@ -194,6 +194,10 @@ if (!process.argv.includes('--worker')) {
     if (!runtime) {
       runtime = join(temporary, 'runtime.mjs')
       await build({ stdin: { contents: "export {installComputerHost} from './src/features/computer-use/host.ts';export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, platform: 'node', format: 'esm', outfile: runtime })
+      // This test-only compiler service otherwise lives until its Node client
+      // exits. Record it, then use its normal stop API before measurement.
+      await processSnapshot(false)
+      await stopEsbuild()
     }
     const runtimeSha256 = await hashFile(resolve(runtime)), { installComputerHost, NativeCompanionDriver } = await import(pathToFileURL(resolve(runtime)).href)
     driver = new NativeCompanionDriver({ executable: companion })
@@ -260,7 +264,12 @@ if (!process.argv.includes('--worker')) {
   finally {
     phase = 'cleanup'; receiver.active = 0; receiver.stats.useGeneration(0)
     const errors = [], forced = []
-    try { await processSnapshot(false) } catch (error) { errors.push(`Before-dispose ownership: ${error.message}`) }
+    let cleanupAttribution
+    try {
+      cleanupAttribution = (await processSnapshot(false)).attribution
+      if (cleanupAttribution?.complete !== true) errors.push(`Before-dispose ownership incomplete: ${cleanupAttribution?.errors?.join(',') ?? 'missing-attribution'}`)
+    } catch (error) { errors.push(`Before-dispose ownership: ${error.message}`) }
+    try { await stopEsbuild() } catch (error) { errors.push(`Compiler service disposal: ${error.message}`) }
     try { await host?.dispose(); if (!host) await driver?.dispose() } catch (error) { errors.push(error.message) }
     if (fixture && fixture.exitCode === null && fixture.signalCode === null) {
       fixture.stdin.end('quit\n')
@@ -270,9 +279,8 @@ if (!process.argv.includes('--worker')) {
     unsubscribe?.(); server.closeAllConnections(); if (server.listening) await new Promise(done => server.close(done))
     let checked = { passed: false, results: [] }
     const immediate = [...known.values()].filter(item => !['runner', 'controller'].includes(item.role))
-    try { for (let attempt = 0; attempt < 30; attempt++) { checked = await observe(observer, { op: 'check', identities: immediate }); if (checked.passed) break; await sleep(500) } } catch (error) { errors.push(error.message) }
-    report.cleanup = { passed: errors.length === 0 && forced.length === 0 && checked.passed, errors, forced, ...checked, runnerDeferredUntilOuterVerification: true }
-    report.cleanup.passed = errors.length === 0 && forced.length === 0 && checked.passed
+    try { for (let attempt = 0; attempt < 30; attempt++) { checked = await observe(observer, { op: 'check', identities: immediate }); if (macProcessCheckPassed(checked, immediate)) break; await sleep(500) } } catch (error) { errors.push(error.message) }
+    report.cleanup = { ...checked, passed: errors.length === 0 && forced.length === 0 && macProcessCheckPassed(checked, immediate), errors, forced, ownershipBeforeDispose: cleanupAttribution, runnerDeferredUntilOuterVerification: true }
     if (!report.cleanup.passed) report.status = 'failed'
     await writeFile(join(output, 'frame-clock.json'), JSON.stringify(receiver.stats.frames))
     await writeFile(join(output, 'trace.json'), JSON.stringify(trace, null, 2))
