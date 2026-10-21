@@ -20,7 +20,7 @@ for (const name of ['report.json', 'run-report.json', 'delivery-verdict.json']) 
 const execute = promisify(execFile), temporary = await mkdtemp(join(tmpdir(), 'qiuya-ai-pointer-')), hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const fixtureSource = join(root, 'src/native/macos/fixtures/AICursorFixture.swift'), observerSource = join(root, 'src/native/macos/fixtures/AICursorObserver.swift'), leaseSource = join(root, 'src/native/macos/fixtures/LeaseOracle.swift')
 const observerBinary = join(temporary, 'cursor-observer'), leaseBinary = join(temporary, 'lease-oracle'), fixturePaths = []
-const trace = [], checks = [], observations = [], captures = [], geometrySettles = [], identities = new Map(), controllers = [], cleanup = { passed: false, errors: [], forced: [], processes: [] }
+const trace = [], checks = [], observations = [], captures = [], geometrySettles = [], captureInputAudits = [], identities = new Map(), controllers = [], cleanup = { passed: false, errors: [], forced: [], processes: [] }
 const key = value => `${value.pid}:${value.startSeconds}:${value.startMicroseconds}`
 const same = (a, b) => a && b && key(a) === key(b) && a.executablePath === b.executablePath
 const remember = (value, role) => { assert.ok(value?.pid && value.startSeconds && value.startMicroseconds && value.executablePath); identities.set(key(value), { ...value, role }); return value }
@@ -90,6 +90,28 @@ async function retire(value) {
   if (value.child.exitCode === null && !value.child.signalCode) value.child.stdin.end()
   const exit = await waitExit(value); assert.equal(exit.code, 0, `${value.label} must exit normally`); assert.equal(exit.signal, null)
 }
+async function retireObserverAfterAudit(value) {
+  if (!value) return
+  // An external held key invalidates the run, but is not evidence that this
+  // input-free observer cannot exit. Always send EOF independently of audit.
+  try {
+    const state = await value.ok('snapshot', { identities: [] })
+    cleanup.finalInputAudit = { passed: empty(state), state }
+    assert.ok(empty(state), 'Final actual OS input must be released')
+  } catch (error) { cleanup.finalInputAudit ??= { passed: false }; cleanup.errors.push(error.message) }
+  let natural = false
+  cleanup.observerEofAttempted = true
+  try {
+    await retire(value); natural = true; cleanup.observerNaturalExit = true
+    await until(async () => !same(await fallbackIdentity(value.child.pid), value.identity), 'Exact observer identity remained after natural EOF', 5000)
+  } catch (error) {
+    cleanup.errors.push(error.message)
+    if (!natural && value.child.exitCode === null && !value.child.signalCode) {
+      try { if (same(await fallbackIdentity(value.child.pid), value.identity)) { cleanup.forced.push(value.label); value.child.kill('SIGKILL'); await waitExit(value, 2000) } }
+      catch (issue) { cleanup.errors.push(issue.message) }
+    }
+  }
+}
 const nativeArrow = state => state.windows.filter(window => window.pid === (native?.identity ?? secondNative)?.pid && window.title === 'QiuYaTools AI pointer' && window.onScreen === true)
 async function arrowVisible(epoch) {
   return until(async () => {
@@ -106,10 +128,10 @@ async function arrowGone(label) {
 }
 async function act(epoch, point, kind = 'move') { return native.ok('act', { epoch, targetId: currentTarget.id, action: { kind, ...point } }) }
 function raster(global, frame) { return { x: (global.x - frame.geometry.x) * frame.width / frame.geometry.width, y: (global.y - frame.geometry.y) * frame.height / frame.geometry.height } }
-async function settledTargetAfterShow(fixture, expectedTarget) {
+async function settledTargetAfterShow(fixture, expectedTarget, stage = 'after-show') {
   const windowId = Number(expectedTarget.id.match(/^mac-window:(\d+)$/u)?.[1])
   assert.ok(Number.isSafeInteger(windowId) && windowId > 0 && expectedTarget.pid === fixture.identity.pid)
-  const start = performance.now(), deadline = start + 8000, evidence = { targetId: expectedTarget.id, owner: fixture.identity, timeoutMs: 8000, minimumStableMs: 200, minimumSamples: 3, samples: [] }
+  const start = performance.now(), deadline = start + 8000, evidence = { stage, targetId: expectedTarget.id, owner: fixture.identity, timeoutMs: 8000, minimumStableMs: 200, minimumSamples: 3, samples: [] }
   geometrySettles.push(evidence)
   let signature, stableAt, count = 0
   const reset = () => { signature = undefined; stableAt = undefined; count = 0 }
@@ -123,7 +145,7 @@ async function settledTargetAfterShow(fixture, expectedTarget) {
   while (performance.now() < deadline) {
     const identity = (await read(() => observer.ok('identity', { pid: fixture.identity.pid }))).identity
     assert.ok(same(identity, fixture.identity) && identity.uniqueId === fixture.identity.uniqueId, 'Restored fixture PID/birth/executable identity changed')
-    const before = await read(() => os('show-geometry-before', {}, [fixture.identity]))
+    const before = await read(() => os(`${stage}-geometry-before`, {}, [fixture.identity]))
     const ownWindow = before.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
     const sample = { atMs: performance.now() - start, window: ownWindow ?? null }; evidence.samples.push(sample)
     if (!ownWindow || ownWindow.onScreen !== true || ownWindow.alpha !== 1 || before.foregroundPid !== fixture.identity.pid) { reset(); await sleep(25); continue }
@@ -137,7 +159,7 @@ async function settledTargetAfterShow(fixture, expectedTarget) {
       assert.ok(['CAPTURE_CHANGED', 'GEOMETRY_CHANGED', 'TARGET_GONE', 'TARGETS_UNAVAILABLE', 'INVALID_TARGET'].includes(reply.error?.code), `Restored fixture read failed: ${JSON.stringify(reply.error)}`)
       reset(); await sleep(25); continue
     }
-    const frame = reply.result, after = await read(() => os('show-geometry-after', {}, [fixture.identity])), afterWindow = after.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
+    const frame = reply.result, after = await read(() => os(`${stage}-geometry-after`, {}, [fixture.identity])), afterWindow = after.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
     const state = await read(() => snapshotFixture(fixture)), confirmed = (await read(() => observer.ok('identity', { pid: fixture.identity.pid }))).identity
     assert.ok(same(confirmed, fixture.identity) && confirmed.uniqueId === fixture.identity.uniqueId, 'Fixture identity changed during the fresh observation')
     assert.ok(state.pid === expectedTarget.pid && state.windowId === windowId && state.bundleId === expectedTarget.appId, 'Fixture snapshot changed its exact window identity')
@@ -160,6 +182,25 @@ async function settledTargetAfterShow(fixture, expectedTarget) {
 async function capture(label, owner, windowId, composited, probe, includeRealCursor = false) {
   const path = join(output, `${label}.png`), value = await observer.ok('capture', { identity: owner, windowId, output: path, composited, probe, includeRealCursor })
   captures.push({ label, ...value, sha256: hash(await readFile(path)), file: path }); return value
+}
+async function auditFirstCapture(label, epoch, eventStart) {
+  const record = { label, independentOS: null, native: null, events: [] }
+  captureInputAudits.push(record)
+  const independentOS = await os(label); record.independentOS = independentOS
+  const status = await native.ok('status')
+  const events = native.transcript.slice(eventStart).filter(value => ['humanInput', 'inputCleanupFailed'].includes(value.event)).map(value => ({ event: value.event, ...(value.epoch === undefined ? {} : { epoch: value.epoch }), ...(['escape', 'preview-pointer'].includes(value.reason) ? { reason: value.reason } : {}) }))
+  record.native = { leaseEpoch: status.leaseEpoch, leaseActor: status.leaseActor, inputState: status.inputState, aiCursor: status.aiCursor }; record.events = events
+  assert.ok(empty(independentOS), 'External held input was observed around the first cursor capture; this run is invalid and input will not be retried')
+  assert.equal(events.length, 0, 'Native humanInput/cleanup failure invalidated the first capture; no input retry is permitted')
+  assert.equal(status.leaseEpoch, epoch, 'First capture must retain the exact physical input lease')
+  assert.equal(status.leaseActor, 'ai'); assert.equal(status.aiCursor?.visible, true)
+  assert.equal(independentOS.foregroundPid, alpha.identity.pid)
+  return record
+}
+async function firstAuditedCapture(label, owner, windowId, probe, epoch, eventStart, includeRealCursor = false) {
+  await auditFirstCapture(`${label}-before`, epoch, eventStart)
+  try { return await capture(label, owner, windowId, true, probe, includeRealCursor) }
+  finally { await auditFirstCapture(`${label}-after`, epoch, eventStart) }
 }
 function assertSmallArrow(value, label) {
   const a = value.analysis.approvedSmallArrow
@@ -216,27 +257,31 @@ try {
   pass('MAC-LEASE-ACTOR-WIRE-REJECTS-UNKNOWN-SOURCE')
   currentTarget = (await native.ok('targets')).targets.find(row => row.pid === alpha.identity.pid && row.appId === ready.bundleId && row.id === `mac-window:${ready.windowId}`)
   assert.ok(currentTarget, 'Input is restricted to the exact disposable fixture process/bundle/window')
-  let frame = await native.ok('observe', { targetId: currentTarget.id }), point = raster(ready.point, frame)
+  const initial = await settledTargetAfterShow(alpha, currentTarget, 'initial-setup')
+  currentTarget = initial.target
+  let frame = initial.frame, point = initial.point
+  const firstDesktopPoint = { x: frame.geometry.x + point.x * frame.geometry.width / frame.width, y: frame.geometry.y + point.y * frame.geometry.height / frame.height }
   let otherPoint = { x: point.x + 70 * frame.width / frame.geometry.width, y: point.y + 25 * frame.height / frame.geometry.height }
   assert.ok(otherPoint.x < frame.width && otherPoint.y < frame.height)
-  environment = { helper, helperSha256, architecture: process.arch, temporary, target: currentTarget, fixtureReady: ready, sources: Object.fromEntries(await Promise.all([fixtureSource, observerSource, leaseSource, fileURLToPath(import.meta.url)].map(async path => [path, hash(await readFile(path))]))) }
+  environment = { helper, helperSha256, architecture: process.arch, temporary, target: currentTarget, fixtureReady: ready, firstAction: { frameId: frame.frameId, width: frame.width, height: frame.height, geometry: frame.geometry, point, desktopPoint: firstDesktopPoint }, sources: Object.fromEntries(await Promise.all([fixtureSource, observerSource, leaseSource, fileURLToPath(import.meta.url)].map(async path => [path, hash(await readFile(path))]))) }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
   phase = 'native-ai-overlay'
+  const firstCaptureEventStart = native.transcript.length
   await native.ok('lease', { epoch: 1, actor: 'ai' }); activeEpoch = 1; await guardians(native.identity)
   await act(1, point); const visible = await arrowVisible(1)
   frame = await native.ok('observe', { targetId: currentTarget.id, preview: true }); assert.equal(frame.aiCursor.visible, true)
   assert.ok(Math.hypot(frame.aiCursor.x - point.x, frame.aiCursor.y - point.y) < 3)
   assert.ok(Math.hypot(frame.cursor.x - frame.aiCursor.x, frame.cursor.y - frame.aiCursor.y) < 3, 'Real cursor and AI metadata agree without replacing each other')
   await writeFile(join(output, 'selected-window-frame.jpg'), Buffer.from(frame.imageBase64, 'base64'))
-  const pointerProbe = glyphProbe(ready.point.x - frame.geometry.x, ready.point.y - frame.geometry.y)
-  const pixels = await capture('actual-ai-overlay-without-real-cursor', alpha.identity, ready.windowId, true, pointerProbe)
+  const pointerProbe = glyphProbe(firstDesktopPoint.x - frame.geometry.x, firstDesktopPoint.y - frame.geometry.y)
+  const pixels = await firstAuditedCapture('actual-ai-overlay-without-real-cursor', alpha.identity, ready.windowId, pointerProbe, 1, firstCaptureEventStart)
   assertSmallArrow(pixels, 'Actual AI overlay excluding the separate real OS cursor')
   // Keep the real user-visible composition as a separate artifact. It is not
   // a claim that the OS cursor is replaced or that two superposed cursors match
   // the approved isolated glyph; that visual boundary requires review.
-  const composition = await capture('actual-ai-overlay-with-real-cursor', alpha.identity, ready.windowId, true, pointerProbe, true)
+  const composition = await firstAuditedCapture('actual-ai-overlay-with-real-cursor', alpha.identity, ready.windowId, pointerProbe, 1, firstCaptureEventStart, true)
   const afterComposition = await os('paired-real-os-cursor-composition')
-  assert.ok(Math.hypot(afterComposition.cursor.x - ready.point.x, afterComposition.cursor.y - ready.point.y) < 2, 'The paired composition must retain the same actual cursor position')
+  assert.ok(Math.hypot(afterComposition.cursor.x - firstDesktopPoint.x, afterComposition.cursor.y - firstDesktopPoint.y) < 2, 'The paired composition must retain the same actual cursor position')
   assert.equal(composition.includesRealOSCursor, true)
   pass('MAC-AI-ACTUAL-CGWINDOW-PIXELS-NOACTIVATE', { window: visible.window, analysis: pixels.analysis, realCursorComposition: composition,
     visualBoundary: 'The isolated glyph is verified; the screenshot including the real OS cursor is retained for actual user-visible overlap review.' })
@@ -357,8 +402,11 @@ finally {
   try {
     if (secondNative) await guardians(secondNative)
     await host?.dispose(); if (!host) await driver?.dispose()
-    if (hostChildExit) { const exit = await hostChildExit; cleanup.hostNativeExit = exit; assert.equal(exit.code, 0, 'Host native helper must exit naturally'); assert.equal(exit.signal, null, 'Forced SDK retirement cannot pass natural cleanup') }
   } catch (error) { cleanup.errors.push(error.message) }
+  if (hostChildExit) {
+    try { const exit = await waitExit({ exited: hostChildExit, label: 'Host native helper' }, 6000); cleanup.hostNativeExit = exit; assert.equal(exit.code, 0, 'Host native helper must exit naturally'); assert.equal(exit.signal, null, 'Forced SDK retirement cannot pass natural cleanup') }
+    catch (error) { cleanup.errors.push(error.message) }
+  }
   try { await stopEsbuild() } catch (error) { cleanup.errors.push(error.message) }
   for (const value of [native, beta, alpha]) {
     if (!value) continue
@@ -373,10 +421,7 @@ finally {
     try { await until(async () => !same(await fallbackIdentity(value.pid), value), `Exact ${value.role} process remained: ${value.pid}`, 5000); cleanup.processes.push({ identity: value, state: 'naturally-exited' }) }
     catch (error) { cleanup.errors.push(error.message); cleanup.processes.push({ identity: value, state: 'unverified-or-alive' }) }
   }
-  if (observer) {
-    try { const state = await observer.ok('snapshot', { identities: [] }); assert.ok(empty(state), 'Final actual OS input must be released'); await retire(observer); assert.ok(!same(await fallbackIdentity(observer.child.pid), observer.identity)) }
-    catch (error) { cleanup.errors.push(error.message); if (observer.child.exitCode === null && !observer.child.signalCode) { try { if (same(await fallbackIdentity(observer.child.pid), observer.identity)) { cleanup.forced.push(observer.label); observer.child.kill('SIGKILL'); await waitExit(observer, 2000) } } catch (issue) { cleanup.errors.push(issue.message) } } }
-  }
+  await retireObserverAfterAudit(observer)
   for (const value of controllers) value.close()
   cleanup.passed = cleanup.errors.length === 0 && cleanup.forced.length === 0
   cleanup.scope = 'Exact native/guardian/fixture/observer identities gone after EOF; compiler via normal esbuild.stop; no shared Codex/WebKit process was signalled or claimed uniquely owned'
@@ -387,6 +432,7 @@ finally {
   await writeFile(join(output, 'transcripts.json'), JSON.stringify(controllers.map(value => ({ label: value.label, pid: value.child.pid, transcript: value.transcript, stderr: value.stderr() })), null, 2))
   await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2)); await writeFile(join(output, 'trace.json'), JSON.stringify(trace, null, 2))
   await writeFile(join(output, 'geometry-settles.json'), JSON.stringify(geometrySettles, null, 2))
+  await writeFile(join(output, 'capture-input-audits.json'), JSON.stringify(captureInputAudits, null, 2))
   await writeFile(join(output, 'report.json'), JSON.stringify({ ...report, status: finalPassed ? 'passed' : report?.status === 'blocked' ? 'blocked' : 'failed', cleanup, testedAt: new Date().toISOString() }, null, 2))
   await writeFile(join(output, 'delivery-verdict.json'), JSON.stringify({ passed: finalPassed, runnerPassed: report?.status === 'passed', naturalCleanupPassed: cleanup.passed, helperUnchanged }, null, 2))
   if (cleanup.passed) await rm(temporary, { recursive: true, force: true })
