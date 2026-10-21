@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
@@ -190,7 +190,7 @@ export function apply(ctx, config) {
         return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
       record.phase = 'prepare-complete'
-      return { sessionId, task, targetId: record.target.id, endpoint: record.pairEndpoint, token: record.pairToken, prompt: prompts[task], model: record.policy.selection }
+      return { sessionId, task, targetId: record.target.id, endpoint: record.pairEndpoint, token: record.pairToken, prompt: prompts[task] + '\n' + visionActionUsage(task), model: record.policy.selection }
     } catch (error) {
       const diagnostic = projectVisionFailure(error, record.phase); record.fatal = diagnostic.code
       const cleanupResult = await cleanup(record).catch(() => ({ passed: false, errors: ['VISION_CLEANUP_FAILED'] }))

@@ -19,6 +19,32 @@ export function projectVisionNativeStatus(value) {
 }
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 export const syntheticHash = text => createHash('sha256').update(text).digest('hex')
+const actionFields = Object.freeze(['action', 'frameId', 'kind', 'text', 'key', 'x', 'y', 'toX', 'toY', 'deltaX', 'deltaY', 'button'])
+const actionKinds = Object.freeze(['click', 'move', 'drag', 'scroll', 'type', 'key'])
+const valueType = value => value === null ? 'null' : Array.isArray(value) ? 'array' : ['object', 'string', 'number', 'boolean', 'undefined'].includes(typeof value) ? typeof value : 'other'
+function projectedFields(value) {
+  const object = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return Object.fromEntries(actionFields.map(key => {
+    const present = Object.hasOwn(object, key), field = object[key]
+    return [key, { present, type: present ? valueType(field) : 'absent', ...(present && typeof field === 'string' ? { length: field.length, sha256: syntheticHash(field) } : {}) }]
+  }))
+}
+/** Finite field names/types only; rejected kind/key/text values never enter logs. */
+export function projectVisionActionDenial(args) {
+  const action = args?.action, kind = action?.kind
+  return { argumentsType: valueType(args), actionType: valueType(action),
+    kindClass: actionKinds.includes(kind) ? kind : typeof kind === 'string' ? 'unsupported-string' : valueType(kind),
+    argumentFields: projectedFields(args), actionFields: projectedFields(action),
+    unknownArgumentKeyCount: args && typeof args === 'object' && !Array.isArray(args) ? Object.keys(args).filter(key => !actionFields.includes(key)).length : 0,
+    unknownActionKeyCount: action && typeof action === 'object' && !Array.isArray(action) ? Object.keys(action).filter(key => !actionFields.includes(key)).length : 0 }
+}
+export function visionActionUsage(task) {
+  const common = '电脑工具参数：先 observe 取得最新 frameId；act 使用 {frameId, action:{kind,...}}。坐标 x、y、toX、toY 都从当前截图读取并使用截图局部坐标。'
+  if (task === 1) return common + ' 点击按钮的 action.kind 为 "click"，同时提供 x、y。'
+  if (task === 2) return common + ' 点击文本框使用 action.kind="click" 和 x、y；输入完整文字使用 action.kind="type"、action.text="你从截图逐字读到的文本"；提交回车使用 action.kind="key"、action.key="Enter"。'
+  if (task === 3) return common + ' 拖拽使用 action.kind="drag"，提供起点 x、y 和终点 toX、toY。'
+  fail('VISION_TASK_SEQUENCE')
+}
 export function sameVisionTarget(actual, expected) {
   return actual?.id === expected.id && actual?.pid === expected.pid && actual?.appId === expected.appId
 }
@@ -78,7 +104,12 @@ export class VisionPolicy {
         if (action.kind === 'key' && !['ENTER', 'RETURN', 'BACKSPACE', 'DELETE', 'CMD+A', 'LEFT', 'RIGHT'].includes(String(action.key).toUpperCase())) fail('VISION_KEY_NOT_ALLOWED')
       }
       return undefined
-    } catch (error) { this.denials.push({ at: this.now(), name: exec.name, code: error.code }); return error.code }
+    } catch (error) {
+      const code = projectVisionFailure(error).code
+      this.denials.push({ at: this.now(), name: VISION_TOOLS.includes(exec.name) ? exec.name : 'other', code,
+        ...(exec.name === 'qiuya_computer_act' ? { parameters: projectVisionActionDenial(exec.arguments) } : {}) })
+      return code
+    }
   }
   finish() { this.ended = true }
   summary({ businessPassed, nonceRead, syntheticNonce }) {

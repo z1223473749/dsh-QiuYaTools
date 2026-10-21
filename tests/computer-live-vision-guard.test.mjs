@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus } from '../scripts/live-vision-guard-core.mjs'
+import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus, projectVisionActionDenial, visionActionUsage } from '../scripts/live-vision-guard-core.mjs'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
-import { visionBundleManifest, visionBundlePatch, visionBundleConsole, VISION_TEST_BUNDLE } from '../scripts/prepare-live-vision.mjs'
+import { visionBundleManifest, visionBundlePatch, visionBundleConsole, visionBundleRunCommand, VISION_TEST_BUNDLE } from '../scripts/prepare-live-vision.mjs'
 import { bundlePatchPaths, loadOverlayPatches, composeEntries } from '@deepseek-ai/dsh-app-boot'
 import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -49,6 +49,32 @@ test('fixture identity is exact and task action policy rejects browser navigatio
   for (const other of [{ pid: 9999 }, { id: 'mac-window:other' }, { appId: 'other.app' }]) assert.equal(sameVisionTarget({ ...target, ...other }, target), false)
   const { policy } = fixture(2); policy.arm()
   for (const action of [{ kind: 'navigate', url: 'https://example.com' }, { kind: 'key', key: 'CMD+Q' }, { kind: 'type', text: 'x'.repeat(257) }]) assert.ok(policy.toolGuard({ agent: { id }, name: 'qiuya_computer_act', arguments: { action } }))
+})
+test('rejected action diagnostics retain finite field shape and hashes without unknown kind, text, key or parameter names', () => {
+  const { policy } = fixture(2); policy.arm()
+  const args = { frameId: 'PRIVATE_FRAME', action: { kind: 'PRIVATE_KIND', text: 'PRIVATE_NOTE', key: 'PRIVATE_KEY', PRIVATE_FIELD: 'PRIVATE_VALUE' }, PRIVATE_ARGUMENT: 'PRIVATE_VALUE' }
+  assert.equal(policy.toolGuard({ agent: { id }, name: 'qiuya_computer_act', arguments: args }), 'VISION_ACTION_NOT_ALLOWED')
+  const row = policy.denials[0], projected = row.parameters
+  assert.equal(projected.kindClass, 'unsupported-string'); assert.equal(projected.actionType, 'object')
+  assert.equal(projected.argumentFields.action.present, true); assert.equal(projected.actionFields.text.present, true)
+  assert.equal(projected.actionFields.text.length, args.action.text.length); assert.match(projected.actionFields.text.sha256, /^[a-f0-9]{64}$/u)
+  assert.equal(projected.actionFields.kind.length, args.action.kind.length); assert.equal(projected.unknownActionKeyCount, 1); assert.equal(projected.unknownArgumentKeyCount, 1)
+  assert.doesNotMatch(JSON.stringify(row), /PRIVATE_/u)
+  const wrongLevel = projectVisionActionDenial({ kind: 'type', text: 'PRIVATE_NOTE' })
+  assert.equal(wrongLevel.argumentFields.text.present, true); assert.equal(wrongLevel.actionFields.text.present, false); assert.equal(wrongLevel.kindClass, 'undefined')
+  assert.equal(projectVisionActionDenial({ action: [] }).actionType, 'array')
+})
+test('test-only API usage teaches the existing action shape without fixture values and never expands task permissions or limits', () => {
+  const usage = visionActionUsage(2)
+  for (const marker of ['action.kind="type"', 'action.text=', 'action.kind="key"', 'action.key="Enter"', 'frameId']) assert.ok(usage.includes(marker))
+  assert.doesNotMatch(usage, /青山路|18号|核验码[0-9a-f]{6}/iu)
+  assert.throws(() => visionActionUsage(99), /VISION_TASK_SEQUENCE/u)
+  const { policy } = fixture(2); policy.arm()
+  assert.equal(policy.maxRequests, 12); assert.equal(policy.deadlineMs, 180000)
+  assert.equal(policy.toolGuard({ agent: { id }, name: 'qiuya_computer_act', arguments: { action: { kind: 'type', text: 'synthetic-unit-text' } } }), undefined)
+  assert.equal(policy.toolGuard({ agent: { id }, name: 'qiuya_computer_act', arguments: { action: { kind: 'key', key: 'Enter' } } }), undefined)
+  assert.equal(policy.toolGuard({ agent: { id }, name: 'qiuya_computer_act', arguments: { action: { kind: 'scroll' } } }), 'VISION_ACTION_NOT_ALLOWED')
+  assert.equal(policy.toolGuard({ agent: { id }, name: 'bash' }), 'VISION_TOOL_NOT_ALLOWED')
 })
 
 test('a business pass alone cannot establish visual reasoning without retained images and a read nonce', () => {
@@ -123,6 +149,19 @@ test('temporary private bundle composes through the official patch parser withou
     assert.deepEqual(rows[0].config, config)
     assert.throws(() => visionBundlePatch({ ...config, native: 'floating/helper' }), /absolute test paths/)
   } finally { await rm(directory, { recursive: true, force: true }) }
+})
+test('prepared owner-run command uses the bundle SHA query so a new bundle cannot reuse the prior imported client module', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-module-cache-')); t.after(() => rm(directory, { recursive: true, force: true }))
+  const oldSha = 'a'.repeat(64), newSha = 'b'.repeat(64), oldCommand = visionBundleRunCommand(oldSha), newCommand = visionBundleRunCommand(newSha)
+  assert.ok(oldCommand.includes('?run=' + oldSha)); assert.ok(newCommand.includes('?run=' + newSha)); assert.notEqual(oldCommand, newCommand)
+  assert.equal(newCommand.includes('\n'), false); assert.ok(newCommand.length < 2000)
+  assert.throws(() => visionBundleRunCommand('unbound'), /exact prepared bundle SHA256/u)
+  const file = join(directory, 'client.mjs'), url = pathToFileURL(file).href
+  await writeFile(file, 'export const ownerVersion="old-unscoped"')
+  const old = await import(url + '?run=' + oldSha)
+  await writeFile(file, 'export const ownerVersion="new-own-session-scoped"')
+  assert.equal((await import(url + '?run=' + oldSha)), old, 'The same URL actually reuses its cached ES module')
+  assert.equal((await import(url + '?run=' + newSha)).ownerVersion, 'new-own-session-scoped')
 })
 
 function consoleHarness() {

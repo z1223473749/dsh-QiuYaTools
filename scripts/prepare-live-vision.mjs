@@ -12,6 +12,10 @@ import { writePrivateJSON } from './live-vision-external-core.mjs'
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const digest = data => createHash('sha256').update(data).digest('hex')
 export const VISION_TEST_BUNDLE = 'qiuya-live-vision-test-only'
+export function visionBundleRunCommand(sha256) {
+  if (!/^[a-f0-9]{64}$/u.test(sha256)) throw Error('An exact prepared bundle SHA256 is required')
+  return `void import('/api/qiuya-tools.vision-test-client?run=${sha256}').then(m=>m.run()).catch(()=>console.error('QIUYA_VISION_TEST_FAILED'))`
+}
 export function visionBundleManifest() {
   return { name: VISION_TEST_BUNDLE, version: '0.0.0', private: true, type: 'module', main: './guard-plugin.mjs', exports: { '.': './guard-plugin.mjs' },
     description: 'Temporary scoped visual acceptance fixture; uninstall after testing.', files: ['guard-plugin.mjs', 'fixture-template.app/', 'cordis.patch.yml'], engines: { node: '>=22' }, dsh: { bundle: { patch: 'cordis.patch.yml' } } }
@@ -73,8 +77,8 @@ export async function prepareLiveVision({ directory = join(tmpdir(), `qiuya-live
   await run('/usr/bin/tar', ['-czf', archive, '-C', join(directory, 'bundle'), 'package'], { timeout: 30000, env: { ...process.env, COPYFILE_DISABLE: '1' } })
   const archiveBytes = await readFile(archive), archiveSha256 = digest(archiveBytes)
   await writeFile(join(directory, 'plugin-config.json'), JSON.stringify(config, null, 2))
-  const command = "void import('/api/qiuya-tools.vision-test-client').then(m=>m.run()).catch(()=>console.error('QIUYA_VISION_TEST_FAILED'))"
-  const consoleFiles = { 'console-command.txt': command }
+  const command = visionBundleRunCommand(archiveSha256)
+  const consoleFiles = { '00-run.txt': command, 'console-command.txt': command }
   for (const mode of ['read-only', 'install', 'uninstall']) consoleFiles[`${mode}-console.txt`] = await visionBundleConsole(mode, { archive, sha256: archiveSha256 })
   for (const [name, source] of Object.entries(consoleFiles)) await writeFile(join(directory, name), source + '\n')
   const files = [...new Set(['scripts/prepare-live-vision.mjs', 'src/native/macos/fixtures/LiveVisionFixture.swift', ...(externalCarrier ? ['src/native/macos/fixtures/AICursorObserver.swift'] : []),
@@ -88,7 +92,7 @@ export async function prepareLiveVision({ directory = join(tmpdir(), `qiuya-live
   const report = { status: 'prepared-not-run', plugin, config, package: { name: manifest.name, version: manifest.version, private: true, archive, sha256: archiveSha256, bytes: archiveBytes.length, patchEntryId: patch[0].insert[0].id },
     consoleCommands: Object.fromEntries(Object.entries(consoleFiles).map(([name, source]) => [name, { characters: source.length, sha256: digest(source), multiline: false }])), sourceHashes,
     pluginSha256: digest(await readFile(plugin)), fixtureSha256: digest(await readFile(join(template, 'Contents/MacOS/fixture'))), helperSha256: digest(await readFile(native)),
-    diagnosticVersion: 1, sdkAPI, externalCarrier: externalPreparation ?? { enabled: false }, inferenceRequestSent: false, actualInstallationExecuted: false, profileFilesChanged: false,
+    diagnosticVersion: 2, sdkAPI, externalCarrier: externalPreparation ?? { enabled: false }, inferenceRequestSent: false, actualInstallationExecuted: false, profileFilesChanged: false,
     note: 'Owner may use official pluginManager.installBundle/removeBundle for this temporary local package. Inspect the full one-line Console command before Enter; unknown install responses are never automatically replayed. The helper is explicitly frozen; this does not establish new pointer/manager integration.' }
   await writeFile(join(directory, 'preparation.json'), JSON.stringify(report, null, 2)); await writeFile(join(directory, 'evidence/preparation.json'), JSON.stringify(report, null, 2))
   return { status: report.status, directory, archive, archiveSha256, configFile: join(directory, 'plugin-config.json'), consoleFiles: Object.keys(consoleFiles) }
