@@ -199,9 +199,13 @@ export class ComputerSessionService {
   }
   async observe(sessionId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(sessionId, signal, false) }
   async preview(sessionId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(sessionId, signal, true) }
-  private validateObservation(observation: ComputerObservation, target: NativeTarget): void {
+  private validateObservation(observation: ComputerObservation, target: NativeTarget): ComputerObservation {
     if (observation.targetId !== target.id || observation.mediaType !== 'image/jpeg' || !validGeometry(observation.geometry) || !Number.isInteger(observation.width) || observation.width < 1 || !Number.isInteger(observation.height) || observation.height < 1 || typeof observation.elements !== 'string' || observation.elements.length > 2_000_000 || typeof observation.imageBase64 !== 'string' || observation.imageBase64.length === 0 || observation.imageBase64.length > 32 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(observation.imageBase64) || observation.imageBase64.length % 4 !== 0) throw new ComputerError('INVALID_OBSERVATION', '原生执行器返回了无效画面')
     requireIdentity(observation.frameId, '帧')
+    const { x, y, width, height, scale } = observation.geometry
+    // Geometry is transport data, never a replacement for the owner-approved
+    // window/application identity. Extra fields cannot overwrite pid/appId/id.
+    return { ...observation, geometry: { x, y, width, height, scale } }
   }
   private async capture(sessionId: string, signal: AbortSignal | undefined, preview: boolean): Promise<ComputerObservation> {
     this.assertEnabled()
@@ -211,10 +215,10 @@ export class ComputerSessionService {
       const current = (await this.driver.targets(operationSignal)).find(item => item.id === target.id)
       operationSignal.throwIfAborted()
       if (!current || current.pid !== target.pid || current.appId !== target.appId) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新选择并授权')
-      const observation = await (preview && this.driver.preview ? this.driver.preview(target.id, operationSignal) : this.driver.observe(target.id, operationSignal))
+      const raw = await (preview && this.driver.preview ? this.driver.preview(target.id, operationSignal) : this.driver.observe(target.id, operationSignal))
       operationSignal.throwIfAborted()
       if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '观察期间控制权已变化')
-      this.validateObservation(observation, target)
+      const observation = this.validateObservation(raw, target)
       record.snapshot.target = { ...current, ...observation.geometry }
       const { imageBase64: _, elements: _elements, mediaType: _mediaType, ...metadata } = observation
       if (preview) {
@@ -354,10 +358,10 @@ export class ComputerSessionService {
         const current = (await this.driver.targets(signal)).find(item => item.id === target.id)
         signal.throwIfAborted()
         if (!current || current.pid !== target.pid || current.appId !== target.appId) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新选择并授权')
-        const observation = await this.driver.observe(record.snapshot.target!.id, signal)
+        const raw = await this.driver.observe(record.snapshot.target!.id, signal)
         signal.throwIfAborted()
         if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '继续操作已取消')
-        this.validateObservation(observation, record.snapshot.target!)
+        const observation = this.validateObservation(raw, record.snapshot.target!)
         record.snapshot.target = { ...current, ...observation.geometry }
         const { imageBase64: _, elements: _elements, mediaType: _mediaType, ...metadata } = observation
         record.snapshot.lastObservation = metadata

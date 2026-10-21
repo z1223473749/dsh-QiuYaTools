@@ -358,3 +358,14 @@ test('a recreated chat inherits its last epoch so stale preview control cannot m
   await restored.dispose(); await f.service.dispose()
   assert.throws(() => new ComputerSessionService({}, { initialEpoch: Number.MAX_SAFE_INTEGER }), { code: 'INVALID_EPOCH' })
 })
+
+test('transport geometry cannot replace the authorized app, PID, or window identity', async () => {
+  const f = fixture(), original = f.driver.observe
+  f.driver.observe = async id => { const value = await original(id); value.geometry = { ...value.geometry, id: 'different-window', appId: 'unapproved.app', pid: 999 }; return value }
+  const observed = await start(f)
+  assert.deepEqual(Object.keys(observed.geometry).sort(), ['height', 'scale', 'width', 'x', 'y'])
+  assert.equal(f.service.get('chat').target.appId, 'fixture.app'); assert.equal(f.service.get('chat').target.pid, 123)
+  await f.service.act('chat', request(observed)); await f.service.pause('chat'); await f.service.resume('chat')
+  assert.equal(f.service.get('chat').target.id, f.target.id); assert.equal(f.service.get('chat').target.appId, 'fixture.app')
+  await f.service.dispose()
+})
