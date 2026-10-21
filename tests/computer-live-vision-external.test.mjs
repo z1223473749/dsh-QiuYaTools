@@ -95,7 +95,7 @@ test('owner connects, starts, stops and restores only its three new session IDs 
         if (input.op === 'prepare') value = { sessionId: ids[input.task - 1], endpoint: 'http://127.0.0.1:1234/v1/computer', token: 'synthetic-private', targetId: 'own-window', prompt: 'Synthetic; never sent to a model' }
         else if (input.op === 'arm') value = { armed: true }
         else if (input.op === 'status') value = { state: 'idle', requests: 1 }
-        else if (input.op === 'finish') value = { passed: true }
+        else if (input.op === 'finish') value = { passed: true, cleanup: { passed: true }, denials: [], fatal: null }
         else if (input.op === 'delivery') value = { passed: input.restore.localMode && input.restore.featureFlags }
         else throw Error('Unexpected test operation')
         return Response.json({ ok: true, value })
