@@ -4,9 +4,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { join, resolve, relative, isAbsolute } from 'node:path'
+import { join, resolve, relative, isAbsolute, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const digest = data => createHash('sha256').update(data).digest('hex')
 export const VISION_TEST_BUNDLE = 'qiuya-live-vision-test-only'
@@ -48,7 +49,7 @@ export async function prepareLiveVision({ directory = join(tmpdir(), `qiuya-live
   await writeFile(join(packageDir, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   await writeFile(join(packageDir, 'cordis.patch.yml'), JSON.stringify(patch, null, 2) + '\n')
   const archive = join(directory, `${VISION_TEST_BUNDLE}-0.0.0.tgz`)
-  await run('/usr/bin/tar', ['-czf', archive, '-C', join(directory, 'bundle'), 'package'], { timeout: 30000 })
+  await run('/usr/bin/tar', ['-czf', archive, '-C', join(directory, 'bundle'), 'package'], { timeout: 30000, env: { ...process.env, COPYFILE_DISABLE: '1' } })
   const archiveBytes = await readFile(archive), archiveSha256 = digest(archiveBytes)
   await writeFile(join(directory, 'plugin-config.json'), JSON.stringify(config, null, 2))
   const command = "void import('/api/qiuya-tools.vision-test-client').then(m=>m.run()).catch(()=>console.error('QIUYA_VISION_TEST_FAILED'))"
@@ -57,10 +58,15 @@ export async function prepareLiveVision({ directory = join(tmpdir(), `qiuya-live
   for (const [name, source] of Object.entries(consoleFiles)) await writeFile(join(directory, name), source + '\n')
   const files = [...new Set(['scripts/prepare-live-vision.mjs', 'src/native/macos/fixtures/LiveVisionFixture.swift', ...Object.keys(bundle.metafile.inputs).map(name => relative(root, resolve(name)))])]
   const sourceHashes = Object.fromEntries(await Promise.all(files.map(async name => [name, digest(await readFile(join(root, name)))])))
+  const require = createRequire(import.meta.url), sdkAPI = []
+  for (const [name, contracts] of [['@deepseek-ai/dsh-agent', ['create({sessionId,meta,agentOptions,setup})', 'setup(agentCtx,agent)->{commit()}']], ['@deepseek-ai/dsh-agent-default-model', ['currentSelection()->{provider,model,reasoningEffort?}']], ['@deepseek-ai/dsh-api-session-controller', ['session/prompt({request})', 'session/cancel({request})']]]) {
+    const entry = require.resolve(name), pkg = JSON.parse(await readFile(join(dirname(entry), '../package.json'), 'utf8'))
+    sdkAPI.push({ package: name, version: pkg.version, entrySHA256: digest(await readFile(entry)), contracts })
+  }
   const report = { status: 'prepared-not-run', plugin, config, package: { name: manifest.name, version: manifest.version, private: true, archive, sha256: archiveSha256, bytes: archiveBytes.length, patchEntryId: patch[0].insert[0].id },
     consoleCommands: Object.fromEntries(Object.entries(consoleFiles).map(([name, source]) => [name, { characters: source.length, sha256: digest(source), multiline: false }])), sourceHashes,
     pluginSha256: digest(await readFile(plugin)), fixtureSha256: digest(await readFile(join(template, 'Contents/MacOS/fixture'))), helperSha256: digest(await readFile(native)),
-    inferenceRequestSent: false, actualInstallationExecuted: false, profileFilesChanged: false,
+    diagnosticVersion: 1, sdkAPI, inferenceRequestSent: false, actualInstallationExecuted: false, profileFilesChanged: false,
     note: 'Owner may use official pluginManager.installBundle/removeBundle for this temporary local package. Inspect the full one-line Console command before Enter; unknown install responses are never automatically replayed. The helper is explicitly frozen; this does not establish new pointer/manager integration.' }
   await writeFile(join(directory, 'preparation.json'), JSON.stringify(report, null, 2)); await writeFile(join(directory, 'evidence/preparation.json'), JSON.stringify(report, null, 2))
   return { status: report.status, directory, archive, archiveSha256, configFile: join(directory, 'plugin-config.json'), consoleFiles: Object.keys(consoleFiles) }

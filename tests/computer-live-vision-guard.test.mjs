@@ -1,15 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden } from '../scripts/live-vision-guard-core.mjs'
+import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus } from '../scripts/live-vision-guard-core.mjs'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { visionBundleManifest, visionBundlePatch, visionBundleConsole, VISION_TEST_BUNDLE } from '../scripts/prepare-live-vision.mjs'
 import { bundlePatchPaths, loadOverlayPatches, composeEntries } from '@deepseek-ai/dsh-app-boot'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import vm from 'node:vm'
+import { build } from 'esbuild'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const id = 'qiuya-vision-12345678-1234-1234-1234-123456789abc'
 const target = { id: 'mac-window:123', pid: 1234, appId: 'com.qiuya.tools.vision-own' }
@@ -172,4 +174,74 @@ test('owner Console read-only and removal touch only this test bundle and remova
   const result = await f.execute(remove); assert.equal(result.application, 'applied'); assert.equal(result.absent, true); assert.equal(result.inactive, true)
   assert.equal(f.calls.find(row => row.method === 'pluginManager/removeBundle').payload.args.name, VISION_TEST_BUNDLE)
   assert.doesNotMatch(f.output.join(''), /SYNTHETIC_PRIVATE_/u)
+})
+
+test('diagnostics admit only finite phases/public codes and boolean native permission readback', () => {
+  const error = Object.assign(new TypeError('PRIVATE_MESSAGE token=PRIVATE_TOKEN'), { code: 'VISION_PRIVATE_TOKEN', stack: 'PRIVATE_STACK', cause: { credentials: 'PRIVATE_AUTH' } })
+  assert.deepEqual(projectVisionFailure(error, 'PRIVATE_PHASE'), { phase: 'unknown', code: 'VISION_TEST_FAILED', category: 'type-error' })
+  assert.deepEqual(projectVisionFailure({ code: 'ENOENT', message: 'PRIVATE_PATH' }, 'fixture-copy'), { phase: 'fixture-copy', code: 'ENOENT', category: 'filesystem' })
+  const native = projectVisionNativeStatus({ available: true, platform: 'darwin', protocolVersion: 1, message: 'PRIVATE_NATIVE_MESSAGE', auth: 'PRIVATE_AUTH', permissions: { screenRecording: false, accessibility: true, postEvents: 'PRIVATE_VALUE', inputMonitoring: false, unknown: 'PRIVATE_PERMISSION' } })
+  assert.deepEqual(native, { available: true, platform: 'darwin', protocolVersion: 1, permissions: { screenRecording: false, accessibility: true, postEvents: null, inputMonitoring: false } })
+  assert.doesNotMatch(JSON.stringify({ error: projectVisionFailure(error), native }), /PRIVATE_/u)
+})
+
+async function bundledVisionPlugin(directory) {
+  const file = join(directory, 'guard.mjs')
+  await build({ entryPoints: [fileURLToPath(new URL('../scripts/live-vision-guard-plugin.mjs', import.meta.url))], outfile: file, bundle: true, platform: 'node', target: 'node22', format: 'esm' })
+  return import(pathToFileURL(file).href)
+}
+
+test('real preparation copy failure records its exact phase, drains owned setup and cannot become green after restoration', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-preparation-diagnostic-')); t.after(() => rm(directory, { recursive: true, force: true }))
+  const plugin = await bundledVisionPlugin(directory), routes = new Map(), disposers = []
+  const ctx = {
+    tools: { get: name => ({ name, execute() { throw Error('Tools must not run during failed preparation') } }) },
+    connection: { browserPeer: { principal: { kind: 'owner' } }, fetch: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } } },
+    effect(fn) { disposers.push(fn()) }, on() { return () => {} },
+  }
+  const config = { fixtureTemplate: join(directory, 'missing-template.app'), native: join(directory, 'must-not-spawn'), directory: join(directory, 'own-output') }
+  if (process.platform !== 'darwin') { assert.throws(() => plugin.apply(ctx, config), /VISION_MAC_REQUIRED/); assert.equal(routes.size, 0); return }
+  plugin.apply(ctx, config); t.after(async () => { for (const dispose of disposers) await dispose() })
+  const call = async input => (await routes.get('/api/qiuya-tools.vision-test').fetch(new Request('http://127.0.0.1/api/qiuya-tools.vision-test', { method: 'POST', body: JSON.stringify(input) }))).json()
+  const result = await call({ op: 'prepare', task: 1 })
+  assert.equal(result.ok, false); assert.equal(result.error, 'ENOENT'); assert.equal(result.diagnostic.phase, 'fixture-copy')
+  const failure = JSON.parse(await readFile(join(config.directory, 'evidence/preparation-failure.json'), 'utf8'))
+  assert.equal(failure.diagnostic.phase, 'fixture-copy'); assert.equal(failure.diagnostic.category, 'filesystem')
+  assert.equal(failure.cleanup.passed, true); assert.deepEqual(failure.nativeStatus, { status: 'not-read' })
+  assert.equal(failure.ownedStreamAttemptsObserved, 0); assert.equal(failure.networkDispatchCount, 'not-proven')
+  assert.equal((await call({ op: 'delivery', restore: { localMode: true, featureFlags: true } })).value.passed, true)
+  const report = JSON.parse(await readFile(join(config.directory, 'evidence/report.json'), 'utf8'))
+  assert.equal(report.status, 'failed'); assert.equal(report.tasks.length, 0); assert.equal(report.preparationFailures.length, 1)
+  assert.doesNotMatch(JSON.stringify({ result, failure, report }), /missing-template|must-not-spawn|\.app|stack|nonce|pairToken/u)
+})
+
+test('served owner client preserves remote preparation phase/public code without leaking the rejected payload or prompting a model', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-owner-diagnostic-')); t.after(() => rm(directory, { recursive: true, force: true }))
+  const plugin = await bundledVisionPlugin(directory), calls = [], output = [], flags = {}, originalEffective = { enabled: true, computerUseEnabled: false }
+  const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
+    crypto: { randomUUID: () => 'synthetic-request' }, AbortSignal, Object, TypeError, SyntaxError,
+    console: { log(value) { output.push(value) } },
+    async fetch(url, options) {
+      const input = JSON.parse(options.body); calls.push({ url, input })
+      if (url === '/api/qiuya-tools.vision-test') {
+        if (input.op === 'prepare') return Response.json({ ok: false, error: 'ENOENT', diagnostic: { phase: 'fixture-copy', message: 'PRIVATE_SERVER_PATH', stack: 'PRIVATE_STACK', token: 'PRIVATE_TOKEN' } })
+        if (input.op === 'failure') return Response.json({ ok: true, value: { recorded: true } })
+        if (input.op === 'delivery') return Response.json({ ok: true, value: { passed: input.restore.localMode && input.restore.featureFlags } })
+        throw Error('Unexpected test operation')
+      }
+      let value
+      if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision: 1, user: { ...flags }, value: { ...originalEffective, ...flags } }] }
+      else if (input.method === 'settings/mutate') { for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; value = {} }
+      else if (input.method === 'qiuya-tools.computer.control') value = input.payload.op === 'status' ? { native: { mode: 'local' }, sessions: [] } : {}
+      else throw Error('Model request or unrelated public RPC is forbidden')
+      return Response.json({ rpcId: input.rpcId, result: { ok: true, value } })
+    },
+  })
+  const result = await run()
+  assert.equal(result.passed, false); assert.equal(result.error, 'ENOENT'); assert.equal(result.diagnostic.phase, 'fixture-copy')
+  assert.equal(result.restoration.localMode, true); assert.equal(result.restoration.featureFlags, true)
+  assert.equal(calls.filter(row => row.input.method === 'session/prompt').length, 0)
+  const failure = calls.find(row => row.input.op === 'failure').input
+  assert.deepEqual(failure, { op: 'failure', phase: 'fixture-copy', code: 'ENOENT' })
+  assert.doesNotMatch(output.join(''), /PRIVATE_|message|stack|token/u)
 })

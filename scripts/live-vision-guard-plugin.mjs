@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
 export const inject = ['agents', 'tools', 'connection', 'webServer', 'agentDefaultModel', 'sessionController', 'llm']
@@ -15,24 +15,27 @@ const bounded = (promise, ms, code) => new Promise((done, reject) => {
   const timer = setTimeout(() => reject(Object.assign(new Error(code), { code })), ms)
   Promise.resolve(promise).then(done, reject).finally(() => clearTimeout(timer))
 })
-const safeError = error => typeof error?.code === 'string' && /^VISION_[A-Z0-9_]{1,70}$/u.test(error.code) ? error.code : 'VISION_TEST_FAILED'
+const safeError = error => projectVisionFailure(error).code
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const prompts = {
   1: '这是专用视觉订单核验测试。先用 qiuya_computer_observe 看图，在图中找到绿色“确认本单”按钮并点击，再观察确认已完成。最后回答图顶部实际显示的六位订单核验码。不要猜码，不要操作别的窗口。只使用提供的四个电脑工具；最多12轮、180秒，完成立即停止。',
   2: '这是独立的视觉收货备注测试。先观察图片，把图中显示的整条收货备注逐字输入文本框，按Enter提交；再观察确认已完成。最后回答图顶部实际显示的六位订单核验码。备注和核验码都必须从图片读取，不要猜。只操作这一个专用窗口，只使用提供的四个电脑工具，最多12轮、180秒。',
   3: '这是独立的视觉订单分拣测试。先观察图片，把蓝色订单卡拖到绿色“已核验”框内，再观察确认已完成。最后回答图上订单卡实际显示的六位核验码。不要猜码，只操作这一个专用窗口，只使用提供的四个电脑工具，最多12轮、180秒。',
 }
+export function visionOwnerClientSource() {
+  return `const VISION_DIAGNOSTIC_PHASES=${JSON.stringify(VISION_DIAGNOSTIC_PHASES)},VISION_DIAGNOSTIC_CODES=${JSON.stringify(VISION_DIAGNOSTIC_CODES)};const projectVisionFailure=${projectVisionFailure.toString()};export const run=${runInOwnerRenderer.toString()};`
+}
 
 export function apply(ctx, config) {
   if (process.platform !== 'darwin') fail('VISION_MAC_REQUIRED')
   if (!config || config.fixtureTemplate !== undefined && typeof config.fixtureTemplate !== 'string' || typeof config?.native !== 'string' || typeof config?.directory !== 'string') fail('VISION_CONFIG_REQUIRED')
   const directory = resolve(config.directory), template = resolve(config.fixtureTemplate ?? fileURLToPath(new URL('./fixture-template.app', import.meta.url))), native = resolve(config.native)
-  const records = new Map(), reports = []; let active, disposed = false, delivery
+  const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure
   const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))
   if ([...originals.values()].some(value => !value)) fail('VISION_PRODUCTION_TOOLS_MISSING')
   const owner = () => ctx.connection.browserPeer?.principal?.kind === 'owner'
   const own = sessionId => { const value = records.get(sessionId); if (!value) fail('VISION_SESSION_NOT_OWNED'); return value }
-  async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
+  async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: ownerFailure || preparationFailures.length || reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, preparationFailures, ...(ownerFailure ? { ownerFailure } : {}), delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
   async function checkNative(record, targetId = record.target.id) {
     if (targetId !== record.target.id || record.fixture.exitCode !== null || record.fixture.signalCode !== null) fail('VISION_FIXTURE_RETIRED')
     const current = (await record.native.targets()).find(row => row.id === targetId)
@@ -56,12 +59,15 @@ export function apply(ctx, config) {
     if (disposed || active || task !== reports.length + 1 || ![1, 2, 3].includes(task)) fail('VISION_TASK_SEQUENCE')
     const sessionId = `qiuya-vision-${randomUUID()}`, bundleId = `com.qiuya.tools.vision-${randomUUID()}`
     const app = join(directory, 'runtime', `${sessionId}.app`), cwd = join(directory, 'runtime', sessionId)
-    const record = { sessionId, task, nonce: randomBytes(3).toString('hex').toUpperCase(), pending: new Map(), snapshotSequence: 0, events: [], completedText: '', settled: false }
+    const record = { sessionId, task, nonce: randomBytes(3).toString('hex').toUpperCase(), pending: new Map(), snapshotSequence: 0, events: [], completedText: '', settled: false, phase: 'prepare-start', streamAttempts: 0 }
     active = record; records.set(sessionId, record)
     try {
       await mkdir(join(directory, 'evidence'), { recursive: true })
-      await mkdir(cwd, { recursive: true }); await cp(template, app, { recursive: true, errorOnExist: true, force: false })
+      record.phase = 'fixture-directory'; await mkdir(cwd, { recursive: true })
+      record.phase = 'fixture-copy'; await cp(template, app, { recursive: true, errorOnExist: true, force: false })
+      record.phase = 'fixture-metadata'
       await writeFile(join(app, 'Contents/Info.plist'), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${bundleId}</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
+      record.phase = 'fixture-launch'
       record.fixture = spawn(join(app, 'Contents/MacOS/fixture'), [], { stdio: ['pipe', 'pipe', 'pipe'] })
       record.fixture.stderr.resume(); record.fixture.stdin.on('error', () => {})
       record.fixture.once('error', () => { record.fatal = 'VISION_FIXTURE_STARTUP' })
@@ -75,9 +81,17 @@ export function apply(ctx, config) {
         }
       })
       record.fixture.stdin.write(JSON.stringify({ task, nonce: record.nonce, note: `青山路18号，请轻放，核验码${record.nonce}`, seed: randomBytes(2).readUInt16BE() }) + '\n')
+      record.phase = 'fixture-ready'
       for (let i = 0; i < 150 && !ready; i++) { if (record.fixture.exitCode !== null || record.fatal) fail('VISION_FIXTURE_STARTUP'); await sleep(100) }
       if (!ready || ready.pid !== record.fixture.pid || ready.bundleId !== bundleId) fail('VISION_FIXTURE_IDENTITY')
       record.native = new NativeCompanionDriver({ executable: native })
+      record.phase = 'native-status'
+      record.nativeStatus = projectVisionNativeStatus(await record.native.status())
+      await writeFile(join(directory, `evidence/native-status-task-${task}.json`), JSON.stringify(record.nativeStatus, null, 2))
+      if (record.nativeStatus.available !== true) fail('VISION_NATIVE_UNAVAILABLE')
+      if (record.nativeStatus.permissions.screenRecording !== true) fail('VISION_NATIVE_SCREEN_PERMISSION')
+      if (record.nativeStatus.permissions.accessibility !== true) fail('VISION_NATIVE_ACCESSIBILITY_PERMISSION')
+      record.phase = 'fixture-target'
       record.target = (await record.native.targets()).find(row => row.id === `mac-window:${ready.windowId}` && row.pid === ready.pid && row.appId === bundleId)
       if (!record.target) fail('VISION_FIXTURE_TARGET_MISSING')
       const fixed = {
@@ -91,12 +105,16 @@ export function apply(ctx, config) {
         async openPreview() { fail('VISION_PREVIEW_NOT_EXPOSED') }, async closePreview() {}, subscribe: listener => record.native.subscribe(listener),
       }
       record.pairToken = randomBytes(32).toString('hex')
+      record.phase = 'pair-server'
       record.server = await createComputerAgentServer(fixed, { token: record.pairToken, host: '127.0.0.1', port: 0 })
+      record.phase = 'pair-identity'
       const identityDriver = new RemoteComputerDriver({ endpoint: record.server.endpoint, token: record.pairToken })
       record.authorizedAppId = `${identityDriver.deviceId}:${bundleId}`; await identityDriver.dispose()
-      const selection = ctx.agentDefaultModel.currentSelection()
+      record.phase = 'model-selection'; const selection = ctx.agentDefaultModel.currentSelection()
       record.policy = new VisionPolicy({ sessionId, task, target: record.target, selection })
+      record.phase = 'agent-create'
       record.handle = await ctx.agents.create({ sessionId, meta: { cwd }, agentOptions: { ...selection, maxTokens: 4096 }, setup(agentCtx, agent) {
+        record.phase = 'agent-setup'
         agentCtx.tools.presentAs('native'); agentCtx.tools.restrict({ allow: VISION_TOOLS })
         agentCtx.tools.guard(exec => record.policy.toolGuard(exec))
         for (const name of VISION_TOOLS) {
@@ -128,10 +146,19 @@ export function apply(ctx, config) {
           }
           if (['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type)) record.events.push({ type: event.type, seq: event.seq, time: event.time, turn: event.data.turn, step: event.data.step, ...(event.type === 'turn/end' ? { reason: event.data.reason?.kind } : {}) })
         })
-        return { commit() { const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
+        return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
+      record.phase = 'prepare-complete'
       return { sessionId, task, targetId: record.target.id, endpoint: record.server.endpoint, token: record.pairToken, prompt: prompts[task], model: record.policy.selection }
-    } catch (error) { record.fatal = safeError(error); await cleanup(record).catch(() => {}); active = undefined; throw error }
+    } catch (error) {
+      const diagnostic = projectVisionFailure(error, record.phase); record.fatal = diagnostic.code
+      const cleanupResult = await cleanup(record).catch(() => ({ passed: false, errors: ['VISION_CLEANUP_FAILED'] }))
+      const failure = { status: 'failed', task, diagnostic, nativeStatus: record.nativeStatus ?? { status: 'not-read' }, ownedStreamAttemptsObserved: record.streamAttempts, networkDispatchCount: 'not-proven', cleanup: cleanupResult }
+      preparationFailures.push(failure); if (active === record) active = undefined
+      try { await writeFile(join(directory, 'evidence/preparation-failure.json'), JSON.stringify(failure, null, 2)); await save() }
+      catch { throw Object.assign(new Error('VISION_DIAGNOSTIC_WRITE_FAILED'), { code: 'VISION_DIAGNOSTIC_WRITE_FAILED', diagnostic }) }
+      throw Object.assign(new Error(diagnostic.code), { code: diagnostic.code, diagnostic })
+    }
   }
   async function arm(record) {
     await selected(record, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
@@ -187,7 +214,9 @@ export function apply(ctx, config) {
   }
   const unStream = ctx.on('llm/stream', async function* (options, next) {
     const record = records.get(options.sessionId)
-    if (!record?.policy) { yield* next(); return }
+    if (!record) { yield* next(); return }
+    record.streamAttempts++
+    if (!record.policy) fail('VISION_NOT_PREPARED')
     try { record.policy.admitRequest(options); yield* next() }
     catch (error) { record.fatal = safeError(error); throw error }
   })
@@ -198,6 +227,12 @@ export function apply(ctx, config) {
       const input = JSON.parse(text); let value
       if (input.op === 'catalog') value = { temporaryTestGuard: true, defaults: ctx.agentDefaultModel.currentSelection(), tasks: reports.length, active: !!active }
       else if (input.op === 'prepare') value = await prepare(input.task)
+      else if (input.op === 'failure') {
+        ownerFailure = projectVisionFailure({ code: input.code }, input.phase)
+        await mkdir(join(directory, 'evidence'), { recursive: true })
+        await writeFile(join(directory, 'evidence/owner-failure.json'), JSON.stringify({ status: 'failed', diagnostic: ownerFailure, networkDispatchCount: 'not-proven' }, null, 2))
+        await save(); value = { recorded: true }
+      }
       else if (input.op === 'delivery') {
         if (typeof input.restore?.localMode !== 'boolean' || typeof input.restore?.featureFlags !== 'boolean') fail('VISION_DELIVERY_STATE')
         delivery = { passed: !active && input.restore.localMode && input.restore.featureFlags, noOwnedActiveTask: !active, localModeRestored: input.restore.localMode, originalFeatureFlagsRestored: input.restore.featureFlags }
@@ -220,9 +255,9 @@ export function apply(ctx, config) {
         else fail('VISION_OPERATION_NOT_ALLOWED')
       }
       return Response.json({ ok: true, value }, { headers: { 'Cache-Control': 'no-store' } })
-    } catch (error) { return Response.json({ ok: false, error: safeError(error) }, { headers: { 'Cache-Control': 'no-store' } }) }
+    } catch (error) { return Response.json({ ok: false, error: safeError(error), diagnostic: projectVisionFailure(error, error?.diagnostic?.phase) }, { headers: { 'Cache-Control': 'no-store' } }) }
   } }), ctx.connection.fetch.register({ path: clientEndpoint, methods: ['GET'], requestBody: 'buffered', async fetch() {
-    return owner() ? new Response(`export const run=${runInOwnerRenderer.toString()};`, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) : new Response('Forbidden', { status: 403 })
+    return owner() ? new Response(visionOwnerClientSource(), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) : new Response('Forbidden', { status: 403 })
   } })]
   ctx.effect(() => async () => {
     disposed = true
@@ -236,41 +271,45 @@ async function runInOwnerRenderer() {
   const rpc = async (method, args = {}, raw = false) => {
     const rpcId = crypto.randomUUID(), response = await fetch('/api/' + method, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: raw ? args : { args } }) })
-    const value = await response.json(); if (!response.ok || value.rpcId !== rpcId || !value.result?.ok) throw Error(value.result?.error?.code || 'VISION_PUBLIC_RPC_FAILED')
+    const value = await response.json(); if (!response.ok || value.rpcId !== rpcId || !value.result?.ok) throw Object.assign(Error('VISION_PUBLIC_RPC_FAILED'), { code: projectVisionFailure({ code: value.result?.error?.code }).code })
     return value.result.value
   }
-  const test = async input => { const response = await fetch('/api/qiuya-tools.vision-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const result = await response.json(); if (!result.ok) throw Error(result.error); return result.value }
+  const test = async input => { const response = await fetch('/api/qiuya-tools.vision-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const result = await response.json(); if (!result.ok) { const diagnostic = projectVisionFailure({ code: result.error }, result.diagnostic?.phase); throw Object.assign(Error(diagnostic.code), { code: diagnostic.code, diagnostic }) }; return result.value }
   const computer = input => rpc('qiuya-tools.computer.control', input, true)
-  const initialSettings = await rpc('settings/describe'), initial = initialSettings.namespaces.find(row => row.ns === 'qiuya-tools')
-  if (!initial || !initialSettings.writable) throw Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED')
-  const keys = ['enabled', 'computerUseEnabled'], original = keys.map(key => ({ key, own: Object.hasOwn(initial.user ?? {}, key), value: initial.user?.[key], effective: initial.value[key] }))
-  const summary = []; let setup, mode, failure
+  const keys = ['enabled', 'computerUseEnabled'], summary = []; let original, setup, mode, failure, diagnostic, phase = 'owner-settings-read'
   const restoration = { localMode: false, featureFlags: false }
   const setEnabled = async () => { const described = await rpc('settings/describe'), row = described.namespaces.find(value => value.ns === 'qiuya-tools'); await rpc('settings/mutate', { ns: 'qiuya-tools', ops: keys.map(key => ({ op: 'set', path: [key], value: true })), expectedRevision: row.revision }) }
   try {
-    await setEnabled()
-    let state = await computer({ op: 'status' }); mode = state.native?.mode
-    if (mode !== 'local' || state.sessions.some(session => !['stopped', 'faulted', 'disconnected'].includes(session.state))) throw Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION')
+    const initialSettings = await rpc('settings/describe'), initial = initialSettings.namespaces.find(row => row.ns === 'qiuya-tools')
+    if (!initial || !initialSettings.writable) throw Object.assign(Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED'), { code: 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED' })
+    original = keys.map(key => ({ key, own: Object.hasOwn(initial.user ?? {}, key), value: initial.user?.[key], effective: initial.value[key] }))
+    phase = 'owner-enable'; await setEnabled()
+    phase = 'owner-status'; let state = await computer({ op: 'status' }); mode = state.native?.mode
+    if (mode !== 'local' || state.sessions.some(session => !['stopped', 'faulted', 'disconnected'].includes(session.state))) throw Object.assign(Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION'), { code: 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION' })
     for (let task = 1; task <= 3; task++) {
-      setup = await test({ op: 'prepare', task })
-      await computer({ op: 'connect', mode: 'remote', endpoint: setup.endpoint, token: setup.token }); delete setup.token
-      await computer({ op: 'start', sessionId: setup.sessionId, targetId: setup.targetId })
-      await test({ op: 'arm', sessionId: setup.sessionId })
+      phase = 'owner-prepare'; setup = await test({ op: 'prepare', task })
+      phase = 'owner-connect'; await computer({ op: 'connect', mode: 'remote', endpoint: setup.endpoint, token: setup.token }); delete setup.token
+      phase = 'owner-start'; await computer({ op: 'start', sessionId: setup.sessionId, targetId: setup.targetId })
+      phase = 'owner-arm'; await test({ op: 'arm', sessionId: setup.sessionId })
+      phase = 'owner-prompt'
       await rpc('session/prompt', { request: { requestId: crypto.randomUUID(), sessionId: setup.sessionId, mode: 'queue', content: [{ type: 'text', text: setup.prompt }] } })
-      let ended = false
+      phase = 'owner-wait'; let ended = false
       for (let i = 0; i < 180; i++) {
         await new Promise(done => setTimeout(done, 1000))
         state = await test({ op: 'status', sessionId: setup.sessionId })
         if (state.fatal || (state.state === 'idle' && state.requests > 0)) { ended = true; break }
       }
-      await rpc('session/cancel', { request: { sessionId: setup.sessionId } })
+      phase = 'owner-finish'; await rpc('session/cancel', { request: { sessionId: setup.sessionId } })
       await computer({ op: 'stop', sessionId: setup.sessionId })
       const result = await test({ op: 'finish', sessionId: setup.sessionId })
       summary.push({ task, passed: result.passed, steps: result.steps, requestAttempts: result.requestAttempts, retainedImageOccurrences: result.retainedImageOccurrences, businessPassed: result.businessPassed, visualNonceRead: result.visualNonceRead })
-      setup = undefined; await computer({ op: 'connect', mode: 'local' })
+      setup = undefined; phase = 'owner-reset-local'; await computer({ op: 'connect', mode: 'local' })
       if (!ended || !result.passed) break
     }
-  } catch (error) { failure = /^VISION_[A-Z0-9_]{1,70}$/u.test(error.message) ? error.message : 'VISION_TEST_FAILED' }
+  } catch (error) {
+    diagnostic = projectVisionFailure(error, error?.diagnostic?.phase !== 'unknown' && error?.diagnostic?.phase || phase); failure = diagnostic.code
+    await test({ op: 'failure', phase: diagnostic.phase, code: diagnostic.code }).catch(() => {})
+  }
   finally {
     if (setup?.sessionId) {
       await rpc('session/cancel', { request: { sessionId: setup.sessionId } }).catch(() => {})
@@ -284,15 +323,16 @@ async function runInOwnerRenderer() {
         const current = await computer({ op: 'status' }); restoration.localMode = current.native?.mode === 'local' && current.sessions.every(session => ['stopped', 'faulted', 'disconnected'].includes(session.state))
       }
     } catch { failure ??= 'VISION_CONNECTION_RESTORE_FAILED' }
-    try {
+    try { if (original) {
       const described = await rpc('settings/describe'), row = described.namespaces.find(value => value.ns === 'qiuya-tools')
       await rpc('settings/mutate', { ns: 'qiuya-tools', expectedRevision: row.revision, ops: original.map(item => item.own ? { op: 'set', path: [item.key], value: item.value } : { op: 'unset', path: [item.key] }) })
       const final = (await rpc('settings/describe')).namespaces.find(value => value.ns === 'qiuya-tools')
       restoration.featureFlags = original.every(item => Object.hasOwn(final.user ?? {}, item.key) === item.own && (!item.own || JSON.stringify(final.user[item.key]) === JSON.stringify(item.value)) && final.value[item.key] === item.effective)
+    }
     } catch { failure ??= 'VISION_FEATURE_RESTORE_FAILED' }
     try { const receipt = await test({ op: 'delivery', restore: restoration }); if (!receipt.passed) failure ??= 'VISION_DELIVERY_FAILED' }
     catch { failure ??= 'VISION_DELIVERY_FAILED' }
   }
-  const result = { kind: 'QIUYA_REAL_VISION_TEST', passed: !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, tasks: summary, restoration, ...(failure ? { error: failure } : {}) }
+  const result = { kind: 'QIUYA_REAL_VISION_TEST', passed: !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, tasks: summary, restoration, ...(failure ? { error: failure, diagnostic: diagnostic ?? projectVisionFailure({ code: failure }, phase) } : {}) }
   console.log(JSON.stringify(result)); return result
 }
