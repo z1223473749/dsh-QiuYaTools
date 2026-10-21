@@ -2,7 +2,7 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告区分实际桌面、浏览器、确定性模型、故障注入及真实模型，不把这些证据相互替代。原始范围见 [开发计划](windows-and-computer-use-development-plan.md)，操作方式见 [使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 当前三份安装包已重新生成，Mac当前包安装恢复5/5通过，当前Windows ARM64和x64包各真实宿主12/12及安装5/5通过；x64为真实x64 Node及helper在ARM来宾中的转译执行，不代表原生x64硬件。原生预览缺少置顶已用创建句柄时声明 `WS_EX_TOPMOST` 修复，ARM64与x64正式helper各52项原生检查及对应架构Node隐藏启动5项均通过；诊断候选与早期生产包的结果不能直接移记到当前包。批量归档的无关刷新关闭菜单缺陷已独立复现、先红后绿修复。Mac最近预检仍锁屏，新的WKWebView手动输入、完整Mac长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉任务也缺少合法owner连接前提。Excel专用加载项和macOS锁屏扩展尚未实现，不能称为“完全复刻Codex”。
+**整体尚未通过完整验收。** 当前三份安装包已重新生成，Mac当前包安装恢复5/5通过，当前Windows ARM64和x64包各真实宿主12/12及安装5/5通过；x64为真实x64 Node及helper在ARM来宾中的转译执行，不代表原生x64硬件。原生预览缺少置顶已用创建句柄时声明 `WS_EX_TOPMOST` 修复，ARM64与x64正式helper各52项原生检查及对应架构Node隐藏启动5项均通过；诊断候选与早期生产包的结果不能直接移记到当前包。批量归档的无关刷新关闭菜单缺陷已独立复现、先红后绿修复。当前正式ARM64 helper的原生WebView2/1280×720源画面30分钟、5故障恢复及自然清理整链已通过，13.5045FPS/P9544ms。Mac最近预检仍锁屏，新的WKWebView手动输入、完整Mac长稳、持有输入后崩溃恢复和反向独立目标仍被阻塞；真实视觉任务也缺少合法owner连接前提。Excel专用加载项和macOS锁屏扩展尚未实现，不能称为“完全复刻Codex”。
 
 ## 1. 版本、环境及证据口径
 
@@ -19,11 +19,13 @@
 | --- | --- | --- |
 | Mac 完整检查 | passed：`QIUYA_TOOLS_UNIVERSAL=1 npm run check`，**533/533**，0失败、0跳过；含类型检查、通用构建、逻辑与集成回归，不等同全部桌面 E2E | [日志](../artifacts/computer-use/final-lifecycle-webview-check.log) |
 | Windows 完整 Node 检查 | passed：源码快照`3a4dcd2`，真实Windows ARM64 Node22.23.3，**533总数、529 passed、0 failed、4 skipped**；仅跳过依赖Swift/lipo的Mac检查，含批量菜单及最新进程生命周期回归 | [报告](../artifacts/computer-use/windows-unit-lifecycle-webview-final/report.json)、[日志](../artifacts/computer-use/windows-unit-lifecycle-webview-final/unit.log) |
+| 证据包与输入编排专用回归 | passed：独立Python证据包4/4；本机mock CLI编排4/4，验证成功/事后残留/注销异常/强制停止判定及原始报告不改写。它们不计入Node的533项，也不代表Windows输入实测 | [证据包回归](../artifacts/computer-use/evidence-packaging-regression/report.json)、[输入编排回归](../artifacts/computer-use/windows-input-runner-orchestration/report.json)、[可重跑mock脚本](../artifacts/computer-use/windows-input-runner-orchestration/test-runner.mjs) |
 | 真实 Chromium 预览 | passed：**17/17**，确定性 driver；覆盖坐标、光标、接管、文字、继续/停止、位图释放、坏 JPEG、迟到解码、旧手势、迟到自动暂停 | [报告](../artifacts/computer-use/preview-web/report.json) |
 | Windows ARM64 原生 | passed：当前正式ARM64 helper `42889f9c…` **52/52**，真实桌面输入、UIA、WebView2、租约、崩溃与 guardian、持续可见预览；个别注入 writer 故障检查不使用真实 OS 输入 | [报告](../artifacts/computer-use/windows-native-pinning-final/report.json) |
 | Windows Node 隐藏启动 | passed：真实ARM64 Node `windowsHide:true` 启动当前 `42889f9c…` helper，窗口可见和回执 **5/5** | [报告](../artifacts/computer-use/windows-node-hidden-pinning-final/report.json) |
 | Windows当前x64原生复核 | passed：当前 `3f0073ba…` **52/52**。首轮执行至37项中36通过、humanInput通知断言1失败仍保留；只读排空现有stdout后在原stale reply之后20ms收到该事件，extraActions=0、extraHidInputs=0，没有改PE或重发输入 | [52项复核](../artifacts/computer-use/windows-native-x64-event-drain-final/report.json)、[首轮失败](../artifacts/computer-use/windows-native-x64-pinning-final/report.json) |
 | Windows当前x64隐藏启动 | passed：真实x64 Node22.23.3启动当前x64 helper，**5/5**；PD ARM来宾转译，不能扩展为原生x64硬件 | [报告](../artifacts/computer-use/windows-node-hidden-x64-pinning-final/report.json) |
+| Windows原生WebView2画面长稳 | passed：当前正式ARM64 helper的1280×720源/JPEG/canvas，30分钟/5恢复，13.5045FPS、P9544ms、0invalid/0wrongDimensions；238身份自然退出。浮窗实际600×420缩放，没有混合滚动拖拽30分钟负载 | [runner](../artifacts/computer-use/windows-webview2-720p-final/report.json)、[delivery](../artifacts/computer-use/windows-webview2-720p-final/delivery-verdict.json) |
 | Windows 在途拖动释放 | passed（置顶修复前helper的历史证据）：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
 | Windows ARM64实际Harness | passed：当前包 `5609bc04…`、实际helper `42889f9c…`，真实Host/UI **12/12**；两次原生TopMost=true、中文实际提交、主Agent图片/native动作、trusted浏览器拖出、8MiB文件交换通过，文件分支无原生输入误发。ARM64原位暴露点击点(1204,133)可用，本轮没有走corner移动fallback | [报告](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/manual-preview-input-evidence.json)、[点击前置](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/fixture-user-activation-diagnostic.json) |
 | Windows x64实际Harness | passed：当前包 `95f0c9b9…`、真实x64 Node与helper `3f0073ba…`，**12/12**、exit0；两次TopMost=true、manual中文实际目标提交/回复、主Agent确定性图片运输、trusted拖出、批量归档及8MiB文件交换通过。ARM来宾转译，非原生x64硬件；历史失败保留 | [当前报告](../artifacts/harness-e2e/windows-bulk-stable-x64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-x64-final/manual-preview-input-evidence.json)、[完成回执](../artifacts/harness-e2e/windows-bulk-stable-x64-final/completed.json) |
@@ -73,7 +75,17 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 ## 5. 性能、资源与修复证据
 
-### 当前1280×720原生WebView2：60秒通过，30分钟进行中；早期失败保留
+### 当前1280×720原生WebView2：30分钟通过；早期失败保留
+
+**当前正式ARM64 helper的30分钟画面链路passed。** [原始报告](../artifacts/computer-use/windows-webview2-720p-final/report.json)：1,800,064ms、24,309个不同源时钟帧，完整时段**13.5045FPS**、P95 **44ms**、0invalid、0wrongDimensions，5次终止/显式重开/CDP重连；最长画面间隔8,765ms包含恢复停顿。热身与旧代排除不从完整壁钟扣除，0invalid不等于没有掉源帧。helper为当前正式`42889f9c…`，Host/预览bundle为`ef496e8d…`；后者从相同生产源码构建，测试owner carrier不代替真实SDK认证，当前tgz的Host12另验。
+
+61份约30秒资源采样：Node RSS峰**90,710,016B**，整个自有进程树WS峰**1,478,590,464B**，低于原1.5GiB（1,610,612,736B）门槛；直接native最多1、native树最多3。采样含PowerShell/conhost，间隙瞬时峰未测。PrivatePageCount由603,820,032至918,200,320B、峰939,827,200B，只作诊断，不冒充工作集，也不称无限时段无泄漏。[资源汇总](../artifacts/computer-use/windows-webview2-720p-final/resource-summary.json)与图保留原runner判定。
+
+[inner清理](../artifacts/computer-use/windows-webview2-720p-final/cleanup-verification.json)追踪237个子进程身份；runner退出后[238身份复查](../artifacts/computer-use/windows-webview2-720p-final/post-run-cleanup-verification.json)全部消失，[outer](../artifacts/computer-use/windows-webview2-720p-final/outer-cleanup-verdict.json)自然退出且forcedRequired=false。[launcher](../artifacts/computer-use/windows-webview2-720p-final/launcher-completed.json)确认stdout/stderr复制完成，exit0；[最终delivery](../artifacts/computer-use/windows-webview2-720p-final/delivery-verdict.json)passed。预览附件spy写入0，不代替SDK数据库测量。source/JPEG/canvas backing为1280×720，实际浮窗600×420缩放；本轮为动画/采集/显示负载，没有30分钟scroll/drag混合输入负载。
+
+![当前原生WebView2长稳资源趋势](../artifacts/computer-use/windows-webview2-720p-final/resource-trend.png)
+
+以下保留测试工具迭代中的失败，不覆盖当前通过记录：
 
 [首轮实际报告](../artifacts/computer-use/windows-webview2-720p-smoke/report.json)为**failed**：WinForms生产helper `42889f9c…` 中的真实WebView2，经生产capture/Host/预览canvas；30,073ms、300个不同源时钟帧，包含1次helper终止和显式重开/CDP重连。完整壁钟 **9.9757 FPS < 10**，即使首末有效帧区间10.0979FPS也不能替代完整时段门槛；P95 **96ms**、0invalid、0wrongDimensions，WS峰 **1,411,133,440字节**低于原1.5GiB门槛，Node峰73,416,704字节。画面时钟读取独立于native/Host frame ID，6个热身帧排除、14个迟到旧代通知忽略；没有降低门槛或把接近10改成通过。
 
@@ -83,11 +95,17 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 [独立生命周期实测](../artifacts/computer-use/windows-node-console-lifecycle-proof/lifecycle-summary.json)也证伪了“CreateNoWindow会消除conhost”：同一自有Node的20次采样均见直接conhost，Node自然运行6,104ms后相关精确身份均退出，全程无kill/GUI输入。原report.passed=false对应被证伪的无conhost假设，不是电脑操控功能失败。当前测试只把同快照已归属、精确出生时间/系统完整路径/直接父关系均校验的runner控制台基础进程延至runner退出后复查；它仍计入资源、追踪及最后自然退出检查。其他native/WebView2/source必须先退出；任何强制清理或残留都会使delivery失败。较大PowerShell通过活动UUID文件及SHA校验的短File命令传输，未改系统策略。
 
-修正后的[60秒/1故障](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/report.json)整链passed：60,092ms、797帧、完整时段13.2630FPS、P95 40ms、0invalid/0wrongDimensions；Node RSS峰71,905,280B、自有WS峰1,459,101,696B，未放宽原门槛。[inner清理](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/cleanup-verification.json)、[runner退出后49身份核验](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/post-run-cleanup-verification.json)、[outer自然退出](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/outer-cleanup-verdict.json)及[delivery](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/delivery-verdict.json)均通过，exit0、stdout/stderr复制完成，无强制清理。这是短测，**30分钟/5故障目前进行中，尚未判定**。
+修正后的[60秒/1故障](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/report.json)整链passed：60,092ms、797帧、完整时段13.2630FPS、P95 40ms、0invalid/0wrongDimensions；Node RSS峰71,905,280B、自有WS峰1,459,101,696B，未放宽原门槛。[inner清理](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/cleanup-verification.json)、[runner退出后50身份核验](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/post-run-cleanup-verification.json)、[outer自然退出](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/outer-cleanup-verdict.json)及[delivery](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/delivery-verdict.json)均通过，exit0、stdout/stderr复制完成，无强制清理。这是短测；其后当前正式30分钟/5故障整链已独立通过，见本节首段。
 
 [页面像素证据](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/native-webview2-page.png)来自实际原生页面：source/captured JPEG/canvas backing均1280×720，但Form仍600×420缩放显示，不是物理720p viewport，也没有scroll/drag endurance负载。正式helper SHA为`42889f9c…`，生产Host/预览bundle SHA为`ef496e8d…`；测试owner carrier不替代真实Harness SDK认证，包的UI12另验。
 
 仅清理语义的[实际Session0预检](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight-2/report.json)**6/6通过**，无GUI、无input：自有15秒寿命Node child验证精确身份query、birth+1跳过、wrongpath拒绝且原child仍活、exact pinned Kill/Wait及退出后查询。此前[SystemTemp staging失败](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight/report.json)保留，当次没有启动child/GUI。另有[HTTP/File AST预检](../artifacts/computer-use/windows-webview2-cleanup-review/powershell-parse-http.json)3个源脚本解析通过、执行进程操作0；它们不证明实际WebView长稳或自然清理已经通过。
+
+### 独立滚动/拖拽输入短测：首轮failed，等待只读取证修正复验
+
+[首轮原始结果](../artifacts/computer-use/windows-input-short-final/report.json)failed：当前正式`42889f9c…` helper已完成1次正常拖动及3个已核验滚轮动作，随后up后的只读`LB_GETTOPINDEX`经300ms SendMessageTimeout返回失败。该次没有错误码/逐次耗时证据，根因尚未确定，不能直接归因于产品输入或固定称为超时。[独立delivery](../artifacts/computer-use/windows-input-short-final/delivery-verdict.json)false；原生输入/进程自然清理、任务自然Ready/LastTaskResult0、事后身份检查及注销均通过，没有重放输入或改写原始report。
+
+Windows[AST及oracle编译预检](../artifacts/computer-use/windows-input-short-preflight/report.json)已passed，只解析源码/编译C#，未启动GUI或调用oracle。正在给同一窗口的只读查询增加错误码、耗时与2秒总预算的有界重试；首个成功值立即返回且不按期望值筛选，值不符仍失败。复验尚未完成。本项仅约两分钟native输入验证，不是30分钟混合renderer长稳。
 
 ### 历史 Windows 640×360共享Edge前端30分钟源画面→renderer
 
@@ -105,7 +123,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 门槛未放宽：≥10完整时段唯一帧/秒，源时钟到完成绘制P95≤500ms，0坏/过旧时间戳，5次受控helper终止后显式重启，0逐帧附件写入；Node RSS≤512MiB，整个自有进程树 WorkingSet sum≤**1,610,612,736字节**，直接native≤1、native树≤4。进程统计包含采样PowerShell/conhost，按同快照PID+创建时间排除PID复用；精确测试helper路径保留孤儿。PrivatePageCount只是原始观察，不另设阈值，WS被trim不能证明私有提交回收。
 
-原生WebView2＋1280×720首轮30秒实测因完整壁钟FPS和清理失败，详细结果见前段；修正runner后的60秒整链已通过，正式30分钟进行中。这份历史Edge报告不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
+原生WebView2＋1280×720首轮30秒实测因完整壁钟FPS和清理失败，详细结果见前段；修正runner后的60秒及正式30分钟整链均已独立通过，见本节首段。这份历史Edge报告不是原生WebView2 renderer长稳，也没有覆盖720p、全部DPI或在途滚动/拖动负载。0无效时间戳不等于零丢源帧，最大间隔包含计划中的helper故障。空闲pause ACK与真正按住后的mouse-up P95分开计。
 
 ### 首轮完整renderer：failed，保留原记录
 
@@ -162,7 +180,7 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 [Mac完整30分钟旧报告](../artifacts/computer-use/macos-soak-fixed/report.json)是 **failed**：1,800,796ms、19,691有效唯一帧、892无效/过旧时间戳、5次受控终止、0附件写入；即使P95 104ms或旧uniqueFPS达标也不能改判通过。源时间戳冻结在2026-10-20 18:02:33.511 UTC，与pmset显示器熄灭同秒，证据在 `environment-interruption/`。fixture已增加仅生命周期内的防显示器闲置休眠断言与draw遥测；没有修改全局电源或登录设置。修复后短测仍失败，最新桌面锁屏，完整重验blocked。
 
-最近[预检](../artifacts/computer-use/preflight-during-final-pinning-validation/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5项、共享Chromium预览17项及Chrome通道10项均不替代它。
+2026-10-20 23:38 UTC的最新[只读预检](../artifacts/computer-use/preflight-final-native-endurance/report.json)权限为true但session-unlocked为blocked，前台loginwindow。新guard只读/互斥/正常转移/空租约崩溃恢复4项通过，真正按住拖动返回FOCUS_CHANGED，没有观察到down，不能称持有输入后崩溃恢复通过。新canvas的Mac真实WKWebView接管也需解锁后重验；Mac安装5项、共享Chromium预览17项及Chrome通道10项均不替代它。
 
 | 未完成验收 | 状态 | 前提/范围 |
 | --- | --- | --- |
@@ -187,6 +205,12 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 | `dsh-qiuya-tools-win32-arm64.tgz` | 62,725,649 | `5609bc04963b13be517c5187821343c71c4bd5747a3dc5138e811a083a1bff14` |
 | `dsh-qiuya-tools-win32-x64.tgz` | 66,978,457 | `95f0c9b968f9e5464b71d64e505804ecefe1ac2c1cd06abc48e1f55a79328604` |
 
+本机没有全局PATH中的`dsh`。可在Harness插件管理器添加对应本地tgz；Mac本机也可使用已验证存在的内置CLI（将`实际profile名`替换为你使用的profile）：
+
+```sh
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile "实际profile名" add "/Users/qiuya/code/zh-code/dsh-QiuYaTools/artifacts/dsh-qiuya-tools-darwin-universal.tgz"
+```
+
 这些是Harness插件tgz，不是独立OS安装器。Windows最终用户不需要.NET开发SDK，WebView2 Runtime前提及命令见 [安装指南](computer-use-guide.md)。[原生与依赖manifest](../artifacts/delivery-manifest.json)绑定精确资产，置顶修复前的包和helper另存 [pre-pinning-candidate](../artifacts/pre-pinning-candidate/preservation.json)，正式置顶但批量菜单修复前的包另存 [pre-bulk-menu-candidate](../artifacts/pre-bulk-menu-candidate/preservation.json)；更早候选保留于 `artifacts/pre-memory-candidate/`。
 
 核心复现入口：
@@ -201,8 +225,8 @@ node scripts/test-harness-install.mjs --package /absolute/candidate.tgz --old-pa
 
 Windows PD入口：[原生runner](../scripts/test-windows-native-pd.mjs)、[宿主与安装runner](../scripts/e2e-windows-harness-pd.mjs)、[原生WebView2/720p长稳runner](../scripts/soak-webview2-windows-pd.mjs)（历史共享Edge runner为`scripts/soak-windows-pd.mjs`）、[跨电脑文件](../scripts/e2e-windows-exchange-pd.mjs)。长稳与GUI测试的短租约必须按已导出的guest测量起点协调，避免互相抢桌面。
 
-历史 `ab9d9b12…` 包的真实窗口证据（不是当前新包的UI复验）：
+当前ARM64 `5609bc04…` 包的真实窗口证据（本地确定性provider，不是设计稿）：
 
-![Windows实际悬浮预览](../artifacts/harness-e2e/windows-canvas-final/manual-preview-window.jpg)
+![Windows实际悬浮预览](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/manual-preview-window.jpg)
 
-[目标实际收到中文并回复](../artifacts/harness-e2e/windows-canvas-final/manual-preview-target-result.jpg)。以上为实际测试窗口，不是设计稿；本地确定性模型回复不能称真实视觉推理。
+[目标实际收到中文并回复](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/manual-preview-target-result.jpg)。以上为实际测试窗口，不是设计稿；本地确定性模型回复不能称真实视觉推理。

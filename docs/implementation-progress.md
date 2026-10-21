@@ -14,11 +14,11 @@
 | P3 主Agent与图像 | blocked（真实模型） | 双端历史实际SDK工具、附件与adapter运输通过；Mac实际3次带图请求/4图片块，当前Windows ARM64 5609bc04…Host12/12亦有带图与native动作，上一代0d341525…电脑case9通过。确定性provider不证明视觉推理。当前官方flash目录声明text+image，真实owner RPC401、桌面锁屏未取得合法renderer连接，实际账号服务及固定视觉任务仍未验 |
 | P4A Mac原生执行器 | blocked | ARM64历史原生11项、通用构建/自测通过；新guard只读/互斥/转移/空租约崩溃恢复4项通过。真实按住后崩溃恢复未完成，最新桌面锁屏；Intel与最低系统未实测 |
 | P4B Windows原生执行器 | passed（两架构列明范围） | 当前正式ARM64与x64 helper各原生52/52及对应架构真实Node隐藏5/5通过，ARM64 remote15/15通过；矩阵windows-pinning-native-matrix.json绑定精确SHA。x64原37项中36通过、humanInput断言1失败保留；只读排空stdout在原stale reply后20ms收事件，extraActions=0/extraHidInputs=0，未改PE或补输入。历史mouse-up30次P95 21.7592ms/最大24.1073ms、截图8项保留原代次，仍无原生x64硬件证据 |
-| P5 悬浮实时预览 | failed / blocked（完整矩阵） | 共享Chromium17/17，当前两架构正式包各Host12/12及原生手动中文/四按钮/两次置顶通过；本轮只用原位暴露点，未走corner移动fallback。旧0eb/3c924的640×360 Edge30分钟passed不能移作新helper/WebView2/720p证据。新720p真实原生WebView2首轮30,073ms/300帧/fullwall9.9757<10、P9596ms/0invalid/1fault/WS1,411,133,440B，FPS与清理均failed。后续60秒整链13.2630FPS/P9540ms/0invalid/1fault及自然清理passed，正式30分钟进行中；Mac长稳failed后仍锁屏阻塞 |
+| P5 悬浮实时预览 | failed / blocked（完整矩阵） | 共享Chromium17/17，当前两架构正式包各Host12/12及原生手动中文/四按钮/两次置顶通过；本轮只用原位暴露点，未走corner移动fallback。旧0eb/3c924的640×360 Edge30分钟passed不能移作新helper/WebView2/720p证据。新720p真实原生WebView2首轮30,073ms/300帧/fullwall9.9757<10、P9596ms/0invalid/1fault/WS1,411,133,440B，FPS与清理均failed。后续60秒整链13.2630FPS/P9540ms/0invalid/1fault及自然清理passed，正式30分钟/5恢复整链13.5045FPS/P9544ms、238身份自然退出passed；Mac长稳failed后仍锁屏阻塞 |
 | P6 独立环境 | blocked（反向实机） | 当前正式ARM64 helper Mac→Windows15/15，配对/撤权/心跳通过，environment内嵌report。手动文件交换35项、真实NTFS10/10、当前ARM64 Host UI8MiB上传/下载与同名拒绝通过，文件分支observe/lease/release/act/preview调用0（status查询不为0）。Windows→Mac因Mac锁屏未发送输入，不用回环替代第二目标 |
 | P7 浏览器通道 | passed | Mac Chrome与Windows Edge各10项实际浏览器检查；独立持久profile、显式CDP、站点许可、导航/标签页、Agent注册及失败释放回归。没有随包日常profile浏览器扩展，真实视觉推理由P3另验 |
 | P8 安装与更新 | passed（当前本地测试包范围） | 当前Mac58126d4a…、ARM64 5609bc04…与x64 95f0c9b9…各官方管理器5/5通过；x64是真实x64 Node在ARM来宾转译。上一代正式置顶包0d341525…/db8bdccc…各5/5保留。当前三包严格版本/协议/架构/hash/大小及隔离Host加载通过。CI未远程执行，正式签名、公证、公开发布not-run |
-| P9 完整验收 | failed / blocked | 当前ARM64及x64包各实际UI12/12与安装5/5通过，两架构正式PE52+隐藏5及ARM64 remote15通过；Windows同快照全量529 passed/4 skipped/0 failed。原生WebView2/720p首轮短测FPS及清理failed，修正后的60秒整链passed，正式30分钟进行中。Mac长稳failed，后续Mac输入、反向目标与真实模型blocked；整体不能报告完成 |
+| P9 完整验收 | failed / blocked | 当前ARM64及x64包各实际UI12/12与安装5/5通过，两架构正式PE52+隐藏5及ARM64 remote15通过；Windows同快照全量529 passed/4 skipped/0 failed。原生WebView2/720p首轮短测FPS及清理failed，修正后的60秒及正式30分钟/5恢复整链passed。Mac长稳failed，后续Mac输入、反向目标与真实模型blocked；整体不能报告完成 |
 | P10 Excel与锁屏扩展 | not-run，未实现 | 专用Excel加载项、macOS锁屏操控需独立实现和对应Office/系统会话环境；普通点击不替代专用扩展 |
 
 ## 主要修复及其依据
@@ -48,13 +48,15 @@
 
 原生WebView2/720p[首轮短测](../artifacts/computer-use/windows-webview2-720p-smoke/report.json)failed：30,073ms/300帧，完整壁钟9.9757FPS<10（未放宽门槛），P9596ms、0invalid、0wrongDimensions、1fault，WS1,411,133,440B bounded。source/captured JPEG/canvas1280×720，Form600×420缩放，不能称物理720p viewport或scroll/drag endurance。runner conhost10996被误要求提前退出并forced killed，inner=false；outer4,704字符EncodedCommand执行失败，delivery=false；事后48身份均gone不能代替outer通过。原失败保留。第二轮60秒虽然12.7932FPS/P9551ms达标，仍因错误的GetConsoleWindow归属与空列表清理失败；该API推断已删除。独立CreateNoWindow实测20次均见自有Node直接conhost，Node自然退出后均消失，未使用kill。当前按同快照精确身份/路径/直接父关系仅将runner控制台基础进程延后核验，仍计入资源与outer自然退出；其他native/WebView2/source须先退出，任何强制清理使delivery失败，大PS改短File传输。
 
-[修正后60秒整链](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/delivery-verdict.json)passed：60,092ms/797帧/完整时段13.2630FPS/P9540ms/0invalid/0wrongDimensions/1fault，NodeRSS峰71,905,280B、自有WS峰1,459,101,696B。inner、runner退出后49身份、outer自然清理和launcher回执均passed，exit0、无强制清理。短测不替代30分钟，正式30分钟/5fault进行中；详细原始链接见测试报告。
+[修正后60秒整链](../artifacts/computer-use/windows-webview2-720p-lifecycle-smoke/delivery-verdict.json)passed：60,092ms/797帧/完整时段13.2630FPS/P9540ms/0invalid/0wrongDimensions/1fault，NodeRSS峰71,905,280B、自有WS峰1,459,101,696B。inner、runner退出后50身份、outer自然清理和launcher回执均passed，exit0、无强制清理。短测不替代30分钟，[正式30分钟/5fault整链](../artifacts/computer-use/windows-webview2-720p-final/delivery-verdict.json)随后passed：1,800,064ms/24,309帧/13.5045FPS/P9544ms/0invalid/0wrongDimensions，NodeRSS峰90,710,016B、自有WS峰1,478,590,464B；61资源样本，238身份事后自然退出，exit0且无强制清理。最长间隔8,765ms含故障恢复，PrivatePageCount603,820,032→918,200,320B、峰939,827,200B，不称无限时段无泄漏。source/canvas1280×720、浮窗600×420缩放，仍无30分钟滚动拖拽混合负载；详细原始链接见测试报告。
+
+新增独立120秒滚动/拖拽短测的[首轮](../artifacts/computer-use/windows-input-short-final/report.json)failed：1次正常拖动与3个已验证wheel后，只读LB_GETTOPINDEX系统消息返回失败；300ms/API返回不足以确定根因。输入及4个已知helper自然清理、任务Ready/exit0与注销、事后检查均passed，delivery仍false。原始失败保留，正在仅修正只读oracle的有界重试与错误码记录，复验尚未完成；未改生产PE或重发任何输入。
 
 清理语义[实际Session0预检6/6](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight-2/report.json)通过，仅自有15秒寿命Node子进程，无GUI/input；此前[SystemTemp staging失败](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight/report.json)保留，当次没有启动child。另[HTTP/File AST三个源解析](../artifacts/computer-use/windows-webview2-cleanup-review/powershell-parse-http.json)通过，执行进程操作0；不替代长稳或自然清理结果。
 
 1. 历史3c924源码/0ebhelper的30分钟源画面→Edge renderer passed：1,801,027ms、23,025帧、完整时段12.7844FPS、P9532ms、0无效、5终止/显式重启、0附件spy写入，Node RSS峰133,132,288B，自有WS峰1,549,283,328B<1.5GiB。61份资源采样及私有提交趋势保留，完成回执exit0，171个采样进程身份事后均已退出。负载仅640×360的共享Edge前端，不代替原生WebView2/720p/滚动拖动长稳。
 2. 历史Windows renderer完整30分钟画面指标通过但资源failed：既有PID复用误归属，也有真实自有进程超限。统计修复和图片/Blob对照后，采用位图释放修复；保留所有失败报告。旧native采集组件30分钟passed不是最终renderer全量证明。
-3. Mac完整30分钟旧报告failed，显示器熄灭同秒源时钟冻结；fixture仅增加生命周期内防显示器闲置休眠和draw遥测，没有更改全局电源或登录。[最新预检](../artifacts/computer-use/preflight-during-final-pinning-validation/report.json)仍session-unlocked blocked、前台loginwindow，权限true不等于可输入。解锁后须重验Mac长稳、新WKWebView接管、真实持有输入后的guardian和Windows→Mac目标。
+3. Mac完整30分钟旧报告failed，显示器熄灭同秒源时钟冻结；fixture仅增加生命周期内防显示器闲置休眠和draw遥测，没有更改全局电源或登录。[最新预检](../artifacts/computer-use/preflight-final-native-endurance/report.json)仍session-unlocked blocked、前台loginwindow，权限true不等于可输入。解锁后须重验Mac长稳、新WKWebView接管、真实持有输入后的guardian和Windows→Mac目标。
 4. 真实视觉固定任务blocked：官方默认account/flash目录已确认text+image；现有desktop公开owner RPC401且锁屏未取得合法renderer，尚未调用真实推理。另一本机49506/v1/models的503只对应自定义route，不代表默认account无图片能力；解锁后应复用现有登录态验证。
 5. 另需原生Intel Mac/Windows x64硬件、旧系统、全部DPI/物理多屏、AltGr/死键和完整路径矩阵。P10专用扩展及浏览器日常profile扩展仍未实现。
 
