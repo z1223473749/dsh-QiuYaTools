@@ -21,25 +21,49 @@ enum NativeLeaseActor: String {
     override var canBecomeMain: Bool { false }
 }
 
-@MainActor private final class AICursorView: NSView {
-    var tip = CGPoint(x: 10, y: 10)
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func draw(_ dirtyRect: NSRect) {
+@MainActor enum AICursorGlyph {
+    static let hotspot = CGPoint(x: 2, y: 3)
+
+    static func path(at tip: CGPoint) -> NSBezierPath {
+        let offset = CGPoint(x: tip.x - hotspot.x, y: tip.y - hotspot.y)
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: offset.x + x, y: offset.y + y) }
+        // The same 18 × 20 paper-plane outline as the user-approved review and
+        // preview SVG. The small tip, rather than the glow's bounds, is input.
+        let arrow = NSBezierPath()
+        arrow.move(to: p(3.1, 2.4))
+        arrow.curve(to: p(1.8, 3.5), controlPoint1: p(2.3, 2), controlPoint2: p(1.6, 2.6))
+        arrow.line(to: p(4, 16))
+        arrow.curve(to: p(6, 16.3), controlPoint1: p(4.2, 17.1), controlPoint2: p(5.4, 17.3))
+        arrow.line(to: p(9, 11.4)); arrow.line(to: p(14.4, 9.1))
+        arrow.curve(to: p(14.5, 6.9), controlPoint1: p(15.5, 8.7), controlPoint2: p(15.6, 7.4))
+        arrow.close()
+        return arrow
+    }
+
+    static func draw(at tip: CGPoint) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        let arrow = NSBezierPath()
-        let points: [CGPoint] = [.zero, CGPoint(x: 0, y: 29), CGPoint(x: 8, y: 22),
-            CGPoint(x: 16, y: 38), CGPoint(x: 23, y: 34), CGPoint(x: 15, y: 20), CGPoint(x: 29, y: 20)]
-        arrow.move(to: tip)
-        for point in points.dropFirst() { arrow.line(to: CGPoint(x: tip.x + point.x, y: tip.y + point.y)) }
-        arrow.close()
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let arrow = path(at: tip)
         let glow = NSShadow()
-        glow.shadowColor = NSColor(calibratedWhite: 0.22, alpha: 0.42)
-        glow.shadowBlurRadius = 7; glow.shadowOffset = .zero; glow.set()
-        NSColor(calibratedWhite: 0.57, alpha: 0.96).setFill(); arrow.fill()
-        NSColor.white.setStroke(); arrow.lineWidth = 2; arrow.lineJoinStyle = .round; arrow.stroke()
+        glow.shadowColor = NSColor(srgbRed: 81 / 255, green: 84 / 255, blue: 90 / 255, alpha: 0.44)
+        glow.shadowBlurRadius = 10; glow.shadowOffset = CGSize(width: 0, height: -1); glow.set()
+        // A single composite shadow avoids drawing separate opaque halos for
+        // the translucent fill and white outline. The broad, soft falloff has
+        // no solid background or mouse-event surface.
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        NSColor(srgbRed: 149 / 255, green: 153 / 255, blue: 158 / 255, alpha: 0.45).setFill(); arrow.fill()
+        NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.96).setStroke()
+        arrow.lineWidth = 1.25; arrow.lineJoinStyle = .round; arrow.lineCapStyle = .round; arrow.stroke()
+        context.endTransparencyLayer()
     }
+}
+
+@MainActor private final class AICursorView: NSView {
+    var tip = CGPoint.zero
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) { AICursorGlyph.draw(at: tip) }
 }
 
 @MainActor final class AICursorOverlay {
@@ -112,7 +136,7 @@ enum NativeLeaseActor: String {
 
     static func clippedFrame(at point: CGPoint, target: CGRect) -> CGRect {
         // Clip both the arrow and its glow to the authorized target bounds.
-        CGRect(x: point.x - 10, y: point.y - 10, width: 50, height: 58).intersection(target)
+        CGRect(x: point.x - 18, y: point.y - 18, width: 48, height: 50).intersection(target)
     }
 
     static func isSystemCursorWindow(layer: CGWindowLevel?, ownerPID: pid_t?,

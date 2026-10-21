@@ -106,10 +106,23 @@ async function arrowGone(label) {
 }
 async function act(epoch, point, kind = 'move') { return native.ok('act', { epoch, targetId: currentTarget.id, action: { kind, ...point } }) }
 function raster(global, frame) { return { x: (global.x - frame.geometry.x) * frame.width / frame.geometry.width, y: (global.y - frame.geometry.y) * frame.height / frame.geometry.height } }
-async function capture(label, owner, windowId, composited, probe) {
-  const path = join(output, `${label}.png`), value = await observer.ok('capture', { identity: owner, windowId, output: path, composited, probe })
+async function capture(label, owner, windowId, composited, probe, includeRealCursor = false) {
+  const path = join(output, `${label}.png`), value = await observer.ok('capture', { identity: owner, windowId, output: path, composited, probe, includeRealCursor })
   captures.push({ label, ...value, sha256: hash(await readFile(path)), file: path }); return value
 }
+function assertSmallArrow(value, label) {
+  const a = value.analysis.approvedSmallArrow
+  assert.ok(a && a.backgroundSpread <= 8 && a.backgroundRGB.every(channel => channel >= 0 && channel <= 25), `${label}: the independent flat near-black fixture background was not verified: ${JSON.stringify(a)}`)
+  assert.ok(a && a.outlineArea >= 4 && a.outlineArea <= 90, `${label}: small white outline missing or oversized: ${JSON.stringify(a)}`)
+  assert.ok(a.softGreyHaloArea >= 4, `${label}: soft grey halo missing: ${JSON.stringify(a)}`)
+  assert.equal(a.brightAreaOutsideGlyph, 0, `${label}: a bright long tail or oversized contour extends outside the approved 18×20 glyph`)
+  assert.equal(a.bodySamples.length, 3)
+  for (const sample of a.bodySamples) {
+    assert.ok(sample.pixels > 0 && sample.rgb.length === 3 && Math.min(...sample.rgb) >= 35 && Math.max(...sample.rgb) <= 140 && Math.max(...sample.rgb) - Math.min(...sample.rgb) < 30,
+      `${label}: interior must be translucent neutral grey over the black fixture: ${JSON.stringify(sample)}`)
+  }
+}
+function glyphProbe(tipX, tipY) { return { x: tipX - 18, y: tipY - 18, width: 48, height: 50, tipX, tipY } }
 async function hostRpc(op) {
   const result = await routes.get('/api/qiuya-tools.computer.control').fetch(new Request(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.control`, { method: 'POST', body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: 'qiuya-tools.computer.control', payload: { op, sessionId: 'native-ai-pointer' } }) }))
   const reply = (await result.json()).result; assert.equal(reply.ok, true, `Real Host ${op}: ${JSON.stringify(reply.error)}`); return reply.value
@@ -164,9 +177,18 @@ try {
   assert.ok(Math.hypot(frame.aiCursor.x - point.x, frame.aiCursor.y - point.y) < 3)
   assert.ok(Math.hypot(frame.cursor.x - frame.aiCursor.x, frame.cursor.y - frame.aiCursor.y) < 3, 'Real cursor and AI metadata agree without replacing each other')
   await writeFile(join(output, 'selected-window-frame.jpg'), Buffer.from(frame.imageBase64, 'base64'))
-  const pixels = await capture('actual-ai-overlay', alpha.identity, ready.windowId, true, { x: ready.point.x - frame.geometry.x - 2, y: ready.point.y - frame.geometry.y - 2, width: 36, height: 46 })
-  assert.ok(pixels.analysis.whitePixels >= 15 && pixels.analysis.greyPixels >= 70, `Actual display arrow fill/white-outline pixels missing: ${JSON.stringify(pixels.analysis)}`)
-  pass('MAC-AI-ACTUAL-CGWINDOW-PIXELS-NOACTIVATE', { window: visible.window, analysis: pixels.analysis })
+  const pointerProbe = glyphProbe(ready.point.x - frame.geometry.x, ready.point.y - frame.geometry.y)
+  const pixels = await capture('actual-ai-overlay-without-real-cursor', alpha.identity, ready.windowId, true, pointerProbe)
+  assertSmallArrow(pixels, 'Actual AI overlay excluding the separate real OS cursor')
+  // Keep the real user-visible composition as a separate artifact. It is not
+  // a claim that the OS cursor is replaced or that two superposed cursors match
+  // the approved isolated glyph; that visual boundary requires review.
+  const composition = await capture('actual-ai-overlay-with-real-cursor', alpha.identity, ready.windowId, true, pointerProbe, true)
+  const afterComposition = await os('paired-real-os-cursor-composition')
+  assert.ok(Math.hypot(afterComposition.cursor.x - ready.point.x, afterComposition.cursor.y - ready.point.y) < 2, 'The paired composition must retain the same actual cursor position')
+  assert.equal(composition.includesRealOSCursor, true)
+  pass('MAC-AI-ACTUAL-CGWINDOW-PIXELS-NOACTIVATE', { window: visible.window, analysis: pixels.analysis, realCursorComposition: composition,
+    visualBoundary: 'The isolated glyph is verified; the screenshot including the real OS cursor is retained for actual user-visible overlap review.' })
   const beforeClick = await snapshotFixture(); await act(1, point, 'click'); const clicked = await snapshotFixture(), afterClick = await os('click-through')
   assert.equal(clicked.counts.clicks - beforeClick.counts.clicks, 1); assert.equal(clicked.counts.downs - beforeClick.counts.downs, 1); assert.equal(clicked.counts.ups - beforeClick.counts.ups, 1)
   assert.equal(afterClick.foregroundPid, alpha.identity.pid); assert.ok(empty(afterClick)); await arrowVisible(1)
@@ -248,11 +270,13 @@ try {
   await host.service.act('native-ai-pointer', { actionId: randomUUID(), frameId: observed.frameId, action: { kind: 'move', ...point } })
   const receipt = await until(() => { const f = frameReceipts.get(pageReceipt?.frameId); return f?.aiCursor?.visible && pageReceipt.cursor.visible ? { dom: pageReceipt, frame: f } : false }, 'Real WK SVG arrow did not reflect the independently returned native aiCursor', 12000)
   const expectedX = receipt.dom.canvas.x + receipt.frame.aiCursor.x * receipt.dom.canvas.width / receipt.frame.width, expectedY = receipt.dom.canvas.y + receipt.frame.aiCursor.y * receipt.dom.canvas.height / receipt.frame.height
-  assert.ok(Math.abs(receipt.dom.cursor.x + 4 - expectedX) < 2 && Math.abs(receipt.dom.cursor.y + 3 - expectedY) < 2, 'Production SVG tip must follow the actual native raster point')
+  assert.ok(Math.abs(receipt.dom.cursor.x + 2 - expectedX) < 2 && Math.abs(receipt.dom.cursor.y + 3 - expectedY) < 2, 'Production SVG hotspot (2,3) must follow the actual native raster point')
   const wkWindow = (await os('real-native-preview')).windows.find(row => row.pid === secondNative.pid && row.title === 'QiuYaTools · 电脑操控')
   assert.ok(wkWindow && wkWindow.layer > 0)
-  const wkPixels = await capture('actual-wk-ai-arrow', secondNative, wkWindow.id, false, { x: receipt.dom.cursor.x, y: receipt.dom.cursor.y + wkWindow.height - receipt.dom.innerHeight, width: receipt.dom.cursor.width, height: receipt.dom.cursor.height })
-  assert.ok(wkPixels.analysis.whitePixels >= 8 && wkPixels.analysis.svgGreyPixels >= 20, `Actual WK arrow pixels missing: ${JSON.stringify(wkPixels.analysis)}`)
+  assert.equal(receipt.dom.cursor.width, 18); assert.equal(receipt.dom.cursor.height, 20)
+  const wkPixels = await capture('actual-wk-ai-arrow', secondNative, wkWindow.id, false,
+    glyphProbe(receipt.dom.cursor.x + 2, receipt.dom.cursor.y + 3 + wkWindow.height - receipt.dom.innerHeight))
+  assertSmallArrow(wkPixels, 'Actual WK SVG arrow')
   pass('MAC-REAL-WK-PREVIEW-AI-RASTER-AND-PIXELS', { receipt, analysis: wkPixels.analysis })
   const beforeRedock = host.service.get('native-ai-pointer'), pausesBefore = pagehidePauses, closesBefore = nativeEvents.filter(event => event.event === 'previewClosed').length
   await hostRpc('redock'); await sleep(600)

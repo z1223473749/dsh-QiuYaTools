@@ -12,6 +12,7 @@ import Foundation
         precondition(AICursorOverlay.rasterPoint(scaledPoint, geometry: scaled) == CGPoint(x: 800, y: 400), "AI cursor uses screenshot scale and negative display coordinates")
         let edge = AICursorOverlay.clippedFrame(at: CGPoint(x: -1279, y: 101), target: geometry.frame)
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
+        try approvedSmallGlyph()
         let cursorLayer = CGWindowLevelForKey(.cursorWindow)
         precondition(AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { $0 == 415 }), "Only an independently verified system cursor owner is excluded")
         precondition(!AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { _ in false }), "An unverified or spoofed cursor-level owner still occludes")
@@ -53,6 +54,37 @@ import Foundation
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }
         precondition(integer(true) == nil && integer(1.5) == nil && integer(-1) == nil && integer(4) == 4)
-        print("Native self-test passed: geometry, AI cursor clipping/scale, lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+    }
+
+    @MainActor private static func approvedSmallGlyph() throws {
+        precondition(AICursorGlyph.hotspot == CGPoint(x: 2, y: 3), "Native and SVG hotspots must align")
+        let bounds = AICursorGlyph.path(at: .zero).bounds
+        precondition(bounds.width < 16 && bounds.height < 17, "The approved paper-plane contour has no traditional long tail")
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 96, pixelsHigh: 100, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let context = NSGraphicsContext(bitmapImageRep: bitmap)!
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
+        context.cgContext.translateBy(x: 0, y: 100); context.cgContext.scaleBy(x: 2, y: -2)
+        NSColor.black.setFill(); CGRect(x: 0, y: 0, width: 48, height: 50).fill()
+        AICursorGlyph.draw(at: CGPoint(x: 18, y: 18)); NSGraphicsContext.restoreGraphicsState()
+        var white = 0, halo = 0, brightOutside = 0
+        for row in 0..<100 { for column in 0..<96 {
+            let color = bitmap.colorAt(x: column, y: row)!.usingColorSpace(.sRGB)!
+            let rgb = [color.redComponent, color.greenComponent, color.blueComponent].map { $0 * 255 }
+            let x = (Double(column) + 0.5) / 2 - 18 + 2, y = (Double(row) + 0.5) / 2 - 18 + 3
+            let inside = x >= 0 && x < 18 && y >= 0 && y < 20
+            if inside && rgb.min()! > 225 { white += 1 }
+            if !inside && rgb.max()! > 160 { brightOutside += 1 }
+            if !inside && rgb.max()! >= 2 && rgb.max()! <= 80 && rgb.max()! - rgb.min()! < 25 { halo += 1 }
+        } }
+        precondition(white >= 16 && white <= 360 && halo >= 16 && brightOutside == 0,
+            "Rendered glyph requires a small white contour and dim outer glow, without a bright long tail")
+        for (x, y) in [(5.3, 6.3), (5.8, 9.5), (8.0, 7.5)] {
+            let color = bitmap.colorAt(x: Int((18 - 2 + x) * 2), y: Int((18 - 3 + y) * 2))!.usingColorSpace(.sRGB)!
+            let rgb = [color.redComponent, color.greenComponent, color.blueComponent].map { $0 * 255 }
+            precondition(rgb.min()! >= 35 && rgb.max()! <= 140 && rgb.max()! - rgb.min()! < 30,
+                "Approved fill stays translucent neutral grey over black")
+        }
     }
 }

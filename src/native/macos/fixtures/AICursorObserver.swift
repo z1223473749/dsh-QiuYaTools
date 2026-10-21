@@ -47,6 +47,59 @@ private func windowInfo(_ info: [String: Any]) -> [String: Any]? {
         "alpha": info[kCGWindowAlpha as String] as Any? ?? NSNull(), "onScreen": info[kCGWindowIsOnscreen as String] as Any? ?? NSNull(),
         "x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height]
 }
+
+// This deliberately tests visible properties, not a duplicate production path:
+// a thin white contour in 18×20, translucent grey interior on the black fixture,
+// a dim halo outside that box, and no bright traditional long tail below it.
+private func smallArrowAnalysis(_ bitmap: NSBitmapImageRep, crop: CGRect, probe: [String: Double]) -> [String: Any]? {
+    guard let tipX = probe["tipX"], let tipY = probe["tipY"],
+          let x = probe["x"], let y = probe["y"], let width = probe["width"], let height = probe["height"] else { return nil }
+    let scaleX = Double(bitmap.pixelsWide) / crop.width, scaleY = Double(bitmap.pixelsHigh) / crop.height
+    let minX = max(0, Int(floor(x * scaleX))), minY = max(0, Int(floor(y * scaleY)))
+    let maxX = min(bitmap.pixelsWide, Int(ceil((x + width) * scaleX))), maxY = min(bitmap.pixelsHigh, Int(ceil((y + height) * scaleY)))
+    guard minX < maxX, minY < maxY else { return nil }
+    let background: [[Double]] = [(tipX - 16, tipY - 16), (tipX + 26, tipY - 16),
+        (tipX - 16, tipY + 28), (tipX + 26, tipY + 28)].compactMap { point in
+        let column = Int((point.0 * scaleX).rounded()), row = Int((point.1 * scaleY).rounded())
+        guard column >= 0, column < bitmap.pixelsWide, row >= 0, row < bitmap.pixelsHigh,
+              let c = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { return nil }
+        return [Double(c.redComponent) * 255, Double(c.greenComponent) * 255, Double(c.blueComponent) * 255]
+    }
+    guard background.count == 4 else { return nil }
+    let backgroundRGB = (0..<3).map { channel in background.map { $0[channel] }.reduce(0, +) / 4 }
+    let backgroundSpread = (0..<3).map { channel in background.map { $0[channel] }.max()! - background.map { $0[channel] }.min()! }.max()!
+    var outline = 0, halo = 0, brightOutside = 0
+    for row in minY..<maxY { for column in minX..<maxX {
+        guard let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { continue }
+        let r = Double(color.redComponent) * 255, g = Double(color.greenComponent) * 255, b = Double(color.blueComponent) * 255
+        let localX = (Double(column) + 0.5) / scaleX - tipX + 2, localY = (Double(row) + 0.5) / scaleY - tipY + 3
+        let inGlyph = localX >= 0 && localX < 18 && localY >= 0 && localY < 20
+        if inGlyph && min(r, g, b) > 225 { outline += 1 }
+        if !inGlyph {
+            if max(r, g, b) > 160 { brightOutside += 1 }
+            let delta = [r - backgroundRGB[0], g - backgroundRGB[1], b - backgroundRGB[2]]
+            if delta.max()! >= 2 && delta.max()! <= 60 && delta.max()! - delta.min()! < 25 { halo += 1 }
+        }
+    } }
+    let samples: [[String: Any]] = [(5.3, 6.3), (5.8, 9.5), (8.0, 7.5)].map { point in
+        let centerX = tipX - 2 + point.0, centerY = tipY - 3 + point.1
+        let a = max(0, Int(floor((centerX - 0.35) * scaleX))), b = max(0, Int(floor((centerY - 0.35) * scaleY)))
+        let c = min(bitmap.pixelsWide, Int(ceil((centerX + 0.35) * scaleX))), d = min(bitmap.pixelsHigh, Int(ceil((centerY + 0.35) * scaleY)))
+        var channels = [Double](repeating: 0, count: 3), count = 0
+        if a < c, b < d { for row in b..<d { for column in a..<c {
+            if let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) {
+                channels[0] += Double(color.redComponent) * 255; channels[1] += Double(color.greenComponent) * 255
+                channels[2] += Double(color.blueComponent) * 255; count += 1
+            }
+        } } }
+        return ["glyphX": point.0, "glyphY": point.1, "rgb": count > 0 ? channels.map { $0 / Double(count) } : [], "pixels": count]
+    }
+    let area = scaleX * scaleY
+    return ["viewBox": [18, 20], "hotspot": [2, 3], "outlineArea": Double(outline) / area,
+        "softGreyHaloArea": Double(halo) / area, "brightAreaOutsideGlyph": Double(brightOutside) / area,
+        "bodySamples": samples, "backgroundRGB": backgroundRGB, "backgroundSpread": backgroundSpread,
+        "requiresFlatNearBlackBackground": true, "scaleX": scaleX, "scaleY": scaleY]
+}
 private final class CursorFrame: NSObject, SCStreamOutput, @unchecked Sendable {
     let lock = NSLock()
     var image: CGImage?
@@ -140,7 +193,8 @@ private final class CursorFrame: NSObject, SCStreamOutput, @unchecked Sendable {
             if #available(macOS 14.0, *) { config.ignoreShadowsSingleWindow = true }
         }
         guard config.width > 0, config.height > 0, config.width <= 3200, config.height <= 2400 else { throw failure("capture-size-bound") }
-        config.showsCursor = false; config.queueDepth = 1; config.scalesToFit = true; config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.showsCursor = command["includeRealCursor"] as? Bool == true
+        config.queueDepth = 1; config.scalesToFit = true; config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         let frame = CursorFrame(), stream = SCStream(filter: filter, configuration: config, delegate: nil)
         try stream.addStreamOutput(frame, type: .screen, sampleHandlerQueue: DispatchQueue(label: "qiuya.test.cursor-frame"))
         try await stream.startCapture()
@@ -168,9 +222,11 @@ private final class CursorFrame: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             analysis = ["whitePixels": white, "greyPixels": grey, "svgGreyPixels": svgGrey, "pixels": count,
                 "bitmapRect": ["x": minX, "y": minY, "width": maxX - minX, "height": maxY - minY], "logicalProbe": probe]
+            analysis["approvedSmallArrow"] = smallArrowAnalysis(bitmap, crop: crop, probe: probe)
         }
         return ["owner": owner.json, "windowId": number, "x": crop.minX, "y": crop.minY, "width": crop.width, "height": crop.height,
             "pixelWidth": bitmap.pixelsWide, "pixelHeight": bitmap.pixelsHigh, "bytes": bytes.count, "analysis": analysis,
-            "method": command["composited"] as? Bool == true ? "independent SCK display-sourceRect cropped to owned fixture; real OS cursor excluded" : "independent SCK owned-window capture; real OS cursor excluded"]
+            "includesRealOSCursor": config.showsCursor,
+            "method": command["composited"] as? Bool == true ? "independent SCK display-sourceRect cropped to owned fixture" : "independent SCK owned-window capture"]
     }
 }
