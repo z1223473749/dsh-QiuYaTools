@@ -21,7 +21,7 @@ export interface ComputerSessionSnapshot {
   sessionId: string; state: ComputerState; target: NativeTarget | null; epoch: number; updatedAt: number
   lastObservation?: Omit<ComputerObservation, 'imageBase64' | 'elements' | 'mediaType'>
   error?: { code: string; message: string }
-  lastAction?: { actionId: string; action: ComputerAction; phase: 'executing' | 'completed' | 'failed'; at: number }
+  lastAction?: { actionId: string; action: ComputerAction; actor?: 'ai' | 'human'; phase: 'executing' | 'completed' | 'failed'; at: number }
 }
 export interface DeviceDriver {
   status(signal?: AbortSignal): Promise<ComputerStatus>

@@ -345,7 +345,16 @@ test('dispose always asks the driver to clean input even when a lease release fa
   f.driver.lease = async epoch => { nativeEpoch = epoch }
   f.driver.release = async () => { throw new Error('release failed') }
   f.driver.dispose = async () => { disposed = true; nativeEpoch = 0 }
-  await f.service.start('chat', f.target.id, { allowOnce: true }); await f.service.dispose()
+  await f.service.start('chat', f.target.id, { allowOnce: true }); await assert.rejects(f.service.dispose(), /未确认释放/)
   assert.equal(disposed, true); assert.equal(nativeEpoch, 0)
   await assert.rejects(f.service.start('chat', f.target.id, { allowOnce: true }), { code: 'DISPOSED' })
+})
+
+test('a recreated chat inherits its last epoch so stale preview control cannot match', async () => {
+  const f = fixture(), restored = new ComputerSessionService(f.driver, { initialEpoch: 750 })
+  await restored.start('chat', f.target.id, { allowOnce: true })
+  assert.equal(restored.get('chat').epoch, 751)
+  await restored.pause('chat'); assert.ok(restored.get('chat').epoch > 751)
+  await restored.dispose(); await f.service.dispose()
+  assert.throws(() => new ComputerSessionService({}, { initialEpoch: Number.MAX_SAFE_INTEGER }), { code: 'INVALID_EPOCH' })
 })

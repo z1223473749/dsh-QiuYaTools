@@ -7,6 +7,7 @@ export interface ComputerSessionOptions {
   readAllowedApps?: () => readonly string[]
   writeAllowedApps?: (appIds: string[]) => void | Promise<void>
   now?: () => number
+  initialEpoch?: number
 }
 /** One service owns one real desktop. Native epoch fencing remains authoritative. */
 export class ComputerSessionService {
@@ -28,6 +29,9 @@ export class ComputerSessionService {
   private tail: Promise<unknown> = Promise.resolve()
   private readonly unsubscribe?: () => void
   constructor(readonly driver: DeviceDriver, private readonly options: ComputerSessionOptions = {}) {
+    const initialEpoch = options.initialEpoch ?? 0
+    if (!Number.isSafeInteger(initialEpoch) || initialEpoch < 0 || initialEpoch >= Number.MAX_SAFE_INTEGER) throw new ComputerError('INVALID_EPOCH', '初始控制周期无效')
+    this.nextEpoch = initialEpoch
     this.unsubscribe = driver.subscribe?.(event => {
       if (event.event === 'previewClosed' || event.event === 'humanInput') {
         const id = event.sessionId ?? this.activeSession
@@ -258,7 +262,7 @@ export class ComputerSessionService {
           const current = targets.find(value => value.id === target.id)
           this.fence(record, epoch, human); operationSignal.throwIfAborted()
           if (!current || current.pid !== target.pid || current.appId !== target.appId || !sameGeometry(current, observation.geometry)) throw new ComputerError('STALE_OBSERVATION', '目标窗口或缩放已变化，请重新观察')
-          record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'executing', at: this.clock() }; this.notify()
+          record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, actor: human ? 'human' : 'ai', phase: 'executing', at: this.clock() }; this.notify()
           return this.driver.act(epoch, target.id, action, operationSignal)
         })
         this.fence(record, epoch, human)
@@ -271,7 +275,7 @@ export class ComputerSessionService {
             await this.releaseLeases(sessionId)
             record.allowOnce = false
             if (this.activeSession === sessionId) this.activeSession = undefined
-            record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }
+            record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, actor: human ? 'human' : 'ai', phase: 'completed', at: this.clock() }
             this.change(record, 'stopped')
             return { actionId: request.actionId, targetId: target.id, epoch, result }
           }
@@ -284,7 +288,7 @@ export class ComputerSessionService {
         }
         delete record.snapshot.lastObservation
         record.previewFrames.clear()
-        record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, phase: 'completed', at: this.clock() }
+        record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, actor: human ? 'human' : 'ai', phase: 'completed', at: this.clock() }
         this.change(record, human ? 'humanControl' : 'ready')
         return { actionId: request.actionId, targetId: target.id, epoch, result }
       } catch (error) {
@@ -370,7 +374,11 @@ export class ComputerSessionService {
     const stopping = [...this.sessions.keys()].map(id => this.stop(id))
     this.disposed = true
     this.disposing = (async () => {
-      try { await Promise.allSettled([...stopping, this.permissionTail]) } finally { this.listeners.clear(); await this.driver.dispose?.() }
+      try {
+        const results = await Promise.allSettled([...stopping, this.permissionTail])
+        const failed = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
+        if (failed.length) throw new AggregateError(failed.map(value => value.reason), '部分电脑输入未确认释放')
+      } finally { this.listeners.clear(); await this.driver.dispose?.() }
     })()
     return this.disposing
   }
