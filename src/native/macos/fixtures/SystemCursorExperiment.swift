@@ -90,8 +90,9 @@ private func probe(_ command: [String: Any]) throws -> [String: Any] {
 // No unconditional Show: it belongs only to this process's successful Hide.
 private final class BalancedHide {
     let setBackground: (Bool) -> Int32, hide: () -> Int32, show: () -> Int32
+    let connectionEvidence: [String: Any]
     private(set) var owned = false, background = false, hides = 0, shows = 0
-    init(setBackground: @escaping (Bool) -> Int32, hide: @escaping () -> Int32, show: @escaping () -> Int32) { self.setBackground = setBackground; self.hide = hide; self.show = show }
+    init(connectionEvidence: [String: Any] = [:], setBackground: @escaping (Bool) -> Int32, hide: @escaping () -> Int32, show: @escaping () -> Int32) { self.connectionEvidence = connectionEvidence; self.setBackground = setBackground; self.hide = hide; self.show = show }
     func acquire() throws {
         if owned { return }
         guard setBackground(true) == 0 else { throw issue("background-property-failed") }; background = true
@@ -101,15 +102,20 @@ private final class BalancedHide {
         if owned { guard show() == 0 else { throw issue("show-unconfirmed") }; owned = false; shows += 1 }
         if background { guard setBackground(false) == 0 else { throw issue("property-reset-unconfirmed") }; background = false }
     }
-    var snapshot: [String: Any] { ["ownedHideCount": owned ? 1 : 0, "backgroundPropertyOwned": background, "successfulHideCalls": hides, "successfulShowCalls": shows] }
+    var snapshot: [String: Any] { ["ownedHideCount": owned ? 1 : 0, "backgroundPropertyOwned": background, "successfulHideCalls": hides, "successfulShowCalls": shows, "connection": connectionEvidence] }
     static func native() throws -> BalancedHide {
         typealias ConnectionFn = @convention(c) () -> Int32
         typealias PropertyFn = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
         let handle = UnsafeMutableRawPointer(bitPattern: -2)
-        guard let connection = dlsym(handle, "CGSMainConnectionID") ?? dlsym(handle, "_CGSDefaultConnection"), let setter = dlsym(handle, "CGSSetConnectionProperty") else { throw issue("background-SPI-unavailable") }
-        let cid = unsafeBitCast(connection, to: ConnectionFn.self)(), set = unsafeBitCast(setter, to: PropertyFn.self)
+        let main = dlsym(handle, "CGSMainConnectionID"), fallback = dlsym(handle, "_CGSDefaultConnection")
+        guard main != nil || fallback != nil, let setter = dlsym(handle, "CGSSetConnectionProperty") else { throw issue("background-SPI-unavailable") }
+        // Read both IDs for falsifiable evidence. Keep the previous symbol
+        // priority unchanged; only the hider activation policy is varied.
+        let mainId = main.map { unsafeBitCast($0, to: ConnectionFn.self)() }, fallbackId = fallback.map { unsafeBitCast($0, to: ConnectionFn.self)() }
+        let cid = mainId ?? fallbackId ?? 0, set = unsafeBitCast(setter, to: PropertyFn.self)
         guard cid > 0 else { throw issue("connection-unavailable") }
-        return BalancedHide(setBackground: { enabled in set(cid, cid, "SetsCursorInBackground" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse) }, hide: { Int32(CGDisplayHideCursor(CGMainDisplayID()).rawValue) }, show: { Int32(CGDisplayShowCursor(CGMainDisplayID()).rawValue) })
+        let evidence: [String: Any] = ["CGSMainConnectionID": mainId as Any? ?? NSNull(), "_CGSDefaultConnection": fallbackId as Any? ?? NSNull(), "selectedSymbol": main != nil ? "CGSMainConnectionID" : "_CGSDefaultConnection", "selectedId": cid, "spiDiagnosticOnly": true]
+        return BalancedHide(connectionEvidence: evidence, setBackground: { enabled in set(cid, cid, "SetsCursorInBackground" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse) }, hide: { Int32(CGDisplayHideCursor(CGMainDisplayID()).rawValue) }, show: { Int32(CGDisplayShowCursor(CGMainDisplayID()).rawValue) })
     }
 }
 @MainActor private final class ExperimentCanvas: NSView {
@@ -136,7 +142,7 @@ private final class BalancedHide {
                 guard view.tip.x >= 40, view.tip.y >= 40, view.tip.x < view.bounds.width-50, view.tip.y < view.bounds.height-50 else { throw issue("cursor-outside-safe-fixture-region") }
                 canvas = view; window = w; pointer = cursor; w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             } else { balance = try .native() }
-            emit(["event": "ready", "role": fixture ? "fixture" : "hider", "identity": try identity(getpid()), "windowId": window.map { $0.windowNumber } as Any? ?? NSNull(), "pointer": pointer.map { ["x": $0.x, "y": $0.y] } as Any? ?? NSNull()])
+            emit(["event": "ready", "role": fixture ? "fixture" : "hider", "identity": try identity(getpid()), "activationPolicy": NSApp.activationPolicy() == .accessory ? "accessory" : NSApp.activationPolicy() == .regular ? "regular" : "prohibited", "connection": balance?.connectionEvidence as Any? ?? NSNull(), "windowId": window.map { $0.windowNumber } as Any? ?? NSNull(), "pointer": pointer.map { ["x": $0.x, "y": $0.y] } as Any? ?? NSNull()])
             timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.watch() } }
             DispatchQueue.global().async { [weak self] in
                 while let line = readLine() {
@@ -208,6 +214,6 @@ private final class BalancedHide {
         }
         guard CommandLine.arguments.contains("--fixture") || CommandLine.arguments.contains("--hider") else { throw issue("explicit-role-required") }
         let fixture = CommandLine.arguments.contains("--fixture"), app = NSApplication.shared, delegate = try ExperimentApp(fixture: fixture)
-        app.setActivationPolicy(fixture ? .regular : .prohibited); app.delegate = delegate; app.run()
+        app.setActivationPolicy(fixture ? .regular : .accessory); app.delegate = delegate; app.run()
     }
 }

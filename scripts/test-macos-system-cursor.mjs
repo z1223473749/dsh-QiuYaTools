@@ -41,6 +41,7 @@ if (arg('--parent-proxy')) {
     assert.equal(selfTest.passed, true); assert.equal(selfTest.actualCursorCalls, 0)
     for (const path of sources) assert.equal(digest(await readFile(path)), hashes[path], 'Experiment source changed during preparation')
     preparation = { status: 'prepared-not-GUI-run', binary: await realpath(binary), observer: await realpath(observer), binarySHA256: digest(await readFile(binary)), observerSHA256: digest(await readFile(observer)), sources: hashes, selfTest,
+      experimentControl: { hiderActivationPolicy: 'accessory', priorFailedPolicy: 'prohibited', changedBehavior: 'hider activation policy only; read-only symbol ID evidence added', connectionSelection: 'CGSMainConnectionID then _CGSDefaultConnection, unchanged', productionChanged: false },
       authority: 'Only explicit --run and root-approved GUI gate may launch fixture/hider/probe; no plugin or profile changed.',
       crashRestoration: 'not-proven', references: ['https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/MouseCursor.html', 'https://raw.githubusercontent.com/input-leap/input-leap/master/src/lib/platform/OSXScreen.h', 'https://raw.githubusercontent.com/input-leap/input-leap/master/src/lib/platform/OSXScreen.mm'] }
     await writeFile(join(output, 'preparation.json'), JSON.stringify(preparation, null, 2))
@@ -91,7 +92,7 @@ if (arg('--parent-proxy')) {
     }
     async function holder(proxy=false) {
       const value=proxy?endpoint(process.execPath,[fileURLToPath(import.meta.url),'--parent-proxy',preparation.binary,'--worker-sha256',preparation.binarySHA256],'proxy-parent'):endpoint(preparation.binary,['--hider'],'hider')
-      const ready=await value.ready(),worker=await pin(ready.identity,'hider');assert.equal(ready.role,'hider');const parent=proxy?await pin(await identify(value.child.pid),'proxy-parent'):null
+      const ready=await value.ready(),worker=await pin(ready.identity,'hider');assert.equal(ready.role,'hider');if(preparation.experimentControl)assert.equal(ready.activationPolicy,preparation.experimentControl.hiderActivationPolicy);const parent=proxy?await pin(await identify(value.child.pid),'proxy-parent'):null
       assert.equal(worker.parentPid,proxy?parent.pid:process.pid);return{value,worker,parent}
     }
     async function killOwned(identity, value) { assert.ok(same(await identify(identity.pid),identity),'Refusing to signal a reused PID'); process.kill(identity.pid,'SIGKILL'); if(value)await waitExit(value,'SIGKILL') }
