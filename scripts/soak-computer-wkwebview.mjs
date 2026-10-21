@@ -117,7 +117,7 @@ if (!process.argv.includes('--worker')) {
       }
       const headers = Object.fromEntries(result.headers); delete headers['content-length']
       response.writeHead(result.status, headers); response.end(content)
-    } catch { if (!response.headersSent) response.writeHead(500); response.end() }
+    } catch (error) { fatal ??= error; mark('test-http-failure', { method: request.method, message: error.message }); if (!response.headersSent) response.writeHead(500); response.end() }
   })
   async function waitFor(operation, message, timeout = 20000) {
     const until = Date.now() + timeout
@@ -161,6 +161,8 @@ if (!process.argv.includes('--worker')) {
     assert.equal(artifact.sha256, nativeArtifacts[0].sha256, 'The helper must not change between generations')
     const record = { generation: current, openedAtMs: Date.now() }; generations.push(record)
     await driver.openPreview(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}`, title, sessionId)
+    // Pin native/XPC identities even when page startup or the probe fails.
+    record.native = await nativeIdentity(false)
     await waitFor(() => receiver.generations.get(current)?.frames >= 6, 'The actual WKWebView did not report six completed clock frames', 30000)
     record.native = await nativeIdentity(); record.window = await windowEvidence(record.native, `native-wk-generation-${current}`)
     record.document = receiver.generations.get(current).document
@@ -258,6 +260,7 @@ if (!process.argv.includes('--worker')) {
   finally {
     phase = 'cleanup'; receiver.active = 0; receiver.stats.useGeneration(0)
     const errors = [], forced = []
+    try { await processSnapshot(false) } catch (error) { errors.push(`Before-dispose ownership: ${error.message}`) }
     try { await host?.dispose(); if (!host) await driver?.dispose() } catch (error) { errors.push(error.message) }
     if (fixture && fixture.exitCode === null && fixture.signalCode === null) {
       fixture.stdin.end('quit\n')

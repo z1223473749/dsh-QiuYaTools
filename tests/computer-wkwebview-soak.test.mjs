@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { build } from 'esbuild'
 import { WKFrameReceiver, macResourceVerdict, wkPreviewInstrumentation } from '../scripts/computer-wkwebview-soak-evidence.mjs'
 
 const frame = (generation, sequence, atMs) => ({ kind: 'frame', generation, sequence, atMs, stamp: atMs % 2 ** 32, width: 1280, height: 720 })
@@ -40,4 +41,13 @@ test('WK instrumentation installs before production draw without rewriting produ
   assert.ok(result.indexOf('__qytWKSoakFrame') < result.indexOf('productionDraw()'))
   assert.ok(result.includes('<body><script>productionDraw()</script></body>'))
   assert.throws(() => wkPreviewInstrumentation(production, { generation: 1, reportPath: 'https://remote/frames' }), /isolated/)
+})
+
+test('WK probe accepts the actual shipped implicit-head preview and preserves its script', async () => {
+  const built = await build({ entryPoints: ['src/features/computer-use/preview-page.ts'], bundle: true, write: false, format: 'esm' })
+  const { computerPreviewPage } = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'))
+  const result = wkPreviewInstrumentation(computerPreviewPage, { generation: 1, reportPath: '/__wk_soak/12345678-1234-1234-1234-123456789abc/frames' })
+  assert.ok(result.indexOf('__qytWKSoakFrame') < result.indexOf("(()=>{'use strict'"))
+  assert.ok(result.includes(computerPreviewPage.slice(computerPreviewPage.indexOf('<script>'))))
+  assert.throws(() => wkPreviewInstrumentation('<html>no scripts</html>', { generation: 1, reportPath: '/__wk_soak/12345678-1234-1234-1234-123456789abc/frames' }), /script was not found/)
 })

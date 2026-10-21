@@ -6,11 +6,14 @@ export { WebViewClockAccumulator }
 
 export function wkPreviewInstrumentation(html, { generation, reportPath }) {
   if (!Number.isSafeInteger(generation) || generation < 1 || !/^\/__wk_soak\/[a-f0-9-]{36}\/frames$/u.test(reportPath)) throw new Error('Invalid isolated WK probe destination')
-  if (!/<head[\s>]/iu.test(html)) throw new Error('Production preview head was not found')
   const source = `(${installWKFrameReporter.toString()})(${JSON.stringify({ generation, reportPath })});(${installWebViewClockProbe.toString()})(${JSON.stringify({ bindingName: '__qytWKSoakFrame', generation })});`
   // Install before the production script can draw its first frame. This has the
   // same observation role as addInitScript/CDP, without enabling native debug.
-  return html.replace(/<head\b[^>]*>/iu, match => `${match}<script>${source}</script>`)
+  if (/<head[\s>]/iu.test(html)) return html.replace(/<head\b[^>]*>/iu, match => `${match}<script>${source}</script>`)
+  // The shipped self-contained page relies on HTML's implicit head. Observe
+  // before its first script rather than requiring a tag the product omits.
+  if (!/<script[\s>]/iu.test(html)) throw new Error('Production preview script was not found')
+  return html.replace(/<script(?=[\s>])/iu, `<script>${source}</script><script`)
 }
 
 /** Runs only inside this UUID's actual production WKWebView document. */
