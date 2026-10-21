@@ -40,6 +40,12 @@ public static class QytAiOracle
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] private static extern bool QueryFullProcessImageName(IntPtr process,int flags,StringBuilder path,ref int size);
+    [DllImport("kernel32.dll",SetLastError=true)] private static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(uint access,bool inherit,int pid);
+    [DllImport("kernel32.dll",SetLastError=true)] private static extern bool GetProcessTimes(Microsoft.Win32.SafeHandles.SafeProcessHandle process,out long created,out long exit,out long kernel,out long user);
+    [DllImport("kernel32.dll",SetLastError=true)] private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle process,uint milliseconds);
+    [DllImport("kernel32.dll",SetLastError=true)] private static extern bool ProcessIdToSessionId(int pid,out uint session);
+    private static readonly Dictionary<string,Microsoft.Win32.SafeHandles.SafeProcessHandle> pins=new Dictionary<string,Microsoft.Win32.SafeHandles.SafeProcessHandle>(StringComparer.OrdinalIgnoreCase);
+    private static string PinKey(int pid,string ticks,string executable){return pid+":"+ticks+":"+executable;}
     [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] private static extern bool GetUserObjectInformation(IntPtr value,int index,StringBuilder text,int length,out int needed);
     [DllImport("user32.dll")] private static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
@@ -51,17 +57,28 @@ public static class QytAiOracle
     [StructLayout(LayoutKind.Sequential)] private struct Keyboard { public ushort Key,Scan;public uint Flags,Time;public UIntPtr Extra; }
     public static object Identity(int pid)
     {
-        using(var p=Process.GetProcessById(pid)){return new{pid=pid,createdAtTicks=p.StartTime.ToUniversalTime().Ticks.ToString(),expectedExecutablePath=ProcessPath(p),sessionId=p.SessionId};}
+        var handle=OpenProcess(0x00101000,false,pid);bool kept=false;
+        try{if(handle.IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());if(Retired(handle))throw new InvalidOperationException("Process retired before identity capture");long born,ended,kernel,user;if(!GetProcessTimes(handle,out born,out ended,out kernel,out user))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());var path=new StringBuilder(32768);int size=path.Capacity;if(!QueryFullProcessImageName(handle.DangerousGetHandle(),0,path,ref size))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());uint session;if(!ProcessIdToSessionId(pid,out session))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());string ticks=DateTime.FromFileTimeUtc(born).Ticks.ToString(),executable=path.ToString(),key=PinKey(pid,ticks,executable);lock(pins){if(!pins.ContainsKey(key)){if(pins.Count>=512)throw new InvalidOperationException("Own process pin budget exceeded");pins.Add(key,handle);kept=true;}}return new{pid=pid,createdAtTicks=ticks,expectedExecutablePath=executable,sessionId=session};}finally{if(!kept)handle.Dispose();}
     }
-    private static string ProcessPath(Process process){var path=new StringBuilder(32768);int size=path.Capacity;if(!QueryFullProcessImageName(process.Handle,0,path,ref size))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return path.ToString();}
     public static object ReadFixture(string path)
     {
         var clock=Stopwatch.StartNew();while(true){try{using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))using(var reader=new StreamReader(file)){return new JavaScriptSerializer().DeserializeObject(reader.ReadToEnd());}}catch(IOException){if(clock.ElapsedMilliseconds>=5000)throw;System.Threading.Thread.Sleep(10);}}
     }
     public static bool Same(int pid,string ticks,string executable)
     {
-        try{using(var p=Process.GetProcessById(pid)){return p.StartTime.ToUniversalTime().Ticks.ToString()==ticks&&String.Equals(ProcessPath(p),executable,StringComparison.OrdinalIgnoreCase);}}catch(ArgumentException){return false;}
+        if(pid<=0||String.IsNullOrEmpty(ticks)||String.IsNullOrEmpty(executable))throw new InvalidOperationException("Pinned process identity is incomplete");
+        Microsoft.Win32.SafeHandles.SafeProcessHandle handle;lock(pins){if(!pins.TryGetValue(PinKey(pid,ticks,executable),out handle))throw new InvalidOperationException("Process was not pinned during identity capture");}
+        {
+            if(Retired(handle))return false;
+            long born,ended,kernel,user;if(!GetProcessTimes(handle,out born,out ended,out kernel,out user)){int error=Marshal.GetLastWin32Error();if(Retired(handle))return false;throw new System.ComponentModel.Win32Exception(error);}
+            if(DateTime.FromFileTimeUtc(born).Ticks.ToString()!=ticks)return false;
+            var path=new StringBuilder(32768);int size=path.Capacity;
+            if(!QueryFullProcessImageName(handle.DangerousGetHandle(),0,path,ref size)){int error=Marshal.GetLastWin32Error();if(Retired(handle))return false;throw new System.ComponentModel.Win32Exception(error);}
+            if(!String.Equals(path.ToString(),executable,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Pinned live process image changed");
+            return !Retired(handle);
+        }
     }
+    private static bool Retired(Microsoft.Win32.SafeHandles.SafeProcessHandle handle){uint result=WaitForSingleObject(handle,0);if(result==0)return true;if(result==258)return false;throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}
     public static object[] Windows(int expectedPid)
     {
         var result=new List<object>();

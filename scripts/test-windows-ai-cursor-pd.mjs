@@ -63,11 +63,16 @@ async function actualRaster(checkpoint, samePoint = false) {
     // Independent approved-color oracle: .45 #95999e over the known blue
     // fixture, with at most .44 #51545a shadow underneath. No screenshot normalization.
     const isBody = ([r, g, b]) => r >= 84 && r <= 103 && g >= 121 && g <= 135 && b >= 136 && b <= 158
-    let white = 0, body = 0, background = 0, changed = 0
+    const isWhiteStroke = ([r, g, b]) => {
+      const alpha = [(r - 37) / (255 - 37), (g - 113) / (255 - 113), (b - 151) / (255 - 151)]
+      return Math.min(...alpha) >= .55 && Math.max(...alpha) <= 1 && Math.max(...alpha) - Math.min(...alpha) <= .14
+    }
+    let white = 0, fullyWhite = 0, body = 0, background = 0, changed = 0
     let left = clipped.width, top = clipped.height, right = -1, bottom = -1
     for (let offset = 0; offset < clipped.data.length; offset += 4) {
       const [r, g, b] = clipped.data.subarray(offset, offset + 3)
-      if (r > 230 && g > 230 && b > 230) { white++; const index = offset / 4, x = index % clipped.width, y = Math.floor(index / clipped.width); left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y) }
+      if (r > 230 && g > 230 && b > 230) fullyWhite++
+      if (isWhiteStroke([r, g, b])) { white++; const index = offset / 4, x = index % clipped.width, y = Math.floor(index / clipped.width); left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y) }
       if (isBody([r, g, b])) body++
       if (r === 37 && g === 113 && b === 151) background++; else changed++
     }
@@ -76,8 +81,8 @@ async function actualRaster(checkpoint, samePoint = false) {
     const bodyPointIsArrow = isBody(bodyPixel), scale = checkpoint.pointer.dpi / 96, area = scale * scale
     const contour = { left, top, width: right - left + 1, height: bottom - top + 1 }
     const smallContour = contour.width >= 10 * scale && contour.width <= 18 * scale && contour.height >= 11 * scale && contour.height <= 20 * scale
-    const verdict = { passed: white >= 8 * area && white <= 110 * area && body >= 15 * area && body <= 200 * area && background > 100 && changed > 100 && bodyPointIsArrow && smallContour,
-      white, body, background, changed, bodyPointIsArrow, bodyPixel, contour, approved: { svgHotspot: [2, 3], frameHotspot: [18, 16], fill: '#95999e', fillAlpha: .45, strokeAlpha: .96, strokeWidth: 1.25, shadow: '#51545a', shadowAlpha: .44, blur: 5, down: 1 }, resolution: { width: image.width, height: image.height }, screen, crop,
+    const verdict = { passed: white >= 10 * area && white <= 110 * area && fullyWhite >= 1 && body >= 15 * area && body <= 200 * area && background > 100 && changed > 100 && bodyPointIsArrow && smallContour,
+      white, fullyWhite, whiteCoverageRule: 'white over known background with >=.55 per-channel effective alpha, channel estimates agree within .14; respects antialias coverage of the approved 1.25px stroke', body, background, changed, bodyPointIsArrow, bodyPixel, contour, approved: { svgHotspot: [2, 3], frameHotspot: [18, 16], fill: '#95999e', fillAlpha: .45, strokeAlpha: .96, strokeWidth: 1.25, shadow: '#51545a', shadowAlpha: .44, blur: 5, down: 1 }, resolution: { width: image.width, height: image.height }, screen, crop,
       mapping: 'identity physical pixels; virtual desktop origin subtracted, no resize or color normalization', entireFrameRetained: false,
       realCursor: checkpoint.real, aiCursor: checkpoint.ai }
     await writeFile(join(output, samePoint ? 'vm-same-point-verdict.json' : 'vm-raster-verdict.json'), JSON.stringify(verdict, null, 2) + '\n')
@@ -131,7 +136,10 @@ try {
     if (process.argv.includes('--baseline')) baselineResult = await baseline()
     await transfer('helper.exe', guestRoot + '\\qiuya-windows.exe')
     taskName = 'QiuYaTools-ai-cursor-' + key
-    const argumentsText = `-NoProfile -STA -NonInteractive -ExecutionPolicy Bypass -File "${guestRoot}\\test.ps1" -Helper "${guestRoot}\\qiuya-windows.exe" -Output "${guestRoot}\\evidence" -FixtureSource "${guestRoot}\\fixture.cs"`
+    files.set('runner.ps1', Buffer.from(`$ErrorActionPreference='Stop';$code=0;try{& ${quote(guestRoot + '\\test.ps1')} -Helper ${quote(guestRoot + '\\qiuya-windows.exe')} -Output ${quote(guestRoot + '\\evidence')} -FixtureSource ${quote(guestRoot + '\\fixture.cs')} 1> ${quote(guestRoot + '\\evidence\\runner.log')} 2> ${quote(guestRoot + '\\evidence\\runner.err')};$code=$LASTEXITCODE}catch{$_|Out-String|Add-Content -LiteralPath ${quote(guestRoot + '\\evidence\\runner.err')};$code=1};exit $code`))
+    await ps(`New-Item -ItemType Directory -Force ${quote(guestRoot + '\\evidence')}|Out-Null`)
+    await transfer('runner.ps1', guestRoot + '\\runner.ps1')
+    const argumentsText = `-NoProfile -STA -NonInteractive -ExecutionPolicy Bypass -File "${guestRoot}\\runner.ps1"`
     files.set('launch.ps1', Buffer.from(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(argumentsText)};$p=New-ScheduledTaskPrincipal -UserId ${quote(user.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 4);Register-ScheduledTask -TaskName ${quote(taskName)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(taskName)}`))
     await transfer('launch.ps1', guestRoot + '\\launch.ps1')
     await ps(`& ${quote(guestRoot + '\\launch.ps1')}`)
@@ -164,8 +172,8 @@ try {
       }
       await new Promise(done => setTimeout(done, 250))
     }
-    assert.ok(report, 'Interactive test did not produce a bounded report')
-    for (const name of ['shown-native.json', 'fallback-known-pixels.json', 'screen-fallback.png', 'native-observe.jpg', 'native-known-region.png', 'events.json', 'before-desktop.json', 'after-desktop.json', 'failure-windows.json', 'fixture-state.json']) { const bytes = await ownFile(name); if (bytes) await writeFile(join(output, name), bytes) }
+    for (const name of ['runner.log', 'runner.err', 'shown-native.json', 'fallback-known-pixels.json', 'screen-fallback.png', 'native-observe.jpg', 'native-known-region.png', 'events.json', 'before-desktop.json', 'after-desktop.json', 'failure-summary.json', 'failure-windows.json', 'fixture-state.json']) { const bytes = await ownFile(name); if (bytes) await writeFile(join(output, name), bytes) }
+    assert.ok(report, 'Interactive test did not produce a bounded report; inspect runner.err and preserved own diagnostics')
     const task = JSON.parse(await ps(`$t=Get-ScheduledTask -TaskName ${quote(taskName)};$i=Get-ScheduledTaskInfo -TaskName ${quote(taskName)};@{state=$t.State.ToString();exitCode=[long]$i.LastTaskResult}|ConvertTo-Json -Compress`))
     await writeFile(join(output, 'environment.json'), JSON.stringify({ vm, host, guestRoot, helperPath, helperSHA256, architecture, baseline: baselineResult, task, raster: captureVerdict, samePointRaster: samePointVerdict, reportPassed: report.passed }, null, 2))
     assert.equal(report.passed, true); assert.equal(task.state, 'Ready'); assert.equal(task.exitCode, 0)

@@ -7,6 +7,7 @@ New-Item -ItemType Directory -Force $Output|Out-Null
 $checks=[Collections.Generic.List[object]]::new();$children=[Collections.Generic.List[object]]::new();$events=[Collections.Generic.List[object]]::new();$sequence=0;$command=0;$active=@{};$forced=@();$tracked=@();$result=$null
 $env:QIUYA_TOOLS_NATIVE_DATA_DIR=Join-Path $Output 'webview-data'
 $env:QIUYA_WINDOWS_INPUT_TRACE='1'
+$env:QIUYA_WINDOWS_PREVIEW_TRACE='1'
 function Save([string]$name,$value){$value|ConvertTo-Json -Depth 24|Set-Content -LiteralPath (Join-Path $Output $name) -Encoding UTF8}
 function Assert([bool]$condition,[string]$id,$details=$null){$checks.Add(@{id=$id;passed=$condition;details=$details});if(!$condition){throw $id}}
 function Until([scriptblock]$operation,[string]$message,[int]$timeout=4000){$clock=[Diagnostics.Stopwatch]::StartNew();do{$value=& $operation;if($value){return $value};Start-Sleep -Milliseconds 25}while($clock.ElapsedMilliseconds -lt $timeout);throw $message}
@@ -19,7 +20,7 @@ function Bound($p){$i=($children|Where-Object {$_.process.Id -eq  $p.Id}).identi
 function Rpc($p,[string]$op,[hashtable]$body=@{}){
  [void](Bound $p);$script:sequence++;$id='ai-real-'+$script:sequence;$body.requestId=$id;$body.op=$op;$text=$body|ConvertTo-Json -Depth 10 -Compress
  $text=[regex]::Replace($text,'[^\x00-\x7F]',{param($m)'\u'+([int][char]$m.Value).ToString('x4')});$p.StandardInput.WriteLine($text);$p.StandardInput.Flush();$clock=[Diagnostics.Stopwatch]::StartNew()
- while($clock.ElapsedMilliseconds -lt  30000){$read=$p.StandardOutput.ReadLineAsync();if(!$read.Wait([Math]::Max(1,30000-[int]$clock.ElapsedMilliseconds))){throw 'Native RPC timeout'};if($null -eq  $read.Result){throw 'Native EOF before reply'};$answer=$read.Result|ConvertFrom-Json;if($answer.event){$events.Add($answer);continue};if($answer.requestId -ne  $id){throw 'Out of order native reply'};return $answer};throw 'Native RPC timeout'
+ while($clock.ElapsedMilliseconds -lt  30000){$read=$p.StandardOutput.ReadLineAsync();if(!$read.Wait([Math]::Max(1,30000-[int]$clock.ElapsedMilliseconds))){throw 'Native RPC timeout'};if($null -eq  $read.Result){throw 'Native EOF before reply'};$answer=$read.Result|ConvertFrom-Json;if($answer.event){$events.Add($answer);Save 'events.json' $events;continue};if($answer.requestId -ne  $id){throw 'Out of order native reply'};return $answer};throw 'Native RPC timeout'
 }
 function Good($p,[string]$op,[hashtable]$body=@{}){$r=Rpc $p $op $body;if(!$r.ok){throw ('Native '+$op+' failed: '+$r.error.code)};return $r.result}
 function Lease($p,[long]$epoch,[string]$actor='ai'){$r=Good $p 'lease' @{epoch=$epoch;actor=$actor};$active[$p.Id]=$epoch;return $r}
@@ -31,7 +32,9 @@ function PointerVisible($p){@((PointerWindows $p)|Where-Object visible).Count -e
 function PointerHidden($p){@((PointerWindows $p)|Where-Object visible).Count -eq  0}
 function Move-Ai($p,[long]$epoch,[int]$x,[int]$y){[void](Good $p 'act' @{epoch=$epoch;targetId=$target.id;action=@{kind='move';x=$x;y=$y}});Until {$s=Good $p 'status';if($s.aiCursor.visible -and (PointerVisible $p)){return $s}} 'Actual AI surface did not become visible'}
 function Track-Native {
- $list=@();foreach($row in @(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -ieq  $Helper})){try{$i=[QytAiOracle]::Identity([int]$row.ProcessId);$list+=@{pid=$i.pid;createdAtTicks=$i.createdAtTicks;expectedExecutablePath=$i.expectedExecutablePath;parentPid=[int]$row.ParentProcessId}}catch{}}
+ $all=@(Get-CimInstance Win32_Process);$owned=@{};foreach($row in $all){if($row.ExecutablePath -ieq $Helper -or ($row.CommandLine -and $row.CommandLine.Contains($env:QIUYA_TOOLS_NATIVE_DATA_DIR))){$owned[[int]$row.ProcessId]=$true}}
+ do{$added=$false;foreach($row in $all){if($owned.ContainsKey([int]$row.ParentProcessId) -and !$owned.ContainsKey([int]$row.ProcessId)){$owned[[int]$row.ProcessId]=$true;$added=$true}}}while($added)
+ $list=@();foreach($row in @($all|Where-Object {$owned.ContainsKey([int]$_.ProcessId)})){try{$i=[QytAiOracle]::Identity([int]$row.ProcessId);$list+=@{pid=$i.pid;createdAtTicks=$i.createdAtTicks;expectedExecutablePath=$i.expectedExecutablePath;parentPid=[int]$row.ParentProcessId}}catch{}}
  return $list
 }
 try{
@@ -90,6 +93,7 @@ try{
  $ownPreview='http://127.0.0.1:'+(Fixture).port+'/preview?sid='
  [void](Good $computer 'openPreview' @{sessionId='preserved';url=($ownPreview+'preserved');title='Own preserved preview'})
  [void](Until {if(@((Fixture).webEvents|Where-Object {$_.kind -eq 'ready' -and $_.sid -eq 'preserved'}).Count -eq 1){return $true}} 'Actual preserve test page did not load' 10000)
+ $tracked+=Track-Native
  $preservedWindow=@([QytAiOracle]::Windows($computer.Id)|Where-Object {$_.title -like 'Own preserved preview*' -and $_.visible})[0]
  Assert ($preservedWindow -and ($preservedWindow.exStyle -band 8) -ne 0) 'AI-PRESERVE-ACTUAL-WEBVIEW-IS-VISIBLE-TOPMOST' $preservedWindow
  [void](Good $computer 'closePreview' @{sessionId='preserved';preserveSession=$true});[void](Good $computer 'status')
@@ -107,7 +111,7 @@ try{
  [void](Until {if((PointerHidden $computer) -and  !(Good $computer 'status').aiCursor.visible){return $true}} 'Target close did not hide AI pointer')
  Assert $true 'AI-TARGET-CLOSE-HIDES-SURFACE';[void](Release $computer 1)
  $result=@{passed=$true;checks=$checks;architecture=$status.architecture;sessionId=$before.sessionId;actualOsInput=$true;mouseSource='native and independent Win32 SendInput OS-synthetic; not HID';physicalRaster='prlctl capture only own confirmed rectangle';events=$events.Count;sourceBoundary='Native HWND/driver matrix; no actual Harness Host or production preview-page UI lifecycle is claimed'}
-}catch{$result=@{passed=$false;checks=$checks;error=$_.Exception.Message;trace=$_.ScriptStackTrace};try{Save 'failure-windows.json' @{computerWindows=if($computer -and  !$computer.HasExited){[QytAiOracle]::Windows($computer.Id)}else{@()};nativeStatus=if($computer -and !$computer.HasExited){Good $computer 'status'}else{$null};desktop=[QytAiOracle]::DesktopState();fixture=if(Test-Path (Join-Path $Output 'fixture-state.json')){Fixture}else{$null}}}catch{}}
+}catch{$result=@{passed=$false;checks=$checks;error=$_.Exception.Message;trace=$_.ScriptStackTrace};Save 'failure-summary.json' $result;try{Save 'failure-windows.json' @{computerWindows=if($computer -and  !$computer.HasExited){[QytAiOracle]::Windows($computer.Id)}else{@()};nativeStatus=if($computer -and !$computer.HasExited){Good $computer 'status'}else{$null};desktop=[QytAiOracle]::DesktopState();fixture=if(Test-Path (Join-Path $Output 'fixture-state.json')){Fixture}else{$null}}}catch{}}
 finally{
  try{$tracked+=Track-Native}catch{}
  foreach($child in $children){$p=$child.process;if($p.HasExited){continue};if($active.ContainsKey($p.Id)){try{[void](Release $p $active[$p.Id])}catch{}};try{if($p.StartInfo.RedirectStandardInput){$p.StandardInput.Close()}else{FixtureCommand 'exit'};[void]$p.WaitForExit(4000)}catch{};if(!$p.HasExited){$forced+=@{identity=$child.identity;role=$child.role};if([QytAiOracle]::Same($child.identity.pid,$child.identity.createdAtTicks,$child.identity.expectedExecutablePath)){$p.Kill();[void]$p.WaitForExit(2000)}}}
