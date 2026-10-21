@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,12 +14,19 @@ const directory = await mkdtemp(join(tmpdir(), 'qiuya-computer-e2e-'))
 const evidenceFlag = process.argv.indexOf('--evidence-dir')
 const evidenceDirectory = evidenceFlag < 0 ? undefined : process.argv[evidenceFlag + 1]
 if (evidenceFlag >= 0 && !evidenceDirectory) throw new Error('--evidence-dir requires a directory')
-async function report(result) {
+let finalResult, stage = 'setup'
+const trace = [], fixtureStates = [], cleanupErrors = []
+async function report(result) { finalResult = result }
+async function saveReport() {
+  const result = { ...finalResult, status: cleanupErrors.length ? 'failed' : finalResult?.status ?? 'failed', stage, trace, fixtureStates,
+    helper: { pid: native.pid, sha256: createHash('sha256').update(await readFile(helper)).digest('hex') },
+    cleanup: { passed: !cleanupErrors.length, errors: cleanupErrors, scope: 'fixture and primary companion; guardian lifecycle has separate tests' } }
   if (evidenceDirectory) {
     await mkdir(evidenceDirectory, { recursive: true })
     await writeFile(join(evidenceDirectory, 'report.json'), JSON.stringify({ ...result, testedAt: new Date().toISOString(), architecture: process.arch }, null, 2) + '\n')
   }
   console.log(JSON.stringify(result, null, 2))
+  if (result.status === 'failed') process.exitCode = 1
 }
 const native = spawn(helper, [], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
 native.stderr.resume()
@@ -37,12 +45,15 @@ const previewServer = createServer(async (incoming, response) => {
 })
 nativeLines.on('line', line => {
   let value; try { value = JSON.parse(line) } catch { return }
+  trace.push({ at: Date.now(), direction: 'reply', requestId: value.requestId, event: value.event, ok: value.ok, error: value.error,
+    result: value.result && { performed: value.result.performed, kind: value.result.kind, epoch: value.result.epoch, inputState: value.result.inputState, geometry: value.result.geometry, width: value.result.width, height: value.result.height } })
   if (value.event === 'humanInput' && value.reason === 'preview-pointer') { previewPaused = true; return }
   const job = pending.get(value.requestId)
   if (job) { clearTimeout(job.timer); pending.delete(value.requestId); job.resolve(value) }
 })
 function request(op, payload = {}) {
   const requestId = ++nextId
+  trace.push({ at: Date.now(), direction: 'request', stage, requestId, op, ...payload })
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`Native ${op} timed out`)) }, 15_000)
     pending.set(requestId, { resolve, reject, timer })
@@ -61,6 +72,7 @@ const run = (command, args) => new Promise((resolve, reject) => {
 })
 try {
   const status = await ok('status')
+  assert.equal(status.inputState.leftButtonDown, false, 'The desktop mouse must be released before the isolated input test begins')
   const badURL = await request('openPreview', { url: 'https://example.com/', sessionId: 'fixture', title: 'fixture' })
   assert.equal(badURL.ok, false); assert.equal(badURL.error.code, 'INVALID_PREVIEW_URL')
   await ok('lease', { epoch: 1 }); await ok('release', { epoch: 1 })
@@ -84,6 +96,7 @@ try {
     const states = []; const waiting = []
     fixtureLines.on('line', line => {
       let state; try { state = JSON.parse(line) } catch { return }
+      fixtureStates.push({ at: Date.now(), state })
       const resolve = waiting.shift(); if (resolve) resolve(state); else states.push(state)
     })
     const nextState = () => new Promise((resolve, reject) => {
@@ -92,6 +105,7 @@ try {
       waiting.push(state => { clearTimeout(timer); resolve(state) })
     })
     const ready = await nextState()
+    assert.equal(ready.pid, fixture.pid)
     async function snapshot() { fixture.stdin.write('snapshot\n'); return nextState() }
     const { targets } = await ok('targets')
     const target = targets.find(target => target.pid === fixture.pid && target.title.includes('E2E Fixture'))
@@ -111,9 +125,12 @@ try {
     for (let attempt = 0; attempt < 40 && !previewLoaded; attempt++) await delay(50)
     assert.ok(previewLoaded, 'The native floating WKWebView must load the same-origin preview page')
     await delay(300)
+    stage = 'fixture-click'
+    trace.push({ at: Date.now(), stage, ready, target, before: await snapshot(), inputState: (await ok('status')).inputState })
     await act({ kind: 'click', ...point('button') }); await delay(100)
     const clicked = await snapshot()
     assert.equal(clicked.counts.clicks, 1, `Native click must activate the fixture button: ${JSON.stringify(clicked.counts)}`)
+    stage = 'fixture-text-and-shortcut'
     await act({ kind: 'click', ...point('text') })
     await act({ kind: 'type', text: 'QiuYa 测试 ✓' }); await delay(100)
     assert.equal((await snapshot()).text, 'QiuYa 测试 ✓', 'Unicode typing must reach the fixture text field')
@@ -121,6 +138,7 @@ try {
     assert.equal((await snapshot()).text, 'replaced', 'Native shortcut must select the fixture text')
     await act({ kind: 'scroll', ...point('canvas'), deltaY: -80, deltaX: 0 }); await delay(100)
     assert.ok((await snapshot()).counts.scrolls > 0, 'Native scroll must reach the fixture')
+    stage = 'held-drag-release'
     const beforeDrag = await snapshot()
     const canvas = point('canvas')
     const dragging = request('act', { epoch: 2, targetId: target.id, action: { kind: 'drag', ...canvas, toX: canvas.x + 100, toY: canvas.y + 30 } })
@@ -138,6 +156,7 @@ try {
     assert.equal(stale.ok, false); assert.equal(stale.error.code, 'STALE_EPOCH')
     assert.deepEqual((await snapshot()).counts, afterRelease.counts, 'Stale action must inject no events')
     currentEpoch = 3; previewPaused = false
+    stage = 'preview-human-interruption'
     await ok('lease', { epoch: 3 }); await ok('observe', { targetId: target.id, preview: true })
     const humanDrag = request('act', { epoch: 3, targetId: target.id, action: { kind: 'drag', ...canvas, toX: canvas.x + 100, toY: canvas.y + 30 } })
     await delay(200); fixture.stdin.write(`preview-click ${native.pid}\n`)
@@ -153,11 +172,24 @@ try {
       screenshot: { width: frame.width, height: frame.height, bytes: jpeg.length }, counts: afterRelease.counts,
       verified: ['SCK-window-capture', 'AX-fixture-tree', 'real-click-under-floating-preview', 'Unicode-text', 'keyboard-shortcut', 'real-scroll', 'floating-WKWebView-loaded', 'real-preview-human-override-during-drag', 'mid-drag-revocation', 'held-button-release', 'stale-action-zero-events'] })
   }
+} catch (error) {
+  finalResult = { status: 'failed', reason: error.message, stack: error.stack }
 } finally {
-  fixture?.stdin.end('quit\n'); fixtureLines?.close(); fixture?.kill()
-  native.stdin.end(); nativeLines.close()
-  await Promise.race([new Promise(resolve => native.once('exit', resolve)), delay(2000).then(() => native.kill())])
+  const retire = async (child, name) => {
+    if (!child || child.exitCode !== null || child.signalCode) return
+    child.stdin.end(name === 'fixture' ? 'quit\n' : undefined)
+    await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(3000)])
+    if (child.exitCode === null && !child.signalCode) {
+      cleanupErrors.push(`${name} required forced retirement`)
+      child.kill('SIGKILL'); await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(2000)])
+    }
+    if (child.exitCode === null && !child.signalCode) cleanupErrors.push(`${name} exit could not be confirmed`)
+  }
+  await retire(fixture, 'fixture'); fixtureLines?.close()
+  await retire(native, 'native')
+  nativeLines.close()
   for (const job of pending.values()) clearTimeout(job.timer)
   previewServer.closeAllConnections(); await new Promise(resolve => previewServer.close(resolve))
+  await saveReport()
   await rm(directory, { recursive: true, force: true })
 }
