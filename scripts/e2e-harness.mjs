@@ -1,7 +1,7 @@
 /** Real installed Harness + isolated profile + deterministic local model + Chrome. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -24,7 +24,7 @@ const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
 const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
 const tests = [], errors = [], screenshots = [], windowRpc = []
-let host, browser, page, driver, diagnosticComplete = false
+let host, browser, page, driver, macPreviewRetirement, diagnosticComplete = false
 class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
@@ -215,7 +215,8 @@ try {
   await test('native-independent-window-and-reuse', async () => {
     const compiled = await build({ stdin: { contents: "export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
     const { NativeCompanionDriver } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
-    const executable = arg('--native', process.platform === 'darwin' ? join(root, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer') : join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`))
+    const macCandidateHelper = candidate && process.argv.includes('--manual-preview-e2e') ? join(profileHome, 'profiles/web/node_modules/dsh-qiuya-tools/lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer') : join(root, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')
+    const executable = arg('--native', process.platform === 'darwin' ? macCandidateHelper : join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`))
     driver = new NativeCompanionDriver({ executable, args: process.platform === 'win32' ? ['--computer'] : [] })
     await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
     let ownedTargets = []
@@ -354,12 +355,34 @@ try {
     }, alphaId)
     await writeFile(join(output, 'preview-native-status.json'), JSON.stringify(nativeStatus, null, 2))
     const previewPath = join(output, 'floating-computer-preview.jpg')
-    let preview, observer, windowsPreview, observeWindowState
+    let preview, observer, windowsPreview, observeWindowState, macPreview
     if (process.platform === 'darwin') {
-      observer = join(temporary, 'harness-window-evidence')
-      await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'Vision', join(root, 'src/native/macos/fixtures/HarnessWindowEvidence.swift'), '-o', observer])
-      await sleep(1500)
-      preview = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', previewPath]))
+      if (process.argv.includes('--manual-preview-e2e')) {
+        assert.ok(candidate && host?.pid, 'Mac manual input requires this runner’s own installed profile and Host process')
+        const interactor = join(temporary, 'harness-preview-macos')
+        await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', join(root, 'tests/fixtures/harness-preview-macos.swift'), '-o', interactor])
+        const request = async value => {
+          const answer = JSON.parse(await nativeCommand(interactor, ['--request', JSON.stringify(value)]))
+          assert.equal(answer.ok, true, `Owned Mac preview operation failed: ${answer.error}`)
+          return answer.result
+        }
+        const library = join(profileHome, 'profiles/web/node_modules/dsh-qiuya-tools/lib')
+        const bound = await request({ op: 'bind', ancestorPid: host.pid, targetPid: independentTarget.pid,
+          targetWindowId: Number(independentTarget.id.replace(/^mac-window:/u, '')),
+          previewExecutable: await realpath(join(library, 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')),
+          targetExecutable: await realpath(join(library, 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window')),
+          previewTitle: 'QiuYaTools · 电脑操控' })
+        await writeFile(join(output, 'mac-preview-owned-binding.json'), JSON.stringify(bound, null, 2))
+        macPreview = (op, extra = {}) => request({ op, binding: bound.binding, ...extra })
+        macPreviewRetirement = () => macPreview('retirement')
+        const view = await macPreview('observe', { output: previewPath })
+        preview = { ...view, id: bound.binding.previewWindowId, pid: bound.binding.preview.pid, accessibility: view.labels, recognizedText: [] }
+      } else {
+        observer = join(temporary, 'harness-window-evidence')
+        await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'Vision', join(root, 'src/native/macos/fixtures/HarnessWindowEvidence.swift'), '-o', observer])
+        await sleep(1500)
+        preview = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', previewPath]))
+      }
       await writeFile(join(output, 'floating-preview-evidence.json'), JSON.stringify(preview, null, 2))
       const text = [...preview.accessibility, ...preview.recognizedText].join('\n')
       for (const label of ['暂停', '接管', '继续', '停止']) assert.ok(text.includes(label), `The actual floating preview must expose ${label}`)
@@ -406,8 +429,21 @@ try {
         return { diagnostic: true, timeline: JSON.parse(await readFile(join(output, 'preview-window-timeline.json'), 'utf8')), stages: windowStages, boundary: 'The pre-click 10ms Win32 timeline and three read-only preview phases follow the first eight UI prerequisites and real main-Agent Move; no preview controls/manual actions or later cases are run.' }
       }
     }
-    for (const [button, state] of [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['停止', 'stopped']]) {
-      if (observer) {
+    const computerSnapshot = () => page.evaluate(async sessionId => {
+      const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+      const result = (await response.json()).result
+      if (!response.ok || !result.ok) throw new Error('The owned computer status failed')
+      return { session: result.value.sessions.find(value => value.sessionId === sessionId), native: result.value.native }
+    }, alphaId)
+    const controlSteps = macPreview ? [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['继续', 'ready'], ['暂停', 'paused'], ['停止', 'stopped'], ['停止', 'stopped']] : [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['停止', 'stopped']]
+    const macLifecycle = [], beforeRetirement = []
+    for (const [step, [button, state]] of controlSteps.entries()) {
+      const previous = macPreview ? await computerSnapshot() : undefined
+      if (macPreview) {
+        const receipt = await macPreview('button', { label: button })
+        assert.equal(receipt.pressed, true)
+        await writeFile(join(output, `preview-control-${step}-${state}.json`), JSON.stringify(receipt, null, 2))
+      } else if (observer) {
         const receipt = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', join(output, `preview-control-${state}.jpg`), button]))
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
@@ -425,16 +461,31 @@ try {
           const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
           return { httpStatus: response.status, body: await response.json() }
         }, alphaId).catch(failure => ({ error: failure.message }))
-        const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : undefined
+        const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : macPreview ? await macPreview('observe', { output: join(output, `preview-control-${state}-failed.jpg`) }).catch(failure => ({ error: failure.message })) : undefined
         const panelText = await page.locator('.qyt-feature-panel [role="status"]').innerText().catch(failure => failure.message)
         await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: error.message, backend, native, panelText }, null, 2))
-        const pixels = await driver.observe(preview.id).catch(() => undefined)
+        const pixels = windowsPreview ? await driver.observe(preview.id).catch(() => undefined) : undefined
         if (pixels) await writeFile(join(output, `preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
         throw error
       }
-      if (state === 'humanControl' && windowsPreview && process.argv.includes('--manual-preview-e2e')) {
+      if (macPreview) {
+        const current = await computerSnapshot()
+        macLifecycle.push({ step, button, previous, current })
+        if (state === 'stopped') {
+          assert.equal(current.native.inputState.mouseHeld, false)
+          assert.equal(current.native.inputState.keysHeld, 0)
+          assert.equal(current.native.inputState.leftButtonDown, false)
+          if (previous.session.state === 'stopped') {
+            assert.equal(current.session.epoch, previous.session.epoch, 'Repeated Stop must not create another control epoch')
+            assert.deepEqual(current.session.lastAction, previous.session.lastAction, 'Repeated Stop must not replay target input')
+          }
+          beforeRetirement.push(current)
+        }
+        await writeFile(join(output, 'mac-preview-control-lifecycle.json'), JSON.stringify(macLifecycle, null, 2))
+      }
+      if (state === 'humanControl' && (windowsPreview || macPreview) && process.argv.includes('--manual-preview-e2e')) {
         const marker = `E2E:manual-preview-${suffix}-你好`
-        const evidence = { marker, mouseSource: 'Win32 SendInput OS-synthetic; not Parallels hardware', receipts: [], actions: [], states: [] }
+        const evidence = { marker, mouseSource: macPreview ? 'CGEvent HID tap OS-synthetic; not hardware' : 'Win32 SendInput OS-synthetic; not Parallels hardware', receipts: [], actions: [], states: [] }
         const completed = kind => waitFor(async () => {
           const current = await page.evaluate(async sessionId => {
             const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
@@ -446,28 +497,35 @@ try {
           return current?.lastAction?.phase === 'completed' && current.lastAction.action.kind === kind ? current.lastAction : undefined
         }, `The real native preview ${kind} did not complete`)
         try {
-          evidence.receipts.push(JSON.parse(await windowsPreview('', ['-Operation', 'click-image', '-ImageLabel', '实时电脑画面', '-X', '0.5', '-Y', '0.85'])))
+          evidence.receipts.push(macPreview ? await macPreview('click-composer') : JSON.parse(await windowsPreview('', ['-Operation', 'click-image', '-ImageLabel', '实时电脑画面', '-X', '0.5', '-Y', '0.85'])))
           evidence.actions.push(await completed('click'))
-          const afterTargetClick = await observeWindowState('after-manual-target-click')
-          assert.equal(afterTargetClick.state.window.topmost, true, 'The native floating preview must remain TOPMOST after the completed target click')
-          const footer = JSON.parse(await windowsPreview('', ['-Operation', 'set-text', '-TextLabel', '接管后输入文字', '-Text', marker]))
+          if (observeWindowState) {
+            const afterTargetClick = await observeWindowState('after-manual-target-click')
+            assert.equal(afterTargetClick.state.window.topmost, true, 'The native floating preview must remain TOPMOST after the completed target click')
+          }
+          const footer = macPreview ? await macPreview('type-footer', { text: marker }) : JSON.parse(await windowsPreview('', ['-Operation', 'set-text', '-TextLabel', '接管后输入文字', '-Text', marker]))
           evidence.receipts.push(footer)
-          assert.equal(footer.clicked, true, 'The user must actually activate the own preview footer before typing')
+          assert.equal(macPreview ? footer.click?.clicked : footer.clicked, true, 'The user must actually activate the own preview footer before typing')
           assert.equal(footer.textValue, marker)
-          evidence.receipts.push(JSON.parse(await windowsPreview('输入', ['-MouseButton'])))
+          evidence.receipts.push(macPreview ? await macPreview('button', { label: '输入' }) : JSON.parse(await windowsPreview('输入', ['-MouseButton'])))
           evidence.actions.push(await completed('type'))
-          evidence.receipts.push(JSON.parse(await windowsPreview('Enter', ['-MouseButton'])))
+          evidence.receipts.push(macPreview ? await macPreview('button', { label: 'Enter' }) : JSON.parse(await windowsPreview('Enter', ['-MouseButton'])))
           evidence.actions.push(await completed('key'))
           await page.getByText(`已完成本地测试回复：${marker}`, { exact: true }).waitFor({ timeout: 20000 })
+          if (macPreview) {
+            const delivered = (await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse).filter(record => record.sessionId === alphaId && record.marker === marker && record.purpose === null)
+            assert.equal(delivered.length, 1, 'The independent fixture provider must receive exactly one actual Chinese prompt after the native preview Enter')
+            evidence.providerReceipts = delivered
+          }
           evidence.actualTargetSubmission = true
           const after = await driver.observe(independentTarget.id)
           await writeFile(join(output, 'manual-preview-target-result.jpg'), Buffer.from(after.imageBase64, 'base64'))
-          const floatingAfter = await driver.observe(preview.id)
-          await writeFile(join(output, 'manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64'))
+          if (macPreview) await macPreview('observe', { output: join(output, 'manual-preview-window.jpg') })
+          else { const floatingAfter = await driver.observe(preview.id); await writeFile(join(output, 'manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64')) }
         } finally {
           if (!evidence.actualTargetSubmission) {
-            evidence.failurePreview = await windowsPreview().then(JSON.parse).catch(error => ({ error: error.message }))
-            for (const [name, targetId] of [['target', independentTarget.id], ['floating', preview.id]]) {
+            evidence.failurePreview = macPreview ? await macPreview('observe', { output: join(output, 'manual-preview-failed-floating.jpg') }).catch(error => ({ error: error.message })) : await windowsPreview().then(JSON.parse).catch(error => ({ error: error.message }))
+            for (const [name, targetId] of [['target', independentTarget.id], ...macPreview ? [] : [['floating', preview.id]]]) {
               const failed = await driver.observe(targetId).catch(() => undefined)
               if (failed) await writeFile(join(output, `manual-preview-failed-${name}.jpg`), Buffer.from(failed.imageBase64, 'base64'))
             }
@@ -475,6 +533,15 @@ try {
           await writeFile(join(output, 'manual-preview-input-evidence.json'), JSON.stringify(evidence, null, 2))
         }
       }
+    }
+    if (macPreview) {
+      const closed = await macPreview('close'), repeated = await macPreview('close')
+      assert.equal(closed.closed, true); assert.equal(repeated.closed, true); assert.equal(repeated.alreadyClosed, true)
+      const after = await computerSnapshot(), stopped = beforeRetirement.at(-1)
+      assert.equal(after.session.state, 'stopped'); assert.equal(after.session.epoch, stopped.session.epoch)
+      assert.deepEqual(after.session.lastAction, stopped.session.lastAction)
+      assert.equal(after.native.inputState.mouseHeld, false); assert.equal(after.native.inputState.keysHeld, 0); assert.equal(after.native.inputState.leftButtonDown, false)
+      await writeFile(join(output, 'mac-preview-natural-retirement.json'), JSON.stringify({ closed, repeated, after, noKillOrSignal: true, note: 'The NSPanel closes naturally; the native companion remains owned by this live Host until Host disposal.' }, null, 2))
     }
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     return { preview, adapterRequestsWithImages: images.length, imageBlocks: images.flatMap(request => request.imageBlocks).length,
@@ -590,7 +657,25 @@ finally {
     await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + error.message) })
   }
   await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
-  if (host) await Promise.race([new Promise(resolve => host.once('exit', resolve)), sleep(3000).then(() => host.kill('SIGKILL'))])
+  let forcedHostTermination = false
+  if (host && macPreviewRetirement) await new Promise(resolve => {
+    if (host.exitCode !== null || host.signalCode !== null) return resolve()
+    const finish = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => { forcedHostTermination = true; host.kill('SIGKILL'); resolve() }, 3000)
+    host.once('exit', finish)
+  })
+  else if (host) await Promise.race([new Promise(resolve => host.once('exit', resolve)), sleep(3000).then(() => host.kill('SIGKILL'))])
+  if (macPreviewRetirement) {
+    const start = Date.now(); let last, failure
+    try {
+      last = await waitFor(async () => {
+        last = await macPreviewRetirement()
+        return last.allRetired ? last : undefined
+      }, 'The same owned Host/preview/session process identities did not retire after Host shutdown', 10000)
+    } catch (error) { failure = error.message; errors.push(failure) }
+    if (forcedHostTermination) errors.push('The owned Mac Host required SIGKILL instead of graceful retirement')
+    await writeFile(join(output, 'mac-preview-process-retirement.json'), JSON.stringify({ elapsedMs: Date.now() - start, last, failure, forcedHostTermination, source: 'read-only proc_pidinfo exact PID + birth + executable; no signal or kill by this observer', boundary: 'Host receives the runner’s existing normal SIGTERM shutdown; helper processes are not directly killed by this oracle.' }, null, 2))
+  }
   const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length
   const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
