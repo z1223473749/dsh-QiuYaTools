@@ -300,13 +300,19 @@ try {
     const enable = page.getByRole('checkbox', { name: '启用', exact: true })
     if (!await enable.isChecked()) await enable.click()
     await waitFor(() => enable.isChecked(), 'Computer-use setting did not persist')
-    await page.getByRole('button', { name: '刷新窗口', exact: true }).click()
     await page.getByRole('combobox', { name: /^关联聊天/u }).selectOption(alphaId)
+    await page.getByRole('button', { name: '刷新窗口', exact: true }).click()
     await page.getByRole('combobox', { name: /^应用窗口/u }).selectOption(independentTarget.id)
     await page.getByRole('button', { name: '允许本次并开始', exact: true }).click()
     await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes('ready'), 'Computer session did not become ready')
     await screenshot('computer-authorized')
     await page.getByRole('button', { name: '关闭', exact: true }).click()
+    const inlinePreview = page.locator(`[data-qyt-computer-inline="${alphaId}"]`)
+    await inlinePreview.waitFor()
+    const smallFrame = inlinePreview.locator('iframe')
+    assert.equal(await smallFrame.getAttribute('src'), `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(alphaId)}&view=inline`)
+    await smallFrame.contentFrame().getByRole('img', { name: '实时电脑画面', exact: true }).waitFor()
+    await screenshot('chat-inline-preview')
     if (process.platform === 'win32') {
       // Keep the fixture user's foreground target. DOM input submits the main
       // Agent request without focusing another desktop/browser window.
@@ -346,7 +352,7 @@ try {
         return readFile(ready, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return undefined; throw error })
       }, 'The profile-bound read-only preview timeline did not become ready', 20000)
     }
-    try { await page.getByRole('button', { name: '悬浮实时预览', exact: true }).click() }
+    try { await page.getByRole('button', { name: '弹出大预览', exact: true }).click() }
     finally { if (previewTimeline) await previewTimeline }
     await sleep(1000)
     const nativeStatus = await page.evaluate(async sessionId => {
@@ -596,11 +602,12 @@ try {
     try {
       await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
       const enable = page.getByRole('checkbox', { name: '启用', exact: true }); if (!await enable.isChecked()) await enable.click()
+      await page.getByRole('combobox', { name: /^关联聊天/u }).selectOption(alphaId)
       await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('remote')
       await page.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
       await page.getByLabel('配对密钥', { exact: true }).fill(pairing)
       await page.getByRole('checkbox', { name: /允许通过受信任的私有网络连接/u }).check()
-      await page.getByRole('button', { name: '连接所选环境', exact: true }).click()
+      await page.getByRole('button', { name: '为此聊天连接环境', exact: true }).click()
       const pane = page.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')
       await pane.waitFor()
       await pane.getByRole('button', { name: '检查并刷新交换目录', exact: true }).click()
@@ -626,7 +633,7 @@ try {
       Object.assign(evidence, { name, size: bytes.length, sha256, uploadedBytesVerified: true, browserDownloadVerified: true, duplicateRejectedWithoutOverwrite: true })
       await screenshot('file-exchange-ui')
       await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('local')
-      await page.getByRole('button', { name: '连接所选环境', exact: true }).click()
+      await page.getByRole('button', { name: '为此聊天连接环境', exact: true }).click()
       await waitFor(async () => await page.getByRole('heading', { name: '手动文件交换', exact: true }).count() === 0, 'The file-only remote environment did not disconnect')
       await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
       assert.ok(calls.status > 0)
