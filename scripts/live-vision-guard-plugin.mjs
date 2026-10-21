@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
 import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
-import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
+import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
 export const inject = ['agents', 'tools', 'connection', 'webServer', 'agentDefaultModel', 'sessionController', 'llm']
@@ -85,8 +85,8 @@ export function apply(ctx, config) {
     const url = new URL(paired.endpoint)
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.pathname !== COMPUTER_AGENT_PATH || url.username || url.password || url.search || url.hash ||
         !/^[a-f0-9]{64}$/u.test(paired.token) || !sameExternalIdentity(paired.carrierIdentity, carrier.carrierIdentity) ||
-        paired.fixtureIdentity?.pid !== ready.pid || paired.fixtureIdentity?.parentPid !== process.pid || paired.fixtureIdentity?.executablePath !== request.executablePath ||
-        paired.nativeIdentity?.parentPid !== carrier.carrierIdentity.pid || paired.nativeIdentity?.executablePath !== cfg.native ||
+        paired.fixtureIdentity?.pid !== ready.pid || paired.fixtureIdentity?.parentPid !== process.pid || !await sameExternalExecutable(paired.fixtureIdentity?.executablePath, request.executablePath) ||
+        paired.nativeIdentity?.parentPid !== carrier.carrierIdentity.pid || !await sameExternalExecutable(paired.nativeIdentity?.executablePath, cfg.native) ||
         paired.target?.id !== `mac-window:${ready.windowId}` || paired.target.pid !== ready.pid || paired.target.appId !== bundleId) fail('VISION_EXTERNAL_BINDING')
     record.external.fixtureIdentity = paired.fixtureIdentity; record.external.nativeIdentity = paired.nativeIdentity
     record.target = paired.target; record.pairToken = paired.token; record.pairEndpoint = paired.endpoint

@@ -11,6 +11,13 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
 export function sameExternalIdentity(a, b) {
   return !!a && !!b && a.pid === b.pid && a.startSeconds === b.startSeconds && a.startMicroseconds === b.startMicroseconds && a.executablePath === b.executablePath
 }
+export async function sameExternalExecutable(a, b) {
+  // Foundation/proc_pidpath can publish /tmp while Node realpath publishes
+  // /private/tmp. Compare filesystem objects here without changing the raw
+  // identity passed back to the Swift observer's strict expected(...) oracle.
+  if (typeof a !== 'string' || typeof b !== 'string' || !isAbsolute(a) || !isAbsolute(b)) return false
+  try { return await realpath(a) === await realpath(b) } catch { return false }
+}
 export function externalIdentityRetired(current, pinned) {
   // A different executable with the same PID/birth is not proof of exit. The
   // read-only observer returns null only for ESRCH, never for permission errors.
@@ -84,10 +91,10 @@ export function validateExternalBinding(value, request, config) {
 export function externalCleanupPassed(value) {
   return value?.passed === true && Array.isArray(value.errors) && value.errors.length === 0 && value.nativeNaturalExit === true && value.forced === false
 }
-export async function verifyExternalFixture(request, config, { identity, fileHash, targets, pinned }) {
+export async function verifyExternalFixture(request, config, { identity, fileHash, targets, pinned, executableEquals = sameExternalExecutable }) {
   validateExternalRequest(request, config, request.task)
   const current = await identity(request.pid)
-  if (!current || current.pid !== request.pid || current.parentPid !== request.parentPid || current.executablePath !== request.executablePath ||
+  if (!current || current.pid !== request.pid || current.parentPid !== request.parentPid || !await executableEquals(current.executablePath, request.executablePath) ||
       typeof current.startSeconds !== 'string' || typeof current.startMicroseconds !== 'string' || pinned && !sameExternalIdentity(current, pinned) ||
       await fileHash(current.executablePath) !== config.fixtureSha256) visionExternalFailure('VISION_EXTERNAL_FIXTURE_CHANGED')
   const target = (await targets()).find(row => row.id === `mac-window:${request.windowId}`)

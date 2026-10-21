@@ -1,14 +1,14 @@
 /** Explicit test carrier launched by Codex. Never launched by the Harness plugin. */
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { readFile, writeFile, realpath } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createComputerAgentServer, NativeCompanionDriver } from '../src/features/computer-use/remote.ts'
 import { projectVisionNativeStatus } from './live-vision-guard-core.mjs'
 import { visionDigest, visionExternalFailure as fail, validateExternalConfig, validateExternalRequest, validateExternalBinding,
-  verifyExternalFixture, sameExternalIdentity, externalIdentityRetired, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile } from './live-vision-external-core.mjs'
+  verifyExternalFixture, sameExternalIdentity, sameExternalExecutable, externalIdentityRetired, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile } from './live-vision-external-core.mjs'
 
 function oracleRPC(path) {
   const child = spawn(path, [], { stdio: ['pipe', 'pipe', 'pipe'] }), pending = new Map(); let sequence = 0, readyResolve, readyReject
@@ -71,8 +71,8 @@ export async function runExternalVisionCarrier(configPath) {
   try {
     for (const [path, expected] of [[config.native, config.nativeSha256], [config.oracle, config.oracleSha256], [config.carrier, config.carrierSha256]]) if (await hashFile(path) !== expected) fail('VISION_EXTERNAL_SOURCE_CHANGED')
     oracle = oracleRPC(config.oracle); const oracleIdentity = remember(await bounded(oracle.ready, 5000, 'VISION_EXTERNAL_ORACLE_TIMEOUT'), 'oracle')
-    if (oracleIdentity.pid !== oracle.child.pid || oracleIdentity.executablePath !== await realpath(config.oracle)) fail('VISION_EXTERNAL_IDENTITY')
-    carrierIdentity = await identity(process.pid); if (carrierIdentity.executablePath !== await realpath(process.execPath)) fail('VISION_EXTERNAL_IDENTITY')
+    if (oracleIdentity.pid !== oracle.child.pid || !await sameExternalExecutable(oracleIdentity.executablePath, config.oracle)) fail('VISION_EXTERNAL_IDENTITY')
+    carrierIdentity = await identity(process.pid); if (!await sameExternalExecutable(carrierIdentity.executablePath, process.execPath)) fail('VISION_EXTERNAL_IDENTITY')
     await writePrivateJSON(join(config.directory, 'external', 'carrier-ready.json'), { version: 1, runId: config.runId, rendezvousNonce: config.rendezvousNonce, carrierIdentity })
     while (!stopping && task <= 3 && Date.now() < config.expiresAt) {
       let request
@@ -83,7 +83,7 @@ export async function runExternalVisionCarrier(configPath) {
       record.child = Reflect.get(driver, 'child'); if (!record.child?.pid) fail('VISION_EXTERNAL_IDENTITY')
       record.exits = record.child.exitCode !== null || record.child.signalCode !== null ? Promise.resolve({ code: record.child.exitCode, signal: record.child.signalCode }) : new Promise(done => record.child.once('exit', (code, signal) => done({ code, signal })))
       record.nativeIdentity = remember(await identity(record.child.pid), 'native'); record.nativeIdentity.ownerTask = task
-      if (record.nativeIdentity.executablePath !== await realpath(config.native) || record.nativeIdentity.parentPid !== process.pid) fail('VISION_EXTERNAL_IDENTITY')
+      if (!await sameExternalExecutable(record.nativeIdentity.executablePath, config.native) || record.nativeIdentity.parentPid !== process.pid) fail('VISION_EXTERNAL_IDENTITY')
       if (!record.nativeStatus.available || record.nativeStatus.permissions?.screenRecording !== true || record.nativeStatus.permissions?.accessibility !== true || record.nativeStatus.permissions?.postEvents !== true) fail('VISION_EXTERNAL_NATIVE_PERMISSION')
       const check = async targetId => {
         if (targetId !== undefined && targetId !== `mac-window:${request.windowId}`) fail('VISION_TARGET_CHANGED')

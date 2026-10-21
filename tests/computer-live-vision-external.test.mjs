@@ -8,10 +8,10 @@ import { build } from 'esbuild'
 import vm from 'node:vm'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { validateExternalConfig, validateExternalRequest, validateExternalBinding, verifyExternalFixture, sameExternalIdentity,
-  readPrivateJSON, writePrivateJSON, removePrivateJSON, externalCleanupPassed, externalIdentityRetired } from '../scripts/live-vision-external-core.mjs'
+  readPrivateJSON, writePrivateJSON, removePrivateJSON, externalCleanupPassed, externalIdentityRetired, sameExternalExecutable, visionDigest } from '../scripts/live-vision-external-core.mjs'
 const hash = 'a'.repeat(64), runId = '12345678-1234-1234-1234-123456789abc', sessionId = 'qiuya-vision-12345678-1234-1234-1234-123456789abc'
 function config() { const directory = resolve(tmpdir(), 'vision-synthetic'); return { version: 1, runId, rendezvousNonce: 'b'.repeat(64), directory, native: join(directory, 'helper'), oracle: join(directory, 'oracle'), carrier: join(directory, 'carrier.mjs'), nativeSha256: hash, oracleSha256: hash, carrierSha256: hash, fixtureSha256: hash, expiresAt: Date.now() + 900000 } }
-function request(cfg = config()) { return { version: 1, runId: cfg.runId, rendezvousNonce: cfg.rendezvousNonce, task: 1, requestId: runId, sessionId, pid: 123, parentPid: 42, windowId: 456, bundleId: 'com.qiuya.tools.vision-12345678-1234-1234-1234-123456789abc', executablePath: join(cfg.directory, 'runtime', sessionId + '.app', 'Contents/MacOS/fixture'), fixtureSha256: hash, nativeSha256: hash } }
+function request(cfg = config()) { return { version: 1, runId: cfg.runId, rendezvousNonce: cfg.rendezvousNonce, task: 1, requestId: runId, sessionId, pid: 123, parentPid: 42, windowId: 456, bundleId: 'com.qiuya.tools.vision-12345678-1234-1234-1234-123456789abc', executablePath: join(cfg.directory, 'runtime', sessionId + '.app', 'Contents/MacOS/fixture'), fixtureSha256: cfg.fixtureSha256, nativeSha256: cfg.nativeSha256 } }
 const row = request => ({ pid: request.pid, parentPid: request.parentPid, executablePath: request.executablePath, startSeconds: '123', startMicroseconds: '456', uniqueId: '1' })
 const target = request => ({ id: `mac-window:${request.windowId}`, appId: request.bundleId, pid: request.pid, x: 0, y: 0, width: 680, height: 480, scale: 1 })
 
@@ -26,7 +26,7 @@ test('external requests cannot select another task, parent, executable tree, run
 })
 test('fixture adoption verifies current PID birth/path/parent, binary SHA and native window/bundle together', async () => {
   const cfg = config(), req = request(cfg), pinned = row(req)
-  const good = { identity: async () => pinned, fileHash: async () => hash, targets: async () => [target(req)], pinned }
+  const good = { identity: async () => pinned, fileHash: async () => hash, targets: async () => [target(req)], pinned, executableEquals: async (a, b) => a === b }
   assert.deepEqual((await verifyExternalFixture(req, cfg, good)).identity, pinned)
   for (const changed of [{ identity: async () => ({ ...pinned, startMicroseconds: '999' }) }, { identity: async () => ({ ...pinned, parentPid: 999 }) }, { identity: async () => ({ ...pinned, executablePath: '/another' }) }, { fileHash: async () => 'c'.repeat(64) }, { targets: async () => [{ ...target(req), pid: 999 }] }, { targets: async () => [{ ...target(req), appId: 'another.app' }] }, { targets: async () => [{ ...target(req), id: 'mac-window:other' }] }]) await assert.rejects(verifyExternalFixture(req, cfg, { ...good, ...changed }), { code: 'VISION_EXTERNAL_FIXTURE_CHANGED' })
 })
@@ -50,6 +50,20 @@ test('natural retirement accepts ESRCH or a new birth, but never an unknown read
   assert.equal(externalIdentityRetired(null, pinned), true)
   assert.equal(externalIdentityRetired({ ...pinned, startSeconds: '999' }, pinned), true)
   for (const current of [undefined, pinned, { ...pinned, executablePath: '/another-executable' }, { ...pinned, pid: 999 }]) assert.equal(externalIdentityRetired(current, pinned), false)
+})
+test('actual /tmp executable aliases compare canonically while the original raw identity remains the oracle pin', { skip: process.platform !== 'darwin' }, async t => {
+  const directory = await realpath(await mkdtemp('/private/tmp/qiuya-external-alias-')); t.after(() => rm(directory, { recursive: true, force: true }))
+  const cfg = { ...config(), directory, fixtureSha256: visionDigest('synthetic-not-executed') }, req = request(cfg), canonical = req.executablePath
+  await mkdir(join(directory, 'runtime', sessionId + '.app', 'Contents/MacOS'), { recursive: true }); await writeFile(canonical, 'synthetic-not-executed')
+  const alias = canonical.replace(/^\/private\/tmp\//u, '/tmp/'); assert.notEqual(alias, canonical)
+  assert.equal(await sameExternalExecutable(alias, canonical), true)
+  const raw = { ...row(req), executablePath: alias }, before = JSON.stringify(raw)
+  const verified = await verifyExternalFixture(req, cfg, { identity: async () => raw, fileHash: async file => visionDigest(await readFile(file)), targets: async () => [target(req)], pinned: raw })
+  assert.equal(verified.identity, raw); assert.equal(JSON.stringify(raw), before)
+  assert.equal(sameExternalIdentity(raw, { ...raw, executablePath: canonical }), false, 'The strict raw identity must not be rewritten for Swift expected(...)')
+  const unrelated = join(directory, 'same-bytes-different-executable'); await writeFile(unrelated, 'synthetic-not-executed')
+  assert.equal(await sameExternalExecutable(unrelated, canonical), false)
+  assert.equal(await sameExternalExecutable(join(directory, 'missing'), canonical), false)
 })
 test('private rendezvous publishing is atomic, one-shot, 0600 and rejects symlink or public files', { skip: process.platform !== 'darwin' }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'qiuya-external-private-'))); await chmod(directory, 0o700); t.after(() => rm(directory, { recursive: true, force: true }))
