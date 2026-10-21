@@ -154,12 +154,18 @@ try{
   if(([QytInputOracle]::GetAsyncKeyState(1)-band 0x8000)-eq 0){throw 'Synthetic drag never became an actual OS held mouse button'}
   $reply=Reply $dragId;if(!$reply.ok){throw ('Repeated native drag failed '+$reply.error.code)}
   $after=State {param($s)$s.drags-eq ($before.drags+1)} 'completed drag MouseDown/MouseUp';Empty-Held;Own-Foreground;$completed++
-  if($interruptions.Count-gt 0-and $interruptions[$interruptions.Count-1].newEpoch-eq $epoch){$interruptions[$interruptions.Count-1].resumedByCompletedCycle=$completed}
+  if($interruptions.Count-gt 0-and $interruptions[$interruptions.Count-1].newEpoch-eq $epoch-and $interruptions[$interruptions.Count-1].resumedByCompletedCycle-eq 0){
+   $newOwner=[string]$script:latestHeld.ownerId;$interruption=$interruptions[$interruptions.Count-1]
+   if($newOwner-notmatch '^[a-f0-9]{32}$'-or $newOwner-eq $interruption.oldOwnerId){throw 'New input epoch did not record a distinct actual journal owner'}
+   $interruption.newOwnerId=$newOwner;$interruption.resumedByCompletedCycle=$completed
+  }
   if($watch.ElapsedMilliseconds-ge $nextSample){Resource;$nextSample+=10000}
   if($interruptions.Count-lt $Recoveries-and $watch.ElapsedMilliseconds-ge $nextRecovery){
+   $guardianBefore=@(Owned-Native|Where-Object role -eq 'guardian');if($guardianBefore.Count-ne 1){throw 'Expected exactly one persistent companion guardian before recovery'}
    $beforeCancel=$after.drags;$id=Send 'act' @{epoch=$epoch;targetId=$target.id;action=@{kind='drag';x=($drag.x-180);y=$drag.y;toX=($drag.x+180);toY=$drag.y}}
    $downWatch.Restart();while(([QytInputOracle]::GetAsyncKeyState(1)-band 0x8000)-eq 0-and $downWatch.ElapsedMilliseconds-lt 1000){Start-Sleep -Milliseconds 1}
    if(([QytInputOracle]::GetAsyncKeyState(1)-band 0x8000)-eq 0){throw 'Interruption drag never became OS-held'}
+   $oldOwner=[string]$script:latestHeld.ownerId;if($oldOwner-notmatch '^[a-f0-9]{32}$'){throw 'Held drag did not identify its journal owner'}
    $releaseWatch=[Diagnostics.Stopwatch]::StartNew();$releaseId=Send 'release' @{epoch=$epoch}
    while(([QytInputOracle]::GetAsyncKeyState(1)-band 0x8000)-ne 0-and $releaseWatch.ElapsedMilliseconds-lt 2000){Start-Sleep -Milliseconds 1}
    $actualUpMs=$releaseWatch.Elapsed.TotalMilliseconds;if(([QytInputOracle]::GetAsyncKeyState(1)-band 0x8000)-ne 0){throw 'Interruption did not release actual OS mouse state'}
@@ -167,11 +173,16 @@ try{
    if(!$responses[$releaseId].ok-or $responses[$id].ok-or $responses[$id].error.code-ne 'stale-epoch'){throw 'In-flight drag was not cancelled by lease release'};$activeEpoch=0
    $staleId=Send 'act' @{epoch=$epoch;targetId=$target.id;action=@{kind='move';x=$drag.x;y=$drag.y}};$stale=Reply $staleId
    if($stale.ok-or $stale.error.code-ne 'stale-epoch'){throw 'Released epoch accepted another input'};Empty-Held
-   $until=[Diagnostics.Stopwatch]::StartNew();while(@(Owned-Native|Where-Object role -eq 'guardian').Count-gt 0-and $until.ElapsedMilliseconds-lt 5000){Start-Sleep -Milliseconds 20}
-   if(@(Owned-Native|Where-Object role -eq 'guardian').Count-ne 0){throw 'Old input guardian did not retire after lease release'}
+   # The guardian belongs to the companion lifetime, not each epoch. Release clears
+   # the journal/desktop lock; Dispose closes its stdin. Verify reuse here, and
+   # require the same exact guardian to exit naturally with the helper in finally.
+   $guardianReleased=@(Owned-Native|Where-Object role -eq 'guardian')
+   if($guardianReleased.Count-ne 1-or $guardianReleased[0].pid-ne $guardianBefore[0].pid-or $guardianReleased[0].createdAtTicks-ne $guardianBefore[0].createdAtTicks){throw 'Persistent guardian identity changed or grew after epoch release'}
    $epoch++;[void](Call 'lease' @{epoch=$epoch});$activeEpoch=$epoch
+   $guardianAcquired=@(Owned-Native|Where-Object role -eq 'guardian')
+   if($guardianAcquired.Count-ne 1-or $guardianAcquired[0].pid-ne $guardianBefore[0].pid-or $guardianAcquired[0].createdAtTicks-ne $guardianBefore[0].createdAtTicks){throw 'Persistent guardian identity changed or grew after new epoch acquisition'}
    $fresh=Call 'observe' @{targetId=$target.id;preview=$true};if($fresh.geometry.x-ne $frame.geometry.x-or $fresh.geometry.y-ne $frame.geometry.y-or $fresh.width-ne $frame.width-or $fresh.height-ne $frame.height){throw 'Fixture geometry changed; coordinates were not replayed'}
-   $interruptions.Add(@{index=$interruptions.Count+1;elapsedMs=$watch.ElapsedMilliseconds;releasedEpoch=$epoch-1;newEpoch=$epoch;actualHeldBeforeRelease=$true;requestToObservedOsUpMs=$actualUpMs;cancelledDrag=$true;oldEpochRejected=$true;resumedByCompletedCycle=0;sourceDragCounterBefore=$beforeCancel;sourceDragCounterAfter=(State {param($s)$s.pid-eq $fixture.Id} 'after interruption').drags})
+   $interruptions.Add(@{index=$interruptions.Count+1;elapsedMs=$watch.ElapsedMilliseconds;releasedEpoch=$epoch-1;newEpoch=$epoch;actualHeldBeforeRelease=$true;requestToObservedOsUpMs=$actualUpMs;cancelledDrag=$true;oldEpochRejected=$true;resumedByCompletedCycle=0;oldOwnerId=$oldOwner;newOwnerId=$null;guardianBefore=$guardianBefore[0];guardianAfterRelease=$guardianReleased[0];guardianAfterAcquire=$guardianAcquired[0];sourceDragCounterBefore=$beforeCancel;sourceDragCounterAfter=(State {param($s)$s.pid-eq $fixture.Id} 'after interruption').drags})
    $nextRecovery+=$Seconds*1000.0/($Recoveries+1)
   }
  }
