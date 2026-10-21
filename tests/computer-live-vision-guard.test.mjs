@@ -331,7 +331,7 @@ test('served owner client preserves remote preparation phase/public code without
 test('independent visual cases continue after a clean business mismatch but stop at policy or cleanup failure', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-independent-cases-')); t.after(() => rm(directory, { recursive: true, force: true }))
   const plugin = await bundledVisionPlugin(directory)
-  for (const mode of ['business-mismatch', 'cleanup-failure', 'missing-cleanup', 'policy-denial', 'fatal']) {
+  for (const mode of ['business-mismatch', 'VISION_REQUEST_LIMIT', 'VISION_STEP_LIMIT', 'VISION_DEADLINE', 'cleanup-failure', 'missing-cleanup', 'policy-denial', 'fatal']) {
     const prepared = [], prompted = [], finished = [], modes = new Map(), flags = {}
     const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
       crypto: { randomUUID: () => 'synthetic-request' }, AbortSignal, Object, TypeError, SyntaxError,
@@ -347,7 +347,7 @@ test('independent visual cases continue after a clean business mismatch but stop
             const task = Number(input.sessionId.at(-1)); finished.push(task)
             value = { passed: task !== 2, steps: 1, requestAttempts: 1, retainedImageOccurrences: 1, businessPassed: task !== 2, visualNonceRead: true,
               ...(task === 2 && mode === 'missing-cleanup' ? {} : { cleanup: { passed: task !== 2 || mode !== 'cleanup-failure' } }), denials: task === 2 && mode === 'policy-denial' ? [{ code: 'VISION_ACTION_NOT_ALLOWED' }] : [],
-              fatal: task === 2 && mode === 'fatal' ? 'VISION_ROUTE_CHANGED' : null }
+              fatal: task === 2 ? mode === 'fatal' ? 'VISION_ROUTE_CHANGED' : mode.startsWith('VISION_') ? mode : null : null }
           } else if (input.op === 'delivery') value = { passed: input.restore.localMode && input.restore.featureFlags }
           else throw Error('Unexpected diagnostic operation')
           return Response.json({ ok: true, value })
@@ -365,7 +365,7 @@ test('independent visual cases continue after a clean business mismatch but stop
         return Response.json({ rpcId: input.rpcId, result: { ok: true, value } })
       },
     })
-    const result = await run(), expected = mode === 'business-mismatch' ? [1, 2, 3] : [1, 2]
+    const result = await run(), expected = mode === 'business-mismatch' || mode.startsWith('VISION_') ? [1, 2, 3] : [1, 2]
     assert.deepEqual(prepared, expected, mode); assert.deepEqual(finished, expected, mode)
     assert.deepEqual(prompted, expected.map(task => 'own-case-' + task), 'No prompt or failed input is replayed')
     assert.equal(result.passed, false, 'A later passing case cannot turn the business mismatch green')
