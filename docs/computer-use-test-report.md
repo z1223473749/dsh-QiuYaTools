@@ -6,7 +6,7 @@
 
 ## 1. 版本、环境及证据口径
 
-- 当前共享前端包含批量归档修复 `0b5396e`；重新构建及最终资产回执为 `38b929dee91861a29f7e1e74ff16d743377267c0`。Windows原生PE的源码及嵌入元数据绑定 `4dcb3af5881fc1d827f86bf027b632f0207abb35`。旧 `3c924d0 / 3c6e865` 的测试按其原代次保留，不能覆盖新包验收。精确文件哈希见 [delivery-manifest.json](../artifacts/delivery-manifest.json)，包校验值见 [SHA256SUMS](../artifacts/SHA256SUMS)。
+- 当前共享前端包含批量归档修复 `0b5396e`；重新构建及最终资产回执为 `38b929dee91861a29f7e1e74ff16d743377267c0`。Windows原生PE的源码及嵌入元数据绑定 `4dcb3af5881fc1d827f86bf027b632f0207abb35`。旧 `3c924d0 / 3c6e865` 的测试按其原代次保留，不能覆盖新包验收。精确文件哈希见 [delivery-manifest.json](../artifacts/delivery-manifest.json)，包校验值见 [SHA256SUMS](../artifacts/SHA256SUMS)。最后一轮[交付文件与隔离Host复查](../artifacts/computer-use/final-delivery-recheck/report.json)确认三包及7个随包文件未漂移。
 - Mac：macOS 26.6.2 / Darwin 25.6.0，Apple Silicon；主执行 Node 24.17.0，实际安装的 Harness CLI 使用自己的运行时。
 - Windows：PD 26.4.1 内 Windows 11 ARM64，真实登录用户交互桌面 **Session 1**，Node 22.23.3 ARM64；Session 0 命令成功不算 GUI 验证。
 - Windows 原生程序为 .NET 8 自包含程序，构建 SDK 8.0.426，WebView2 SDK 1.0.3912.50。当前ARM64 helper为68,227,039字节，SHA `42889f9c6eda3d5971b9d33e06dc022c1d2731faad6e7b33d536995197ba4a63`；x64为72,050,776字节，SHA `3f0073ba52ff17bf2cdee9d65196b5753b7b334f497bb5f69693f8b7ea8a4594`。[正式构建回执](../artifacts/computer-use/windows-native-pinning-final-build/receipt.json)确认两架构均无诊断源码，编译输入和原SourceRevisionId已归档。
@@ -26,6 +26,7 @@
 | Windows当前x64原生复核 | passed：当前 `3f0073ba…` **52/52**。首轮执行至37项中36通过、humanInput通知断言1失败仍保留；只读排空现有stdout后在原stale reply之后20ms收到该事件，extraActions=0、extraHidInputs=0，没有改PE或重发输入 | [52项复核](../artifacts/computer-use/windows-native-x64-event-drain-final/report.json)、[首轮失败](../artifacts/computer-use/windows-native-x64-pinning-final/report.json) |
 | Windows当前x64隐藏启动 | passed：真实x64 Node22.23.3启动当前x64 helper，**5/5**；PD ARM来宾转译，不能扩展为原生x64硬件 | [报告](../artifacts/computer-use/windows-node-hidden-x64-pinning-final/report.json) |
 | Windows原生WebView2画面长稳 | passed：当前正式ARM64 helper的1280×720源/JPEG/canvas，30分钟/5恢复，13.5045FPS、P9544ms、0invalid/0wrongDimensions；238身份自然退出。浮窗实际600×420缩放，没有混合滚动拖拽30分钟负载 | [runner](../artifacts/computer-use/windows-webview2-720p-final/report.json)、[delivery](../artifacts/computer-use/windows-webview2-720p-final/delivery-verdict.json) |
+| Windows滚动/拖拽输入短测 | passed：当前ARM64 helper，121秒/83正常拖拽/166滚轮/5实际持有撤权与恢复；旧epoch拒绝、owner轮换及4个native身份自然退出；非30分钟混合负载 | [runner](../artifacts/computer-use/windows-input-owner-lifecycle-final/report.json)、[delivery](../artifacts/computer-use/windows-input-owner-lifecycle-final/delivery-verdict.json) |
 | Windows 在途拖动释放 | passed（置顶修复前helper的历史证据）：30次实际按住后释放，独立 C# 线程观测 OS mouse-up，P95 **21.7592ms**，最大 **24.1073ms**；旧epoch全部拒绝，ACK后光标稳定100ms | [报告](../artifacts/computer-use/windows-pause-latency-hook-final/report.json) |
 | Windows ARM64实际Harness | passed：当前包 `5609bc04…`、实际helper `42889f9c…`，真实Host/UI **12/12**；两次原生TopMost=true、中文实际提交、主Agent图片/native动作、trusted浏览器拖出、8MiB文件交换通过，文件分支无原生输入误发。ARM64原位暴露点击点(1204,133)可用，本轮没有走corner移动fallback | [报告](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/manual-preview-input-evidence.json)、[点击前置](../artifacts/harness-e2e/windows-bulk-stable-arm64-final/fixture-user-activation-diagnostic.json) |
 | Windows x64实际Harness | passed：当前包 `95f0c9b9…`、真实x64 Node与helper `3f0073ba…`，**12/12**、exit0；两次TopMost=true、manual中文实际目标提交/回复、主Agent确定性图片运输、trusted拖出、批量归档及8MiB文件交换通过。ARM来宾转译，非原生x64硬件；历史失败保留 | [当前报告](../artifacts/harness-e2e/windows-bulk-stable-x64-final/report.json)、[实际手动输入](../artifacts/harness-e2e/windows-bulk-stable-x64-final/manual-preview-input-evidence.json)、[完成回执](../artifacts/harness-e2e/windows-bulk-stable-x64-final/completed.json) |
@@ -101,11 +102,15 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 
 仅清理语义的[实际Session0预检](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight-2/report.json)**6/6通过**，无GUI、无input：自有15秒寿命Node child验证精确身份query、birth+1跳过、wrongpath拒绝且原child仍活、exact pinned Kill/Wait及退出后查询。此前[SystemTemp staging失败](../artifacts/computer-use/windows-webview2-pinned-cleanup-preflight/report.json)保留，当次没有启动child/GUI。另有[HTTP/File AST预检](../artifacts/computer-use/windows-webview2-cleanup-review/powershell-parse-http.json)3个源脚本解析通过、执行进程操作0；它们不证明实际WebView长稳或自然清理已经通过。
 
-### 独立滚动/拖拽输入短测：首轮failed，等待只读取证修正复验
+### 独立滚动/拖拽输入短测：121秒通过；两轮失败保留
 
-[首轮原始结果](../artifacts/computer-use/windows-input-short-final/report.json)failed：当前正式`42889f9c…` helper已完成1次正常拖动及3个已核验滚轮动作，随后up后的只读`LB_GETTOPINDEX`经300ms SendMessageTimeout返回失败。该次没有错误码/逐次耗时证据，根因尚未确定，不能直接归因于产品输入或固定称为超时。[独立delivery](../artifacts/computer-use/windows-input-short-final/delivery-verdict.json)false；原生输入/进程自然清理、任务自然Ready/LastTaskResult0、事后身份检查及注销均通过，没有重放输入或改写原始report。
+[最终原始结果](../artifacts/computer-use/windows-input-owner-lifecycle-final/report.json)与[delivery](../artifacts/computer-use/windows-input-owner-lifecycle-final/delivery-verdict.json)均passed：当前正式`42889f9c…`、Windows交互Session1，121,331ms内完成**83次正常拖拽、166个已验证滚轮动作、5次实际按住后的撤权/旧epoch拒绝/新epoch恢复**。每轮验证目标WinForms事件、只读ListBox真实视口下移与返回、前台root身份、实际OS down/up和空持有记录；90个空持有快照通过。5次恢复均在后续正常输入中确认新的ownerId；guardian前后采样为同一PID及100ns出生身份且没有增长，随helper EOF自然退出。中断不回滚已发送动作：目标可收到已发生移动的mouse-up，不能把RPC stale-epoch当作撤销应用副作用。
 
-Windows[AST及oracle编译预检](../artifacts/computer-use/windows-input-short-preflight/report.json)已passed，只解析源码/编译C#，未启动GUI或调用oracle。正在给同一窗口的只读查询增加错误码、耗时与2秒总预算的有界重试；首个成功值立即返回且不按期望值筛选，值不符仍失败。复验尚未完成。本项仅约两分钟native输入验证，不是30分钟混合renderer长稳。
+249次只读视口取值共333次API尝试，84次返回1460，随后在固定2秒预算内取得首个成功值，最长总耗时372.5144ms；每次记录身份前后、原始返回、error与耗时。没有重发输入，也没有筛选期望读值。该API失败判定按[Microsoft官方说明](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw)处理，首轮缺错误码的失败不倒推为同一原因。AST/C#编译记录分别保留于[首次](../artifacts/computer-use/windows-input-short-preflight/report.json)、[查询修正](../artifacts/computer-use/windows-input-query-retry-preflight/report.json)、[生命周期修正](../artifacts/computer-use/windows-input-owner-lifecycle-preflight/report.json)，这些预检只解析/编译，没有GUI或oracle调用。
+
+[退出后核验](../artifacts/computer-use/windows-input-owner-lifecycle-final/post-run-cleanup-verification.json)4个已跟踪native身份全部gone；任务自然Ready、LastTaskResult0，注销通过，未调用Stop或强制kill。14份native角色资源样本仅描述精确UUID helper的fixture/computer/capture/guardian：WS峰526,798,848B、合计句柄峰1,320；不冒充全部OS树、无慢性泄漏或renderer性能证明。五个PowerShell轮询的实际OS松键观测值保留在原始数据，不当作独立C#线程的P95基准。这是约两分钟native输入短测，**不是30分钟混合滚动拖拽/renderer负载**。
+
+[首轮原始结果](../artifacts/computer-use/windows-input-short-final/report.json)failed：1次正常拖动与3个已核验wheel后，up后的只读LB_GETTOPINDEX返回失败；没有错误码/耗时证据，原因未定。[该轮delivery](../artifacts/computer-use/windows-input-short-final/delivery-verdict.json)false，原生/任务自然清理通过。[第二轮](../artifacts/computer-use/windows-input-query-retry-final/report.json)15次正常拖拽、30个wheel已验证，57次API尝试中12次1460，后续首个成功读值最长344.8043ms；最终因错误要求guardian随每次租约退出而failed，原始记录保留。源码复核确认guardian跨epoch复用，Release清journal/放锁，Dispose才关stdin；当前修正为身份不变/数量有界、新owner实际轮换及helper结束后自然退出，未改生产PE。
 
 ### 历史 Windows 640×360共享Edge前端30分钟源画面→renderer
 
@@ -113,7 +118,7 @@ Windows[AST及oracle编译预检](../artifacts/computer-use/windows-input-short-
 
 资源峰值为约30秒采样所见，样本间瞬时峰未测。61个资源采样中，Node RSS峰值**133,132,288字节**，整个自有进程树WS峰值**1,549,283,328字节**，低于1.5GiB门槛；直接native最多1个，native树最多3个。原始CPU累计时间也保留在每个进程采样中，未设CPU通过门槛。[资源汇总](../artifacts/computer-use/windows-renderer-canvas-final/resource-summary.json)按原记录绘图，不修改runner结论。
 
-私有提交没有冒充WS：总PrivatePageCount由648,323,072增至1,231,642,624字节，峰1,238,925,312；后15分钟观测范围1,179,049,984至1,238,925,312字节。它不是零增长或无限时段无泄漏证明，工作集trim也不代表提交内存回收。720p/更长运行仍需独立验证。
+私有提交没有冒充WS：总PrivatePageCount由648,323,072增至1,231,642,624字节，峰1,238,925,312；后15分钟观测范围1,179,049,984至1,238,925,312字节。它不是零增长或无限时段无泄漏证明，工作集trim也不代表提交内存回收。该旧helper的更高分辨率/更长运行仍不能由本段推出；当前正式helper的原生720p已在前段独立验证。
 
 [完成回执](../artifacts/computer-use/windows-renderer-canvas-final/completed.json)exitCode=0，无cleanup-error；[只读退出复查](../artifacts/computer-use/windows-renderer-canvas-final/cleanup-verification.json)中171个采样PID+出生身份均不再运行。[故障时间线](../artifacts/computer-use/windows-renderer-canvas-final/fault-trace.json)保留每次暂停、终止、停止、启动与继续采集。
 
@@ -212,6 +217,8 @@ Windows[AST及oracle编译预检](../artifacts/computer-use/windows-input-short-
 ```
 
 这些是Harness插件tgz，不是独立OS安装器。Windows最终用户不需要.NET开发SDK，WebView2 Runtime前提及命令见 [安装指南](computer-use-guide.md)。[原生与依赖manifest](../artifacts/delivery-manifest.json)绑定精确资产，置顶修复前的包和helper另存 [pre-pinning-candidate](../artifacts/pre-pinning-candidate/preservation.json)，正式置顶但批量菜单修复前的包另存 [pre-bulk-menu-candidate](../artifacts/pre-bulk-menu-candidate/preservation.json)；更早候选保留于 `artifacts/pre-memory-candidate/`。
+
+每个完成步骤的本地[中文Git提交清单](../artifacts/computer-use/git-step-commits.log)单独保留。本次没有推送或公开发布。最终证据ZIP由`scripts/package-test-evidence.py`生成，逐文件SHA绑定报告commit和生产回执，历史Edge与当前原生WebView2分别列明。
 
 核心复现入口：
 
