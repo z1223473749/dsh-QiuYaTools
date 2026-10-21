@@ -210,10 +210,10 @@ Mac与Windows实际Harness均证明主Agent公开工具执行，观察截图通�
 | `dsh-qiuya-tools-win32-arm64.tgz` | 62,725,649 | `5609bc04963b13be517c5187821343c71c4bd5747a3dc5138e811a083a1bff14` |
 | `dsh-qiuya-tools-win32-x64.tgz` | 66,978,457 | `95f0c9b968f9e5464b71d64e505804ecefe1ac2c1cd06abc48e1f55a79328604` |
 
-本机没有全局PATH中的`dsh`。可在Harness插件管理器添加对应本地tgz；Mac本机也可使用已验证存在的内置CLI（将`实际profile名`替换为你使用的profile）：
+本机没有全局PATH中的`dsh`。桌面版应在Harness插件管理器添加对应本地tgz，`desktop` profile由Electron独占，CLI明确拒绝该profile。Mac内置CLI只适用于独立的`web`等非桌面profile，例如：
 
 ```sh
-"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile "实际profile名" add "/Users/qiuya/code/zh-code/dsh-QiuYaTools/artifacts/dsh-qiuya-tools-darwin-universal.tgz"
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile web add "/Users/qiuya/code/zh-code/dsh-QiuYaTools/artifacts/dsh-qiuya-tools-darwin-universal.tgz"
 ```
 
 这些是Harness插件tgz，不是独立OS安装器。Windows最终用户不需要.NET开发SDK，WebView2 Runtime前提及命令见 [安装指南](computer-use-guide.md)。[原生与依赖manifest](../artifacts/delivery-manifest.json)绑定精确资产，置顶修复前的包和helper另存 [pre-pinning-candidate](../artifacts/pre-pinning-candidate/preservation.json)，正式置顶但批量菜单修复前的包另存 [pre-bulk-menu-candidate](../artifacts/pre-bulk-menu-candidate/preservation.json)；更早候选保留于 `artifacts/pre-memory-candidate/`。

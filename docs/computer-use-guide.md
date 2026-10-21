@@ -12,13 +12,15 @@
 
 请按 **Harness 进程的架构** 选择 Windows 包；ARM 电脑上运行 x64 Harness 时应使用 x64 包。实际运行覆盖范围以测试报告为准，编译目标不等于旧系统或该架构已实机通过。
 
-在 Harness 的插件管理器添加本地 tgz，或使用其 CLI：
+桌面版请在 Harness 的插件管理器添加对应的本地 tgz。`desktop` profile 由桌面应用独占，不能通过 CLI 安装。
+
+使用独立的 `web` 等非桌面 profile 时，可使用其 CLI：
 
 ```sh
 dsh plugin --profile web add /absolute/path/dsh-qiuya-tools-darwin-universal.tgz
 ```
 
-Windows 路径有空格时在 PowerShell 中使用双引号。若当前使用 desktop profile，请将命令中的 `web` 改成实际 profile；不要把测试 profile 的配置目录当作日常 profile。安装后完全退出再打开 Harness。
+Windows 路径有空格时在 PowerShell 中使用双引号。只将 `web` 替换为实际的非桌面 profile；不要把测试 profile 的配置目录当作日常 profile。安装后检查插件管理器中的版本和运行状态；仅在管理器明确要求重启时重启 Harness。本轮桌面版已通过官方管理器热更新，无需重启。
 
 Windows 原生程序自包含 .NET，使用者不需要开发 SDK；WebView2 Runtime 缺失时会给出明确错误。可从 [Microsoft WebView2 官方页面](https://developer.microsoft.com/microsoft-edge/webview2/) 获取运行时。候选包未做正式开发者签名和 Mac 公证，签名状态也写入资产旁的 JSON。
 
