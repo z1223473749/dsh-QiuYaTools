@@ -34,6 +34,8 @@ const compiled = await build({
       builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, () => ({ contents: 'export function installFeatures() {}' }))
       builder.onResolve({ filter: /^\.\/q-theme\.ts$/ }, () => ({ path: 'theme', namespace: 'theme-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'theme-stub' }, () => ({ contents: 'export function installQTheme() {}' }))
+      builder.onResolve({ filter: /^\.\/session-window-support\.ts$/ }, () => ({ path: 'support', namespace: 'support-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'support-stub' }, () => ({ contents: 'export function getSessionWindowSupport(ctx) { return ctx.sessionWindowSupport }' }))
       builder.onResolve({ filter: /^\.\/about\.tsx$/ }, () => ({ path: 'about', namespace: 'about-stub' }))
       builder.onResolve({ filter: /^react$/, namespace: 'about-stub' }, () => ({ path: 'react', external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'about-stub' }, () => ({ contents: `import React from 'react'; export function AboutPanel({ version, ctx }) { return React.createElement('article', { 'data-about-version': version, 'data-about-context': ctx ? 'present' : 'missing' }, 'about-panel') }` }))
@@ -66,12 +68,18 @@ const defaults = {
 }
 const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']
 
-function mount(value = {}, policy = {}) {
+function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1-rc.2', minimumHarnessVersion: '0.2.1-rc.2', versionSupported: true, status: 'ready' }) {
   let snapshot = {
     status: 'ready', writable: true, value: { ...value }, revision: 1,
     ...policy,
   }
   const listeners = new Set()
+  const supportListeners = new Set()
+  let supportSnapshot = compatibility
+  const sessionWindowSupport = {
+    getSnapshot: () => supportSnapshot,
+    subscribe(callback) { supportListeners.add(callback); return () => supportListeners.delete(callback) },
+  }
   const mutations = []
   let failure = null
   const form = {
@@ -103,10 +111,11 @@ function mount(value = {}, policy = {}) {
   dialog.append(options)
   document.body.append(dialog)
   const root = createRoot(container)
-  act(() => root.render(React.createElement(QiuYaToolsSettings, { form, t: key => key, ctx: {} })))
+  act(() => root.render(React.createElement(QiuYaToolsSettings, { form, t: key => key, ctx: { sessionWindowSupport } })))
   return {
     container, options, mutations,
     snapshot: () => snapshot,
+    support(next) { act(() => { supportSnapshot = next; for (const listener of supportListeners) listener() }) },
     failWith(error) { failure = error },
     switch(label) { return container.querySelector(`:is([role="switch"], [role="checkbox"])[aria-label="${label}"]`) },
     tab(label) { return [...container.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === label) },
@@ -186,6 +195,65 @@ test('a legacy paused profile can be activated through an individual feature swi
       { op: 'set', path: ['sessionWindowsEnabled'], value: true },
     ])
     assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'true')
+  } finally { f.dispose() }
+})
+
+test('independent windows show the minimum Harness version inside the usage guide', () => {
+  const f = mount()
+  try {
+    f.select('sessionWindowsTab')
+    const guide = f.container.querySelector('.qyt-guide')
+    assert.match(guide.textContent, /sessionWindowsMinimum\s+0\.2\.1-rc\.2/u)
+    assert.match(guide.textContent, /sessionWindowsMenu/u)
+    assert.match(guide.textContent, /sessionWindowsDrag/u)
+    assert.equal(f.switch('sessionWindows').disabled, false)
+    assert.equal(f.mutations.length, 0)
+  } finally { f.dispose() }
+})
+
+test('old, unknown and pending Harness versions cannot enable windows individually or through the master', async () => {
+  for (const compatibility of [
+    { status: 'ready', harnessVersion: '0.2.1-rc.1', versionSupported: false },
+    { status: 'unavailable', versionSupported: false },
+    { status: 'checking', versionSupported: false },
+  ]) {
+    const f = mount(defaults, {}, { minimumHarnessVersion: '0.2.1-rc.2', ...compatibility })
+    try {
+      f.select('sessionWindowsTab')
+      assert.equal(f.switch('sessionWindows').disabled, true)
+      assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'false', 'a saved true flag cannot appear active on an unsupported runtime')
+      const expected = compatibility.status === 'ready' ? 'sessionWindowsVersionUnsupported' : compatibility.status === 'checking' ? 'sessionWindowsVersionChecking' : 'sessionWindowsVersionUnknown'
+      assert.ok(f.container.querySelector('.qyt-guide').textContent.includes(expected))
+      if (compatibility.harnessVersion) assert.ok(f.container.querySelector('.qyt-guide').textContent.includes(compatibility.harnessVersion))
+      await f.toggle('sessionWindows')
+      assert.equal(f.mutations.length, 0, 'the handler also rejects a synthetic click on the disabled control')
+      await f.toggle('enabled')
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'false')
+      await f.toggle('enabled')
+      assert.equal(f.snapshot().value.sessionWindowsEnabled, false)
+      for (const field of featureFields.filter(field => field !== 'sessionWindowsEnabled')) assert.equal(f.snapshot().value[field], true)
+      assert.ok(f.mutations.flat().filter(operation => operation.path[0] === 'sessionWindowsEnabled').every(operation => operation.value === false))
+      assert.equal(f.switch('sessionWindows').disabled, true)
+      assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'true', 'the master can still toggle all compatible features')
+    } finally { f.dispose() }
+  }
+})
+
+test('compatibility changes immediately update the window switch without rewriting stored preferences', async () => {
+  const f = mount(defaults)
+  try {
+    f.select('sessionWindowsTab')
+    f.support({ status: 'checking', minimumHarnessVersion: '0.2.1-rc.2', versionSupported: false })
+    assert.equal(f.switch('sessionWindows').disabled, true)
+    assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'false')
+    f.support({ status: 'ready', minimumHarnessVersion: '0.2.1-rc.2', harnessVersion: '0.2.2', versionSupported: true })
+    assert.equal(f.switch('sessionWindows').disabled, false)
+    assert.equal(f.switch('sessionWindows').getAttribute('aria-checked'), 'true')
+    assert.equal(f.mutations.length, 0)
+    await f.toggle('sessionWindows')
+    assert.equal(f.snapshot().value.sessionWindowsEnabled, false)
+    await f.toggle('sessionWindows')
+    assert.equal(f.snapshot().value.sessionWindowsEnabled, true)
   } finally { f.dispose() }
 })
 

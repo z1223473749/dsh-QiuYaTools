@@ -188,7 +188,9 @@ body[data-qyt-q-theme="ocean"] [data-slot="sidebar.workspaces"] [data-row-key^="
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
   --qyt-q-canvas-image: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 65%), radial-gradient(ellipse at 90% 10%, var(--qyt-q-sand-glow), transparent 58%), linear-gradient(var(--qyt-q-art-wash), var(--qyt-q-art-wash)), var(--qyt-ocean-art);
-  --qyt-q-canvas-size: 100% 100%, 100% 100%, 100% 100%, min(1120px, calc(var(--dsh-conversation-column-width, 100vw) * 1.2)) auto;
+  /* Fixed backgrounds use the viewport; cover it at every window size. The
+     composer fade inherits this size to keep both copies of the art aligned. */
+  --qyt-q-canvas-size: 100% 100%, 100% 100%, 100% 100%, cover;
   background-color: var(--qyt-q-base);
   background-image: var(--qyt-q-canvas-image);
   background-position: center, center, center, right bottom;

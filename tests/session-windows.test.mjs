@@ -29,7 +29,8 @@ const fixture = join(fixtureDirectory, 'qiuya-session-window')
 const records = join(temporary, 'records.jsonl')
 await writeFile(fixture, `#!${process.execPath}\nconst fs = require('node:fs'); const rl = require('node:readline').createInterface({ input: process.stdin }); rl.on('line', line => { const value = JSON.parse(line); fs.appendFileSync(${JSON.stringify(records)}, JSON.stringify({ ...value, pid: process.pid, argv: process.argv.slice(2) })+'\\n'); process.stdout.write(JSON.stringify({requestId:value.requestId,ok:true})+'\\n'); }); rl.on('close',()=>process.exit(0));\n`)
 await chmod(fixture, 0o755)
-const installSessionWindowsHost = (ctx, enabled) => installHost(ctx, enabled, { executable: process.execPath, args: [fixture] })
+const versionCompatibility = { harnessVersion: '0.2.1-rc.2', minimumHarnessVersion: '0.2.1-rc.2', versionSupported: true }
+const installSessionWindowsHost = (ctx, enabled) => installHost(ctx, enabled, { executable: process.execPath, args: [fixture], getHarnessVersion: () => versionCompatibility.harnessVersion })
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true }) })
 
@@ -121,7 +122,7 @@ test('Host authority validates feature setting and existing Session before build
   const fixture = windowFetchFixture({ sessionController: { async list() { return { items: [{ sessionId: 'real-session', title: 'Fixture' }] } } } })
   const dispose = installSessionWindowsHost(fixture.host, () => enabled)
   try {
-    assert.deepEqual(await fixture.call('status'), { ok: true, value: { available: true } })
+    assert.deepEqual(await fixture.call('status'), { ok: true, value: { ...versionCompatibility, available: true } })
     assert.equal((await fixture.call('open', { sessionId: 'real-session', source: 'menu' })).ok, false)
     enabled = true
     assert.equal((await fixture.call('open', { sessionId: 'missing', source: 'menu' })).ok, false)
@@ -518,11 +519,11 @@ test('exact Host route uses the browser owner reader without a root SessionContr
   fixture.host.connection.browserPeer.ctx.get = name => name === 'sessionController' ? controller : undefined
   const dispose = installSessionWindowsHost(fixture.host, () => true)
   try {
-    assert.deepEqual(await fixture.call('status'), { ok: true, value: { available: true } })
+    assert.deepEqual(await fixture.call('status'), { ok: true, value: { ...versionCompatibility, available: true } })
     assert.equal((await fixture.call('open', { sessionId: 'peer-session', source: 'menu' })).ok, true)
     assert.equal(listed, 1)
     fixture.host.connection.browserPeer.ctx.get = () => undefined
-    assert.deepEqual(await fixture.call('status'), { ok: true, value: { available: false, reason: 'reader-missing' } })
+    assert.deepEqual(await fixture.call('status'), { ok: true, value: { ...versionCompatibility, available: false, reason: 'reader-missing' } })
   } finally { dispose() }
 })
 

@@ -13,7 +13,13 @@ export interface SessionWindowRequest {
   action?: 'open' | 'prepare' | 'cancel'
   position?: WindowPosition
 }
-export interface SessionWindowStatus { available: boolean; reason?: string }
+export interface SessionWindowStatus {
+  available: boolean
+  reason?: string
+  harnessVersion?: string
+  minimumHarnessVersion?: string
+  versionSupported?: boolean
+}
 
 export function validSessionId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\s\x00-\x1f\x7f]/u.test(value)

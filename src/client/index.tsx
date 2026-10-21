@@ -7,7 +7,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import pkg from '../../package.json' with { type: 'json' }
 import {
-  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, allFeaturesEnabled, isFeatureEnabled, parsePasteThreshold,
+  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold,
   type FeatureField, type Preferences,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
@@ -19,6 +19,8 @@ import { ComputerPanel } from '../features/computer-use/panel.tsx'
 import { installQTheme } from './q-theme.ts'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
+import { getSessionWindowSupport } from './session-window-support.ts'
+import { MINIMUM_SESSION_WINDOW_HARNESS_VERSION } from '../features/session-windows/compatibility.ts'
 import { zh, en, type LocaleKey } from './locales.ts'
 import css from './styles.css'
 
@@ -75,6 +77,8 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     () => form.getSnapshot(),
     () => form.getSnapshot(),
   )
+  const windowSupport = getSessionWindowSupport(ctx)
+  const windowCompatibility = useSyncExternalStore(windowSupport.subscribe, windowSupport.getSnapshot, windowSupport.getSnapshot)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [thresholdDraft, setThresholdDraft] = useState<ThresholdDraft | null>(null)
   const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
@@ -85,8 +89,9 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const id = useId()
   const ready = snapshot.status === 'ready'
   const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
-  const allEnabled = allFeaturesEnabled(preferences)
-  const anyEnabled = FEATURE_FIELDS.some(field => isFeatureEnabled(preferences, field))
+  const availableFeatures = FEATURE_FIELDS.filter(field => field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)
+  const allEnabled = availableFeatures.every(field => isFeatureEnabled(preferences, field))
+  const anyEnabled = availableFeatures.some(field => isFeatureEnabled(preferences, field))
   const disabled = !ready || !snapshot.writable || saveState === 'saving'
   const draft: ThresholdDraft = thresholdDraft ?? {
     characters: String(preferences.pasteCharacterThreshold),
@@ -128,11 +133,12 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   async function setAllFeatures(value: boolean): Promise<void> {
     await persist([
       { op: 'set', path: ['enabled'], value: true },
-      ...FEATURE_FIELDS.map(field => ({ op: 'set' as const, path: [field], value })),
+      ...FEATURE_FIELDS.map(field => ({ op: 'set' as const, path: [field], value: value && (field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported) })),
     ])
   }
 
   async function setFeature(field: FeatureField, value: boolean): Promise<void> {
+    if (value && field === 'sessionWindowsEnabled' && !windowCompatibility.versionSupported) return
     await persist([
       { op: 'set', path: ['enabled'], value: true },
       { op: 'set', path: [field], value },
@@ -170,7 +176,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
           <span className="qyt-brand" aria-hidden="true"><span style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }} /></span>
           <div className="qyt-heading">
             <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span></div>
-            <span className="qyt-status" role={saveState === 'error' ? 'alert' : 'status'} data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(!ready ? snapshot.status === 'loading' ? 'loading' : 'unavailable' : !snapshot.writable ? 'readOnly' : saveState === 'error' ? 'saveError' : saveState === 'saving' ? 'saving' : saveState === 'saved' ? 'saved' : allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')}</span>
+            <span className="qyt-status" role={saveState === 'error' ? 'alert' : 'status'} data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(!ready ? snapshot.status === 'loading' ? 'loading' : 'unavailable' : !snapshot.writable ? 'readOnly' : saveState === 'error' ? 'saveError' : saveState === 'saving' ? 'saving' : saveState === 'saved' ? 'saved' : allEnabled ? windowCompatibility.versionSupported ? 'ready' : 'readyAvailable' : anyEnabled ? 'partial' : 'paused')}</span>
           </div>
           <div className="qyt-header-actions"><span>{t('enabled')}</span><button type="button" className="qyt-master-toggle" role="checkbox" aria-label={t('enabled')} aria-checked={allEnabled ? true : anyEnabled ? 'mixed' : false} title={t(allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')} disabled={disabled} onClick={() => { void setAllFeatures(!allEnabled) }}><span aria-hidden="true" /></button></div>
         </header>
@@ -202,7 +208,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
           <div className="qyt-card qyt-feature-summary">
             <div className="qyt-toggle-row">
               <div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name={feature.field} /></span><h3>{t(feature.label)}</h3></div>
-              <Switch className="qyt-switch" checked={isFeatureEnabled(preferences, feature.field)} label={t(feature.label)} disabled={disabled} onChange={value => { void setFeature(feature.field, value) }} />
+              <Switch className="qyt-switch" checked={isFeatureEnabled(preferences, feature.field) && (feature.field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)} label={t(feature.label)} disabled={disabled || (feature.field === 'sessionWindowsEnabled' && !windowCompatibility.versionSupported)} onChange={value => { void setFeature(feature.field, value) }} />
             </div>
             <p className="qyt-muted">{t(feature.hint)}</p>
           </div>
@@ -222,7 +228,12 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
               </label>
             </div>
             <div className="qyt-threshold-footer"><p className="qyt-feedback" role={thresholdError === null ? 'status' : 'alert'}>{thresholdError === null ? t('thresholdDraft') : t(thresholdError)}</p><button className="qyt-button" type="submit" disabled={disabled || !thresholdDirty}>{t('saveThresholds')}</button></div>
-          </form> : <div className="qyt-card qyt-guide"><h4>{t('howToUse')}</h4><ol>{feature.steps.map(step => <li key={step}>{t(step)}</li>)}</ol></div>}
+          </form> : <div className="qyt-card qyt-guide"><h4>{t('howToUse')}</h4>
+            {feature.field === 'sessionWindowsEnabled' && <>
+              <p className="qyt-muted">{t('sessionWindowsMinimum')} <strong>{MINIMUM_SESSION_WINDOW_HARNESS_VERSION}</strong></p>
+              {!windowCompatibility.versionSupported && <p className="qyt-feedback" role="status">{t(windowCompatibility.status === 'checking' ? 'sessionWindowsVersionChecking' : windowCompatibility.status === 'ready' ? 'sessionWindowsVersionUnsupported' : 'sessionWindowsVersionUnknown')}{windowCompatibility.harnessVersion && <> {t('sessionWindowsCurrentVersion')} {windowCompatibility.harnessVersion}</>}</p>}
+            </>}
+            <ol>{feature.steps.map(step => <li key={step}>{t(step)}</li>)}</ol></div>}
         </div>)}
       </div>)}
     </section>

@@ -8,6 +8,7 @@ import { installSessionWindows } from '../features/session-windows/index.tsx'
 import { installPlanComments } from '../features/plan-comments/index.tsx'
 import { installSidebarTools } from '../features/sidebar-tools/index.tsx'
 import { installPromptSuggestions } from '../features/prompt-suggestions/index.tsx'
+import { effectiveSessionWindowPreferences, getSessionWindowSupport } from './session-window-support.ts'
 
 const dependencies: Record<FeatureField, string[]> = {
   pastedTextEnabled: ['slots'],
@@ -20,6 +21,7 @@ const dependencies: Record<FeatureField, string[]> = {
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
 export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): void {
+  const sessionWindowSupport = getSessionWindowSupport(ctx)
   const current = (): Preferences => ({ ...DEFAULT_PREFERENCES, ...form.getSnapshot().value })
   ctx.effect(() => {
     const board = new FeatureSwitchboard(field => {
@@ -43,11 +45,12 @@ export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): vo
     })
     const sync = (): void => {
       const snapshot = form.getSnapshot()
-      void board.update(snapshot.status === 'ready' ? current() : undefined)
+      void board.update(snapshot.status === 'ready' ? effectiveSessionWindowPreferences(current(), sessionWindowSupport.getSnapshot()) : undefined)
         .catch(error => { ctx.logger.error('QiuYaTools feature update failed: %s', error) })
     }
     const stop = form.subscribe(sync)
+    const stopSupport = sessionWindowSupport.subscribe(sync)
     sync()
-    return async () => { stop(); await board.dispose() }
+    return async () => { stop(); stopSupport(); await board.dispose() }
   })
 }

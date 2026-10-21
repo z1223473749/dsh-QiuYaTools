@@ -1,13 +1,26 @@
 /// <reference types="node" />
 import type { Context } from '@deepseek-ai/cordis'
+import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
 import { access, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { SESSION_WINDOW_CHANNEL, SESSION_WINDOW_STATUS_ENDPOINT, SESSION_WINDOW_OPEN_ENDPOINT, SESSION_WINDOW_QUERY, parseWindowRequest, type SessionWindowStatus } from './contract.ts'
+import { MINIMUM_SESSION_WINDOW_HARNESS_VERSION, sessionWindowVersionCompatibility } from './compatibility.ts'
+
+/** Resolve the running installation's API; bundling app-boot would report the build machine's version. */
+export async function getOfficialHarnessVersion(installAnchor: unknown): Promise<unknown> {
+  // ProfileContext.installAnchor is the launcher's own package.json, outside
+  // the plugin/profile dependency tree. Never authorize from linked dev deps.
+  if (typeof installAnchor !== 'string' || installAnchor.length === 0) return undefined
+  const entry = createRequire(installAnchor).resolve('@deepseek-ai/dsh-app-boot')
+  const runtime = await import(pathToFileURL(entry).href) as { getDshRuntimeVersion?: () => unknown }
+  return runtime.getDshRuntimeVersion?.()
+}
 
 export function sessionWindowExecutable(base: string, platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
   return fileURLToPath(new URL(platform === 'win32' ? `./native/win32-${arch === 'arm64' ? 'arm64' : 'x64'}/qiuya-windows.exe` : './QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', base))
@@ -148,12 +161,16 @@ export class SessionWindowCompanion {
 }
 
 /** Root waits only for connection and webServer. Session readers are resolved on the authenticated call. */
-export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, companionOptions?: { executable: string; args?: readonly string[] }): () => void {
+export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, companionOptions?: { executable: string; args?: readonly string[]; getHarnessVersion?: () => unknown | Promise<unknown> }): () => void {
   const services = ctx as unknown as HostServices
   // A normal .app bundle gives AppKit, LaunchServices and accessibility tools
   // one stable identity while stdin still carries the private launch facts.
   const executable = companionOptions?.executable ?? sessionWindowExecutable(import.meta.url)
   const companion = new SessionWindowCompanion(executable, companionOptions?.args)
+  const getHarnessVersion = companionOptions?.getHarnessVersion ?? (() => {
+    const profile = services.get?.('profileContext') as Pick<ProfileContext, 'installAnchor'> | undefined
+    return getOfficialHarnessVersion(profile?.installAnchor)
+  })
   // A cancel can arrive while exact target validation is awaiting persistence.
   // Keep its intent here so that late validation cannot resurrect a hidden view.
   let preparation: { id: string; generation: number } | undefined
@@ -166,11 +183,15 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
     return (typeof services.get === 'function' ? services.get(name) : services[name]) as T | undefined
   }
   const status = async (peer?: CallingPeer): Promise<SessionWindowStatus> => {
-    if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return { available: false, reason: 'platform' }
+    let version: unknown
+    try { version = await getHarnessVersion() } catch { /* Unknown runtime versions cannot authorize native windows. */ }
+    const compatibility = sessionWindowVersionCompatibility(version)
+    if (!compatibility.versionSupported) return { ...compatibility, available: false, reason: compatibility.harnessVersion === undefined ? 'harness-version-unknown' : 'harness-version' }
+    if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return { ...compatibility, available: false, reason: 'platform' }
     try { await access(executable, constants.X_OK) }
-    catch { return { available: false, reason: 'helper-missing' } }
-    if (!reader<SessionStoreReader>('sessions', peer) && !reader<SessionPersistenceReader>('sessionPersistence', peer) && !reader<SessionControllerReader>('sessionController', peer) && !reader<SessionQueryReader>('sessionQuery', peer)) return { available: false, reason: 'reader-missing' }
-    return { available: true }
+    catch { return { ...compatibility, available: false, reason: 'helper-missing' } }
+    if (!reader<SessionStoreReader>('sessions', peer) && !reader<SessionPersistenceReader>('sessionPersistence', peer) && !reader<SessionControllerReader>('sessionController', peer) && !reader<SessionQueryReader>('sessionQuery', peer)) return { ...compatibility, available: false, reason: 'reader-missing' }
+    return { ...compatibility, available: true }
   }
   const validateTarget = async (id: string, signal: AbortSignal, peer?: CallingPeer): Promise<string | undefined> => {
     const checkAbort = (): void => { if (signal.aborted) throw new Error('已取消打开窗口。') }
@@ -241,12 +262,16 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
       }
       if (!enabled()) throw new Error('会话独立窗口功能已关闭。')
       let currentPreparation: typeof preparation
+      let previousPreparation: typeof preparation
       if (request.action === 'prepare') {
-        const previous = preparation
+        previousPreparation = preparation
         preparation = currentPreparation = { id: request.sessionId, generation: ++preparationGeneration }
-        if (previous && previous.id !== request.sessionId) await companion.cancel(previous.id)
       } else if (preparation?.id === request.sessionId) preparation = undefined
-      if (!(await status(peer)).available) throw new Error('当前系统没有可用的会话窗口组件。')
+      const availability = await status(peer)
+      if (!availability.versionSupported) throw new Error(`会话独立窗口最低支持官方 HARNESS ${MINIMUM_SESSION_WINDOW_HARNESS_VERSION}，请先升级 HARNESS。`)
+      if (!availability.available) throw new Error('当前系统没有可用的会话窗口组件。')
+      if (request.action === 'prepare' && currentPreparation !== preparation) return { ok: true, value: { prepared: false } }
+      if (previousPreparation && previousPreparation.id !== request.sessionId) await companion.cancel(previousPreparation.id)
       const title = await validateTarget(request.sessionId, signal, peer)
       if (signal.aborted) throw new Error('已取消打开窗口。')
       if (request.action === 'prepare' && currentPreparation !== preparation) return { ok: true, value: { prepared: false } }
