@@ -18,6 +18,9 @@ public static class QytInputOracle {
  [DllImport("user32.dll")]static extern bool EnumChildWindows(IntPtr h,Child callback,IntPtr p);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetClassName(IntPtr h,StringBuilder name,int maximum);
  [DllImport("user32.dll",SetLastError=true)]static extern IntPtr SendMessageTimeout(IntPtr h,uint message,IntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr result);
+ [DllImport("kernel32.dll")]static extern void SetLastError(uint error);
+ public static readonly List<object> ViewportReads=new List<object>();
+ static int viewportSequence;
  public static int Owner(IntPtr h){uint pid;GetWindowThreadProcessId(h,out pid);return (int)pid;}
  public static bool Up(){foreach(int key in new[]{1,2,4,16,17,18,91,92})if((GetAsyncKeyState(key)&0x8000)!=0)return false;return true;}
  public static IntPtr ScrollControl(IntPtr root,int pid){
@@ -26,8 +29,24 @@ public static class QytInputOracle {
   if(found.Count!=1)throw new Exception("Own fixture ListBox handle is ambiguous");return found[0];
  }
  public static int TopIndex(IntPtr list,IntPtr root,int pid){
-  if(Owner(list)!=pid||Owner(root)!=pid||GetAncestor(list,2)!=root||!IsWindowVisible(list))throw new Exception("Own visible ListBox identity changed");
-  UIntPtr value;if(SendMessageTimeout(list,0x018e,IntPtr.Zero,IntPtr.Zero,2,300,out value)==IntPtr.Zero)throw new Exception("Read-only LB_GETTOPINDEX timed out");return checked((int)value.ToUInt64());
+  var read=++viewportSequence;var watch=System.Diagnostics.Stopwatch.StartNew();var attempt=0;
+  while(watch.Elapsed.TotalMilliseconds<2000){
+   attempt++;var foregroundBefore=GetForegroundWindow();var rootPidBefore=Owner(root);var listPidBefore=Owner(list);
+   var validBefore=rootPidBefore==pid&&listPidBefore==pid&&GetAncestor(list,2)==root&&IsWindowVisible(root)&&IsWindowVisible(list)&&!IsIconic(root)&&foregroundBefore==root;
+   if(!validBefore){ViewportReads.Add(new{read,attempt,apiAttempted=false,elapsedMs=watch.Elapsed.TotalMilliseconds,reason="identity-visibility-or-foreground-changed",root=root.ToInt64().ToString("x"),list=list.ToInt64().ToString("x"),pid,rootPidBefore,listPidBefore,foregroundBefore=foregroundBefore.ToInt64().ToString("x")});throw new Exception("Own visible foreground ListBox identity changed; no query or input replayed");}
+   var remaining=2000-watch.Elapsed.TotalMilliseconds;if(remaining<1)break;
+   var timeout=(uint)Math.Min(300,Math.Floor(remaining));var started=watch.Elapsed.TotalMilliseconds;
+   // This API may fail without setting LastError. Clear it first and preserve 0 as a generic failure.
+   // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw
+   SetLastError(0);UIntPtr value;var returned=SendMessageTimeout(list,0x018e,IntPtr.Zero,IntPtr.Zero,2,timeout,out value);var error=Marshal.GetLastWin32Error();
+   var finished=watch.Elapsed.TotalMilliseconds;var foregroundAfter=GetForegroundWindow();var rootPidAfter=Owner(root);var listPidAfter=Owner(list);
+   var validAfter=rootPidAfter==pid&&listPidAfter==pid&&GetAncestor(list,2)==root&&IsWindowVisible(root)&&IsWindowVisible(list)&&!IsIconic(root)&&foregroundAfter==root;
+   ViewportReads.Add(new{read,attempt,apiAttempted=true,startedMs=started,elapsedMs=finished-started,totalElapsedMs=finished,timeoutMs=timeout,apiReturn=returned.ToInt64().ToString(),resultRaw=value.ToUInt64().ToString(),lastWin32Error=error,success=returned!=IntPtr.Zero,identityBefore=validBefore,identityAfter=validAfter,root=root.ToInt64().ToString("x"),list=list.ToInt64().ToString("x"),pid,rootPidBefore,listPidBefore,rootPidAfter,listPidAfter,foregroundBefore=foregroundBefore.ToInt64().ToString("x"),foregroundAfter=foregroundAfter.ToInt64().ToString("x")});
+   if(!validAfter)throw new Exception("Own visible foreground ListBox identity changed during read-only query; no input replayed");
+   if(returned!=IntPtr.Zero){if(finished>2000)throw new Exception("Read-only LB_GETTOPINDEX query exceeded its 2000ms budget");return checked((int)value.ToUInt64());}
+   var delay=Math.Min(20,2000-watch.Elapsed.TotalMilliseconds);if(delay>=1)System.Threading.Thread.Sleep((int)delay);
+  }
+  throw new Exception("Read-only LB_GETTOPINDEX query failed within its 2000ms budget; inspect viewportOracle attempts");
  }
 }
 '@
@@ -184,5 +203,6 @@ finally{
  if(![QytInputOracle]::Up()){$cleanupErrors.Add('Actual mouse/modifier state was still held after cleanup')}
  if($cleanupErrors.Count-gt 0){$report.passed=$false};$report.cleanup=@{passed=($cleanupErrors.Count-eq 0);errors=@($cleanupErrors);tracked=@($known.Values);naturallyRemaining=$naturallyRemaining;remainingBeforeFallback=$remaining;forcedRetirementFailsRun=$true}
  $report.checks=@($report.checks|Where-Object{$null -ne $_})+@(@{id='WIN-INPUT-NATURAL-CLEANUP';passed=$report.cleanup.passed})
+ $report.viewportOracle=@{readOnly=$true;budgetPerReadMs=2000;maximumSingleAttemptMs=300;firstSuccessfulValueReturnedWithoutExpectationFilter=$true;attempts=@([QytInputOracle]::ViewportReads)}
  $report|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $Output 'report.json') -Encoding UTF8
 }
