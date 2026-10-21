@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
+import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -324,6 +325,8 @@ try {
     } else { await editor().fill('E2E:computer-move'); await page.getByRole('button', { name: '发送消息', exact: true }).click() }
     try { await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).waitFor({ timeout: 25000 }) }
     finally {
+      const diagnostic = await page.evaluate(captureHarnessComputerDiagnostic, { sessionId: alphaId, codes: HARNESS_COMPUTER_DIAGNOSTIC_CODES }).catch(() => ({ status: 'unavailable', code: 'SNAPSHOT_UNAVAILABLE' }))
+      await writeFile(join(output, 'agent-computer-session-snapshot.json'), JSON.stringify(diagnostic, null, 2))
       const records = (await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
       await writeFile(join(output, 'agent-computer-adapter-requests.json'), JSON.stringify(records.filter(record => record.sessionId === alphaId && record.marker === 'E2E:computer-move'), null, 2))
     }

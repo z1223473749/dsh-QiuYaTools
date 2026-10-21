@@ -8,6 +8,60 @@ const model = 'fixture'
 const plan = '# E2E 测试计划\n\n检查真实会话和插件菜单。\n\n验证批注会提交为新的提示，不覆盖原有草稿。'
 const metadata = { provider, id: model, name: 'QiuYa 本地测试模型', inputModalities: ['text', 'image'], context: { contextWindow: 128000 }, defaultMaxTokens: 4096, systemPromptUpdate: 'in-history' }
 const textOf = message => (message?.content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\n')
+export const HARNESS_COMPUTER_DIAGNOSTIC_CODES = Object.freeze(['UNKNOWN_ERROR_CODE', 'SNAPSHOT_UNAVAILABLE', 'RPC_STATUS_FAILED', 'SESSION_MISMATCH', 'ACCESSIBILITY_REQUIRED', 'SCREEN_RECORDING_REQUIRED', 'CAPTURE_BUSY', 'CAPTURE_CHANGED', 'CAPTURE_START_FAILED', 'CAPTURE_STOPPED', 'CAPTURE_TIMEOUT', 'DESKTOP_BUSY', 'DESKTOP_LEASE_REQUIRED', 'DESKTOP_LOCK_FAILED', 'EVENT_FAILED', 'FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'INPUT_BUSY', 'INPUT_CLEANUP_FAILED', 'INPUT_JOURNAL_FAILED', 'INPUT_JOURNAL_INVALID', 'INVALID_ACTION', 'INVALID_ACTOR', 'INVALID_COORDINATES', 'INVALID_EPOCH', 'INVALID_KEY', 'INVALID_TARGET', 'NATIVE_FAILURE', 'OBSERVATION_REQUIRED', 'PREVIEW_OVERLAP', 'STALE_EPOCH', 'TARGETS_UNAVAILABLE', 'TARGET_GONE', 'CONTROL_CHANGED', 'DISABLED', 'DISPOSED', 'SESSION_NOT_STARTED', 'NATIVE_LEASE_UNRELEASED', 'APP_NOT_ALLOWED', 'DEVICE_BUSY', 'NOT_READY', 'TARGET_NOT_FOUND', 'TARGET_CHANGED', 'STALE_OBSERVATION', 'OUT_OF_BOUNDS', 'ACTION_ID_CONFLICT', 'QUEUE_FULL', 'NATIVE_CLEANUP_FAILED', 'NATIVE_PIPE_FAILED', 'NATIVE_UNAVAILABLE', 'NATIVE_EXITED', 'NATIVE_TIMEOUT', 'NATIVE_PROTOCOL', 'NATIVE_PROTOCOL_VERSION', 'ABORTED', 'CODE_RUN_FAILED', 'TOOL_OUTPUT_INVALID', 'UNKNOWN_TOOL', 'invalid-target', 'target-unavailable', 'target-changed', 'capture-busy', 'geometry-changed', 'capture-unavailable', 'capture-timeout', 'invalid-epoch', 'input-cleanup-failed', 'human-monitor-unavailable', 'human-input-pending', 'stale-epoch', 'invalid-actor', 'foreground-changed', 'input-denied', 'input-busy', 'observation-required', 'foreground-denied'])
+/** Only failed computer-tool receipts in this model request. Text, keys,
+ * URLs, replay state and arbitrary exception fields are never persisted. */
+export function projectHarnessComputerToolErrors(messages) {
+  const calls = new Map(), result = []
+  for (const message of messages.slice(-128)) if (message.role === 'assistant') for (const block of message.content ?? []) if (block.type === 'tool-call' && ['run_code', 'qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause', 'qiuya_computer_status'].includes(block.name)) calls.set(block.id, block.name)
+  for (const message of messages.slice(-128)) {
+    const tool = calls.get(message.toolCallId ?? message.source?.callId)
+    if (message.role !== 'tool' || message.isError !== true || !tool) continue
+    const codes = new Set()
+    function collect(value, depth = 0) {
+      if (!value || typeof value !== 'object' || depth > 4) return
+      if (HARNESS_COMPUTER_DIAGNOSTIC_CODES.includes(value.code)) codes.add(value.code)
+      for (const nested of Object.values(value)) collect(nested, depth + 1)
+    }
+    collect(message.error)
+    for (const block of message.content ?? []) if (block.type === 'text') {
+      try { collect(JSON.parse(block.text)) } catch {}
+      // Some SDK versions expose only Error:<message>. Keep known standalone
+      // code tokens if present, never the original rendered text.
+      const tokens = new Set(block.text.split(/[^A-Za-z0-9_-]+/u))
+      for (const code of HARNESS_COMPUTER_DIAGNOSTIC_CODES) if (tokens.has(code)) codes.add(code)
+    }
+    for (const code of codes.size ? codes : ['UNKNOWN_ERROR_CODE']) if (!result.some(row => row.tool === tool && row.code === code) && result.length < 16) result.push({ tool, code })
+  }
+  return result
+}
+/** Self-contained Playwright callback: retain exactly the selected fixture
+ * session and public native input readback, before test teardown changes it. */
+export async function captureHarnessComputerDiagnostic({ sessionId, codes }) {
+  const code = value => codes.includes(value) ? value : 'UNKNOWN_ERROR_CODE'
+  const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null
+  const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : null
+  const bool = value => typeof value === 'boolean' ? value : null
+  const id = value => typeof value === 'string' && value.length <= 512 && /^[A-Za-z0-9_.:-]+$/u.test(value) ? value : null
+  const geometry = value => value ? Object.fromEntries(['x', 'y', 'width', 'height', 'scale'].map(key => [key, number(value[key])])) : null
+  try {
+    const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', signal: AbortSignal.timeout(10000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+    const envelope = await response.json(), result = envelope.result
+    if (!response.ok || !result?.ok) return { status: 'unavailable', code: code(result?.error?.code), phase: 'owned-status-rpc' }
+    const session = result.value.sessions.find(row => row.sessionId === sessionId), native = result.value.native ?? {}
+    if (!session || session.sessionId !== sessionId) return { status: 'unavailable', code: 'SESSION_MISMATCH' }
+    const last = session.lastAction, observation = session.lastObservation, target = session.target
+    return { status: 'captured', capturedAt: new Date().toISOString(),
+      session: { sessionId, state: ['idle', 'connecting', 'awaitingPermission', 'ready', 'running', 'pausing', 'paused', 'handingOver', 'humanControl', 'resuming', 'stopping', 'stopped', 'disconnected', 'faulted'].includes(session.state) ? session.state : 'unknown', epoch: integer(session.epoch), updatedAt: number(session.updatedAt), error: session.error ? { code: code(session.error.code) } : null,
+        target: target ? { id: id(target.id), appId: id(target.appId), pid: integer(target.pid), geometry: geometry(target) } : null,
+        lastAction: last ? { actionId: id(last.actionId), actor: ['ai', 'human'].includes(last.actor) ? last.actor : null, phase: ['executing', 'completed', 'failed'].includes(last.phase) ? last.phase : null, at: number(last.at), action: { kind: ['click', 'move', 'drag', 'scroll', 'type', 'key'].includes(last.action?.kind) ? last.action.kind : 'other', ...Object.fromEntries(['x', 'y', 'toX', 'toY', 'deltaX', 'deltaY'].filter(key => last.action?.[key] !== undefined).map(key => [key, number(last.action[key])])) } } : null,
+        lastObservation: observation ? { targetId: id(observation.targetId), frameId: id(observation.frameId), width: integer(observation.width), height: integer(observation.height), geometry: geometry(observation.geometry) } : null },
+      native: { available: bool(native.available), platform: ['darwin', 'win32'].includes(native.platform) ? native.platform : null, mode: ['local', 'remote', 'browser'].includes(native.mode) ? native.mode : null,
+        permissions: Object.fromEntries(['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring'].map(key => [key, bool(native.permissions?.[key])])),
+        leaseReported: Object.hasOwn(native, 'leaseEpoch'), leaseEpoch: integer(native.leaseEpoch), leaseActor: ['ai', 'human'].includes(native.leaseActor) ? native.leaseActor : null,
+        inputState: { reported: native.inputState !== undefined, mouseHeld: bool(native.inputState?.mouseHeld), keysHeld: integer(native.inputState?.keysHeld), leftButtonDown: bool(native.inputState?.leftButtonDown) } } }
+  } catch { return { status: 'unavailable', code: 'SNAPSHOT_UNAVAILABLE' } }
+}
 const delay = (milliseconds, signal) => new Promise((resolve, reject) => {
   const timer = setTimeout(done, milliseconds)
   function done() { signal?.removeEventListener('abort', abort); resolve() }
@@ -41,6 +95,7 @@ export function apply(ctx) {
         height: block.attachment?.height, mediaType: block.attachment?.mediaType,
       })))
       const actionResults = []
+      const toolErrors = text.startsWith('E2E:computer') ? projectHarnessComputerToolErrors(messages) : []
       function collectActions(value, depth = 0) {
         if (!value || typeof value !== 'object' || depth > 4) return
         if (value.actionId === 'fixture-agent-move') actionResults.push({ actionId: value.actionId, targetId: value.targetId, epoch: value.epoch, performed: value.result?.performed === true })
@@ -51,7 +106,7 @@ export function apply(ctx) {
       }
       appendFileSync(join(process.env.DSH_HOME, 'e2e-adapter-requests.jsonl'), JSON.stringify({ at: new Date().toISOString(),
         sessionId: options.sessionId ?? null, marker: text.startsWith('E2E:') ? text.slice(0, 80) : 'auxiliary', tools: (options.tools ?? []).map(tool => tool.name),
-        imageBlocks: images, actionResults, purpose: options.purpose ?? null }) + '\n', { mode: 0o600 })
+        imageBlocks: images, actionResults, ...(text.startsWith('E2E:computer') ? { toolErrors } : {}), purpose: options.purpose ?? null }) + '\n', { mode: 0o600 })
       const key = `${options.sessionId}:${text}`
       if (options.maxTokens <= 200 && /natural sentence|next|建议|recommend/i.test(system)) {
         yield { type: 'text-delta', index: 0, text: '继续检查本地测试结果。' }
