@@ -3,6 +3,13 @@
 import AppKit
 import Foundation
 
+func visionNoteMatches(_ actual: String, _ expected: String) -> Bool { actual == expected }
+func visionSubmissionFeedback(task: Int, submitted: Bool, passed: Bool) -> String? {
+    if passed { return "已完成核验 ✓" }
+    if task == 2 && submitted { return "校验未通过：请核对文字、标点和空格" }
+    return nil
+}
+
 final class VisionCanvas: NSView {
     weak var owner: VisionFixture?
     override var isFlipped: Bool { true }
@@ -30,7 +37,9 @@ final class VisionCanvas: NSView {
             NSColor.systemBlue.setFill(); NSBezierPath(roundedRect: o.card, xRadius: 10, yRadius: 10).fill()
             label("订单 \(o.nonce)", o.card.insetBy(dx: 10, dy: 22), 23)
         }
-        if o.passed { label("已完成核验 ✓", NSRect(x: 24, y: 405, width: 600, height: 50), 30) }
+        if let feedback = visionSubmissionFeedback(task: o.task, submitted: o.submitted, passed: o.passed) {
+            label(feedback, NSRect(x: 24, y: 405, width: 630, height: 60), o.passed ? 30 : 24)
+        }
     }
     override func mouseDown(with event: NSEvent) {
         guard let o = owner else { return }; let point = convert(event.locationInWindow, from: nil); o.downs += 1
@@ -92,8 +101,18 @@ final class VisionFixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate 
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }
-    @objc func submit() { submitted = true; passed = input.stringValue == note; canvas.needsDisplay = true }
+    @objc func submit() { submitted = true; passed = visionNoteMatches(input.stringValue, note); canvas.needsDisplay = true }
     func applicationWillTerminate(_ notification: Notification) { if let activity { ProcessInfo.processInfo.endActivity(activity) } }
+}
+if CommandLine.arguments.contains("--self-test") {
+    let expected = "青山路18号，请轻放，核验码A1B2C3"
+    precondition(!visionNoteMatches("青山路 18 号，请轻放，核验码 A1B2C3", expected))
+    precondition(visionNoteMatches(expected, expected))
+    precondition(visionSubmissionFeedback(task: 2, submitted: false, passed: false) == nil)
+    precondition(visionSubmissionFeedback(task: 2, submitted: true, passed: false)?.contains("校验未通过") == true)
+    precondition(visionSubmissionFeedback(task: 2, submitted: true, passed: true) == "已完成核验 ✓")
+    print("Visual fixture self-test passed: exact whitespace, visible mismatch and success feedback; zero windows and input")
+    exit(0)
 }
 guard let line = readLine(), let data = line.data(using: .utf8), let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let task = config["task"] as? Int, (1...3).contains(task), let nonce = config["nonce"] as? String, nonce.count == 6,

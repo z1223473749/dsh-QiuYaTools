@@ -372,7 +372,10 @@ async function runInOwnerRenderer() {
       const result = await test({ op: 'finish', sessionId: setup.sessionId })
       summary.push({ task, passed: result.passed, steps: result.steps, requestAttempts: result.requestAttempts, retainedImageOccurrences: result.retainedImageOccurrences, businessPassed: result.businessPassed, visualNonceRead: result.visualNonceRead })
       const finishedSession = setup.sessionId; setup = undefined; phase = 'owner-reset-local'; await computer({ op: 'connect', sessionId: finishedSession, mode: 'local' })
-      if (!ended || !result.passed) break
+      // A cleanly retired business mismatch must remain a failed case, but it
+      // must not conceal the next independent fixture. Stop on any boundary,
+      // lifetime or policy failure; never retry this task or its input.
+      if (!ended || result.fatal || !result.cleanup?.passed || result.denials?.length) break
     }
   } catch (error) {
     diagnostic = projectVisionFailure(error, error?.diagnostic?.phase !== 'unknown' && error?.diagnostic?.phase || phase); failure = diagnostic.code
