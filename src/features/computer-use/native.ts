@@ -11,6 +11,12 @@ export function computerCompanionPath(platform: NodeJS.Platform = process.platfo
   throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无电脑操控执行器')
 }
 interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void }
+interface CaptureWaiter { resolve: (value: ComputerObservation) => void; reject: (error: unknown) => void }
+interface NativeCapture {
+  controller: AbortController
+  waiters: Set<CaptureWaiter>
+  result: Promise<ComputerObservation>
+}
 interface NativeHeldInputs { keys: number[]; mouseButtons: string[]; unicodeUnits?: number[]; ownerId?: string }
 function ownedInputs(message: Record<string, unknown>): NativeHeldInputs | undefined {
   if (!Array.isArray(message.keys) || message.keys.length > 256 || !message.keys.every(key => Number.isSafeInteger(key) && key >= 0 && key <= 255)) return
@@ -32,6 +38,10 @@ export class NativeCompanionDriver implements DeviceDriver {
   private protocol?: Promise<ComputerStatus>
   private retiring: Promise<void> = Promise.resolve()
   private held: NativeHeldInputs = { keys: [], mouseButtons: [] }
+  private captureTail: Promise<void> = Promise.resolve()
+  private readonly captures = new Set<NativeCapture>()
+  private readonly previewCaptures = new Map<string, NativeCapture>()
+  private captureCallers = 0
   constructor(private readonly options: NativeCompanionOptions = {}) {}
   static defaultPath = computerCompanionPath
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -41,6 +51,10 @@ export class NativeCompanionDriver implements DeviceDriver {
     const held = this.held; this.held = { keys: [], mouseButtons: [] }
     this.child = undefined; this.buffer = ''; this.protocol = undefined
     if (child) { this.retiring = this.retire(child, held); void this.retiring.catch(() => {}) }
+    for (const capture of this.captures) {
+      capture.controller.abort(error)
+      for (const waiter of [...capture.waiters]) waiter.reject(error)
+    }
     for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }
     this.pending.clear()
     this.emit({ event: 'disconnected' })
@@ -159,8 +173,61 @@ export class NativeCompanionDriver implements DeviceDriver {
     if (!Array.isArray(targets)) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的窗口列表无效')
     return targets
   }
-  observe(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId }, signal) }
-  preview(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId, preview: true }, signal) }
+  private capture(targetId: string, preview: boolean, signal?: AbortSignal): Promise<ComputerObservation> {
+    if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    if (this.captureCallers >= 128) return Promise.reject(new ComputerError('QUEUE_FULL', '等待画面的连接过多'))
+    let shared = preview ? this.previewCaptures.get(targetId) : undefined
+    if (!shared) {
+      if (this.captures.size >= 16) return Promise.reject(new ComputerError('QUEUE_FULL', '等待中的画面请求过多'))
+      const controller = new AbortController()
+      const result = this.captureTail.then(() => {
+        controller.signal.throwIfAborted()
+        if (!capture.waiters.size) throw new ComputerError('ABORTED', '画面请求已取消')
+        // A viewer cancellation only leaves its own waiter. Once sent, keep the
+        // native capture slot until the real reply/timeout; otherwise the next
+        // read races Mac's observationBusy even when nobody wants this frame.
+        return this.checked<ComputerObservation>('observe', { targetId, ...(preview ? { preview: true } : {}) }, controller.signal)
+      })
+      // One fan-out per job, rather than a Promise handler per viewer: aborted
+      // viewers leave no retained closures on a slow shared native operation.
+      const completed = () => {
+        this.captures.delete(capture)
+        if (this.previewCaptures.get(targetId) === capture) this.previewCaptures.delete(targetId)
+      }
+      const capture: NativeCapture = { controller, waiters: new Set(), result: result.then(value => {
+        completed()
+        for (const waiter of [...capture.waiters]) waiter.resolve(value)
+        return value
+      }, error => {
+        completed()
+        for (const waiter of [...capture.waiters]) waiter.reject(error)
+        throw error
+      }) }
+      this.captures.add(capture)
+      if (preview) this.previewCaptures.set(targetId, capture)
+      // The FIFO covers capture only. Lease/release/input/status keep their own
+      // immediate RPC path, including while a slow image is being prepared.
+      this.captureTail = capture.result.then(() => {}, () => {})
+      shared = capture
+    }
+    const capture = shared
+    return new Promise<ComputerObservation>((resolve, reject) => {
+      let waiting = true
+      const finish = (complete: () => void) => {
+        if (!waiting) return
+        waiting = false; capture.waiters.delete(waiter); this.captureCallers--
+        signal?.removeEventListener('abort', abort); complete()
+      }
+      const waiter: CaptureWaiter = { resolve: value => finish(() => resolve(value)), reject: error => finish(() => reject(error)) }
+      const abort = () => waiter.reject(signal?.reason ?? new ComputerError('ABORTED', '画面请求已取消'))
+      capture.waiters.add(waiter); this.captureCallers++
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+    })
+  }
+  observe(targetId: string, signal?: AbortSignal) { return this.capture(targetId, false, signal) }
+  preview(targetId: string, signal?: AbortSignal) { return this.capture(targetId, true, signal) }
   lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal) }
   release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.checked('act', { epoch, targetId, action }, signal) }
