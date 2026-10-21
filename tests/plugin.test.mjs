@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import vm from 'node:vm'
+import { Context } from '@deepseek-ai/cordis'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
@@ -48,6 +49,11 @@ function mountClient(plugin, snapshot) {
   const sections = new Map()
   const requestedConfigIds = []
   const injectedSlots = []
+  const injectedServices = []
+  // SSR has no connected Host. Delegate optional injection to the actual
+  // Cordis API so missing connection remains pending, as it does in the SDK,
+  // rather than pretending a callback ran against an incomplete fake peer.
+  const injectionOwner = new Context()
   let injecting = false
   const form = {
     subscribe: () => () => {},
@@ -57,6 +63,14 @@ function mountClient(plugin, snapshot) {
   }
   const ctx = {
     plugin() { return { dispose: async () => {} } },
+    inject(names, callback) {
+      injectedServices.push([...names])
+      const fiber = injectionOwner.inject(names, callback)
+      assert.equal(typeof fiber.dispose, 'function')
+      assert.equal(typeof fiber.await, 'function')
+      cleanups.push(() => fiber.dispose())
+      return fiber
+    },
     logger: { error() {} },
     effect(callback) {
       const dispose = callback()
@@ -93,7 +107,7 @@ function mountClient(plugin, snapshot) {
   }
   plugin.apply(ctx)
   return {
-    localeNamespaces, sections, requestedConfigIds, injectedSlots, form,
+    localeNamespaces, sections, requestedConfigIds, injectedSlots, injectedServices, form,
     dispose() { for (const cleanup of cleanups.reverse()) cleanup() },
     render() {
       const { options, component } = sections.get('qiuya-tools')
@@ -112,9 +126,11 @@ test('built client follows the Harness loader and settings contribution lifecycl
   assert.ok(requestedModules.includes('react'), 'React comes from the host to preserve hook identity')
 
   const mounted = mountClient(plugin, { status: 'ready', writable: true, value: { enabled: true } })
-  assert.deepEqual(mounted.injectedSlots, ['settings.section'])
+  assert.deepEqual(mounted.injectedSlots, ['conversation.session.header.utilities', 'settings.section'])
+  assert.deepEqual(mounted.injectedServices, [['connection']], 'the version check uses one optional public connection injection')
   assert.deepEqual(mounted.requestedConfigIds, ['qiuya-tools'])
-  assert.equal(mounted.sections.size, 1)
+  assert.equal(mounted.sections.size, 2)
+  assert.equal(mounted.sections.get('qiuya-tools-computer-inline').options.name, 'conversation.session.header.utilities', 'the inline preview is additive, not a settings replacement')
   const { options } = mounted.sections.get('qiuya-tools')
   assert.equal(options.name, 'settings.section')
   assert.equal(options.label(), 'QiuYaTools')
