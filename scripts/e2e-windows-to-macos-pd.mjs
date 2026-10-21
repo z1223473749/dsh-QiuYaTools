@@ -84,12 +84,14 @@ async function ps(code, timeout = 30000) {
   assert.ok(guestCreated && serverListening && base, 'Long guest commands require the owned UUID directory and live file server')
   const name = `command-${randomUUID()}.ps1`, bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(code)]), path = guestRoot + '\\' + name
   files.set(name, bytes); transport.push({ name, sha256: sha(bytes), bytes: bytes.length, method: 'sha-verified-owned-file' })
+  let transferred = false
   try {
-    await inlinePs(`$ErrorActionPreference='Stop';$c=[Net.WebClient]::new();$c.Proxy=$null;try{$c.DownloadFile(${quote(base + '/' + name)},${quote(path)})}finally{$c.Dispose()};if((Get-FileHash -LiteralPath ${quote(path)} -Algorithm SHA256).Hash -ne '${sha(bytes)}'){throw 'Command SHA mismatch'}`)
+    await inlinePs(`$ErrorActionPreference='Stop';$p=${quote(path)};$c=[Net.WebClient]::new();$c.Proxy=$null;try{$c.DownloadFile(${quote(base + '/' + name)},$p)}finally{$c.Dispose()};if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne '${sha(bytes)}'){throw 'Command SHA mismatch'}`)
+    transferred = true
     return (await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path], { timeout, killSignal: 'SIGKILL', maxBuffer: 24 * 1024 * 1024 })).stdout.trim()
   } finally {
     files.delete(name)
-    try { await inlinePs(`$ErrorActionPreference='Stop';Remove-Item -LiteralPath ${quote(path)} -Force -ErrorAction Stop`) }
+    try { if (transferred) await inlinePs(`$ErrorActionPreference='Stop';Remove-Item -LiteralPath ${quote(path)} -Force -ErrorAction Stop`) }
     catch (error) { cleanup.errors.push(`Owned command-file removal: ${JSON.stringify(bounded(error))}`) }
   }
 }
