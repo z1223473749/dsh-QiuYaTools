@@ -20,7 +20,7 @@ for (const name of ['report.json', 'run-report.json', 'delivery-verdict.json']) 
 const execute = promisify(execFile), temporary = await mkdtemp(join(tmpdir(), 'qiuya-ai-pointer-')), hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const fixtureSource = join(root, 'src/native/macos/fixtures/AICursorFixture.swift'), observerSource = join(root, 'src/native/macos/fixtures/AICursorObserver.swift'), leaseSource = join(root, 'src/native/macos/fixtures/LeaseOracle.swift')
 const observerBinary = join(temporary, 'cursor-observer'), leaseBinary = join(temporary, 'lease-oracle'), fixturePaths = []
-const trace = [], checks = [], observations = [], captures = [], identities = new Map(), controllers = [], cleanup = { passed: false, errors: [], forced: [], processes: [] }
+const trace = [], checks = [], observations = [], captures = [], geometrySettles = [], identities = new Map(), controllers = [], cleanup = { passed: false, errors: [], forced: [], processes: [] }
 const key = value => `${value.pid}:${value.startSeconds}:${value.startMicroseconds}`
 const same = (a, b) => a && b && key(a) === key(b) && a.executablePath === b.executablePath
 const remember = (value, role) => { assert.ok(value?.pid && value.startSeconds && value.startMicroseconds && value.executablePath); identities.set(key(value), { ...value, role }); return value }
@@ -106,6 +106,57 @@ async function arrowGone(label) {
 }
 async function act(epoch, point, kind = 'move') { return native.ok('act', { epoch, targetId: currentTarget.id, action: { kind, ...point } }) }
 function raster(global, frame) { return { x: (global.x - frame.geometry.x) * frame.width / frame.geometry.width, y: (global.y - frame.geometry.y) * frame.height / frame.geometry.height } }
+async function settledTargetAfterShow(fixture, expectedTarget) {
+  const windowId = Number(expectedTarget.id.match(/^mac-window:(\d+)$/u)?.[1])
+  assert.ok(Number.isSafeInteger(windowId) && windowId > 0 && expectedTarget.pid === fixture.identity.pid)
+  const start = performance.now(), deadline = start + 8000, evidence = { targetId: expectedTarget.id, owner: fixture.identity, timeoutMs: 8000, minimumStableMs: 200, minimumSamples: 3, samples: [] }
+  geometrySettles.push(evidence)
+  let signature, stableAt, count = 0
+  const reset = () => { signature = undefined; stableAt = undefined; count = 0 }
+  const read = async operation => {
+    const left = deadline - performance.now(); assert.ok(left > 0, 'Restored exact fixture geometry did not settle before the read-only deadline')
+    let timer
+    try { return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Restored exact fixture geometry read exceeded its deadline')), left) })]) }
+    finally { clearTimeout(timer) }
+  }
+  const matches = (a, b, fields = ['x', 'y', 'width', 'height']) => !!a && !!b && fields.every(field => Number.isFinite(a[field]) && a[field] === b[field]) && a.width > 0 && a.height > 0
+  while (performance.now() < deadline) {
+    const identity = (await read(() => observer.ok('identity', { pid: fixture.identity.pid }))).identity
+    assert.ok(same(identity, fixture.identity) && identity.uniqueId === fixture.identity.uniqueId, 'Restored fixture PID/birth/executable identity changed')
+    const before = await read(() => os('show-geometry-before', {}, [fixture.identity]))
+    const ownWindow = before.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
+    const sample = { atMs: performance.now() - start, window: ownWindow ?? null }; evidence.samples.push(sample)
+    if (!ownWindow || ownWindow.onScreen !== true || ownWindow.alpha !== 1 || before.foregroundPid !== fixture.identity.pid) { reset(); await sleep(25); continue }
+    const target = (await read(() => native.ok('targets'))).targets.find(row => row.id === expectedTarget.id)
+    if (target) assert.ok(target.pid === expectedTarget.pid && target.appId === expectedTarget.appId, 'Restored native target identity changed')
+    sample.targetGeometry = target ? { x: target.x, y: target.y, width: target.width, height: target.height, scale: target.scale } : null
+    if (!matches(ownWindow, target) || !Number.isFinite(target.scale) || target.scale <= 0) { reset(); await sleep(25); continue }
+    const reply = await read(() => native.request('observe', { targetId: expectedTarget.id }))
+    if (!reply.ok) {
+      sample.observationError = reply.error?.code
+      assert.ok(['CAPTURE_CHANGED', 'GEOMETRY_CHANGED', 'TARGET_GONE', 'TARGETS_UNAVAILABLE', 'INVALID_TARGET'].includes(reply.error?.code), `Restored fixture read failed: ${JSON.stringify(reply.error)}`)
+      reset(); await sleep(25); continue
+    }
+    const frame = reply.result, after = await read(() => os('show-geometry-after', {}, [fixture.identity])), afterWindow = after.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
+    const state = await read(() => snapshotFixture(fixture)), confirmed = (await read(() => observer.ok('identity', { pid: fixture.identity.pid }))).identity
+    assert.ok(same(confirmed, fixture.identity) && confirmed.uniqueId === fixture.identity.uniqueId, 'Fixture identity changed during the fresh observation')
+    assert.ok(state.pid === expectedTarget.pid && state.windowId === windowId && state.bundleId === expectedTarget.appId, 'Fixture snapshot changed its exact window identity')
+    sample.frame = { targetId: frame.targetId, frameId: frame.frameId, width: frame.width, height: frame.height, geometry: frame.geometry }; sample.afterWindow = afterWindow ?? null; sample.fixturePoint = state.point
+    if (frame.targetId !== expectedTarget.id || !matches(ownWindow, frame.geometry) || !matches(target, frame.geometry, ['x', 'y', 'width', 'height', 'scale']) || !matches(ownWindow, afterWindow) || afterWindow?.onScreen !== true || afterWindow?.alpha !== 1 || after.foregroundPid !== fixture.identity.pid || state.visible !== true) { reset(); await sleep(25); continue }
+    assert.ok(Number.isSafeInteger(frame.width) && frame.width > 0 && Number.isSafeInteger(frame.height) && frame.height > 0 && Number.isFinite(state.point?.x) && Number.isFinite(state.point?.y))
+    const next = JSON.stringify([...['x', 'y', 'width', 'height', 'scale'].map(field => frame.geometry[field]), frame.width, frame.height, state.point.x, state.point.y])
+    if (signature !== next) { signature = next; stableAt = performance.now(); count = 1 } else count++
+    sample.agreeingSamples = count; sample.stableMs = performance.now() - stableAt
+    if (count >= evidence.minimumSamples && sample.stableMs >= evidence.minimumStableMs) {
+      const point = raster(state.point, frame)
+      assert.ok(point.x >= 0 && point.y >= 0 && point.x < frame.width && point.y < frame.height, 'Fresh fixture point must lie inside the exact settled raster')
+      evidence.passed = true; evidence.elapsedMs = performance.now() - start; evidence.stableMs = sample.stableMs; evidence.agreeingSamples = count; evidence.point = point
+      return { frame, target, point }
+    }
+    await sleep(25)
+  }
+  throw new Error('Restored exact fixture CG/native observation geometry did not become continuously stable; no post-show action was sent')
+}
 async function capture(label, owner, windowId, composited, probe, includeRealCursor = false) {
   const path = join(output, `${label}.png`), value = await observer.ok('capture', { identity: owner, windowId, output: path, composited, probe, includeRealCursor })
   captures.push({ label, ...value, sha256: hash(await readFile(path)), file: path }); return value
@@ -166,7 +217,7 @@ try {
   currentTarget = (await native.ok('targets')).targets.find(row => row.pid === alpha.identity.pid && row.appId === ready.bundleId && row.id === `mac-window:${ready.windowId}`)
   assert.ok(currentTarget, 'Input is restricted to the exact disposable fixture process/bundle/window')
   let frame = await native.ok('observe', { targetId: currentTarget.id }), point = raster(ready.point, frame)
-  const otherPoint = { x: point.x + 70 * frame.width / frame.geometry.width, y: point.y + 25 * frame.height / frame.geometry.height }
+  let otherPoint = { x: point.x + 70 * frame.width / frame.geometry.width, y: point.y + 25 * frame.height / frame.geometry.height }
   assert.ok(otherPoint.x < frame.width && otherPoint.y < frame.height)
   environment = { helper, helperSha256, architecture: process.arch, temporary, target: currentTarget, fixtureReady: ready, sources: Object.fromEntries(await Promise.all([fixtureSource, observerSource, leaseSource, fileURLToPath(import.meta.url)].map(async path => [path, hash(await readFile(path))]))) }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
@@ -225,7 +276,11 @@ try {
   await native.ok('lease', { epoch: 4, actor: 'ai' }); activeEpoch = 4; await native.ok('observe', { targetId: currentTarget.id }); await act(4, point); await arrowVisible(4)
   await alpha.ok('hide'); await arrowGone('target-left-screen'); pass('MAC-TARGET-OFFSCREEN-HIDES-AI')
   await native.ok('release', { epoch: 4 }); activeEpoch = undefined; await alpha.ok('show'); await alpha.ok('activate'); await until(async () => (await os('show-primary')).foregroundPid === alpha.identity.pid, 'Restored fixture did not become foreground')
-  await native.ok('lease', { epoch: 5, actor: 'ai' }); activeEpoch = 5; await native.ok('observe', { targetId: currentTarget.id }); await act(5, point); await arrowVisible(5); await guardians(native.identity)
+  const settled = await settledTargetAfterShow(alpha, currentTarget)
+  frame = settled.frame; currentTarget = settled.target; point = settled.point
+  otherPoint = { x: point.x + 70 * frame.width / frame.geometry.width, y: point.y + 25 * frame.height / frame.geometry.height }
+  assert.ok(otherPoint.x < frame.width && otherPoint.y < frame.height)
+  await native.ok('lease', { epoch: 5, actor: 'ai' }); activeEpoch = 5; await act(5, point); await arrowVisible(5); await guardians(native.identity)
   await retire(native); activeEpoch = undefined; const firstNative = native.identity; native = undefined
   await until(async () => !(await fallbackIdentity(firstNative.pid)), 'Native EOF did not retire the helper')
   const disconnected = await os('native-eof', {}, [alpha.identity, beta.identity]); assert.ok(empty(disconnected)); pass('MAC-DISCONNECT-RETIRES-OVERLAY-AND-OWNED-INPUT')
@@ -331,6 +386,7 @@ finally {
   if (!cleanup.passed) cleanup.retainedTemporary = temporary
   await writeFile(join(output, 'transcripts.json'), JSON.stringify(controllers.map(value => ({ label: value.label, pid: value.child.pid, transcript: value.transcript, stderr: value.stderr() })), null, 2))
   await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2)); await writeFile(join(output, 'trace.json'), JSON.stringify(trace, null, 2))
+  await writeFile(join(output, 'geometry-settles.json'), JSON.stringify(geometrySettles, null, 2))
   await writeFile(join(output, 'report.json'), JSON.stringify({ ...report, status: finalPassed ? 'passed' : report?.status === 'blocked' ? 'blocked' : 'failed', cleanup, testedAt: new Date().toISOString() }, null, 2))
   await writeFile(join(output, 'delivery-verdict.json'), JSON.stringify({ passed: finalPassed, runnerPassed: report?.status === 'passed', naturalCleanupPassed: cleanup.passed, helperUnchanged }, null, 2))
   if (cleanup.passed) await rm(temporary, { recursive: true, force: true })
