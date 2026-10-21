@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
+import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -26,6 +27,7 @@ const profileHome = join(temporary, 'qiuya-harness-home')
 const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
 const tests = [], errors = [], screenshots = [], windowRpc = []
 let host, browser, page, driver, macPreviewRetirement, diagnosticComplete = false
+let blankSessionSequence = 0
 class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
@@ -82,12 +84,15 @@ async function openSettings() {
   await page.getByRole('heading', { name: 'QiuYa 增强工具箱', exact: true }).waitFor()
 }
 async function blankSession() {
+  const sequence = ++blankSessionSequence
+  const before = await page.evaluate(captureHarnessWorkspaceDom)
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
   // Observe both public DOM bindings after the asynchronous Session transition;
   // a fixed delay can type into the previous Session while draft restoration is
   // still running on a busy guest.
   let signature, stableAt = Date.now()
-  const sessionId = await waitFor(async () => {
+  let sessionId
+  try { sessionId = await waitFor(async () => {
     const state = await page.evaluate(() => {
     const body = document.querySelector('[data-conversation-content][data-content-phase="hero"]')
     const selected = document.querySelector('[data-row-key^="session:"][aria-selected="true"]')
@@ -98,7 +103,8 @@ async function blankSession() {
     const next = JSON.stringify(state)
     if (next !== signature) { signature = next; stableAt = Date.now() }
     return state?.text === '' && Date.now() - stableAt >= 750 ? state.id : undefined
-  }, 'The public blank Session and its empty composer did not settle')
+  }, 'The public blank Session and its empty composer did not settle') }
+  finally { await writeFile(join(output, 'blank-session-dom-' + String(sequence).padStart(3, '0') + '.json'), JSON.stringify({ before, after: await page.evaluate(captureHarnessWorkspaceDom), readySessionId: sessionId }, null, 2)) }
   return sessionId
 }
 async function newSession(label) {
@@ -159,6 +165,21 @@ try {
   await onboarding.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
   if (await onboarding.isVisible()) await onboarding.click()
   await page.getByRole('button', { name: '账号菜单', exact: true }).waitFor()
+  // First-use default-workspace restoration can be cancelled by navigation.
+  // Register only this test's existing UUID directory through the documented
+  // Workspace API, then select it through the actual public workspace menu.
+  const workspacePath = join(temporary, 'workspace-' + randomUUID()); await mkdir(workspacePath)
+  const workspaceBefore = await page.evaluate(captureHarnessWorkspaceDom)
+  let ownedWorkspace, workspaceSessionId
+  try {
+    ownedWorkspace = await registerHarnessWorkspace(page, await realpath(workspacePath))
+    await waitFor(async () => (await page.evaluate(captureHarnessWorkspaceDom)).rows.some(row => row.key === 'workspace:' + ownedWorkspace.workspaceId && row.visible), 'The registered own workspace did not appear in the public workspace list')
+    await page.getByRole('button', { name: '选择工作区', exact: true }).click()
+    await page.getByRole('menuitem', { name: ownedWorkspace.title, exact: true }).click()
+    workspaceSessionId = await waitFor(async () => selectedHarnessWorkspaceSession(await page.evaluate(captureHarnessWorkspaceDom), ownedWorkspace), 'The explicitly selected own workspace did not expose its ready blank Session')
+  } finally {
+    await writeFile(join(output, 'workspace-prerequisite.json'), JSON.stringify({ ownedWorkspace, workspaceSessionId, before: workspaceBefore, after: await page.evaluate(captureHarnessWorkspaceDom), boundary: 'One documented owner workspace/create RPC for a fresh test-owned directory, then an actual public workspace menu selection. No user workspace is adopted or read; no prompt is sent during setup.' }, null, 2))
+  }
   const suffix = Date.now().toString(36), alpha = `E2E:Alpha-${suffix}`, beta = `E2E:Beta-${suffix}`, gamma = `E2E:Gamma-${suffix}`
   await test('account-menu-settings-and-all-feature-tabs', async () => {
     await openSettings()
