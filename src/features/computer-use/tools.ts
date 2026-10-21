@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ComputerError, parseComputerAction, requireIdentity } from './contract.ts'
-import type { ComputerSessionService } from './session.ts'
+import type { ComputerServiceFacade } from './environment-manager.ts'
 
 // Keep Host-only SDK augmentation out of the shared Client TypeScript graph.
 // These structural public seams are verified against the actual SDK in tests.
@@ -23,7 +23,7 @@ function parameters(value: unknown, allowed: string[]): Record<string, unknown> 
   return value as Record<string, unknown>
 }
 /** Uses only the current Agent's public tool/attachment services; no model requests. */
-export function installComputerTools(ctx: Context, service: ComputerSessionService, options: ComputerToolsOptions = {}): () => void {
+export function installComputerTools(ctx: Context, service: ComputerServiceFacade, options: ComputerToolsOptions = {}): () => void {
   const services = ctx as Context & ComputerToolServices
   const session = (exec: ToolRunContext): string => {
     if (options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用')

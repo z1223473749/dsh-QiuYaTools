@@ -1,0 +1,256 @@
+import { createHash, randomInt } from 'node:crypto'
+import { join } from 'node:path'
+import { ComputerDriverRouter } from './driver-router.ts'
+import { ComputerSessionService, type ComputerSessionOptions } from './session.ts'
+import { ComputerInputScheduler, ScheduledComputerDriver } from './scheduled-driver.ts'
+import { NativeCompanionDriver } from './native.ts'
+import { RemoteComputerDriver } from './remote.ts'
+import { ComputerError, computerError, requireIdentity } from './contract.ts'
+import type { ComputerActionRequest, ComputerSessionSnapshot } from './contract.ts'
+
+export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget'>
+export interface ComputerConnectionOptions {
+  mode: 'local' | 'remote' | 'browser'; endpoint?: string; token?: string; allowPrivateNetwork?: boolean
+  browser?: 'chrome' | 'edge'; allowedOrigins?: string[]; initialUrl?: string; cdpEndpoint?: string
+}
+export interface ComputerEnvironmentOptions extends Pick<ComputerSessionOptions, 'enabled' | 'readAllowedApps' | 'writeAllowedApps' | 'now'> {
+  directory?: string
+  createRouter?: (sessionId: string | undefined, scheduler: ComputerInputScheduler) => ComputerDriverRouter
+  maxEnvironments?: number
+  idleMs?: number
+}
+interface Environment {
+  sessionId?: string; driver: ComputerDriverRouter; service: ComputerSessionService; switching: boolean
+  lastUsed: number; files: Set<AbortController>; unsubscribe: () => void
+  retiring: boolean; closeAttempted: boolean; retirement?: Promise<void>; cleanupError?: { code: string; message: string }
+  previewDetached: boolean; previewIntent: number
+}
+const terminal = (state: string) => ['stopped', 'faulted', 'disconnected'].includes(state)
+const failures = (rows: PromiseSettledResult<unknown>[]) => rows.filter((row): row is PromiseRejectedResult => row.status === 'rejected').map(row => row.reason)
+const failMany = (errors: unknown[], message: string) => { if (errors.length) throw new AggregateError(errors, message) }
+const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+const invoke = <T>(run: () => T | Promise<T>): Promise<T> => { try { return Promise.resolve(run()) } catch (error) { return Promise.reject(error) } }
+
+/** Remote exchange remains owner-only while physical input uses the shared FIFO. */
+class ScheduledRemoteComputerDriver extends ScheduledComputerDriver {
+  constructor(private readonly remote: RemoteComputerDriver, scheduler: ComputerInputScheduler) { super(remote, `remote:${hash(remote.endpoint)}`, scheduler) }
+  exchange(request: unknown, signal?: AbortSignal) { return this.remote.exchange(request, signal) }
+}
+
+/** One service/router per chat. Default connection exists only for legacy owner
+ * calls without a chat and cannot switch or cancel another environment. */
+export class ComputerEnvironmentManager implements ComputerServiceFacade {
+  private readonly entries = new Map<string, Environment>()
+  private legacy?: Environment
+  private readonly snapshots = new Map<string, ComputerSessionSnapshot>()
+  private readonly listeners = new Set<() => void>()
+  private readonly scheduler = new ComputerInputScheduler()
+  private readonly allowed = new Set<string>()
+  private readonly denied = new Set<string>()
+  private readonly permissionIntents = new Map<string, number>()
+  private permissionVersion = 0
+  private permissionTail: Promise<void> = Promise.resolve()
+  private readonly permissionWrites = new Set<Promise<void>>()
+  // A fresh Host/HMR lifetime also starts far from the old page's cached
+  // epochs. Native physical epochs remain the driver's separate counter.
+  private epochHighWater = randomInt(1, 2 ** 40)
+  private disposed = false
+  private disposing?: Promise<void>
+  private sweeping?: Promise<void>
+  constructor(private readonly options: ComputerEnvironmentOptions = {}) {
+    for (const app of options.readAllowedApps?.() ?? []) this.allowed.add(app)
+    if (!Number.isInteger(options.maxEnvironments ?? 128) || (options.maxEnvironments ?? 128) < 1 || (options.maxEnvironments ?? 128) > 128) throw new ComputerError('INVALID_LIMIT', '电脑环境数量上限无效')
+    if (!Number.isFinite(options.idleMs ?? 60_000) || (options.idleMs ?? 60_000) < 0) throw new ComputerError('INVALID_TIMEOUT', '电脑环境空闲时间无效')
+  }
+  private now() { return this.options.now?.() ?? Date.now() }
+  private assertLive() { if (this.disposed) throw new ComputerError('DISPOSED', '电脑环境管理已关闭') }
+  private assertEnabled() { this.assertLive(); if (this.options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用') }
+  private notify() { for (const listener of this.listeners) { try { listener() } catch {} } }
+  subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  allowedApps(): string[] { return [...this.allowed].filter(app => !this.denied.has(app)).sort() }
+  setAppAllowed(appId: string, allowed: boolean): Promise<void> {
+    this.assertLive(); requireIdentity(appId, '应用')
+    const version = ++this.permissionVersion; this.permissionIntents.set(appId, version)
+    if (allowed && !this.allowedApps().includes(appId)) this.denied.add(appId)
+    let stopping: Promise<unknown> = Promise.resolve()
+    if (!allowed) {
+      this.denied.add(appId); this.allowed.delete(appId)
+      // Call stop synchronously on all services before waiting for disk. This
+      // invalidates action epochs and aborts queued native input immediately.
+      const affected = this.all().flatMap(entry => entry.service.list().filter(row => row.target?.appId === appId).map(row => invoke(() => entry.service.stop(row.sessionId))))
+      stopping = Promise.allSettled(affected).then(rows => failMany(failures(rows), '应用撤权后部分电脑环境尚未释放'))
+    }
+    void stopping.catch(() => {}); this.notify()
+    const writing = this.permissionTail.catch(() => {}).then(async () => {
+      const values = new Set(this.allowedApps()); if (allowed) values.add(appId); else values.delete(appId)
+      await this.options.writeAllowedApps?.([...values].sort())
+      if (this.permissionIntents.get(appId) === version) {
+        this.allowed.clear(); for (const app of values) this.allowed.add(app)
+        if (allowed) this.denied.delete(appId)
+        this.notify()
+      }
+      await stopping
+    })
+    this.permissionWrites.add(writing)
+    void writing.then(() => this.permissionWrites.delete(writing), () => this.permissionWrites.delete(writing))
+    this.permissionTail = writing.catch(() => {}); return writing
+  }
+  private all() { return [...(this.legacy ? [this.legacy] : []), ...this.entries.values()] }
+  private existing(sessionId?: string) { return sessionId === undefined ? this.legacy : this.entries.get(sessionId) }
+  private entry(sessionId?: string): Environment {
+    this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
+    let entry = this.existing(sessionId)
+    if (!entry) {
+      if (sessionId !== undefined && this.entries.size >= (this.options.maxEnvironments ?? 128)) throw new ComputerError('SESSION_LIMIT', '电脑环境数量已达上限，请停止闲置环境并等待释放')
+      const driver = this.options.createRouter?.(sessionId, this.scheduler) ?? new ComputerDriverRouter({
+        local: new ScheduledComputerDriver(new NativeCompanionDriver(), 'local-desktop', this.scheduler),
+        remoteFactory: value => new ScheduledRemoteComputerDriver(new RemoteComputerDriver(value), this.scheduler),
+      })
+      const created = { sessionId, driver, lastUsed: this.now(), switching: false, retiring: false, closeAttempted: false, previewDetached: false, previewIntent: 0, files: new Set<AbortController>(), unsubscribe: () => {} } as Environment
+      created.service = new ComputerSessionService(driver, { enabled: () => !this.disposed && !created.switching && !created.retiring && this.options.enabled?.() !== false,
+        readAllowedApps: () => this.allowedApps(), now: this.options.now, initialEpoch: this.epochHighWater })
+      const unService = created.service.subscribe(() => {
+        for (const row of created.service.list()) {
+          this.epochHighWater = Math.max(this.epochHighWater, row.epoch); this.snapshots.set(row.sessionId, row)
+        }
+        created.lastUsed = this.now(); this.trimSnapshots(); this.notify()
+      })
+      const unDriver = driver.subscribe(event => { if (event.event === 'previewClosed' && (event.sessionId === undefined || event.sessionId === sessionId)) { created.previewIntent++; created.previewDetached = false; this.notify() } })
+      created.unsubscribe = () => { unService(); unDriver() }
+      if (sessionId === undefined) this.legacy = created; else this.entries.set(sessionId, created)
+      entry = created
+    }
+    if (entry.retiring) throw new ComputerError('ENVIRONMENT_RETIRING', '此聊天的旧电脑环境尚未完成清理，请稍后重试')
+    return entry
+  }
+  private trimSnapshots() {
+    for (const [id, snapshot] of this.snapshots) {
+      if (this.snapshots.size <= 128) break
+      if (!this.entries.has(id) && terminal(snapshot.state)) this.snapshots.delete(id)
+    }
+  }
+  private forSession(sessionId: string, create = false) {
+    requireIdentity(sessionId, '会话'); this.assertLive()
+    const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined) ?? (create ? this.entry(sessionId) : undefined)
+    if (!entry) throw new ComputerError('SESSION_NOT_STARTED', '请先在电脑操控面板选择应用并开始')
+    if (entry.retiring) throw new ComputerError('ENVIRONMENT_RETIRING', '此聊天的电脑环境正在清理')
+    entry.lastUsed = this.now(); return entry
+  }
+  get(sessionId: string) { return this.entries.get(sessionId)?.service.get(sessionId) ?? this.legacy?.service.get(sessionId) ?? (this.snapshots.has(sessionId) ? structuredClone(this.snapshots.get(sessionId)!) : undefined) }
+  list() {
+    const values = new Map(this.snapshots)
+    for (const entry of this.all()) for (const row of entry.service.list()) values.set(row.sessionId, row)
+    return [...values.values()].map(row => structuredClone(row))
+  }
+  environments() { return this.all().map(entry => ({ ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
+  isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
+  async statusFor(sessionId?: string, signal?: AbortSignal) {
+    this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
+    const entry = this.existing(sessionId)
+    if (!entry) return { available: false, mode: 'local', uninitialized: true, message: '请选择应用以检测此聊天的本机电脑操控权限' }
+    if (entry.switching || entry.retiring) return { available: false, mode: entry.driver.mode, message: entry.retiring ? '电脑环境正在清理' : '正在切换操作环境' }
+    return entry.service.status(signal)
+  }
+  status(signal?: AbortSignal) { return this.statusFor(undefined, signal) }
+  targetsFor(sessionId?: string, signal?: AbortSignal) { this.assertEnabled(); const entry = this.entry(sessionId); if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境'); entry.lastUsed = this.now(); return entry.service.targets(signal) }
+  targets(signal?: AbortSignal) { return this.targetsFor(undefined, signal) }
+  start(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal } = {}) { this.assertEnabled(); return this.forSession(sessionId, true).service.start(sessionId, targetId, options) }
+  observe(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.observe(sessionId, signal) }
+  preview(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.preview(sessionId, signal) }
+  act(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.act(sessionId, request, signal) }
+  humanAct(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.humanAct(sessionId, request, signal) }
+  permittedTargets(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.permittedTargets(sessionId, signal) }
+  selectTarget(sessionId: string, targetId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.selectTarget(sessionId, targetId, signal) }
+  pause(sessionId: string) { return this.forSession(sessionId).service.pause(sessionId) }
+  takeover(sessionId: string) { return this.forSession(sessionId).service.takeover(sessionId) }
+  resume(sessionId: string) { return this.forSession(sessionId).service.resume(sessionId) }
+  stop(sessionId: string) { return this.forSession(sessionId).service.stop(sessionId) }
+  cancelFiles(sessionId?: string, all = false) {
+    for (const entry of all ? this.all() : [this.existing(sessionId)].filter((value): value is Environment => !!value)) for (const controller of entry.files) controller.abort(new ComputerError('CONTROL_CHANGED', '文件交换已停止'))
+  }
+  async connect(sessionId: string | undefined, options: ComputerConnectionOptions, signal?: AbortSignal) {
+    this.assertEnabled(); signal?.throwIfAborted()
+    const entry = this.entry(sessionId)
+    if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境，请稍候')
+    entry.switching = true; entry.lastUsed = this.now(); this.cancelFiles(sessionId); this.notify()
+    try {
+      const stopped = await Promise.allSettled(entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
+      failMany(failures(stopped), '旧电脑环境尚未释放，不能切换')
+      this.assertEnabled(); signal?.throwIfAborted()
+      if (options.mode === 'local') await entry.driver.useLocal()
+      else if (options.mode === 'remote' && typeof options.endpoint === 'string' && typeof options.token === 'string') await entry.driver.useRemote({ endpoint: options.endpoint, token: options.token, allowInsecurePrivateNetwork: options.allowPrivateNetwork === true })
+      else if (options.mode === 'browser') {
+        if (!this.options.directory) throw new ComputerError('PROFILE_REQUIRED', '浏览器连接需要独立的 Host 配置目录')
+        if (!['chrome', 'edge'].includes(options.browser ?? '') || !Array.isArray(options.allowedOrigins) || options.allowedOrigins.length < 1 || options.allowedOrigins.length > 128 || options.allowedOrigins.some(origin => typeof origin !== 'string' || origin.length > 2048)) throw new ComputerError('INVALID_BROWSER_OPTIONS', '请选择浏览器并填写允许的网站来源')
+        if (options.initialUrl !== undefined && (typeof options.initialUrl !== 'string' || options.initialUrl.length > 8192) || options.cdpEndpoint !== undefined && (typeof options.cdpEndpoint !== 'string' || options.cdpEndpoint.length > 2048)) throw new ComputerError('INVALID_BROWSER_OPTIONS', '浏览器地址无效')
+        await entry.driver.useBrowser({ browser: options.browser, profileDir: join(this.options.directory, 'browser-profiles', sessionId === undefined ? 'legacy' : hash(sessionId), options.browser!), allowedOrigins: options.allowedOrigins, ...(options.cdpEndpoint ? { cdpEndpoint: options.cdpEndpoint } : {}) }, options.initialUrl, signal)
+      } else throw new ComputerError('INVALID_CONNECTION', '请选择本机或提供独立电脑的配对地址与密钥')
+      this.assertEnabled(); signal?.throwIfAborted(); return await entry.driver.status(signal)
+    } finally { entry.switching = false; entry.lastUsed = this.now(); this.notify() }
+  }
+  async exchange(sessionId: string | undefined, request: unknown, signal?: AbortSignal) {
+    this.assertEnabled(); const entry = this.entry(sessionId)
+    if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境')
+    const controller = new AbortController(); entry.files.add(controller)
+    try {
+      const result = await entry.driver.exchange(request, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal)
+      this.assertEnabled(); controller.signal.throwIfAborted(); return result
+    } finally { entry.files.delete(controller); entry.lastUsed = this.now() }
+  }
+  async openPreview(sessionId: string, url: string, title: string, signal?: AbortSignal) {
+    this.assertEnabled(); const entry = this.forSession(sessionId), intent = ++entry.previewIntent
+    const result = await entry.driver.openPreview(url, title, sessionId, signal)
+    if (entry.previewIntent === intent && !entry.retiring && !this.disposed) entry.previewDetached = true
+    this.notify(); return result
+  }
+  async redock(sessionId: string, signal?: AbortSignal) {
+    this.assertEnabled(); const entry = this.forSession(sessionId), intent = ++entry.previewIntent
+    const result = await entry.driver.closePreview(signal, { preserveSession: true })
+    if (entry.previewIntent === intent) entry.previewDetached = false
+    this.notify(); return result
+  }
+  async stopAll() {
+    this.cancelFiles(undefined, true)
+    const stopped = this.all().flatMap<Promise<unknown>>(entry => entry.retiring ? [this.retire(entry)] : entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
+    const result = await Promise.allSettled(stopped); failMany(failures(result), '部分电脑环境尚未完成停止')
+  }
+  private retire(entry: Environment): Promise<void> {
+    if (entry.retirement) return entry.retirement
+    entry.retiring = true; this.cancelFiles(entry.sessionId); this.notify()
+    const retiring = (async () => {
+      const errors: unknown[] = []
+      if (!entry.closeAttempted) {
+        entry.closeAttempted = true
+        const stopped = await Promise.allSettled(entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
+        errors.push(...failures(stopped))
+        try { await entry.service.dispose() } catch (error) { errors.push(error) }
+      }
+      // Retry the driver itself after a previous service-disposal failure. A
+      // rejected service promise is never evidence that native cleanup ran.
+      try { await entry.driver.dispose() } catch (error) { errors.push(error) }
+      failMany(errors, '电脑环境退役未完成')
+      entry.unsubscribe()
+      if (entry.sessionId === undefined) { if (this.legacy === entry) this.legacy = undefined }
+      else if (this.entries.get(entry.sessionId) === entry) this.entries.delete(entry.sessionId)
+      this.trimSnapshots(); this.notify()
+    })()
+    entry.retirement = retiring
+    void retiring.catch(error => { entry.cleanupError = computerError(error); entry.retirement = undefined; this.notify() })
+    return retiring
+  }
+  sweep(): Promise<void> {
+    if (this.sweeping) return this.sweeping
+    if (this.disposed) return Promise.resolve()
+    const now = this.now(), ready = this.all().filter(entry => !entry.switching && !entry.files.size && (entry.retiring || now - entry.lastUsed >= (this.options.idleMs ?? 60_000) && entry.service.list().every(row => terminal(row.state))))
+    const pending = Promise.allSettled(ready.map(entry => this.retire(entry))).then(rows => failMany(failures(rows), '闲置电脑环境清理未完成'))
+    this.sweeping = pending
+    void pending.then(() => { this.sweeping = undefined }, () => { this.sweeping = undefined }); return pending
+  }
+  dispose(): Promise<void> {
+    if (this.disposing) return this.disposing
+    this.disposed = true; this.cancelFiles(undefined, true)
+    const pending = Promise.allSettled([...this.all().map(entry => this.retire(entry)), ...this.permissionWrites]).then(rows => { failMany(failures(rows), '部分电脑环境未能退出'); this.listeners.clear() })
+    this.disposing = pending
+    void pending.catch(() => { this.disposing = undefined }); return pending
+  }
+}

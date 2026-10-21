@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ComputerSessionService } from './session.ts'
 import { ComputerDriverRouter } from './driver-router.ts'
+import { ComputerEnvironmentManager, type ComputerServiceFacade, type ComputerEnvironmentOptions, type ComputerConnectionOptions } from './environment-manager.ts'
 import { computerError, requireIdentity, type DeviceDriver } from './contract.ts'
 import { computerPreviewPage } from './preview-page.ts'
 
@@ -15,10 +16,10 @@ interface Services {
   webServer: { port: number }
   get?(name: string): unknown
 }
-export interface ComputerHost { service: ComputerSessionService; dispose(): Promise<void> }
+export interface ComputerHost { service: ComputerServiceFacade; manager?: ComputerEnvironmentManager; dispose(): Promise<void> }
 
 /** App approvals are owned by the Host profile, never by model tool arguments. */
-export async function installComputerHost(ctx: Context, enabled: () => boolean, options: { driver?: DeviceDriver } = {}): Promise<ComputerHost> {
+export async function installComputerHost(ctx: Context, enabled: () => boolean, options: { driver?: DeviceDriver; environments?: Pick<ComputerEnvironmentOptions, 'createRouter' | 'maxEnvironments' | 'idleMs' | 'now'> } = {}): Promise<ComputerHost> {
   const services = ctx as unknown as Services
   const profile = services.get?.('profileContext') as { dir?: string } | undefined
   const directory = profile?.dir ? join(profile.dir, 'qiuya-computer') : undefined
@@ -27,12 +28,11 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     const stored: unknown = JSON.parse(await readFile(join(directory, 'permissions.json'), 'utf8'))
     if (Array.isArray(stored) && stored.every(id => typeof id === 'string' && id.length <= 512)) allowed = stored
   } catch { /* A missing/invalid approval store grants nothing. */ }
-  const driver = options.driver ?? new ComputerDriverRouter()
+  const driver = options.driver
   let switching = false
-  const service = new ComputerSessionService(driver, {
-    enabled: () => enabled() && !switching,
+  const permissions = {
     readAllowedApps: () => allowed,
-    writeAllowedApps: async ids => {
+    writeAllowedApps: async (ids: string[]) => {
       if (!directory) throw new Error('当前 Host 没有可持久化配置目录，请使用本次允许。')
       await mkdir(directory, { recursive: true, mode: 0o700 })
       const temporary = join(directory, `.permissions-${randomUUID()}.json`)
@@ -40,17 +40,34 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
       await rename(temporary, join(directory, 'permissions.json'))
       allowed = [...ids]
     },
-  })
+  }
+  // An explicitly supplied driver retains the original single-environment
+  // contract used by native tests and soak tools. Production uses per-chat
+  // routers and services; unscoped legacy owner calls get their own default.
+  const legacyService = driver ? new ComputerSessionService(driver, { ...permissions, enabled: () => enabled() && !switching }) : undefined
+  const manager = legacyService ? undefined : new ComputerEnvironmentManager({ ...options.environments, ...permissions, enabled, directory })
+  const service: ComputerServiceFacade = legacyService ?? manager!
   let disposed = false, wasEnabled = enabled()
+  let cleanupError: ReturnType<typeof computerError> | undefined, shutdown: Promise<void> | undefined, lastSweep = 0
   const fileRequests = new Set<AbortController>()
-  const cancelFiles = () => { for (const controller of fileRequests) controller.abort(new Error('文件交换已停止。')) }
+  const cancelFiles = () => { for (const controller of fileRequests) controller.abort(new Error('文件交换已停止。')); manager?.cancelFiles(undefined, true) }
   const poll = setInterval(() => {
     const current = enabled()
-    if (wasEnabled && !current) { cancelFiles(); for (const item of service.list()) void service.stop(item.sessionId).catch(() => {}) }
+    if (!current && (wasEnabled || cleanupError) && !shutdown) {
+      cancelFiles()
+      const stopping = manager ? manager.stopAll() : Promise.allSettled(service.list().map(item => service.stop(item.sessionId))).then(rows => {
+        const failed = rows.find((row): row is PromiseRejectedResult => row.status === 'rejected'); if (failed) throw failed.reason
+      })
+      shutdown = stopping
+      void stopping.then(() => { cleanupError = undefined; shutdown = undefined }, error => { cleanupError = computerError(error); shutdown = undefined })
+    }
+    if (manager && current && Date.now() - lastSweep >= 5000) {
+      lastSweep = Date.now(); void manager.sweep().catch(error => { cleanupError = computerError(error) })
+    }
     wasEnabled = current
   }, 100)
   poll.unref()
-  const assertEnabled = () => { if (disposed || !enabled()) throw new Error('请先在设置中启用电脑操控。'); if (switching) throw new Error('正在切换操作环境，请稍候。') }
+  const assertEnabled = (sessionId?: string) => { if (disposed || !enabled()) throw new Error('请先在设置中启用电脑操控。'); if (manager ? manager.isSwitching(sessionId) : switching) throw new Error('正在切换操作环境，请稍候。') }
   const owner = () => services.connection.browserPeer?.principal.kind === 'owner'
   const unregister = [services.connection.fetch.register({
     path: `/api/${COMPUTER_ENDPOINT}`, methods: ['POST'], requestBody: 'buffered',
@@ -68,11 +85,14 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         const sessionId = input.sessionId === undefined ? undefined : requireIdentity(input.sessionId, '会话')
         let value: unknown
         if (input.op === 'status') {
-          value = { enabled: enabled(), switching, sessions: service.list(), allowedApps: service.allowedApps(), native: switching ? { available: false, message: '正在切换操作环境' } : enabled() ? await service.status(request.signal).catch(computerError) : null }
+          const changing = manager ? manager.isSwitching(sessionId) : switching
+          value = { enabled: enabled(), switching: changing, sessions: service.list(), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments() } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? manager.statusFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
         } else {
-          if (!['pause', 'stop'].includes(input.op)) assertEnabled()
-          if (input.op === 'targets') value = await service.targets(request.signal)
+          if (!['pause', 'stop'].includes(input.op)) assertEnabled(sessionId)
+          if (input.op === 'targets') value = await (manager ? manager.targetsFor(sessionId, request.signal) : legacyService!.targets(request.signal))
           else if (input.op === 'connect') {
+            if (manager) value = await manager.connect(sessionId, input as ComputerConnectionOptions, request.signal)
+            else {
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('此执行器不支持切换设备')
             switching = true; cancelFiles()
             try {
@@ -89,12 +109,18 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
               } else throw new Error('请选择本机或提供独立电脑的配对地址与密钥。')
               value = await driver.status(request.signal)
             } finally { switching = false }
+            }
           }
           else if (input.op === 'exchange') {
+            if (manager) {
+              value = await manager.exchange(sessionId, input.request, request.signal)
+              assertEnabled(sessionId); if (!owner()) throw new Error('文件交换需要本机所有者权限。')
+            } else {
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('文件交换仅适用于已配对的独立电脑。')
             const controller = new AbortController(); fileRequests.add(controller)
             try { value = await driver.exchange(input.request, AbortSignal.any([request.signal, controller.signal])); assertEnabled(); if (!owner()) throw new Error('文件交换需要本机所有者权限。') }
             finally { fileRequests.delete(controller) }
+            }
           }
           else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
           else if (!sessionId) throw new Error('请先选择要关联的聊天。')
@@ -120,7 +146,9 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           else if (input.op === 'act') value = await service.humanAct(sessionId, input.request, request.signal)
           else if (input.op === 'preview') {
             const url = services.connection.authenticatedUrl(`http://127.0.0.1:${services.webServer.port}${COMPUTER_PREVIEW_PATH}?session=${encodeURIComponent(sessionId)}`)
-            value = await driver.openPreview(url, 'QiuYaTools · 电脑操控', sessionId, request.signal)
+            value = manager ? await manager.openPreview(sessionId, url, 'QiuYaTools · 电脑操控', request.signal) : await driver!.openPreview(url, 'QiuYaTools · 电脑操控', sessionId, request.signal)
+          } else if (input.op === 'redock') {
+            value = manager ? await manager.redock(sessionId, request.signal) : await driver!.closePreview(request.signal, { preserveSession: true })
           } else throw new Error('不支持的操作')
         }
         return Response.json({ type: 'server-response', rpcId, result: { ok: true, value } }, { headers: { 'Cache-Control': 'no-store' } })
@@ -133,11 +161,12 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     path: COMPUTER_PREVIEW_PATH, methods: ['GET'], requestBody: 'buffered',
     fetch: async () => owner() ? new Response(computerPreviewPage, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } }) : new Response('Forbidden', { status: 403 }),
   })]
-  return { service, async dispose() {
-    if (disposed) return
+  return { service, ...(manager ? { manager } : {}), async dispose() {
+    if (disposed) { if (manager) await manager.dispose(); return }
     disposed = true; clearInterval(poll); cancelFiles()
     let failure: unknown
-    try { await service.dispose() } catch (error) { failure = error }
+    try { await shutdown } catch (error) { failure = error }
+    try { await (manager ?? legacyService)!.dispose() } catch (error) { failure ??= error }
     const removed = await Promise.allSettled(unregister.map(stop => Promise.resolve().then(stop)))
     if (failure) throw failure
     const failedRoute = removed.find((result): result is PromiseRejectedResult => result.status === 'rejected')
