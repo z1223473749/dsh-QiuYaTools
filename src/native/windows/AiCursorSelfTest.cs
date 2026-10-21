@@ -16,9 +16,15 @@ internal static class AiCursorSelfTest
             using var first = new PreviewDataScope(root); using var second = new PreviewDataScope(root);
             var a = first.Store("same-session"); var b = second.Store("same-session");
             Check(a != b && Path.GetDirectoryName(a) != Path.GetDirectoryName(b), "same-chat-in-two-helpers-has-independent-data-folders");
-            Check(a == first.Store("same-session"), "same-helper-chat-reopen-retains-its-stable-hashed-path");
-            Check(Path.GetFileName(a).Length == 64 && a.Length < 128 && first.Store("../\\unsafe\0会话") != a,
-                "preview-path-is-short-and-session-identity-is-only-a-sha256-segment");
+            Check(a == first.Store("same-session") && Path.GetFileName(a) == "s00" && Path.GetFileName(b) == "s00",
+                "same-helper-chat-reopen-retains-its-stable-helper-private-slot");
+            var unsafeIdentity = first.Store("../\\unsafe\0会话");
+            Check(Path.GetFileName(unsafeIdentity) == "s01" && a.Length < 64 && unsafeIdentity != a && Path.GetDirectoryName(unsafeIdentity) == Path.GetDirectoryName(a),
+                "raw-unsafe-session-identities-only-select-short-slots-inside-their-own-guid-scope");
+            static string Digest(string value) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
+            const string collisionA = "prefix-collision-241", collisionB = "prefix-collision-256";
+            Check(Digest(collisionA)[..4] == Digest(collisionB)[..4] && Digest(collisionA) != Digest(collisionB) && first.Store(collisionA) != first.Store(collisionB),
+                "sha256-prefix-collisions-do-not-alias-full-dictionary-keys-or-slots");
             var uuid = Path.Combine(root, Guid.NewGuid().ToString("D")); Directory.CreateDirectory(uuid); File.WriteAllText(Path.Combine(uuid, "keep.txt"), "session-uuid");
             PreviewDataScope.Prune(root);
             Check(Directory.Exists(first.DirectoryPath) && Directory.Exists(second.DirectoryPath), "live-helper-scopes-are-never-pruned");
@@ -61,10 +67,26 @@ internal static class AiCursorSelfTest
             Directory.Delete(junction); junction = null; PreviewDataScope.Prune(root);
             Check(!Directory.Exists(retired), "verified-retired-owner-and-browser-free-scope-is-collected");
             using (var bounded = new PreviewDataScope(root)) {
-                for (var index = 0; index < PreviewDataScope.SessionLimit; index++) bounded.Store("session-" + index);
+                var slots = new List<string>();
+                for (var index = 0; index < PreviewDataScope.SessionLimit; index++) slots.Add(bounded.Store("session-" + index));
+                Check(slots.Distinct(StringComparer.Ordinal).Count() == PreviewDataScope.SessionLimit && Path.GetFileName(slots[0]) == "s00" && Path.GetFileName(slots[^1]) == "s1f",
+                    "all-32-helper-private-slots-are-distinct-through-the-last-hex-slot");
                 var rejected = false; try { bounded.Store("one-too-many"); } catch (NativeFailure error) when (error.Code == "preview-cache-full") { rejected = true; }
                 Check(rejected, "one-helper-has-a-fixed-32-session-directory-budget");
+                Check(bounded.Store("session-0") == slots[0] && bounded.Store("session-31") == slots[^1],
+                    "full-budget-and-rejected-new-chat-never-reassign-existing-chat-slots");
             }
+            var maximumRoot = PreviewDataScope.MaximumUdfLength - (1 + PreviewDataScope.Prefix.Length + 32 + 1 + 3);
+            var budgetRoot = Path.Combine(home, new string('p', maximumRoot - home.Length - 1));
+            using (var boundary = new PreviewDataScope(budgetRoot)) {
+                var path = Path.Combine(budgetRoot, boundary.Store("at-the-absolute-budget"));
+                Check(budgetRoot.Length == maximumRoot && path.Length == PreviewDataScope.MaximumUdfLength,
+                    "maximum-absolute-udf-budget-is-accepted-with-a-full-guid-and-short-slot");
+            }
+            var tooLong = budgetRoot + "x"; var clock = System.Diagnostics.Stopwatch.StartNew(); var pathRejected = false;
+            try { using var excessPath = new PreviewDataScope(tooLong); } catch (NativeFailure error) when (error.Code == "preview-data-path-too-long") { pathRejected = true; }
+            Check(pathRejected && !Directory.Exists(tooLong) && clock.ElapsedMilliseconds < 2000,
+                "one-character-overlong-root-fails-before-cache-creation-or-browser-start");
             var full = Path.Combine(home, "full"); Directory.CreateDirectory(full);
             for (var index = 0; index < PreviewDataScope.ScopeLimit; index++) Directory.CreateDirectory(Path.Combine(full, PreviewDataScope.Prefix + Guid.NewGuid().ToString("N")));
             var capped = false; try { using var excess = new PreviewDataScope(full); } catch (NativeFailure error) when (error.Code == "preview-cache-full") { capped = true; }

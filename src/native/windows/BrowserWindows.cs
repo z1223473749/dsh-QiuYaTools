@@ -247,6 +247,7 @@ internal sealed class BrowserWindow : Form
     {
         try {
             var directory = Path.Combine(DataRoot(), store);
+            if (preview) PreviewDataScope.ValidateUdfPath(directory);
             Directory.CreateDirectory(directory);
             if (preview) PreviewDataScope.RequirePlainAncestors(directory);
             // A crash during initialization leaves this scope deliberately uncollectable:
@@ -359,6 +360,10 @@ internal sealed class BrowserWindow : Form
 internal sealed class PreviewDataScope : IDisposable
 {
     internal const int ScopeLimit = 64, SessionLimit = 32;
+    // The observed initial private-profile/cache suffix was 91 characters.
+    // Reserve 94, including margin, below the 259 usable characters of a
+    // conventional MAX_PATH path; future cache paths may differ.
+    internal const int MaximumUdfLength = 165;
     internal const string Prefix = "qyt-preview-v2-";
     internal sealed record Identity(int Pid, long Born, string Executable)
     {
@@ -385,7 +390,7 @@ internal sealed class PreviewDataScope : IDisposable
     internal sealed record Manifest(int Version, string Scope, Identity Owner, int Pending, Identity[] Browsers);
     private readonly string root, scope, directory;
     private readonly FileStream lease;
-    private readonly HashSet<string> stores = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> stores = new(StringComparer.Ordinal);
     private Manifest manifest;
     private bool disposed;
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
@@ -399,7 +404,11 @@ internal sealed class PreviewDataScope : IDisposable
     internal string DirectoryPath => directory;
     internal PreviewDataScope(string dataRoot)
     {
-        root = Path.GetFullPath(dataRoot); RequirePlainAncestors(root, allowMissing: true); Directory.CreateDirectory(root); RequirePlainAncestors(root);
+        root = Path.GetFullPath(dataRoot); RequirePlainAncestors(root, allowMissing: true);
+        // Reject before creating any scope or starting a browser. Do not move
+        // configured data to another location or change system path policy.
+        ValidateUdfPath(Path.Combine(root, Prefix + Guid.Empty.ToString("N"), "s00"));
+        Directory.CreateDirectory(root); RequirePlainAncestors(root);
         using var index = Index(root);
         PruneLocked(root);
         if (OwnedDirectories(root).Count >= ScopeLimit) throw new NativeFailure("preview-cache-full", "Preview cache limit reached; close previews and retire inactive preview data before retrying");
@@ -413,9 +422,19 @@ internal sealed class PreviewDataScope : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sessionId))).ToLowerInvariant();
-        if (!stores.Contains(key) && stores.Count >= SessionLimit) throw new NativeFailure("preview-cache-full", "This helper has reached its preview session limit");
-        stores.Add(key); // Raw session identities are never interpreted as path segments.
-        return Path.Combine(Prefix + scope, key);
+        if (!stores.TryGetValue(key, out var slot)) {
+            if (stores.Count >= SessionLimit) throw new NativeFailure("preview-cache-full", "This helper has reached its preview session limit");
+            slot = "s" + stores.Count.ToString("x2", System.Globalization.CultureInfo.InvariantCulture);
+            stores.Add(key, slot); // Full SHA-256 keys stay in memory; raw identities never become paths.
+        }
+        var store = Path.Combine(Prefix + scope, slot);
+        ValidateUdfPath(Path.Combine(root, store));
+        return store;
+    }
+    internal static void ValidateUdfPath(string path)
+    {
+        if (Path.GetFullPath(path).Length > MaximumUdfLength)
+            throw new NativeFailure("preview-data-path-too-long", "The preview cache path is too long; configure a shorter native data directory");
     }
     internal void BeginningBrowser()
     {
