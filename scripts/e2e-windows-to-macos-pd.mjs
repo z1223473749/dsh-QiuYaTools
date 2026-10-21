@@ -286,7 +286,14 @@ try {
     cleanup.naturalRemainingMac = [...cleanup.remainingMac]
     for (const value of cleanup.remainingMac) { try { cleanup.forced.push(await oracle('killOwned', { identity: value })) } catch (error) { cleanup.errors.push(`Pinned Mac retirement: ${error.message}`) } }
     if (cleanup.forced.length) cleanup.errors.push('Forced Mac retirement was required; delivery cannot pass')
-    try { await eventually(async () => (await remaining()).length === 0, 'Exact Mac identities survived pinned fallback'); cleanup.finalOs = await oracle('snapshot'); assert.ok(emptyOs(cleanup.finalOs), 'OS input remained held after remote cleanup') }
+    try {
+      await eventually(async () => (await remaining()).length === 0, 'Exact Mac identities survived pinned fallback')
+      cleanup.postExitOsObservations = []
+      await eventually(async () => {
+        cleanup.finalOs = await oracle('snapshot'); cleanup.postExitOsObservations.push(cleanup.finalOs)
+        return emptyOs(cleanup.finalOs)
+      }, 'OS input did not return to empty during read-only post-exit observation; no input was replayed')
+    }
     catch (error) { cleanup.errors.push(error.message) }
   }
   fixtureLines?.close()
