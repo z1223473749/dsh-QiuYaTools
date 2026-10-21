@@ -100,7 +100,11 @@ async function checkpointGuest() {
   assert.equal(value.identity.platform, 'win32'); assert.equal(value.identity.architecture, nodeArch)
   assert.equal(value.identity.scriptSha256, sha(Buffer.from(client)))
   assert.ok(value.owned.some(row => row.role === 'client'))
-  trackedWindows.push(...value.owned)
+  for (const row of value.owned) {
+    const recorded = trackedWindows.find(item => item.pid === row.pid)
+    if (recorded) assert.deepEqual(recorded, row, 'The owned client identity changed between checkpoints')
+    else trackedWindows.push(row)
+  }
   await writeFile(join(output, 'windows-process-checkpoint.json'), JSON.stringify(value, null, 2) + '\n')
   guestIdentityRecorded = true
 }
@@ -127,7 +131,7 @@ try{
  assert.equal((await fetch(config.fixtureBase+'/checkpoint',{method:'POST',body:JSON.stringify({stage:'capture-only-passed',platform:process.platform,architecture:process.arch,checks})})).status,200);
  let go=false;for(let index=0;index<1800;index++){if(await(await fetch(config.fixtureBase+'/begin')).text()==='go'){go=true;break}await delay(300)}assert.ok(go,'Explicit Mac input gate was not opened');
  frame=await driver.observe(target.id);const point=name=>({x:(config.points[name].x-frame.geometry.x)*frame.width/frame.geometry.width,y:(config.points[name].y-frame.geometry.y)*frame.height/frame.geometry.height});
- const before=await state();await driver.lease(1);
+ const before=await state();assert.equal(before.text,'','The disposable field changed during setup; no input was started');await driver.lease(1);
  await driver.act(1,target.id,{kind:'click',...point('button')});await delay(100);assert.equal((await state()).counts.clicks,before.counts.clicks+1);check('REVERSE-ACTUAL-MAC-CLICK');
  await driver.act(1,target.id,{kind:'click',...point('text')});await driver.act(1,target.id,{kind:'type',text:'Windows to Mac 中文🙂'});await delay(150);assert.equal((await state()).text,'Windows to Mac 中文🙂');check('REVERSE-ACTUAL-MAC-UNICODE');
  await driver.act(1,target.id,{kind:'key',key:'CMD+A'});await driver.act(1,target.id,{kind:'type',text:'replaced'});assert.equal((await state()).text,'replaced');check('REVERSE-MAC-SHORTCUT');
@@ -159,7 +163,7 @@ try {
   await mkdir(join(fixtureContents, 'MacOS'), { recursive: true })
   await writeFile(join(fixtureContents, 'Info.plist'), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${fixtureBundleId}</string><key>CFBundleName</key><string>QiuYaTools Reverse Fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
   await run('/usr/bin/swiftc', ['-swift-version', '5', '-framework', 'AppKit', '-module-cache-path', '/private/tmp/qiuya-remote-swift-cache', fixtureSource, '-o', executable], { timeout: 60000 })
-  fixture = spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'] }); fixture.stderr.resume(); fixture.stdin.on('error', () => {})
+  fixture = spawn(executable, ['--defer-activation'], { stdio: ['pipe', 'pipe', 'pipe'] }); fixture.stderr.resume(); fixture.stdin.on('error', () => {})
   fixtureExit = new Promise(done => { fixture.once('exit', (code, signal) => done({ code, signal })); fixture.once('error', error => done({ error: error.message })) })
   const queued = [], waiting = [], transcript = []
   fixtureLines = createInterface({ input: fixture.stdout })

@@ -31,7 +31,9 @@ final class Fixture: NSObject, NSApplicationDelegate {
         textField.placeholderString = "Disposable test text only"; textField.setAccessibilityIdentifier("qiuya-e2e-text")
         label.frame = NSRect(x: 40, y: 410, width: 550, height: 24)
         window.contentView!.addSubview(label); window.contentView!.addSubview(button); window.contentView!.addSubview(textField)
-        window.acceptsMouseMovedEvents = true; window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        window.acceptsMouseMovedEvents = true; window.center()
+        if CommandLine.arguments.contains("--defer-activation") { window.orderFront(nil) }
+        else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .keyDown, .scrollWheel, .mouseMoved]) { event in
             let key: String
             switch event.type { case .leftMouseDown: key = "mouseDown"; case .leftMouseUp: key = "mouseUp"; case .leftMouseDragged: key = "dragged"; case .keyDown: key = "keys"; case .scrollWheel: key = "scrolls"; default: key = "moves" }
