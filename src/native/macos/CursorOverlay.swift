@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 import Foundation
 
 enum NativeLeaseActor: String {
@@ -114,6 +115,36 @@ enum NativeLeaseActor: String {
         CGRect(x: point.x - 10, y: point.y - 10, width: 50, height: 58).intersection(target)
     }
 
+    static func isSystemCursorWindow(layer: CGWindowLevel?, ownerPID: pid_t?,
+        verifyOwner: (pid_t) -> Bool = verifiedWindowServer) -> Bool {
+        guard layer == CGWindowLevelForKey(.cursorWindow), let ownerPID, ownerPID > 0 else { return false }
+        return verifyOwner(ownerPID)
+    }
+
+    nonisolated private static func verifiedWindowServer(_ pid: pid_t) -> Bool {
+        // WindowServer's real cursor is also a CG window, above the target. Only
+        // this exact system executable at the exact cursor layer is excluded;
+        // another application's floating or cursor-level window still occludes.
+        func processPath() -> String? {
+            var buffer = [CChar](repeating: 0, count: 4096)
+            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+            return String(validatingUTF8: buffer)
+        }
+        guard let path = processPath() else { return false }
+        var executable = stat()
+        guard stat(path, &executable) == 0, executable.st_uid == 0,
+              (executable.st_mode & S_IFMT) == S_IFREG else { return false }
+        let systemPaths = ["/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+            "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"]
+        let trusted = systemPaths.contains { path in
+            var system = stat()
+            return stat(path, &system) == 0 && system.st_uid == 0 && (system.st_mode & S_IFMT) == S_IFREG &&
+                executable.st_dev == system.st_dev && executable.st_ino == system.st_ino
+        }
+        // Re-read instead of caching a bare PID, which could have been reused.
+        return trusted && processPath() == path
+    }
+
     private func beginWatching() {
         guard timer == nil else { return }
         let source = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
@@ -178,6 +209,8 @@ enum NativeLeaseActor: String {
                     abs(rect.minX - target.frame.minX) < 1 && abs(rect.minY - target.frame.minY) < 1 &&
                     abs(rect.width - target.frame.width) < 1 && abs(rect.height - target.frame.height) < 1
             }
+            if Self.isSystemCursorWindow(layer: (item[kCGWindowLayer as String] as? NSNumber)?.int32Value,
+                ownerPID: (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value) { continue }
             if firstCovering == nil, rect.contains(point), (item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0 { firstCovering = id }
         }
         return targetValid && firstCovering == target.windowId

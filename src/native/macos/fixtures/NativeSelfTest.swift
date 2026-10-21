@@ -12,6 +12,12 @@ import Foundation
         precondition(AICursorOverlay.rasterPoint(scaledPoint, geometry: scaled) == CGPoint(x: 800, y: 400), "AI cursor uses screenshot scale and negative display coordinates")
         let edge = AICursorOverlay.clippedFrame(at: CGPoint(x: -1279, y: 101), target: geometry.frame)
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
+        let cursorLayer = CGWindowLevelForKey(.cursorWindow)
+        precondition(AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { $0 == 415 }), "Only an independently verified system cursor owner is excluded")
+        precondition(!AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { _ in false }), "An unverified or spoofed cursor-level owner still occludes")
+        precondition(!AICursorOverlay.isSystemCursorWindow(layer: CGWindowLevelForKey(.floatingWindow), ownerPID: 415, verifyOwner: { _ in true }), "Other system and application layers still occlude")
+        precondition(!AICursorOverlay.isSystemCursorWindow(layer: nil, ownerPID: 415, verifyOwner: { _ in true }) &&
+            !AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: nil, verifyOwner: { _ in true }), "Incomplete cursor-window identity never bypasses occlusion")
         let defaultActor = try NativeLeaseActor.parse(nil), humanActor = try NativeLeaseActor.parse("human")
         precondition(defaultActor == .ai && humanActor == .human)
         for invalid: Any in [true, 0, "Human", "", NSNull()] {
