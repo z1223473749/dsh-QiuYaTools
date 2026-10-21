@@ -127,43 +127,103 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
-func accessibilityText(_ target: NativeTarget) -> String {
-    guard AXIsProcessTrusted() else { return "Accessibility permission is not granted." }
-    let app = AXUIElementCreateApplication(target.pid)
-    AXUIElementSetMessagingTimeout(app, 0.25)
-    var windowValue: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowValue) == .success,
-          let windows = windowValue as? [AXUIElement] else { return "No accessibility windows are available." }
-    var chosen: AXUIElement?
+/// All AXUIElements are created, used and released inside one detached read.
+/// The observe admission gate remains held while awaiting this task, including
+/// cancellation: a timed-out AX call is never abandoned to start another read.
+func accessibilityText(_ target: NativeTarget) async -> String {
+    let pid = target.pid, frame = target.frame
+    return await accessibilityTextOffMain(pid: pid, frame: frame) { .native() }
+}
+
+/// A small typed read seam keeps deadline/privacy tests independent of real
+/// applications, permission APIs, AppKit windows and injected input.
+enum AccessibilityReadValue<Element> {
+    case text(String), point(CGPoint), size(CGSize), elements([Element])
+}
+struct AccessibilityReadBackend<Element> {
+    let trusted: () -> Bool
+    let application: (pid_t) -> Element
+    let setTimeout: (Element, Float) -> Void
+    let attribute: (Element, String) -> AccessibilityReadValue<Element>?
+    let identity: (Element) -> CFHashCode
+}
+extension AccessibilityReadBackend where Element == AXUIElement {
+    static func native() -> Self {
+        Self(trusted: { AXIsProcessTrusted() }, application: { AXUIElementCreateApplication($0) },
+             setTimeout: { element, seconds in AXUIElementSetMessagingTimeout(element, seconds) }, attribute: { element, name in
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success, let value else { return nil }
+            if name == kAXWindowsAttribute || name == kAXChildrenAttribute {
+                guard let elements = value as? [AXUIElement] else { return nil }
+                return .elements(elements)
+            }
+            if name == kAXPositionAttribute || name == kAXSizeAttribute {
+                guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+                let ax = value as! AXValue
+                if name == kAXPositionAttribute, AXValueGetType(ax) == .cgPoint {
+                    var point = CGPoint.zero; guard AXValueGetValue(ax, .cgPoint, &point) else { return nil }; return .point(point)
+                }
+                if name == kAXSizeAttribute, AXValueGetType(ax) == .cgSize {
+                    var size = CGSize.zero; guard AXValueGetValue(ax, .cgSize, &size) else { return nil }; return .size(size)
+                }
+                return nil
+            }
+            return (value as? String).map { .text($0) }
+        }, identity: { CFHash($0) })
+    }
+}
+
+func accessibilityTextOffMain<Element>(pid: pid_t, frame: CGRect, budget: TimeInterval = 0.8,
+    now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    backend: @escaping () -> AccessibilityReadBackend<Element>) async -> String {
+    let worker = Task.detached(priority: .userInitiated) {
+        autoreleasepool { readAccessibilityText(pid: pid, frame: frame, budget: budget, now: now, backend: backend()) }
+    }
+    return await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+}
+
+private func readAccessibilityText<Element>(pid: pid_t, frame: CGRect, budget: TimeInterval,
+    now: () -> TimeInterval, backend: AccessibilityReadBackend<Element>) -> String {
+    let deadline = now() + max(0, budget)
+    func permitted() -> Bool { !Task.isCancelled && now() < deadline }
+    guard permitted(), backend.trusted(), permitted() else { return "Accessibility permission is not granted." }
+    let app = backend.application(pid)
+    func read(_ element: Element, _ name: String) -> AccessibilityReadValue<Element>? {
+        guard permitted() else { return nil }
+        // AX messaging timeouts are advisory; an in-flight OS call cannot be
+        // safely killed. Recheck the total budget after it, discard late data,
+        // and start no more reads. MainActor remains free throughout the call.
+        let remaining = deadline - now()
+        guard remaining > 0, !Task.isCancelled else { return nil }
+        backend.setTimeout(element, Float(min(0.25, remaining)))
+        guard permitted() else { return nil }
+        let value = backend.attribute(element, name)
+        return permitted() ? value : nil
+    }
+    guard case .elements(let windows)? = read(app, kAXWindowsAttribute) else { return "No accessibility windows are available." }
+    var chosen: Element?
     for window in windows {
-        var position: CFTypeRef?; var size: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position)
-        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size)
-        if let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() {
-            var p = CGPoint.zero; var s = CGSize.zero
-            AXValueGetValue(position as! AXValue, .cgPoint, &p); AXValueGetValue(size as! AXValue, .cgSize, &s)
-            if abs(p.x - target.frame.minX) < 3, abs(p.y - target.frame.minY) < 3,
-               abs(s.width - target.frame.width) < 3, abs(s.height - target.frame.height) < 3 { chosen = window; break }
-        }
+        guard permitted() else { break }
+        guard case .point(let p)? = read(window, kAXPositionAttribute),
+              case .size(let s)? = read(window, kAXSizeAttribute) else { continue }
+        if abs(p.x - frame.minX) < 3, abs(p.y - frame.minY) < 3,
+           abs(s.width - frame.width) < 3, abs(s.height - frame.height) < 3 { chosen = window; break }
     }
     guard let root = chosen else { return "The selected window has no matching accessibility tree." }
-    var lines: [String] = []; var visited = Set<CFHashCode>(); let deadline = Date().addingTimeInterval(0.8)
-    func walk(_ element: AXUIElement, _ depth: Int) {
-        guard depth < 9, lines.count < 160, Date() < deadline, visited.insert(CFHash(element)).inserted else { return }
+    var lines: [String] = []; var visited = Set<CFHashCode>()
+    func walk(_ element: Element, _ depth: Int) {
+        guard depth < 9, lines.count < 160, permitted(), visited.insert(backend.identity(element)).inserted else { return }
         var values: [String] = []
-        var roleValue: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &roleValue)
-        let secure = (roleValue as? String) == "AXSecureTextField"
+        let secure: Bool
+        if case .text(let role)? = read(element, kAXSubroleAttribute) { secure = role == "AXSecureTextField" } else { secure = false }
         for name in secure ? [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute] : [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
-            var value: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success, let text = value as? String, !text.isEmpty {
+            if case .text(let text)? = read(element, name), !text.isEmpty {
                 let safe = text.replacingOccurrences(of: "\n", with: " ")
                 if !values.contains(safe) { values.append(String(safe.prefix(300))) }
             }
         }
         if !values.isEmpty { lines.append(String(repeating: "  ", count: depth) + values.joined(separator: " | ")) }
-        var children: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success, let children = children as? [AXUIElement] {
+        if case .elements(let children)? = read(element, kAXChildrenAttribute) {
             for child in children.prefix(80) { walk(child, depth + 1) }
         }
     }

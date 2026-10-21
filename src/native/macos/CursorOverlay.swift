@@ -14,6 +14,129 @@ enum NativeLeaseActor: String {
     }
 }
 
+/// Only this process's one matched NSCursor hide/unhide is owned here. Global
+/// cursor visibility cannot identify another application's hide count.
+@MainActor struct CursorCounterBackend {
+    let unsupportedReason: String?
+    let ownsConnection: () -> Bool
+    let setBackground: (Bool) -> Bool
+    let property: () -> Bool?
+    let hide: () -> Void
+    let unhide: () -> Void
+    let diagnostic: () -> [String: Any]
+
+    static func native() -> CursorCounterBackend {
+        typealias ConnectionFn = @convention(c) () -> Int32
+        typealias OwnerFn = @convention(c) (Int32, UnsafeMutablePointer<pid_t>) -> Int32
+        typealias SetFn = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        typealias CopyFn = @convention(c) (Int32, Int32, CFString, UnsafeMutablePointer<Unmanaged<CFTypeRef>?>) -> Int32
+        func unsupported(_ reason: String) -> CursorCounterBackend {
+            CursorCounterBackend(unsupportedReason: reason, ownsConnection: { false }, setBackground: { _ in false }, property: { nil }, hide: {}, unhide: {}, diagnostic: { ["supported": false, "reason": reason] })
+        }
+        let handle = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let connectionSymbol = dlsym(handle, "CGSMainConnectionID") ?? dlsym(handle, "_CGSDefaultConnection"),
+              let ownerSymbol = dlsym(handle, "CGSConnectionGetPID"), let setterSymbol = dlsym(handle, "CGSSetConnectionProperty"),
+              let copySymbol = dlsym(handle, "CGSCopyConnectionProperty") else { return unsupported("BACKGROUND_CURSOR_SPI_UNAVAILABLE") }
+        let connection = unsafeBitCast(connectionSymbol, to: ConnectionFn.self), owner = unsafeBitCast(ownerSymbol, to: OwnerFn.self)
+        let setter = unsafeBitCast(setterSymbol, to: SetFn.self), copy = unsafeBitCast(copySymbol, to: CopyFn.self), cid = connection()
+        let owns = { () -> Bool in var pid: pid_t = 0; return cid > 0 && connection() == cid && owner(cid, &pid) == 0 && pid == getpid() }
+        guard owns() else { return unsupported("BACKGROUND_CURSOR_CONNECTION_UNVERIFIED") }
+        var last: [String: Any] = ["supported": true, "cid": cid, "property": NSNull(), "copyCode": NSNull(), "spi": true]
+        // ABI and Copy ownership follow the original CGSInternal declaration.
+        // No Get fallback or numeric truthiness is accepted.
+        return CursorCounterBackend(unsupportedReason: nil, ownsConnection: owns, setBackground: { enabled in
+            guard owns() else { return false }
+            let code = setter(cid, cid, "SetsCursorInBackground" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse)
+            last["setCode"] = code; return code == 0
+        }, property: {
+            guard owns() else { last["property"] = NSNull(); return nil }
+            var output: Unmanaged<CFTypeRef>?
+            let code = copy(cid, cid, "SetsCursorInBackground" as CFString, &output); last["copyCode"] = code; last["property"] = NSNull()
+            guard code == 0, let output else { return nil }
+            let value = output.takeRetainedValue()
+            guard CFGetTypeID(value) == CFBooleanGetTypeID(), owns() else { return nil }
+            let result = CFBooleanGetValue((value as! CFBoolean)); last["property"] = result; return result
+        }, hide: { NSCursor.hide() }, unhide: { NSCursor.unhide() }, diagnostic: { last })
+    }
+}
+
+@MainActor final class SystemCursorSuppression {
+    struct Owner: Equatable { let epoch: Int; let leaseOwnerId: String; let targetId: String }
+    private let backend: CursorCounterBackend
+    private(set) var phase: String
+    private(set) var ownsHide = false
+    private(set) var ownsProperty = false
+    private(set) var owner: Owner?
+    private var interruptedEpoch: Int?
+    private var reason: String?
+    var onTransition: (([String: Any]) -> Void)?
+    init(backend: CursorCounterBackend) { self.backend = backend; phase = backend.unsupportedReason == nil ? "idle" : "unsupported"; reason = backend.unsupportedReason }
+    var clear: Bool { !ownsHide && !ownsProperty }
+    var available: Bool { phase != "unsupported" }
+    func interrupted(_ epoch: Int) -> Bool { interruptedEpoch == epoch }
+    func beginLease(_ epoch: Int) { if interruptedEpoch != epoch { interruptedEpoch = nil } }
+    private func change(_ value: String, _ cause: String? = nil) {
+        if phase == value && reason == cause { return }
+        phase = value; reason = cause; onTransition?(snapshot)
+    }
+    var snapshot: [String: Any] {
+        ["phase": phase, "supported": available, "ownedHideCount": ownsHide ? 1 : 0, "propertyOwned": ownsProperty,
+         "epoch": owner?.epoch as Any? ?? NSNull(), "targetId": owner?.targetId as Any? ?? NSNull(),
+         "reason": reason as Any? ?? NSNull(), "interruptedEpoch": interruptedEpoch as Any? ?? NSNull(), "backend": backend.diagnostic()]
+    }
+    @discardableResult func activate(_ next: Owner, eligible: () -> Bool) -> Bool {
+        guard next.epoch >= 0, !next.leaseOwnerId.isEmpty, !next.targetId.isEmpty, available, !interrupted(next.epoch), eligible() else { return false }
+        if owner == next && ownsHide {
+            guard phase == "hidden" else { return false }
+            guard backend.ownsConnection() else { _ = restore("connection-changed"); return false }
+            return true
+        }
+        if !clear && !restore("owner-transition") { return false }
+        guard backend.ownsConnection() else { change("unsupported", "BACKGROUND_CURSOR_CONNECTION_UNVERIFIED"); return false }
+        guard eligible() else { return false }
+        // This dedicated helper is the only user of this own-connection key.
+        // An observed pre-existing true value is nevertheless not ours to
+        // reset. An absent key may read unknown until the first own setter.
+        guard backend.property() != true else { change("unsupported", "BACKGROUND_CURSOR_PROPERTY_ALREADY_SET"); return false }
+        guard eligible() else { return false }
+        owner = next; change("arming")
+        // Retain possible property ownership even when a setter fails. No Hide
+        // is allowed until the synchronous same-connection CFBoolean fence.
+        ownsProperty = true
+        guard backend.setBackground(true), backend.property() == true, backend.ownsConnection() else {
+            if restore("property-before-hide-unconfirmed") { change("unsupported", "BACKGROUND_CURSOR_PROPERTY_UNCONFIRMED") }
+            return false
+        }
+        guard eligible(), !interrupted(next.epoch) else { _ = restore("authorization-changed-before-hide"); return false }
+        ownsHide = true; backend.hide()
+        let stillEligible = eligible()
+        guard stillEligible, ownsHide, owner == next, !interrupted(next.epoch) else { _ = restore("authorization-changed-after-hide"); return false }
+        change("hidden")
+        return true
+    }
+    @discardableResult func interrupt(_ epoch: Int, reason: String) -> Bool {
+        if let owner, owner.epoch != epoch { return clear }
+        interruptedEpoch = epoch
+        return restore(reason)
+    }
+    @discardableResult func restore(_ cause: String, expectedOwner: Owner? = nil) -> Bool {
+        if let expectedOwner, owner != expectedOwner { return clear }
+        if clear { owner = nil; if phase != "unsupported" { change("idle") }; return true }
+        change("restoring", cause)
+        if ownsHide {
+            guard backend.ownsConnection(), backend.property() == true else { change("blocked", "CURSOR_PRE_UNHIDE_UNCONFIRMED"); return false }
+            // This invocation cannot be replayed, even if the subsequent
+            // property reset or its readback fails.
+            backend.unhide(); ownsHide = false
+        }
+        if ownsProperty {
+            guard backend.ownsConnection(), backend.setBackground(false), backend.property() == false else { change("blocked", "CURSOR_PROPERTY_RESET_UNCONFIRMED"); return false }
+            ownsProperty = false
+        }
+        owner = nil; change("idle"); return true
+    }
+}
+
 /// This panel is a visual receipt of actual AI pointer input. It never receives
 /// focus, hit tests, or input, and is separate from the user's real OS cursor.
 @MainActor private final class AICursorPanel: NSPanel {
@@ -67,6 +190,7 @@ enum NativeLeaseActor: String {
 }
 
 @MainActor final class AICursorOverlay {
+    private let suppression: SystemCursorSuppression
     private var panel: AICursorPanel?
     private var arrowView: AICursorView?
     private var timer: Timer?
@@ -78,10 +202,44 @@ enum NativeLeaseActor: String {
     private var phase = "hidden"
     private var point = CGPoint.zero
     private var pendingReadback = false
+    private var restorationTimer: Timer?
+    private var restorationStarted: TimeInterval?
+    private var restorationGeneration: UInt64 = 0
+    private var restorationFailureReported = false
+    private var sessionInactive = false
     var isLeaseCurrent: ((Int) -> Bool)?
+    var physicalLeaseOwner: ((Int) -> String?)?
+    var onRestorationFailure: (() -> Void)?
+    var onSuppressionTransition: (([String: Any]) -> Void)?
+
+    convenience init(backend: CursorCounterBackend? = nil) { self.init(suppression: SystemCursorSuppression(backend: backend ?? .native())) }
+    init(suppression: SystemCursorSuppression) {
+        self.suppression = suppression
+        suppression.onTransition = { [weak self] value in self?.onSuppressionTransition?(value) }
+    }
+    func beginLease(_ epoch: Int) { sessionInactive = !Self.sessionActive(); suppression.beginLease(epoch) }
+    var restorationComplete: Bool { suppression.clear }
+    var restorationBlocked: Bool { !suppression.clear && suppression.phase != "hidden" }
+    @discardableResult func humanIntervened(_ epoch: Int) -> Bool {
+        // A real intervention can arrive after the physical lease but before
+        // the first posted point/panel. Latch that owner without requiring UI.
+        guard isLeaseCurrent?(epoch) == true, let ownerId = physicalLeaseOwner?(epoch), !ownerId.isEmpty else { return suppression.clear }
+        if let owner = suppression.owner, owner.epoch != epoch || owner.leaseOwnerId != ownerId { return suppression.clear }
+        _ = suppression.interrupt(epoch, reason: "human-input")
+        return hide()
+    }
+
+    func withdrawForPointerReadback(epoch: Int, targetId: String) {
+        panel?.orderOut(nil)
+        guard let owner = suppression.owner, owner.epoch == epoch, owner.targetId == targetId else { return }
+        // Pending cursor-position delivery may postpone drawing, never the
+        // restoration of a cursor whose visual replacement is now absent.
+        maintainRestoration(suppression.restore("pointer-readback-mismatch", expectedOwner: owner))
+    }
 
     /// Called only after CGEvent.post. A requested endpoint alone is never shown.
     func posted(_ requested: CGPoint, phase: String, epoch: Int, target: NativeTarget) {
+        guard isLeaseCurrent?(epoch) == true, let ownerId = physicalLeaseOwner?(epoch), !ownerId.isEmpty, !suppression.interrupted(epoch) else { return }
         if self.epoch != epoch || self.target?.id != target.id || self.target?.frame != target.frame {
             hide()
             self.epoch = epoch; self.target = target
@@ -103,19 +261,43 @@ enum NativeLeaseActor: String {
         refresh()
     }
 
-    func hide() {
+    @discardableResult func hide() -> Bool {
         timer?.invalidate(); timer = nil
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         workspaceObservers.removeAll()
         panel?.orderOut(nil); panel?.close(); panel = nil; arrowView = nil
         target = nil; epoch = nil; postedPoints.removeAll(); pendingReadback = false; phase = "hidden"
+        let restored = suppression.restore("overlay-hidden")
+        maintainRestoration(restored)
+        return restored
+    }
+
+    private func maintainRestoration(_ restored: Bool) {
+        if restored {
+            restorationGeneration &+= 1
+            restorationTimer?.invalidate(); restorationTimer = nil; restorationStarted = nil; restorationFailureReported = false
+            return
+        }
+        guard restorationTimer == nil, !restorationFailureReported else { return }
+        restorationGeneration &+= 1; let generation = restorationGeneration, pendingOwner = suppression.owner
+        restorationStarted = ProcessInfo.processInfo.systemUptime
+        // This timer deliberately survives panel/target/visual-timer teardown.
+        let source = Timer(timeInterval: 0.025, repeats: true) { [weak self] _ in MainActor.assumeIsolated {
+            guard let self, self.restorationGeneration == generation else { return }
+            if self.suppression.restore("pending-restoration", expectedOwner: pendingOwner) { self.maintainRestoration(true); return }
+            if ProcessInfo.processInfo.systemUptime - (self.restorationStarted ?? 0) >= 0.5 {
+                self.restorationTimer?.invalidate(); self.restorationTimer = nil; self.restorationFailureReported = true
+                self.onRestorationFailure?()
+            }
+        } }
+        restorationTimer = source; RunLoop.main.add(source, forMode: .common)
     }
 
     func desktopSnapshot() -> [String: Any] {
         refresh()
         return ["x": point.x, "y": point.y, "visible": panel?.isVisible == true,
             "actor": "ai", "phase": phase, "epoch": epoch as Any? ?? NSNull(),
-            "targetId": target?.id as Any? ?? NSNull(), "coordinateSpace": "desktop"]
+            "targetId": target?.id as Any? ?? NSNull(), "coordinateSpace": "desktop", "systemCursorSuppression": suppression.snapshot]
     }
 
     func snapshot(target expected: NativeTarget, geometry: FrameGeometry) -> [String: Any] {
@@ -123,7 +305,7 @@ enum NativeLeaseActor: String {
         let visible = panel?.isVisible == true && target?.id == expected.id && target?.frame == geometry.frame
         let local = Self.rasterPoint(point, geometry: geometry)
         var result: [String: Any] = ["x": local.x, "y": local.y, "visible": visible,
-            "actor": "ai", "phase": visible ? phase : "hidden"]
+            "actor": "ai", "phase": visible ? phase : "hidden", "systemCursorSuppression": suppression.snapshot]
         if let epoch { result["epoch"] = epoch }
         return result
     }
@@ -171,15 +353,22 @@ enum NativeLeaseActor: String {
 
     private func beginWatching() {
         guard timer == nil else { return }
+        let watchedEpoch = epoch
         let source = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
         timer = source; RunLoop.main.add(source, forMode: .common)
         for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
-                     NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.screensDidSleepNotification] {
+                     NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    if name == NSWorkspace.screensDidSleepNotification { self?.hide() } else { self?.refresh() }
+                    guard let self, self.epoch == watchedEpoch else { return }
+                    if [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification].contains(name) {
+                        self.sessionInactive = true
+                        if let epoch = self.epoch { _ = self.suppression.interrupt(epoch, reason: "session-inactive") }
+                        self.hide()
+                    } else { self.refresh() }
                 }
             })
         }
@@ -187,13 +376,13 @@ enum NativeLeaseActor: String {
 
     private func refresh() {
         guard let target, let epoch else { return }
-        guard isLeaseCurrent?(epoch) == true, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
+        guard !sessionInactive, Self.sessionActive(), isLeaseCurrent?(epoch) == true, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
               let actual = CGEvent(source: nil)?.location else { hide(); return }
         let matchesPosted = postedPoints.contains { hypot($0.x - actual.x, $0.y - actual.y) <= 1.5 }
         if !matchesPosted {
             // Event posting is asynchronous. Wait briefly for the real cursor,
             // but never draw at the requested future point during that interval.
-            panel?.orderOut(nil)
+            withdrawForPointerReadback(epoch: epoch, targetId: target.id)
             if !pendingReadback || ProcessInfo.processInfo.systemUptime - lastPostedAt > 0.12 { hide() }
             return
         }
@@ -202,6 +391,17 @@ enum NativeLeaseActor: String {
         point = actual
         let clipped = Self.clippedFrame(at: actual, target: target.frame)
         guard !clipped.isNull, !clipped.isEmpty else { hide(); return }
+        guard let ownerId = physicalLeaseOwner?(epoch), !ownerId.isEmpty else { hide(); return }
+        do {
+            _ = suppression.activate(.init(epoch: epoch, leaseOwnerId: ownerId, targetId: target.id)) { [weak self] in
+                guard let self, !self.sessionInactive, Self.sessionActive(), self.isLeaseCurrent?(epoch) == true,
+                      self.physicalLeaseOwner?(epoch) == ownerId, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
+                      let current = CGEvent(source: nil)?.location, hypot(current.x - actual.x, current.y - actual.y) <= 1.5 else { return false }
+                return self.targetOwnsVisiblePoint(target, point: current)
+            }
+            maintainRestoration(suppression.clear || suppression.phase == "hidden")
+            guard suppression.phase != "blocked" else { hide(); return }
+        }
         if panel == nil {
             let view = AICursorView(frame: .zero)
             let overlay = AICursorPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -218,6 +418,14 @@ enum NativeLeaseActor: String {
         arrowView?.tip = CGPoint(x: actual.x - clipped.minX, y: actual.y - clipped.minY)
         arrowView?.needsDisplay = true
         panel?.orderFrontRegardless()
+    }
+
+    private static func sessionActive() -> Bool {
+        guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
+              (state[kCGSessionOnConsoleKey as String] as? Bool) == true,
+              let uid = state[kCGSessionUserIDKey as String] as? NSNumber, uid.uint32Value == getuid(),
+              (state["CGSSessionScreenIsLocked"] as? Bool) != true else { return false }
+        return true
     }
 
     private func targetOwnsVisiblePoint(_ target: NativeTarget, point: CGPoint) -> Bool {

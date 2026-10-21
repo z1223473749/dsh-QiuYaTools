@@ -13,6 +13,7 @@ import Foundation
         let edge = AICursorOverlay.clippedFrame(at: CGPoint(x: -1279, y: 101), target: geometry.frame)
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
         try approvedSmallGlyph()
+        try cursorSuppressionStateMachine()
         let cursorLayer = CGWindowLevelForKey(.cursorWindow)
         precondition(AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { $0 == 415 }), "Only an independently verified system cursor owner is excluded")
         precondition(!AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { _ in false }), "An unverified or spoofed cursor-level owner still occludes")
@@ -54,7 +55,164 @@ import Foundation
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }
         precondition(integer(true) == nil && integer(1.5) == nil && integer(-1) == nil && integer(4) == 4)
-        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+    }
+
+    @MainActor private static func cursorSuppressionStateMachine() throws {
+        final class Fake {
+            var calls = [String](), propertyValue: Bool? = false, connection = true, setWorks = true
+            var readOverride: ((Bool?) -> Bool?)?, onHide: (() -> Void)?
+            var backend: CursorCounterBackend {
+                CursorCounterBackend(unsupportedReason: nil, ownsConnection: { self.connection }, setBackground: { enabled in
+                    self.calls.append(enabled ? "set-true" : "set-false"); if self.setWorks { self.propertyValue = enabled }; return self.setWorks
+                }, property: { self.calls.append("copy"); if let readOverride = self.readOverride { return readOverride(self.propertyValue) }; return self.propertyValue },
+                hide: { self.calls.append("hide"); self.onHide?() }, unhide: { self.calls.append("unhide") }, diagnostic: { ["fake": true] })
+            }
+            var hides: Int { calls.filter { $0 == "hide" }.count }
+            var unhides: Int { calls.filter { $0 == "unhide" }.count }
+        }
+        let a = SystemCursorSuppression.Owner(epoch: 10, leaseOwnerId: "fake-owner-a", targetId: "own-window-a")
+        let b = SystemCursorSuppression.Owner(epoch: 11, leaseOwnerId: "fake-owner-b", targetId: "own-window-b")
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend)
+            precondition(c.clear && f.calls.isEmpty, "Status/idle construction never hides")
+            precondition(!c.activate(a, eligible: { false }) && f.calls.isEmpty, "No cursor mutation without actual eligibility")
+            for _ in 0..<24 { precondition(c.activate(a, eligible: { true })) }
+            precondition(f.hides == 1 && c.ownsHide && c.ownsProperty, "One Hide for all events of the physical AI owner")
+            precondition(c.restore("release") && c.restore("EOF") && c.restore("termination"))
+            precondition(f.calls == ["copy", "set-true", "copy", "hide", "copy", "unhide", "set-false", "copy"], "The same-CID copy fences bracket a single matched counter pair")
+        }
+        do {
+            var mutations = 0
+            let backend = CursorCounterBackend(unsupportedReason: "SPI_UNAVAILABLE", ownsConnection: { false }, setBackground: { _ in mutations += 1; return false }, property: { nil }, hide: { mutations += 1 }, unhide: { mutations += 1 }, diagnostic: { [:] })
+            let c = SystemCursorSuppression(backend: backend)
+            precondition(!c.activate(a, eligible: { true }) && c.restore("normal-preview") && c.phase == "unsupported" && mutations == 0, "Unsupported capability does not break unrelated preview/input")
+        }
+        do {
+            let f = Fake(); f.connection = false; let c = SystemCursorSuppression(backend: f.backend)
+            precondition(!c.activate(a, eligible: { true }) && f.calls.isEmpty && c.phase == "unsupported", "An unverified connection is explicitly unsupported and never mutated")
+        }
+        do {
+            let f = Fake(); f.propertyValue = true; let c = SystemCursorSuppression(backend: f.backend)
+            precondition(!c.activate(a, eligible: { true }) && c.phase == "unsupported" && c.clear && f.calls == ["copy"], "Pre-existing true belongs to neither our counter nor our property cleanup")
+            precondition(c.restore("teardown") && f.calls == ["copy"], "Unsupported baseline must never be reset to false")
+        }
+        do {
+            let f = Fake(); f.readOverride = { _ in false }; let c = SystemCursorSuppression(backend: f.backend)
+            precondition(!c.activate(a, eligible: { true }) && f.hides == 0 && c.clear && c.phase == "unsupported", "Unconfirmed true is cleaned without Hide")
+        }
+        do {
+            let f = Fake(); f.readOverride = { _ in nil }; let c = SystemCursorSuppression(backend: f.backend)
+            precondition(!c.activate(a, eligible: { true }) && f.hides == 0 && c.ownsProperty && !c.ownsHide, "Unknown/non-Boolean readback never hides or forgets uncertain property cleanup")
+            f.readOverride = nil; precondition(c.restore("readback-recovered") && c.clear && f.unhides == 0)
+        }
+        do {
+            let f = Fake(); f.setWorks = false; let c = SystemCursorSuppression(backend: f.backend)
+            precondition(!c.activate(a, eligible: { true }) && f.hides == 0 && c.ownsProperty)
+            f.setWorks = true; precondition(c.restore("setter-recovered") && c.clear && f.unhides == 0)
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); var eligibilityChecks = 0
+            precondition(!c.activate(a, eligible: { eligibilityChecks += 1; return eligibilityChecks < 4 }))
+            precondition(f.hides == 0 && c.clear, "Authorization is rechecked after the property roundtrip")
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); var eligible = true
+            f.onHide = { eligible = false }
+            precondition(!c.activate(a, eligible: { eligible }) && f.hides == 1 && f.unhides == 1 && c.clear, "Post-Hide authorization loss immediately balances its own count")
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend)
+            precondition(c.activate(a, eligible: { true })); precondition(c.interrupt(10, reason: "human"))
+            precondition(!c.activate(a, eligible: { true }) && f.hides == 1, "Human intervention latches out later posted events of the same physical epoch")
+            c.beginLease(10); precondition(c.interrupted(10)); c.beginLease(11)
+            precondition(c.activate(b, eligible: { true }) && f.hides == 2)
+            _ = c.interrupt(10, reason: "stale-human-callback"); _ = c.restore("stale-timer", expectedOwner: a)
+            precondition(c.owner == b && c.ownsHide && f.unhides == 1, "Late old-owner callbacks cannot release the new owner")
+            precondition(c.restore("release-b"))
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend), overlay = AICursorOverlay(suppression: c)
+            let target = NativeTarget(id: a.targetId, appId: "own.fake", title: "own", pid: 99, windowId: 99, frame: CGRect(x: 0, y: 0, width: 640, height: 480), scale: 1)
+            overlay.isLeaseCurrent = { _ in false }; overlay.physicalLeaseOwner = { _ in "fake-owner-a" }
+            overlay.posted(.zero, phase: "moving", epoch: 10, target: target)
+            overlay.isLeaseCurrent = { _ in true }; overlay.physicalLeaseOwner = { _ in nil }
+            overlay.posted(.zero, phase: "moving", epoch: 10, target: target)
+            precondition(f.calls.isEmpty && c.clear, "Human actor, stale/absent physical lease and unowned status never mutate the cursor or create a panel")
+            overlay.isLeaseCurrent = { $0 == 10 }; overlay.physicalLeaseOwner = { $0 == 10 ? "fake-owner-a" : nil }
+            precondition(overlay.humanIntervened(10), "Human input before any panel/point still latches the real physical epoch")
+            overlay.posted(.zero, phase: "moving", epoch: 10, target: target)
+            precondition(c.interrupted(10) && f.calls.isEmpty, "A later first posted event of that epoch cannot Hide or create a panel")
+            c.beginLease(11); precondition(c.activate(b, eligible: { true }))
+            _ = overlay.humanIntervened(10)
+            precondition(c.ownsHide && c.owner == b && f.unhides == 0, "Stale old-epoch human callback cannot restore a new owner")
+            precondition(c.restore("test-end"))
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend), overlay = AICursorOverlay(suppression: c)
+            precondition(c.activate(a, eligible: { true }))
+            overlay.withdrawForPointerReadback(epoch: 9, targetId: a.targetId)
+            overlay.withdrawForPointerReadback(epoch: 10, targetId: "different-window")
+            precondition(c.ownsHide && f.unhides == 0, "Unknown/stale geometry cannot restore someone else's active cursor")
+            overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
+            precondition(c.clear && f.unhides == 1, "Pointer delivery delay restores immediately without waiting for the visual 120ms timeout")
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend), overlay = AICursorOverlay(suppression: c)
+            precondition(c.activate(a, eligible: { true })); f.setWorks = false
+            overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
+            precondition(!overlay.hide() && c.ownsProperty && f.unhides == 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { f.setWorks = true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            precondition(c.clear && overlay.restorationComplete && f.unhides == 1, "Independent restoration timer survives panel/target teardown and never repeats Unhide")
+            precondition(c.activate(b, eligible: { true }))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+            precondition(c.owner == b && c.ownsHide && f.unhides == 1, "A retired restoration timer cannot touch a later owner")
+            precondition(c.restore("test-end"))
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend), overlay = AICursorOverlay(suppression: c); var failures = 0
+            overlay.onRestorationFailure = { failures += 1 }
+            precondition(c.activate(a, eligible: { true })); f.readOverride = { _ in false }
+            overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.65))
+            precondition(failures == 1 && c.ownsHide && c.ownsProperty && f.unhides == 0, "Bounded recovery reports failure once without forgetting owned counter/property")
+            f.readOverride = nil; precondition(overlay.hide() && f.unhides == 1)
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); precondition(c.activate(a, eligible: { true }))
+            f.readOverride = { _ in false }
+            precondition(!c.restore("focus-loss") && c.ownsHide && c.ownsProperty && f.unhides == 0)
+            precondition(!c.activate(a, eligible: { true }), "An unrestored same owner cannot be reported active again")
+            precondition(!c.activate(b, eligible: { true }) && f.hides == 1, "An unconfirmed old owner blocks a new physical owner")
+            f.readOverride = nil; precondition(c.restore("pending-restoration") && c.clear && f.unhides == 1)
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); precondition(c.activate(a, eligible: { true }))
+            f.setWorks = false
+            precondition(!c.restore("sleep") && !c.ownsHide && c.ownsProperty && f.unhides == 1)
+            for _ in 0..<3 { precondition(!c.restore("pending-after-panel-closed")) }
+            precondition(f.unhides == 1, "Pending reset survives panel teardown without a second Unhide")
+            f.setWorks = true; precondition(c.restore("pending-restoration") && c.clear && f.unhides == 1)
+        }
+        do {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); precondition(c.activate(a, eligible: { true }))
+            f.readOverride = { value in value == false ? true : value }
+            precondition(!c.restore("session-inactive") && !c.ownsHide && c.ownsProperty)
+            f.readOverride = nil; precondition(c.restore("reset-readback-retry") && f.unhides == 1)
+        }
+        for reason in ["focus-loss", "geometry-change", "target-exit", "pending-pointer-timeout", "sleep", "session-inactive", "EOF", "action-error"] {
+            let f = Fake(), c = SystemCursorSuppression(backend: f.backend); precondition(c.activate(a, eligible: { true }))
+            precondition(c.restore(reason) && c.restore("termination") && f.hides == 1 && f.unhides == 1)
+        }
+        for (cursorOK, heldOK) in [(false, true), (true, false), (false, false), (true, true)] {
+            var sequence = [String]()
+            do {
+                try completeOwnedInputCleanup(restoreCursor: { sequence.append("cursor"); return cursorOK }, releaseHeld: { sequence.append("held"); if !heldOK { throw ComputerError("FAKE_HELD_FAILURE", "fake") } }, releaseDesktop: { sequence.append("unlock") })
+                precondition(cursorOK && heldOK)
+            } catch { precondition(!cursorOK || !heldOK) }
+            precondition(sequence == (cursorOK && heldOK ? ["cursor", "held", "unlock"] : ["cursor", "held"]), "All cleanup paths attempt held input but retain global guard on either failure")
+        }
     }
 
     @MainActor private static func approvedSmallGlyph() throws {

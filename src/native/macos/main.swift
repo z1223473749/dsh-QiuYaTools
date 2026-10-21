@@ -16,9 +16,13 @@ import ScreenCaptureKit
     private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        input.onCursorCleanupFailure = { [weak self] in
+            Wire.send(["event": "inputCleanupFailed", "code": "CURSOR_CLEANUP_FAILED"])
+            self?.shutdown()
+        }
         input.prepareFocus = { [weak self] in self?.preview?.window.resignKey() }
         input.preparePointerRegion = { [weak self] points in try self?.preview?.avoidPointerPath(points) }
-        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .mouseMoved,
+        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged, .mouseMoved,
             .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
         globalInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in self?.humanInput(event) }
         localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in self?.humanInput(event); return event }
@@ -56,7 +60,7 @@ import ScreenCaptureKit
     private func humanInput(_ event: NSEvent) {
         guard let cgEvent = event.cgEvent,
               cgEvent.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) else { return }
-        input.hideAICursor()
+        input.humanInputDetected()
         guard let epoch = input.fence.active else { return }
         let escape = event.type == .keyDown && event.keyCode == 53
         let previewPointer: Bool
@@ -143,9 +147,11 @@ import ScreenCaptureKit
                     let cursor = CGEvent(source: nil)?.location ?? CGPoint(x: -1, y: -1)
                     let localX = (cursor.x - target.frame.minX) * Double(frame.width) / target.frame.width
                     let localY = (cursor.y - target.frame.minY) * Double(frame.height) / target.frame.height
+                    let elements = command["preview"] as? Bool == true || command["includeElements"] as? Bool == false ? "" : await accessibilityText(target)
+                    guard !closing else { return }
                     Wire.success(requestId, ["targetId": id, "frameId": "\(generation):\(frame.sequence)", "imageBase64": frame.jpeg.base64EncodedString(),
                         "mediaType": "image/jpeg", "width": frame.width, "height": frame.height,
-                        "elements": command["preview"] as? Bool == true || command["includeElements"] as? Bool == false ? "" : accessibilityText(target),
+                        "elements": elements,
                         "geometry": ["x": target.frame.minX, "y": target.frame.minY, "width": target.frame.width, "height": target.frame.height,
                                      "scale": target.scale],
                         "cursor": ["x": localX, "y": localY, "visible": target.frame.contains(cursor)],
@@ -169,12 +175,16 @@ import ScreenCaptureKit
         if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
         globalInputMonitor = nil; localInputMonitor = nil
-        if let epoch = input.fence.active { try? input.release(epoch) }
-        input.hideAICursor(); try? input.releaseHeldInput(); preview?.close(); preview = nil
+        do { try input.shutdownCleanup() }
+        catch { Wire.send(["event": "inputCleanupFailed", "code": (error as? ComputerError)?.code ?? "INPUT_CLEANUP_FAILED"]) }
+        preview?.close(); preview = nil
         Task { @MainActor in await capture.stop(); NSApp.terminate(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
     }
-    func applicationWillTerminate(_ notification: Notification) { input.hideAICursor(); try? input.releaseHeldInput() }
+    func applicationWillTerminate(_ notification: Notification) {
+        do { try input.shutdownCleanup() }
+        catch { Wire.send(["event": "inputCleanupFailed", "code": (error as? ComputerError)?.code ?? "INPUT_CLEANUP_FAILED"]) }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 

@@ -19,6 +19,17 @@ final class EpochFence {
     }
 }
 
+/// Never let cursor restoration failure bypass owned key/button cleanup, or
+/// unlock the desktop before both independent cleanup boundaries succeed.
+@MainActor func completeOwnedInputCleanup(restoreCursor: () -> Bool, releaseHeld: () throws -> Void, releaseDesktop: () throws -> Void) throws {
+    let cursorRestored = restoreCursor()
+    var cleanupError: Error?
+    do { try releaseHeld() } catch { cleanupError = error }
+    if !cursorRestored { throw ComputerError("CURSOR_CLEANUP_FAILED", "The owned cursor restoration is not confirmed. Control remains blocked.") }
+    if let cleanupError { throw cleanupError }
+    try releaseDesktop()
+}
+
 @MainActor final class NativeInput {
     let fence = EpochFence()
     private let eventSource = CGEventSource(stateID: .hidSystemState)
@@ -31,8 +42,15 @@ final class EpochFence {
     private lazy var aiPointer: AICursorOverlay = {
         let overlay = AICursorOverlay()
         overlay.isLeaseCurrent = { [weak self] epoch in self?.fence.active == epoch && self?.leaseActor == .ai }
+        overlay.physicalLeaseOwner = { [weak self] epoch in
+            guard let self, self.fence.active == epoch, self.leaseActor == .ai else { return nil }
+            return self.desktopLease?.ownerId
+        }
+        overlay.onSuppressionTransition = { value in Wire.send(["event": "cursorSuppression", "state": value]) }
+        overlay.onRestorationFailure = { [weak self] in self?.onCursorCleanupFailure?() }
         return overlay
     }()
+    var onCursorCleanupFailure: (() -> Void)?
     var preparePointerRegion: (([CGPoint]) throws -> Void)?
     var prepareFocus: (() -> Void)?
     private(set) var busy = false
@@ -65,19 +83,24 @@ final class EpochFence {
 
     func lease(_ epoch: Int, actor: NativeLeaseActor = .ai) throws {
         guard epoch > fence.highest else { throw ComputerError("STALE_EPOCH", "The control lease is stale.") }
+        guard aiPointer.hide() else { throw ComputerError("CURSOR_CLEANUP_FAILED", "The previous cursor owner has not been restored. Control remains blocked.") }
         if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
         try desktopLease!.acquire()
         do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
-        aiPointer.hide(); leaseActor = actor
+        leaseActor = actor; aiPointer.beginLease(epoch)
     }
     func release(_ epoch: Int) throws {
         let wasActive = fence.active.map { $0 <= epoch } ?? false
         fence.release(epoch)
         if wasActive || (fence.active == nil && desktopLease?.ownerId != nil) {
-            aiPointer.hide()
-            try releaseHeldInput()
-            try desktopLease?.release()
+            try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
         }
+    }
+    func shutdownCleanup() throws {
+        // A failed action may already have revoked its epoch while still
+        // retaining the physical lock. Shutdown must clean that owner too.
+        fence.release(max(0, fence.highest))
+        try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
     }
 
     func act(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any]) async throws -> [String: Any] {
@@ -88,18 +111,23 @@ final class EpochFence {
             aiPointer.settled(epoch: epoch)
             return result
         } catch {
-            if fence.active == epoch { aiPointer.hide() }
+            let cursorRestored = fence.active == epoch ? aiPointer.hide() : aiPointer.restorationComplete
             if ownsInput { do { try releaseHeldInput() } catch { fence.release(epoch); throw error } }
+            if !cursorRestored { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "The owned cursor restoration is not confirmed. Control remains blocked.") }
             throw error
         }
     }
 
-    func hideAICursor() { aiPointer.hide() }
+    @discardableResult func hideAICursor() -> Bool { aiPointer.hide() }
+    func humanInputDetected() {
+        if let epoch = fence.active { _ = aiPointer.humanIntervened(epoch) } else { aiPointer.hide() }
+    }
     var aiCursorState: [String: Any] { aiPointer.desktopSnapshot() }
     func aiCursor(target: NativeTarget, geometry: FrameGeometry) -> [String: Any] { aiPointer.snapshot(target: target, geometry: geometry) }
 
     private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)
+        guard !aiPointer.restorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; no new input is permitted.") }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for QiuYaTools Computer in System Settings.") }
         guard !busy else { throw ComputerError("INPUT_BUSY", "Another input action is still settling.") }
         guard target.frame == geometry.frame else { throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.") }
@@ -214,6 +242,7 @@ final class EpochFence {
 
     private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry) throws {
         try fence.check(epoch)
+        guard !aiPointer.restorationBlocked else { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The target application lost focus; input stopped.") }
         guard let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, target.windowId) as? [[String: Any]],
               let item = info.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId }),
