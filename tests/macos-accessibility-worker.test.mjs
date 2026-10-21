@@ -17,7 +17,7 @@ test('macOS detached AX reads leave MainActor release/restore responsive and pre
     const binary = join(directory, 'ax-worker-selftest')
     await execute('/usr/bin/swiftc', ['-O', '-swift-version', '5', '-parse-as-library', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx13.0`,
       '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'ApplicationServices', '-framework', 'CoreImage', '-framework', 'CoreMedia',
-      '-module-cache-path', join(directory, 'module-cache'), ...['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'CursorOverlay.swift', 'Input.swift', 'fixtures/AccessibilityWorkerSelfTest.swift'].map(name => join(source, name)), '-o', binary], { timeout: 90_000 })
+      '-module-cache-path', join(directory, 'module-cache'), ...['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'OperationBadge.swift', 'CursorOverlay.swift', 'FocusPreparation.swift', 'Input.swift', 'fixtures/AccessibilityWorkerSelfTest.swift'].map(name => join(source, name)), '-o', binary], { timeout: 90_000 })
     const { stdout } = await execute(binary, [], { timeout: 15_000 })
     const report = JSON.parse(stdout)
     assert.equal(report.passed, true)

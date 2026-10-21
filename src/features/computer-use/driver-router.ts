@@ -1,7 +1,7 @@
 import { NativeCompanionDriver } from './native.ts'
 import { RemoteComputerDriver, type RemoteComputerOptions } from './remote.ts'
 import { BrowserSession, BrowserDeviceDriver, type BrowserOptions } from './browser.ts'
-import { ComputerError, type DeviceDriver, type NativeComputerEvent, type ComputerAction, type NativeTarget } from './contract.ts'
+import { ComputerError, type ComputerSystemPermission, type DeviceDriver, type NativeComputerEvent, type ComputerAction, type NativeTarget } from './contract.ts'
 import type { ExchangeResult } from './exchange.ts'
 
 /** Switching is performed only after the Host has stopped every active session. */
@@ -94,8 +94,17 @@ export class ComputerDriverRouter implements DeviceDriver {
       finally { this.candidates.delete(next) }
     }, signal)
   }
+  get requiresOwnerReconnect(): boolean { return (this.current as DeviceDriver & { requiresOwnerReconnect?: boolean }).requiresOwnerReconnect === true }
+  acknowledgeOwnerReconnect(): void { (this.current as DeviceDriver & { acknowledgeOwnerReconnect?(): void }).acknowledgeOwnerReconnect?.() }
   status(signal?: AbortSignal) { this.assertLive(); const current = this.current, mode = this.mode; return current.status(signal).then(status => ({ ...status, mode })) }
   targets(signal?: AbortSignal) { this.assertLive(); return this.current.targets(signal) }
+  applications(signal?: AbortSignal) {
+    this.assertLive()
+    if (this.current.applications) return this.current.applications(signal)
+    return this.current.targets(signal).then(targets => [...new Map(targets.map(target => [target.appId, { appId: target.appId, name: this.mode === 'browser' ? '浏览器' : target.appId, running: true, launchable: false }])).values()])
+  }
+  launchApplication(appId: string, signal?: AbortSignal) { this.assertLive(); if (!this.current.launchApplication) throw new ComputerError('APPLICATION_LAUNCH_UNSUPPORTED', '请先手动打开该应用'); return this.current.launchApplication(appId, signal) }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) { this.assertLive(); if (!this.local.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '此设备不支持直接打开系统设置'); return this.local.openSystemSettings(kind, signal) }
   async exchange(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> {
     this.assertLive()
     const current = this.current as DeviceDriver & { exchange?(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> }, generation = this.generation

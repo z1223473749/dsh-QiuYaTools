@@ -51,8 +51,16 @@ final class EpochFence {
         return overlay
     }()
     var onCursorCleanupFailure: (() -> Void)?
+    private lazy var operationBadge: AIOperationBadge = {
+        let badge = AIOperationBadge()
+        badge.isLeaseCurrent = { [weak self] epoch in self?.fence.active == epoch && self?.leaseActor == .ai && self?.desktopLease?.ownerId != nil }
+        return badge
+    }()
+    var aiOperationState: [String: Any] { operationBadge.snapshot }
     var preparePointerRegion: (([CGPoint]) throws -> Void)?
     var prepareFocus: (() -> Void)?
+    private var humanInputGeneration: UInt64 = 0
+    private(set) var focusAttempt: [String: Any]?
     private(set) var busy = false
     var inputState: [String: Any] { ["mouseHeld": heldMouse != nil, "keysHeld": heldKeys.count, "ownerId": desktopLease?.ownerId as Any? ?? NSNull(),
         "leftButtonDown": CGEventSource.buttonState(.combinedSessionState, button: .left)] }
@@ -87,12 +95,13 @@ final class EpochFence {
         if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
         try desktopLease!.acquire()
         do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
-        leaseActor = actor; aiPointer.beginLease(epoch)
+        leaseActor = actor; aiPointer.beginLease(epoch); operationBadge.beginLease(epoch)
     }
     func release(_ epoch: Int) throws {
         let wasActive = fence.active.map { $0 <= epoch } ?? false
         fence.release(epoch)
         if wasActive || (fence.active == nil && desktopLease?.ownerId != nil) {
+            operationBadge.hide()
             try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
         }
     }
@@ -100,10 +109,12 @@ final class EpochFence {
         // A failed action may already have revoked its epoch while still
         // retaining the physical lock. Shutdown must clean that owner too.
         fence.release(max(0, fence.highest))
+        operationBadge.hide()
         try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
     }
 
     func act(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any]) async throws -> [String: Any] {
+        defer { operationBadge.hide(epoch: epoch) }
         var ownsInput = false
         do {
             let result = try await performAct(epoch: epoch, target: target, geometry: geometry, action: action, started: { ownsInput = true })
@@ -120,7 +131,8 @@ final class EpochFence {
 
     @discardableResult func hideAICursor() -> Bool { aiPointer.hide() }
     func humanInputDetected() {
-        if let epoch = fence.active { _ = aiPointer.humanIntervened(epoch) } else { aiPointer.hide() }
+        humanInputGeneration &+= 1
+        if let epoch = fence.active { operationBadge.interrupt(epoch); _ = aiPointer.humanIntervened(epoch) } else { operationBadge.hide(); aiPointer.hide() }
     }
     var aiCursorState: [String: Any] { aiPointer.desktopSnapshot() }
     func aiCursor(target: NativeTarget, geometry: FrameGeometry) -> [String: Any] { aiPointer.snapshot(target: target, geometry: geometry) }
@@ -153,12 +165,20 @@ final class EpochFence {
         busy = true
         started()
         defer { busy = false }
+        let expectedHumanInputGeneration = humanInputGeneration
+        let preparationCheckpoint = { [unowned self] in
+            try self.fence.check(epoch)
+            guard self.humanInputGeneration == expectedHumanInputGeneration else {
+                throw ComputerError("HUMAN_INPUT_INTERRUPTED", "Human input interrupted focus preparation; no input was posted.")
+            }
+            guard !self.aiPointer.restorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
+        }
         prepareFocus?()
         if let point = start { try preparePointerRegion?(destination.map { [point, $0] } ?? [point]) }
-        guard let application = NSRunningApplication(processIdentifier: target.pid), !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited.") }
-        application.activate(options: [.activateIgnoringOtherApps])
-        raiseWindow(target)
-        try await Task.sleep(nanoseconds: 80_000_000)
+        let focusBackend = try FocusPreparationBackend.native(target: target, geometry: geometry, checkpoint: preparationCheckpoint)
+        try await BoundedFocusPreparation.run(targetPid: target.pid, backend: focusBackend, checkpoint: preparationCheckpoint,
+            record: { [unowned self] in self.focusAttempt = $0 })
+        try preparationCheckpoint()
         try check(epoch, target, geometry)
         lastPid = target.pid
         // Record the entire action's possible downs before the first injected down.
@@ -192,6 +212,7 @@ final class EpochFence {
             // Protocol follows browser wheel semantics: positive is right/down.
             guard let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .pixel, wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx), wheel3: 0) else { throw ComputerError("EVENT_FAILED", "Could not create a scroll event.") }
             postPointer(event)
+            focusAttempt?["inputPosted"] = true
         case "type":
             // Use Unicode events, never the user's clipboard. Split on Characters so
             // surrogate pairs and composed graphemes are not broken between events.
@@ -203,7 +224,7 @@ final class EpochFence {
                 down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 down.flags = []; up.flags = []
-                down.postToPid(target.pid); heldKeys.insert(0)
+                down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(0); operationBadge.posted(epoch: epoch, target: target)
                 try check(epoch, target, geometry)
                 up.postToPid(target.pid); heldKeys.remove(0)
                 try await Task.sleep(nanoseconds: 1_000_000)
@@ -214,7 +235,7 @@ final class EpochFence {
             guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: false) else { throw ComputerError("EVENT_FAILED", "Could not create a key event.") }
             down.flags = combination.1; up.flags = []
-            down.postToPid(target.pid); heldKeys.insert(combination.0)
+            down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(combination.0); operationBadge.posted(epoch: epoch, target: target)
             try await Task.sleep(nanoseconds: 25_000_000)
             try check(epoch, target, geometry)
             up.postToPid(target.pid); heldKeys.remove(combination.0)
@@ -230,6 +251,8 @@ final class EpochFence {
         lastPoint = point
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         postPointer(event)
+        focusAttempt?["inputPosted"] = true
+        operationBadge.posted(epoch: epoch, target: target)
         if leaseActor == .ai {
             let pressed = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
             aiPointer.posted(point, phase: pressed ? "pressed" : "moving", epoch: epoch, target: target)
@@ -252,28 +275,6 @@ final class EpochFence {
               abs(current.width - geometry.frame.width) < 1, abs(current.height - geometry.frame.height) < 1 else {
             aiPointer.hide()
             throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.")
-        }
-    }
-}
-
-func raiseWindow(_ target: NativeTarget) {
-    let app = AXUIElementCreateApplication(target.pid)
-    AXUIElementSetMessagingTimeout(app, 0.2)
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success, let windows = value as? [AXUIElement] else { return }
-    for window in windows {
-        var position: CFTypeRef?; var size: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position)
-        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size)
-        guard let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { continue }
-        var p = CGPoint.zero; var s = CGSize.zero
-        AXValueGetValue(position as! AXValue, .cgPoint, &p); AXValueGetValue(size as! AXValue, .cgSize, &s)
-        if abs(p.x - target.frame.minX) < 3, abs(p.y - target.frame.minY) < 3, abs(s.width - target.frame.width) < 3, abs(s.height - target.frame.height) < 3 {
-            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-            AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-            AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, window)
-            return
         }
     }
 }

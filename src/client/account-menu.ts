@@ -13,6 +13,21 @@ interface AccountMenuServices {
 }
 
 type OpenSection = (id: string) => void
+const computerNavigation = new WeakMap<object, { pending: boolean; listeners: Set<() => void> }>()
+function navigation(ctx: object) { let value = computerNavigation.get(ctx); if (!value) { value = { pending: false, listeners: new Set() }; computerNavigation.set(ctx, value) } return value }
+export function consumeComputerSettingsNavigation(ctx: object): boolean { const value = navigation(ctx), pending = value.pending; value.pending = false; return pending }
+export function subscribeComputerSettingsNavigation(ctx: object, listener: () => void): () => void { const value = navigation(ctx); value.listeners.add(listener); return () => { value.listeners.delete(listener) } }
+/** Open the verified public Settings section, then its own computer tab. */
+export function openComputerSettings(ctx: Context): boolean {
+  const slots = (ctx as unknown as AccountMenuServices).slots
+  if (!slots || typeof slots.entriesOfSlot !== 'function') return false
+  const open = settingsSectionOpener(slots)
+  if (!open) return false
+  const value = navigation(ctx); value.pending = true
+  for (const listener of value.listeners) listener()
+  open(SETTINGS_ID)
+  return true
+}
 
 /** The shipped Settings shell exposes its existing root instance through this public store seat. */
 export function settingsSectionOpener(slots: AccountMenuServices['slots']): OpenSection | undefined {

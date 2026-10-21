@@ -1,5 +1,5 @@
 /** Local-only deterministic provider for the installed Harness UI E2E runner. */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 export const name = 'qiuya-harness-e2e-provider'
 export const inject = ['llm']
@@ -8,12 +8,12 @@ const model = 'fixture'
 const plan = '# E2E 测试计划\n\n检查真实会话和插件菜单。\n\n验证批注会提交为新的提示，不覆盖原有草稿。'
 const metadata = { provider, id: model, name: 'QiuYa 本地测试模型', inputModalities: ['text', 'image'], context: { contextWindow: 128000 }, defaultMaxTokens: 4096, systemPromptUpdate: 'in-history' }
 const textOf = message => (message?.content ?? []).filter(block => block.type === 'text').map(block => block.text).join('\n')
-export const HARNESS_COMPUTER_DIAGNOSTIC_CODES = Object.freeze(['UNKNOWN_ERROR_CODE', 'SNAPSHOT_UNAVAILABLE', 'RPC_STATUS_FAILED', 'SESSION_MISMATCH', 'ACCESSIBILITY_REQUIRED', 'SCREEN_RECORDING_REQUIRED', 'CAPTURE_BUSY', 'CAPTURE_CHANGED', 'CAPTURE_START_FAILED', 'CAPTURE_STOPPED', 'CAPTURE_TIMEOUT', 'DESKTOP_BUSY', 'DESKTOP_LEASE_REQUIRED', 'DESKTOP_LOCK_FAILED', 'EVENT_FAILED', 'FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'INPUT_BUSY', 'INPUT_CLEANUP_FAILED', 'INPUT_JOURNAL_FAILED', 'INPUT_JOURNAL_INVALID', 'INVALID_ACTION', 'INVALID_ACTOR', 'INVALID_COORDINATES', 'INVALID_EPOCH', 'INVALID_KEY', 'INVALID_TARGET', 'NATIVE_FAILURE', 'OBSERVATION_REQUIRED', 'PREVIEW_OVERLAP', 'STALE_EPOCH', 'TARGETS_UNAVAILABLE', 'TARGET_GONE', 'CONTROL_CHANGED', 'DISABLED', 'DISPOSED', 'SESSION_NOT_STARTED', 'NATIVE_LEASE_UNRELEASED', 'APP_NOT_ALLOWED', 'DEVICE_BUSY', 'NOT_READY', 'TARGET_NOT_FOUND', 'TARGET_CHANGED', 'STALE_OBSERVATION', 'OUT_OF_BOUNDS', 'ACTION_ID_CONFLICT', 'QUEUE_FULL', 'NATIVE_CLEANUP_FAILED', 'NATIVE_PIPE_FAILED', 'NATIVE_UNAVAILABLE', 'NATIVE_EXITED', 'NATIVE_TIMEOUT', 'NATIVE_PROTOCOL', 'NATIVE_PROTOCOL_VERSION', 'ABORTED', 'CODE_RUN_FAILED', 'TOOL_OUTPUT_INVALID', 'UNKNOWN_TOOL', 'invalid-target', 'target-unavailable', 'target-changed', 'capture-busy', 'geometry-changed', 'capture-unavailable', 'capture-timeout', 'invalid-epoch', 'input-cleanup-failed', 'human-monitor-unavailable', 'human-input-pending', 'stale-epoch', 'invalid-actor', 'foreground-changed', 'input-denied', 'input-busy', 'observation-required', 'foreground-denied'])
+export const HARNESS_COMPUTER_DIAGNOSTIC_CODES = Object.freeze(['UNKNOWN_ERROR_CODE', 'COMPUTER_ENTRY_FAILED', 'SESSION_REQUIRED', 'CALLER_NOT_LIVE', 'DELEGATED_CALLER', 'OWNER_RESUME_REQUIRED', 'OWNER_SWITCH_REQUIRED', 'REQUEST_CANCELLED', 'REQUEST_EXPIRED', 'REQUEST_STALE', 'CANDIDATE_EXPIRED', 'CALL_REPLAY_MISMATCH', 'REQUEST_LIMIT', 'REQUEST_PENDING', 'APPROVAL_DISABLED', 'APP_DENIED', 'DISCOVERY_UNAVAILABLE', 'SYSTEM_PERMISSION_REQUIRED', 'APPLICATION_WINDOW_REQUIRED', 'APPLICATION_UNAVAILABLE', 'APPLICATION_LAUNCH_UNSUPPORTED', 'APPLICATION_LAUNCH_UNCONFIRMED', 'SESSION_LIMIT', 'ENVIRONMENT_RETIRING', 'INVALID_REQUEST', 'SNAPSHOT_UNAVAILABLE', 'RPC_STATUS_FAILED', 'SESSION_MISMATCH', 'ACCESSIBILITY_REQUIRED', 'SCREEN_RECORDING_REQUIRED', 'CAPTURE_BUSY', 'CAPTURE_CHANGED', 'CAPTURE_START_FAILED', 'CAPTURE_STOPPED', 'CAPTURE_TIMEOUT', 'DESKTOP_BUSY', 'DESKTOP_LEASE_REQUIRED', 'DESKTOP_LOCK_FAILED', 'EVENT_FAILED', 'FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'INPUT_BUSY', 'INPUT_CLEANUP_FAILED', 'INPUT_JOURNAL_FAILED', 'INPUT_JOURNAL_INVALID', 'INVALID_ACTION', 'INVALID_ACTOR', 'INVALID_COORDINATES', 'INVALID_EPOCH', 'INVALID_KEY', 'INVALID_TARGET', 'NATIVE_FAILURE', 'OBSERVATION_REQUIRED', 'PREVIEW_OVERLAP', 'STALE_EPOCH', 'TARGETS_UNAVAILABLE', 'TARGET_GONE', 'CONTROL_CHANGED', 'DISABLED', 'DISPOSED', 'SESSION_NOT_STARTED', 'NATIVE_LEASE_UNRELEASED', 'APP_NOT_ALLOWED', 'DEVICE_BUSY', 'NOT_READY', 'TARGET_NOT_FOUND', 'TARGET_CHANGED', 'STALE_OBSERVATION', 'OUT_OF_BOUNDS', 'ACTION_ID_CONFLICT', 'QUEUE_FULL', 'NATIVE_CLEANUP_FAILED', 'NATIVE_PIPE_FAILED', 'NATIVE_UNAVAILABLE', 'NATIVE_EXITED', 'NATIVE_TIMEOUT', 'NATIVE_PROTOCOL', 'NATIVE_PROTOCOL_VERSION', 'ABORTED', 'CODE_RUN_FAILED', 'TOOL_OUTPUT_INVALID', 'UNKNOWN_TOOL', 'invalid-target', 'target-unavailable', 'target-changed', 'capture-busy', 'geometry-changed', 'capture-unavailable', 'capture-timeout', 'invalid-epoch', 'input-cleanup-failed', 'human-monitor-unavailable', 'human-input-pending', 'stale-epoch', 'invalid-actor', 'foreground-changed', 'input-denied', 'input-busy', 'observation-required', 'foreground-denied'])
 /** Only failed computer-tool receipts in this model request. Text, keys,
  * URLs, replay state and arbitrary exception fields are never persisted. */
 export function projectHarnessComputerToolErrors(messages) {
   const calls = new Map(), result = []
-  for (const message of messages.slice(-128)) if (message.role === 'assistant') for (const block of message.content ?? []) if (block.type === 'tool-call' && ['run_code', 'qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause', 'qiuya_computer_status'].includes(block.name)) calls.set(block.id, block.name)
+  for (const message of messages.slice(-128)) if (message.role === 'assistant') for (const block of message.content ?? []) if (block.type === 'tool-call' && ['run_code', 'qiuya_computer_discover', 'qiuya_computer_request_control', 'qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause', 'qiuya_computer_status'].includes(block.name)) calls.set(block.id, block.name)
   for (const message of messages.slice(-128)) {
     const tool = calls.get(message.toolCallId ?? message.source?.callId)
     if (message.role !== 'tool' || message.isError !== true || !tool) continue
@@ -58,6 +58,7 @@ export async function captureHarnessComputerDiagnostic({ sessionId, codes }) {
         lastObservation: observation ? { targetId: id(observation.targetId), frameId: id(observation.frameId), width: integer(observation.width), height: integer(observation.height), geometry: geometry(observation.geometry) } : null },
       native: { available: bool(native.available), platform: ['darwin', 'win32'].includes(native.platform) ? native.platform : null, mode: ['local', 'remote', 'browser'].includes(native.mode) ? native.mode : null,
         permissions: Object.fromEntries(['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring'].map(key => [key, bool(native.permissions?.[key])])),
+        focusAttempt: native.focusAttempt ? { ...Object.fromEntries(['targetPid', 'beforePid', 'afterPid', 'settledMs', 'axSettableResult', 'axFrontmostResult', 'raiseResult'].map(key => [key, integer(native.focusAttempt[key])])), activationAccepted: bool(native.focusAttempt.activationAccepted), inputPosted: bool(native.focusAttempt.inputPosted) } : null,
         leaseReported: Object.hasOwn(native, 'leaseEpoch'), leaseEpoch: integer(native.leaseEpoch), leaseActor: ['ai', 'human'].includes(native.leaseActor) ? native.leaseActor : null,
         inputState: { reported: native.inputState !== undefined, mouseHeld: bool(native.inputState?.mouseHeld), keysHeld: integer(native.inputState?.keysHeld), leftButtonDown: bool(native.inputState?.leftButtonDown) } } }
   } catch { return { status: 'unavailable', code: 'SNAPSHOT_UNAVAILABLE' } }
@@ -113,25 +114,47 @@ export function apply(ctx) {
       } else if (text.startsWith('E2E:computer')) {
         const stage = submittedComputers.get(key) ?? 0
         const tools = options.tools ?? []
+        // The runner owns this synthetic target. It supplies only its fixture
+        // identity; all authority still comes from discover -> owner card ->
+        // request_control. This provider is a transport E2E, not real reasoning.
+        const fixtureTarget = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'e2e-computer-target.json'), 'utf8'))
+        const lastToolObject = () => {
+          for (const message of [...messages].reverse()) if (message.role === 'tool') {
+            for (const block of message.content ?? []) if (block.type === 'text') { try { return JSON.parse(block.text) } catch {} }
+          }
+        }
         if (stage === 0) {
           if (tools.some(tool => tool.name === 'run_code')) {
-            submittedComputers.set(key, 3)
-            yield *call('run_code', { code: "const before = await tools.qiuya_computer_observe({}); const action = await tools.qiuya_computer_act({frameId:before.frameId,actionId:'fixture-agent-move',action:{kind:'move',x:Math.floor(before.width/2),y:Math.floor(before.height/2)}}); const after = await tools.qiuya_computer_observe({}); return {action,after};", description: '观察本次授权的测试应用，移动指针，再检查画面' }); return
+            submittedComputers.set(key, 7)
+            const code = `const found = await tools.qiuya_computer_discover({query:${JSON.stringify(fixtureTarget.query)}}); const candidate = found.applications.find(app => app.appName === ${JSON.stringify(fixtureTarget.query)}); if (!candidate) throw new Error('E2E_APPLICATION_NOT_DISCOVERED'); const granted = await tools.qiuya_computer_request_control({candidateId:candidate.candidateId,reason:'在当前测试聊天操作本次专用测试窗口，验证图片与鼠标工具链'}); const windows = await tools.qiuya_computer_targets({}); if (!windows.targets.some(target => target.id === ${JSON.stringify(fixtureTarget.targetId)})) throw new Error('E2E_FIXTURE_TARGET_NOT_PERMITTED'); await tools.qiuya_computer_select({targetId:${JSON.stringify(fixtureTarget.targetId)}}); const before = await tools.qiuya_computer_observe({}); const action = await tools.qiuya_computer_act({frameId:before.frameId,actionId:'fixture-agent-move',action:{kind:'move',x:Math.floor(before.width/2),y:Math.floor(before.height/2)}}); const after = await tools.qiuya_computer_observe({}); return {granted,action,after};`
+            yield *call('run_code', { code, description: '从当前聊天发现测试应用，等待用户授权，再观察、操作和验证' }); return
           }
-          if (tools.some(tool => tool.name === 'qiuya_computer_observe')) { submittedComputers.set(key, 1); yield *call('qiuya_computer_observe', {}); return }
+          if (tools.some(tool => tool.name === 'qiuya_computer_discover')) { submittedComputers.set(key, 1); yield *call('qiuya_computer_discover', { query: fixtureTarget.query }); return }
           yield { type: 'text-delta', index: 0, text: 'E2E_COMPUTER_TOOL_UNAVAILABLE' }
         } else if (stage === 1) {
+          const discovery = lastToolObject(), candidate = discovery?.applications?.find(app => app.appName === fixtureTarget.query)
+          if (!candidate) { yield { type: 'text-delta', index: 0, text: 'E2E_APPLICATION_NOT_DISCOVERED' } }
+          else { submittedComputers.set(key, 2); yield *call('qiuya_computer_request_control', { candidateId: candidate.candidateId, reason: '在当前测试聊天操作本次专用测试窗口，验证图片与鼠标工具链' }); return }
+        } else if (stage === 2) {
+          submittedComputers.set(key, 3); yield *call('qiuya_computer_targets', {}); return
+        } else if (stage === 3) {
+          const targets = lastToolObject()?.targets ?? []
+          if (!targets.some(target => target.id === fixtureTarget.targetId)) { yield { type: 'text-delta', index: 0, text: 'E2E_FIXTURE_TARGET_NOT_PERMITTED' } }
+          else { submittedComputers.set(key, 4); yield *call('qiuya_computer_select', { targetId: fixtureTarget.targetId }); return }
+        } else if (stage === 4) {
+          submittedComputers.set(key, 5); yield *call('qiuya_computer_observe', {}); return
+        } else if (stage === 5) {
           const observationText = [...messages].reverse().filter(message => message.role === 'tool').map(textOf).join('\n')
           const frameId = observationText.match(/"frameId"\s*:\s*"([^"\\]+)"/u)?.[1]
           const image = images.at(-1)
           if (frameId && image && tools.some(tool => tool.name === 'qiuya_computer_act')) {
-            submittedComputers.set(key, 2)
+            submittedComputers.set(key, 6)
             yield *call('qiuya_computer_act', { frameId, actionId: 'fixture-agent-move', action: { kind: 'move', x: Math.floor(image.width / 2), y: Math.floor(image.height / 2) } }); return
           }
           yield { type: 'text-delta', index: 0, text: 'E2E_COMPUTER_FRAME_MISSING' }
-        } else if (stage === 2) {
+        } else if (stage === 6) {
           if (!actionResults.some(result => result.performed)) { yield { type: 'text-delta', index: 0, text: 'E2E_COMPUTER_ACTION_FAILED' }; yield { type: 'finish', reason: { kind: 'stop' } }; return }
-          submittedComputers.set(key, 3); yield *call('qiuya_computer_observe', {}); return
+          submittedComputers.set(key, 7); yield *call('qiuya_computer_observe', {}); return
         } else {
           yield { type: 'text-delta', index: 0, text: images.length ? `E2E_ADAPTER_IMAGE_CONFIRMED:${images.length}` : 'E2E_COMPUTER_IMAGE_MISSING' }
         }

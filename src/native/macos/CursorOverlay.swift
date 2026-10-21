@@ -437,7 +437,7 @@ enum NativeLeaseActor: String {
         var targetValid = false
         var firstCovering: CGWindowID?
         for item in windows {
-            guard let id = (item[kCGWindowNumber as String] as? NSNumber)?.uint32Value, id != ownId,
+            guard let id = (item[kCGWindowNumber as String] as? NSNumber)?.uint32Value, id != ownId, !AIOperationBadge.ownsWindow(id),
                   let bounds = item[kCGWindowBounds as String] as? [String: Any], let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
             if id == target.windowId {
                 targetValid = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == target.pid &&

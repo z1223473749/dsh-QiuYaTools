@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { ComputerApprovalCard, ComputerIcon, SystemPermissionNotice, computerApprovalNeedsSystemPermissions, computerStateLabels, type ComputerApprovalRequest, type ComputerDecision, type NativeApplication, type ComputerNativeView } from './presentation.tsx'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComputerSessionSnapshot, NativeTarget } from './contract.ts'
 import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.ts'
@@ -6,7 +8,10 @@ import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.t
 interface Rpc { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
 interface Catalog { list: { getSnapshot(): { ids: string[]; byId: Record<string, { displayTitle?: string; title?: string; blank?: boolean; origin?: string }> } } }
 const endpoint = 'qiuya-tools.computer.control'
-type NativeView = { permissions?: Record<string, boolean>; message?: string; mode?: 'local' | 'remote' | 'browser' }
+type NativeView = ComputerNativeView
+type Status = { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; pendingRequests?: ComputerApprovalRequest[]; native: NativeView | null; environments?: { sessionId?: string; mode: 'local' | 'remote' | 'browser'; previewDetached?: boolean }[] }
+const noSubscribe = () => () => {}
+const environmentName = { local: '这台电脑', remote: '独立电脑', browser: '独立浏览器' }
 function FileExchangePanel({ call }: { call(op: string, extra?: object): Promise<unknown> }) {
   const [listing, setListing] = useState<ExchangeResult>(), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const mounted = useRef(true)
@@ -79,86 +84,91 @@ function FileExchangePanel({ call }: { call(op: string, extra?: object): Promise
   </div>
 }
 export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Context; enabled: boolean; onEnabled(value: boolean): void; disabled: boolean }) {
-  const [targets, setTargets] = useState<NativeTarget[]>([]), [targetId, setTargetId] = useState('')
-  const [sessionId, setSessionId] = useState(() => typeof document === 'undefined' ? '' : document.querySelector('[data-conversation-session]')?.getAttribute('data-conversation-session') ?? '')
-  const [sessions, setSessions] = useState<ComputerSessionSnapshot[]>([]), [allowed, setAllowed] = useState<string[]>([])
-  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [native, setNative] = useState<NativeView | null>(), [fileGeneration, setFileGeneration] = useState(0)
-  const [chats, setChats] = useState<{ id: string; title: string }[]>([])
+  const currentSeat = (ctx.get('uiSession') as { adapter?: { current?: { subscribe(listener: () => void): () => void; getSnapshot(): { key?: string } } } } | undefined)?.adapter?.current
+  const activeSessionId = useSyncExternalStore(currentSeat ? listener => currentSeat.subscribe(listener) : noSubscribe, () => currentSeat?.getSnapshot().key, () => undefined)
+  const [status, setStatus] = useState<Status>({ sessions: [], allowedApps: [], native: null })
+  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [fileGeneration, setFileGeneration] = useState(0)
+  const [applications, setApplications] = useState<NativeApplication[]>([]), [addingApp, setAddingApp] = useState(false), [appId, setAppId] = useState('')
   const [mode, setMode] = useState<'local' | 'remote' | 'browser'>('local'), [endpointUrl, setEndpointUrl] = useState(''), [token, setToken] = useState(''), [allowPrivate, setAllowPrivate] = useState(false)
   const [browser, setBrowser] = useState<'chrome' | 'edge'>('chrome'), [origins, setOrigins] = useState(''), [initialUrl, setInitialUrl] = useState(''), [cdpEndpoint, setCdpEndpoint] = useState('')
-  const revision = useRef(0), mounted = useRef(true), performing = useRef(false)
+  const revision = useRef(0), mounted = useRef(true), performing = useRef(false), refreshSequence = useRef(0)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; revision.current++ } }, [])
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
     if (!connection) throw new Error('连接尚未就绪')
-    const response = await connection.rpc.call('/api', endpoint, { op, ...(sessionId ? { sessionId } : {}), ...extra })
+    const response = await connection.rpc.call('/api', endpoint, { op, ...extra })
     if (!response.ok) throw new Error(response.error?.message ?? '电脑操控请求失败')
     return response.value
   }
   const refresh = async () => {
-    const generation = revision.current
-    const result = await call('status') as { sessions: ComputerSessionSnapshot[]; allowedApps: string[]; native: NativeView | null }
-    if (!mounted.current || generation !== revision.current) return
-    setSessions(result.sessions); setAllowed(result.allowedApps); setNative(result.native)
-    const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
-    if (catalog) setChats(catalog.ids.filter(id => catalog.byId[id]?.origin !== 'subagent').map(id => ({ id, title: catalog.byId[id].displayTitle ?? catalog.byId[id].title ?? id })))
+    const generation = revision.current, sequence = ++refreshSequence.current, result = await call('status') as Status
+    if (!mounted.current || generation !== revision.current || sequence !== refreshSequence.current) return
+    setStatus(result)
   }
   useEffect(() => {
-    revision.current++; setTargets([]); setTargetId(''); setNative(undefined); setMessage(''); setToken(''); setEndpointUrl(''); setMode('local'); setBusy(false)
-    setFileGeneration(value => value + 1)
-    if (!enabled) return
+    revision.current++; performing.current = false; setMessage(''); setToken(''); setEndpointUrl(''); setMode('local'); setBusy(false); setFileGeneration(value => value + 1)
     let disposed = false
     const run = async () => { try { if (!disposed) await refresh() } catch (error) { if (!disposed) setMessage((error as Error).message) } }
     void run(); const timer = window.setInterval(() => { void run() }, 1500)
     return () => { disposed = true; window.clearInterval(timer) }
-  }, [enabled, sessionId])
-  const action = async (op: string, extra = {}) => {
+  }, [enabled, activeSessionId])
+  useEffect(() => {
+    if (!enabled) return
+    let disposed = false
+    // Application names are owner-only metadata; loading them never opens a
+    // control session or the manual add form. Keep identities if discovery fails.
+    void call('applications').then(result => { if (!disposed && mounted.current) setApplications(result as NativeApplication[]) }).catch(() => {})
+    return () => { disposed = true }
+  }, [enabled])
+  const action = async (op: string, extra: object = {}) => {
     if (performing.current) return
-    if (!sessionId) { setMessage('请先选择关联聊天。'); return }
-    performing.current = true
-    const generation = revision.current
-    setBusy(true); setMessage('')
+    performing.current = true; const generation = revision.current; setBusy(true); setMessage('')
     try {
-      const result = await call(op, extra)
-      if (!mounted.current || generation !== revision.current) return
-      if (op === 'connect') { setTargets([]); setTargetId(''); setFileGeneration(value => value + 1) }
-      if (op === 'targets') { const list = result as NativeTarget[]; setTargets(list); if (!list.some(t => t.id === targetId)) setTargetId(list[0]?.id ?? '') }
-      await refresh()
-    } catch (error) { if (mounted.current && generation === revision.current) setMessage((error as Error).message) }
-    finally { performing.current = false; if (mounted.current && generation === revision.current) setBusy(false) }
+      if (op !== 'refresh') {
+        const result = await call(op, extra)
+        if (!mounted.current || generation !== revision.current) return
+        if (op === 'applications') { const list = result as NativeApplication[]; setApplications(list); setAddingApp(true); setAppId(list[0]?.appId ?? '') }
+        if (op === 'connect') setFileGeneration(value => value + 1)
+      }
+      await refresh(); return true
+    } catch (error) { if (mounted.current && generation === revision.current) setMessage((error as Error).message); return false }
+    finally { if (mounted.current && generation === revision.current) { performing.current = false; setBusy(false) } }
   }
-  const current = sessions.find(item => item.sessionId === sessionId)
-  return <div className="qyt-feature-panel">
-    <div className="qyt-card"><div className="qyt-toggle-row"><h3>电脑操控</h3><label><input type="checkbox" checked={enabled} disabled={disabled} onChange={e => onEnabled(e.target.checked)}/> 启用</label></div>
-      <p className="qyt-muted">每个聊天都有独立的小预览、AI 指针和暂停状态，预览可随时弹出为大窗口或收回。当前聊天需选择支持图片输入的模型。</p>
-      {enabled && <><p>独立浏览器和远端环境可同时工作；操作同一台电脑时，鼠标和键盘按任务顺序执行。</p>
-        <div style={{ display: 'grid', gap: 12 }}>
-          <label>关联聊天 <select value={sessionId} disabled={busy} onChange={e => setSessionId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请选择聊天</option>{chats.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-          <label>操作环境 <select value={mode} onChange={e => setMode(e.target.value as 'local' | 'remote' | 'browser')}><option value="local">这台电脑</option><option value="remote">独立虚拟机或远端电脑</option><option value="browser">浏览器专用通道</option></select></label>
-          {mode === 'remote' && <><label>配对地址 <input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={e => setEndpointUrl(e.target.value)}/></label><label>配对密钥 <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)}/></label><label><input type="checkbox" checked={allowPrivate} onChange={e => setAllowPrivate(e.target.checked)}/> 允许通过受信任的私有网络连接（例如本机虚拟机）</label></>}
-          {mode === 'browser' && <><label>浏览器 <select value={browser} onChange={e => setBrowser(e.target.value as 'chrome' | 'edge')}><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option></select></label><label>允许的网站来源（每行一个）<textarea rows={3} value={origins} placeholder="https://example.com" onChange={e => setOrigins(e.target.value)}/></label><label>起始页面 <input type="url" value={initialUrl} placeholder="https://example.com/" onChange={e => setInitialUrl(e.target.value)}/></label><details><summary>连接已开启调试的浏览器</summary><label>本机调试地址（可选）<input type="url" value={cdpEndpoint} placeholder="http://127.0.0.1:9222" onChange={e => setCdpEndpoint(e.target.value)}/></label></details><p className="qyt-muted">默认打开独立的浏览器配置，可在其中登录。只允许列出的网站；修改后重新连接即生效。浏览器通道可在后台操作标签页。</p></>}
-          <button className="qyt-button" disabled={busy || !sessionId || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>为此聊天连接环境</button>
-          {sessionId && native?.mode && <p className="qyt-muted">此聊天已连接：{({ local: '这台电脑', remote: '远端电脑', browser: '独立浏览器' })[native.mode]}</p>}
-          {mode === 'remote' && native?.mode === 'remote' && !busy && <FileExchangePanel key={`${sessionId}:${fileGeneration}`} call={call}/>}
-          <label>应用窗口 <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ maxWidth: '100%' }}><option value="">请刷新窗口列表</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title || item.appId}</option>)}</select></label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="qyt-button" disabled={busy || !sessionId} onClick={() => { void action('targets') }}>刷新窗口</button>
-            <button className="qyt-button" disabled={busy || !sessionId || !targetId} onClick={() => { void action('start', { targetId }) }}>允许本次并开始</button>
-            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('preview') }}>弹出大预览</button>
-            <button className="qyt-button" disabled={busy || !current || current.state === 'stopped'} onClick={() => { void action('redock') }}>收回到聊天</button>
-            {(['pause', 'takeover', 'resume', 'stop'] as const).map((op, i) => <button className="qyt-button" key={op} disabled={busy || !current} onClick={() => { void action(op) }}>{['暂停', '接管', '继续', '停止'][i]}</button>)}
-          </div>
-          {current && <p role="status">{current.target?.title} · {current.state}{current.error ? ` · ${current.error.message}` : ''}</p>}
-        </div>
-        <div><strong>系统权限</strong>{native?.permissions && Object.entries(native.permissions).map(([key, granted]) => <p key={key}>{({ screenRecording: '屏幕录制', accessibility: '辅助功能', inputMonitoring: '输入监控' } as Record<string, string>)[key] ?? key}：{granted ? '已允许' : '未允许'}</p>)}{native?.message && <p>{native.message}</p>}</div>
-        <p className="qyt-muted">Mac 需要在系统设置中允许“QiuYaTools Computer”的屏幕录制和辅助功能。Windows 桌面操作会使用当前前台输入。收回预览和切换聊天会继续后台任务；直接关闭大预览会暂停对应任务。</p>
-      </>}
-      {message && <p role="alert">{message}</p>}
-    </div>
-    {enabled && <div className="qyt-card"><h4>始终允许的应用</h4><p className="qyt-muted">持续授权由你管理，撤销后立即停止该应用的操作。</p>
-      {targetId && targets.find(t => t.id === targetId) && <button className="qyt-button" disabled={busy} onClick={() => { void action('allow', { appId: targets.find(t => t.id === targetId)!.appId, allowed: true }) }}>始终允许所选应用</button>}
-      {allowed.map(appId => <p key={appId}>{appId} <button disabled={busy} onClick={() => { void action('allow', { appId, allowed: false }) }}>撤销</button></p>)}
-      {!allowed.length && <p>暂无持续授权</p>}
-    </div>}
+  const native = status.native, mac = native?.platform === 'darwin'
+  const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
+  const tasks = status.sessions.filter(item => item.state !== 'stopped')
+  const connected = status.environments?.find(item => item.sessionId === activeSessionId)
+  const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void action('decide', { sessionId: request.sessionId, requestId: request.requestId, requestVersion: request.requestVersion, decision }) }
+  return <div className="qyt-feature-panel qyt-computer-surface qyt-computer-panel">
+    <section className="qyt-card qyt-feature-summary">
+      <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><ComputerIcon/></span><h3>电脑操控</h3></div><Switch className="qyt-switch" checked={enabled} disabled={disabled} label="启用电脑操控" onChange={onEnabled}/></div>
+      <p className="qyt-muted">在聊天中说明任务，模型会自动请求所需应用。你确认授权后，它才会查看画面并开始操作。</p>
+      <div className="qyt-computer-summary-meta"><span className="qyt-computer-status-badge">{enabled ? '已启用' : '未启用'}</span><span className="qyt-computer-caption">随时暂停、人工接管，或把预览弹出为独立窗口。</span></div>
+    </section>
+    {enabled && status.pendingRequests?.map(request => <div key={request.requestId}><SystemPermissionNotice native={request.preflight} busy={busy} onOpenSettings={kind => { void action('openSettings', { kind, sessionId: request.sessionId }) }} onRefresh={() => { void action('refresh') }}/><ComputerApprovalCard request={request} busy={busy} allowDisabled={computerApprovalNeedsSystemPermissions(request.preflight)} onDecision={decision => decide(request, decision)}/></div>)}
+    <section className="qyt-card" aria-label="系统权限">
+      <div className="qyt-computer-section-heading"><div><h4>系统权限</h4><p className="qyt-muted">{!enabled ? '启用电脑操控后，可检查并设置系统权限。' : mac ? '授权在系统设置中完成，返回后重新检查即可。' : '检查这台电脑的可用状态。应用授权会在聊天中单独询问。'}</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('refresh') }}>重新检查</button></div>
+      {!enabled ? null : mac ? <SystemPermissionNotice native={native} busy={busy} full onOpenSettings={kind => { void action('openSettings', { kind }) }} onRefresh={() => { void action('refresh') }}/>
+        : <p className="qyt-muted">{native?.message || (native?.available ? '当前交互桌面已就绪。' : '正在检查本机状态…')}</p>}
+    </section>
+    <section className="qyt-card" aria-label="始终允许的应用">
+      <div className="qyt-computer-section-heading"><div><h4>始终允许的应用</h4><p className="qyt-muted">这些应用无需重复询问。撤销后会立即停止相应操作。</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('applications') }}>添加应用</button></div>
+      {addingApp && <form className="qyt-computer-add-application" onSubmit={event => { event.preventDefault(); if (appId) void action('allow', { appId, allowed: true }).then(accepted => { if (accepted) setAddingApp(false) }) }}><label>选择应用<select value={appId} disabled={busy} onChange={event => setAppId(event.target.value)}>{applications.map(app => <option key={app.appId} value={app.appId}>{app.name}</option>)}</select></label><button type="submit" className="qyt-button qyt-button-primary" disabled={busy || !appId}>始终允许</button><button type="button" className="qyt-button" onClick={() => setAddingApp(false)}>取消</button>{!applications.length && <p className="qyt-muted">暂无可添加的应用。请先打开需要操作的应用，再重新添加。</p>}</form>}
+      {status.allowedApps.length ? <div className="qyt-computer-permission-list">{status.allowedApps.map(id => <div className="qyt-computer-permission-row" key={id}><div><strong>{applications.find(app => app.appId === id)?.name || id}</strong><span className="qyt-computer-caption">持续授权</span></div><button type="button" className="qyt-button" disabled={busy} aria-label={`撤销 ${applications.find(app => app.appId === id)?.name || id}`} onClick={() => { void action('allow', { appId: id, allowed: false }) }}>撤销</button></div>)}</div> : <p className="qyt-computer-empty">暂无持续授权。模型首次使用应用时会向你询问。</p>}
+    </section>
+    <section className="qyt-card" aria-label="电脑任务概览"><div className="qyt-computer-section-heading"><div><h4>任务概览</h4><p className="qyt-muted">每个聊天都有独立的预览、授权和暂停状态。</p></div><span className="qyt-computer-status-badge">{tasks.length} 个任务</span></div>
+      {!tasks.length && <p className="qyt-computer-empty">还没有电脑任务。回到聊天，告诉模型你想完成什么。</p>}
+      {tasks.map(task => <div key={task.sessionId} className="qyt-computer-task" data-qyt-computer-session={task.sessionId} data-state={task.state}><div className="qyt-computer-section-heading"><div><strong>{catalog?.byId[task.sessionId]?.displayTitle ?? catalog?.byId[task.sessionId]?.title ?? '聊天任务'}</strong><p className="qyt-computer-caption">{task.target?.title || '等待应用授权'}</p></div><span className="qyt-computer-status-badge">{computerStateLabels[task.state] ?? '需要处理'}</span></div><div className="qyt-computer-actions">
+        <button type="button" className="qyt-button" disabled={busy} onClick={() => { void action(['paused', 'humanControl'].includes(task.state) ? 'resume' : 'pause', { sessionId: task.sessionId }) }}>{['paused', 'humanControl'].includes(task.state) ? '继续' : '暂停'}</button><button type="button" className="qyt-button" disabled={busy} onClick={() => { void action('preview', { sessionId: task.sessionId }) }}>弹出预览</button><button type="button" className="qyt-button" disabled={busy} onClick={() => { void action('redock', { sessionId: task.sessionId }) }}>收回聊天</button><button type="button" className="qyt-button" disabled={busy} onClick={() => { void action('stop', { sessionId: task.sessionId }) }}>停止</button>
+      </div>{task.error && <p className="qyt-computer-error" role="status">{task.error.message}</p>}</div>)}
+    </section>
+    <details className="qyt-card qyt-computer-advanced"><summary>高级操作环境<span>独立浏览器、虚拟机与远端电脑</span></summary><p className="qyt-muted">日常使用无需配置。{activeSessionId ? '以下环境仅用于当前聊天，不影响其他任务。' : '进入聊天后可为该聊天配置独立环境。'}</p><div className="qyt-computer-fields">
+      <label>操作环境<select value={mode} onChange={event => { setMode(event.target.value as typeof mode); setFileGeneration(value => value + 1) }}><option value="local">这台电脑</option><option value="remote">独立虚拟机或远端电脑</option><option value="browser">浏览器专用通道</option></select></label>
+      {mode === 'remote' && <><label>配对地址<input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={event => setEndpointUrl(event.target.value)}/></label><label>配对密钥<input type="password" autoComplete="off" value={token} onChange={event => setToken(event.target.value)}/></label><label className="qyt-computer-check"><input type="checkbox" checked={allowPrivate} onChange={event => setAllowPrivate(event.target.checked)}/>允许连接受信任的私有网络</label></>}
+      {mode === 'browser' && <><label>浏览器<select value={browser} onChange={event => setBrowser(event.target.value as typeof browser)}><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option></select></label><label>允许的网站来源（每行一个）<textarea rows={3} value={origins} placeholder="https://example.com" onChange={event => setOrigins(event.target.value)}/></label><label>起始页面<input type="url" value={initialUrl} placeholder="https://example.com/" onChange={event => setInitialUrl(event.target.value)}/></label><details><summary>连接现有浏览器</summary><label>本机调试地址（可选）<input type="url" value={cdpEndpoint} placeholder="http://127.0.0.1:9222" onChange={event => setCdpEndpoint(event.target.value)}/></label></details><p className="qyt-muted">默认打开独立浏览器配置，只访问你列出的网站。</p></>}
+      <div className="qyt-computer-actions"><button type="button" className="qyt-button" disabled={busy || !enabled || !activeSessionId || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { sessionId: activeSessionId, mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>连接当前聊天的环境</button>{connected && <span className="qyt-computer-caption">已连接：{environmentName[connected.mode]}</span>}</div>
+      {mode === 'remote' && (connected?.mode ?? native?.mode) === 'remote' && !busy && <FileExchangePanel key={`${activeSessionId ?? ''}:${fileGeneration}`} call={(op, extra) => call(op, { ...(activeSessionId ? { sessionId: activeSessionId } : {}), ...extra })}/>}
+    </div></details>
+    {message && <p className="qyt-computer-error" role="alert">{message}</p>}
   </div>
 }

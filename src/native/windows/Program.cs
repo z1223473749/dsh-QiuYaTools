@@ -13,6 +13,7 @@ internal static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Contains("--self-test-applications")) { Emit(ApplicationMetadataSelfTest.Run()); return; }
         if (args.Contains("--self-test-preview-storage")) { Emit(AiCursorSelfTest.PreviewStorage()); return; }
         if (args.Contains("--self-test-ai-cursor")) { Emit(AiCursorSelfTest.Run()); return; }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
@@ -54,6 +55,7 @@ internal sealed class NativeContext : ApplicationContext
     private readonly Control dispatcher = new();
     private readonly WindowManager windows = new();
     private readonly ComputerDriver? computer;
+    private readonly NativeApplicationCatalog applications = new();
     private readonly System.Windows.Forms.Timer parentWatch = new() { Interval = 1500 };
     private readonly int parentPid;
     private bool exiting;
@@ -100,6 +102,9 @@ internal sealed class NativeContext : ApplicationContext
             if (computer == null) result = await windows.Session(op, request, requestId);
             else result = op switch {
                 "status" => computer.Status(),
+                "applications" => await Task.Run(applications.Applications),
+                "openSystemSettings" => NativeApplicationCatalog.OpenSystemSettings(Program.Text(request, "kind", 64)),
+                "launchApplication" => await Task.Run(() => applications.Launch(Program.Text(request, "appId", 1024))),
                 "targets" => await Task.Run(computer.Targets),
                 "observe" => await Task.Run(() => computer.Observe(Program.Text(request, "targetId", 256), request.TryGetProperty("preview", out var preview) && preview.ValueKind == JsonValueKind.True)),
                 "lease" => computer.Lease(request),

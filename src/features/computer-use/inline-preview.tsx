@@ -1,15 +1,18 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { Preferences } from '../../shared.ts'
 import type { ComputerSessionSnapshot } from './contract.ts'
+import { ComputerApprovalCard, SystemPermissionNotice, computerApprovalNeedsSystemPermissions, type ComputerApprovalRequest, type ComputerDecision, type ComputerNativeView } from './presentation.tsx'
 
 interface Connection { rpc: { call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
-interface PreviewStatus { sessions: ComputerSessionSnapshot[]; environments?: { sessionId: string; previewDetached?: boolean }[] }
+interface PreviewStatus { sessions: ComputerSessionSnapshot[]; pendingRequests?: ComputerApprovalRequest[]; native?: ComputerNativeView | null; environments?: { sessionId: string; previewDetached?: boolean }[] }
 const endpoint = 'qiuya-tools.computer.control'
-const labels: Record<string, string> = { ready: '已就绪', running: '正在操作', paused: '已暂停', humanControl: '你正在接管', resuming: '正在继续', stopping: '正在停止', faulted: '需要处理', disconnected: '连接断开', connecting: '正在连接', pausing: '正在暂停', handingOver: '正在接管' }
+export function clampInlinePreviewPosition(position: { x: number; y: number }, size: { width: number; height: number }, viewport: { width: number; height: number }) {
+  return { x: Math.min(Math.max(8, viewport.width - size.width - 8), Math.max(8, position.x)), y: Math.min(Math.max(8, viewport.height - size.height - 8), Math.max(8, position.y)) }
+}
 export function inlineComputerPreviewUrl(sessionId: string): string { return `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}&view=inline` }
 
 /** An additive, Session-scoped public slot. Unmounting its iframe does not
@@ -20,24 +23,30 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
   function InlinePreview({ sessionId }: PropsRuntime<'conversation.session.header.utilities'>) {
     const preferences = useSyncExternalStore(listener => form.subscribe(listener), () => form.getSnapshot(), () => form.getSnapshot())
     const enabled = preferences.status === 'ready' && preferences.value?.enabled !== false && preferences.value?.computerUseEnabled === true
+    const [native, setNative] = useState<ComputerNativeView | null>()
+    const [requests, setRequests] = useState<ComputerApprovalRequest[]>([])
     const [current, setCurrent] = useState<ComputerSessionSnapshot>(), [detached, setDetached] = useState(false)
-    const [busy, setBusy] = useState(false), [error, setError] = useState(''), [collapsed, setCollapsed] = useState(false)
+    const [busy, setBusy] = useState(false), [error, setError] = useState(''), [controlsHidden, setControlsHidden] = useState(false)
+    const [position, setPosition] = useState<{ x: number; y: number }>(), [dragging, setDragging] = useState(false)
+    const anchor = useRef<HTMLDivElement>(null), card = useRef<HTMLElement>(null), drag = useRef<{ pointerId: number; x: number; y: number; left: number; top: number; handle: HTMLElement }>()
     const generation = useRef(0), refreshSequence = useRef(0), pending = useRef(false), mounted = useRef(true)
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++ } }, [])
-    const call = async (op: string, signal?: AbortSignal) => {
+    const call = async (op: string, signal?: AbortSignal, extra: object = {}) => {
       const peer = connection(); if (!peer) throw new Error('连接尚未就绪')
-      const result = await peer.rpc.call('/api', endpoint, { op, sessionId }, signal)
+      const result = await peer.rpc.call('/api', endpoint, { op, sessionId, ...extra }, signal)
       if (!result.ok) throw new Error(result.error?.message ?? '电脑预览暂不可用')
       return result.value
     }
     const refresh = async (signal?: AbortSignal) => {
       const revision = generation.current, sequence = ++refreshSequence.current, status = await call('status', signal) as PreviewStatus
       if (!mounted.current || signal?.aborted || revision !== generation.current || sequence !== refreshSequence.current) return
+      setNative(status.native)
       setCurrent(status.sessions.find(row => row.sessionId === sessionId))
+      setRequests((status.pendingRequests ?? []).filter(row => row.sessionId === sessionId && row.state === 'pending'))
       setDetached(status.environments?.find(row => row.sessionId === sessionId)?.previewDetached === true)
     }
     useEffect(() => {
-      generation.current++; pending.current = false; setCurrent(undefined); setError(''); setDetached(false); setBusy(false)
+      generation.current++; pending.current = false; setCurrent(undefined); setNative(undefined); setRequests([]); setError(''); setDetached(false); setBusy(false)
       if (!enabled) return
       const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>
       const poll = async () => {
@@ -47,32 +56,77 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
       void poll()
       return () => { controller.abort(); clearTimeout(timer) }
     }, [enabled, sessionId])
-    const control = async (op: string) => {
+    const control = async (op: string, extra: object = {}) => {
       if (pending.current) return
       pending.current = true
       const revision = generation.current; setBusy(true); setError('')
       try {
-        await call(op)
+        if (op !== 'refresh') await call(op, undefined, extra)
         if (mounted.current && revision === generation.current) await refresh()
       } catch (failure) { if (mounted.current && revision === generation.current) setError((failure as Error).message) }
       finally { if (mounted.current && revision === generation.current) { pending.current = false; setBusy(false) } }
     }
-    if (!enabled || !current || current.sessionId !== sessionId || current.state === 'stopped') return null
-    const live = ['ready', 'running', 'paused', 'humanControl'].includes(current.state)
-    return <div className="qyt-computer-inline-anchor" data-qyt-computer-chat={sessionId}>
-      <button type="button" className="qyt-computer-inline-toggle" aria-label={collapsed ? '显示电脑实时预览' : '收起电脑实时预览'} aria-expanded={!collapsed} onClick={() => setCollapsed(value => !value)}>电脑 · {labels[current.state] ?? current.state}</button>
-      {!collapsed && <section className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId}>
-        <div className="qyt-computer-inline-title"><span title={current.target?.title}>{current.target?.title || '电脑操控'}</span><span>{labels[current.state] ?? current.state}</span></div>
-        {detached ? <div className="qyt-computer-inline-detached">预览已弹出<button type="button" disabled={busy} onClick={() => { void control('redock') }}>收回到聊天</button></div>
-          : live ? <iframe title="当前聊天的实时电脑画面" src={inlineComputerPreviewUrl(sessionId)} referrerPolicy="no-referrer" className="qyt-computer-inline-frame"/>
-            : <div className="qyt-computer-inline-detached">{current.error?.message || '等待电脑画面'}</div>}
-        <div className="qyt-computer-inline-actions">
-          <button type="button" disabled={busy} aria-label="暂停电脑任务" onClick={() => { void control('pause') }}>暂停</button>
-          <button type="button" disabled={busy || !live} aria-label="接管电脑任务" onClick={() => { void control('takeover') }}>接管</button>
-          <button type="button" disabled={busy || !['paused', 'humanControl'].includes(current.state)} aria-label="继续电脑任务" onClick={() => { void control('resume') }}>继续</button>
-          <button type="button" disabled={busy} aria-label="停止电脑任务" onClick={() => { void control('stop') }}>停止</button>
-          <button type="button" disabled={busy || !live} aria-label={detached ? '收回电脑预览' : '弹出电脑预览'} onClick={() => { void control(detached ? 'redock' : 'preview') }}>{detached ? '收回' : '弹出'}</button>
-        </div>
+    const active = current && current.sessionId === sessionId && current.state !== 'stopped' ? current : undefined
+    const live = !!active && ['ready', 'running', 'paused', 'humanControl'].includes(active.state)
+    const cancelDrag = () => {
+      const previous = drag.current; drag.current = undefined
+      if (previous?.handle.hasPointerCapture?.(previous.pointerId)) previous.handle.releasePointerCapture(previous.pointerId)
+      if (mounted.current) setDragging(false)
+    }
+    const clamp = (point: { x: number; y: number }) => {
+      const box = card.current?.getBoundingClientRect(), view = card.current?.ownerDocument.defaultView ?? window
+      return clampInlinePreviewPosition(point, { width: box?.width || 300, height: box?.height || 180 }, { width: view.innerWidth, height: view.innerHeight })
+    }
+    useLayoutEffect(() => { cancelDrag(); setPosition(undefined); setControlsHidden(false) }, [sessionId])
+    useLayoutEffect(() => {
+      if (!enabled || (!active && !requests.length) || !card.current) return
+      const view = card.current.ownerDocument.defaultView ?? window
+      const contain = () => setPosition(previous => { const origin = anchor.current?.getBoundingClientRect(), box = card.current?.getBoundingClientRect(), next = clamp(previous ?? { x: (origin?.right ?? view.innerWidth) - (box?.width || 300), y: (origin?.bottom ?? 48) + 10 }); return previous?.x === next.x && previous.y === next.y ? previous : next })
+      contain(); view.addEventListener('resize', contain); view.addEventListener('blur', cancelDrag)
+      const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(contain) : undefined
+      observer?.observe(card.current)
+      return () => { view.removeEventListener('resize', contain); view.removeEventListener('blur', cancelDrag); observer?.disconnect(); cancelDrag() }
+    }, [enabled, sessionId, active?.sessionId, requests.length])
+    useLayoutEffect(() => { if (active?.state === 'humanControl') cancelDrag() }, [active?.state])
+    const startDrag = (event: React.PointerEvent<HTMLElement>) => {
+      if (!active || event.button !== 0 || event.isPrimary === false || !card.current) return
+      event.preventDefault(); event.stopPropagation()
+      const box = card.current.getBoundingClientRect()
+      drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: position?.x ?? box.left, top: position?.y ?? box.top, handle: event.currentTarget }
+      event.currentTarget.setPointerCapture?.(event.pointerId); setDragging(true)
+    }
+    const moveDrag = (event: React.PointerEvent<HTMLElement>) => {
+      const start = drag.current
+      if (!start || start.pointerId !== event.pointerId) return
+      event.preventDefault(); setPosition(clamp({ x: start.left + event.clientX - start.x, y: start.top + event.clientY - start.y }))
+    }
+    const nudge = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+      const direction = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[event.key]
+      if (!direction || !card.current) return
+      event.preventDefault(); const box = card.current.getBoundingClientRect(), step = event.shiftKey ? 40 : 8
+      setPosition(clamp({ x: (position?.x ?? box.left) + direction[0] * step, y: (position?.y ?? box.top) + direction[1] * step }))
+    }
+    if (!enabled || (!requests.length && !active)) return null
+    const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void control('decide', { requestId: request.requestId, requestVersion: request.requestVersion, decision }) }
+    return <div ref={anchor} className="qyt-computer-inline-anchor qyt-computer-surface" data-qyt-computer-chat={sessionId}>
+      {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : undefined} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
+        {!!requests.length && <SystemPermissionNotice native={native} busy={busy} onOpenSettings={kind => { void control('openSettings', { kind }) }} onRefresh={() => { void control('refresh') }}/>}
+        {requests.map(request => <ComputerApprovalCard key={request.requestId} request={request} busy={busy} allowDisabled={computerApprovalNeedsSystemPermissions(native)} onDecision={decision => decide(request, decision)}/>)}
+        {active && <div className="qyt-computer-inline-image">
+          <div className="qyt-computer-inline-actions" aria-label="电脑预览悬浮控件" onFocusCapture={() => setControlsHidden(false)}>
+            <button type="button" className="qyt-computer-inline-grip" aria-label="拖动电脑小预览" title="拖动小预览；方向键移动" onPointerDown={startDrag} onKeyDown={nudge}><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><circle cx="5" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="10" cy="12" r="1"/></svg></button>
+            <button type="button" disabled={busy} aria-label="暂停电脑任务" onClick={() => { void control('pause') }}>暂停</button>
+            <button type="button" disabled={busy || !live} aria-label="接管电脑任务" onClick={() => { void control('takeover') }}>接管</button>
+            <button type="button" disabled={busy || !['paused', 'humanControl'].includes(active.state)} aria-label="继续电脑任务" onClick={() => { void control('resume') }}>继续</button>
+            <button type="button" disabled={busy} aria-label="停止电脑任务" onClick={() => { void control('stop') }}>停止</button>
+            <button type="button" disabled={busy || !live} aria-label={detached ? '收回电脑预览' : '弹出电脑预览'} onClick={() => { void control(detached ? 'redock' : 'preview') }}>{detached ? '收回' : '弹出'}</button>
+            <button type="button" className="qyt-computer-inline-collapse" aria-label="隐藏预览控件" title="隐藏控件以操作完整画面；鼠标移出再进入或用 Tab 恢复" onClick={event => { event.currentTarget.blur(); setControlsHidden(true) }}>−</button>
+          </div>
+          {live ? <iframe title="当前聊天的实时电脑画面" src={inlineComputerPreviewUrl(sessionId)} referrerPolicy="no-referrer" className="qyt-computer-inline-frame"/>
+              : <div className="qyt-computer-inline-detached">{active.error?.message || '等待电脑画面'}</div>}
+          {active.state !== 'humanControl' && <div className="qyt-computer-inline-drag-surface" aria-hidden="true" onPointerDown={startDrag}/>}
+
+        </div>}
         {error && <p role="alert">{error}</p>}
       </section>}
     </div>

@@ -2,7 +2,28 @@
 
 报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告按资产 SHA 和实际 JSON 回执记录，不把单元测试、确定性 provider、真实模型、原生输入及性能测试相互替代。范围与门槛见[开发计划](windows-and-computer-use-development-plan.md)，操作方式见[使用指南](computer-use-guide.md)。
 
-**整体尚未通过完整验收。** 最新 Windows ARM64/x64 helper 各原生52/52及指针/预览扩展29/29通过，最新 Windows Node 实际输出为636总数、627通过、9跳过、0失败。Mac新候选基础Harness10/10与安装5/5通过，但增加手动预览的12项轮次为11/12；当前Mac白描边灰色指针还会被真实系统指针叠盖，完整WKWebView长稳未通过。真实账号视觉测试已经实际发送请求：首轮任务1通过、任务2达到12次请求上限失败，不能再写成“从未调用真实模型”，也不能写成三任务通过。Excel专用加载项、锁屏扩展与若干硬件/系统矩阵仍未实现或未测。
+**整体尚未通过完整验收。** 本批已实现聊天自动发起、按应用授权、系统权限引导及统一工具箱视觉；小预览为固定长方形，画面按 X/Y 铺满，悬停显示控件，弹出后聊天画面继续实时显示。本批代码、构建及相关测试统一提交。发现的 Mac 同应用重叠窗口输入边界另立修复，未把当前开发验证包当作最终交付。
+
+## 0. 本批交互功能与当前验证（覆盖下面历史快照的“最新”称呼）
+
+| 项目 | 当前实际结果 | 证据与边界 |
+| --- | --- | --- |
+| Mac 全量 check | **730/730，0失败／跳过；typecheck 与 universal 构建通过** | `artifacts/computer-use/macos-full-check-current/c9fc39b7-6398-4c19-8bc5-565cfe9c037f/report.json`；319个 tracked＋untracked 输入测试前后稳定，源码摘要 `4f2900b85272b649ca7f62d686c2770f8e9d7046eaea6767d957fb6c0f262bc7`。本节文字为测试完成后同步，不改变执行代码 |
+| Windows 全量 Node 已验证快照 | **717总／705通过／0失败／12平台跳过** | `artifacts/computer-use/windows-current-node-unit/c80b1cba-490f-4674-bcdd-5994aed54de9/report.json`；源码及SDK后验通过。原 orchestration 读回错误保留；后续日志SHA与精确任务自然退出／注销回执独立保留。本批后加的启动围栏、窗口列表及满幅预览增量仍需Windows重跑，不能冒用该717项 |
+| 满幅小预览 | **共享UI54/54；真实headless小框13/13；真实预览页25项通过** | `artifacts/computer-use/inline-full-frame-overlay-web/report.json` 与 `artifacts/computer-use/preview-full-frame-feature-final/report.json`。固定300×180／小viewport边界、阴影、hover/focus、−隐藏控件、顶部点击与拖动、同iframe弹出收回；像素四角满幅及角落输入映射分别检验 |
+| 授权与启动并发 | 修复并回归通过 | 最终start/select绑定 `{id,appId,pid}`；停止后的迟到窗口列表拒绝、撤权后按最新授权过滤，session29/29。已发出的launch等实际回执后才放FIFO；未知结果封锁surface，仅owner重新连接可恢复；标准shell含真实paired HTTP的91/91通过，见 `artifacts/computer-use/launch-quiescence-review/` |
+| Windows正式PE原生实测 | **ARM64 52/52＋29/29；x64 52/52＋29/29** | `artifacts/computer-use/windows-current-native-matrix/report.json`；Session1真实执行，来宾与本地PE SHA后验一致，两个指针组跟踪35／33身份自然退役、无held／lease／journal，四个任务最终缺席。x64是ARM来宾翻译；本轮未单独检验badge像素，也不替代新tgz的Harness界面 |
+| Windows应用／权限自测 | **两架构各18/18** | `artifacts/computer-use/windows-applications-permissions-selftest/report.json`，指定正式PE、Session0纯无界面、自然退出，无桌面输入 |
+| Mac实际Harness已验证快照 | **11/12；主Agent发现→owner允许一次→图片→实际Move→图片通过** | `artifacts/harness-e2e/macos-chat-first-minimal-preview/report.json`，绑定此前 `a6342c30…58f6`。失败在独立预览的严格测试命中检查；后续证据识别为系统WindowServer指针层并窄修夹具，接续轮次另遇AX窗口定位失败。失败均保留，未把人工接管记为通过，最新满幅整包仍待回归 |
+| Mac官方安装已验证快照 | **5/5通过** | `artifacts/install-e2e/macos-chat-first-minimal-preview/report.json`；此前a634包的安装／升级／坏包恢复／回滚／重装，不能替代本批新包安装 |
+| Mac同应用窗口边界 | **已复现，尚未修复** | `artifacts/computer-use/macos-exact-focus-static/red.log`：同PID的B前台、A被选中仍可到达模拟posting boundary。当前仅检查应用前台不足以保证exact窗口；下一次独立修复必须在每次输入前校验窗口身份。本批不得据单元全绿声称该边界已安全 |
+| 真实视觉模型第四轮 | 任务1通过；任务2到预算并出现1次拒绝；任务3未运行 | `artifacts/model-capability-resumed/actual-vision-external-attempt-4/evidence/report.json`；两个helper／fixture自然清理，oracle自然退出，cleanupErrors为空，官方卸载已应用；私有正文未归档 |
+
+本批验证包保存于 `artifacts/candidates-chat-full-frame-feature/`，各包的完整SHA和字节数见相邻 `.tgz.json`。它们已通过严格包校验，均为未签名的 `0.6.0-beta.1` 开发验证包；整包回归和上述Mac窗口边界修复完成前不作为最终发布。此前 `candidates-chat-first-toolbox/` 和 `candidates-chat-first-minimal-preview/` 保留历史回执，不覆盖原始失败。
+
+Mac本批helper为universal，SHA `ad57146885f640988ac34f23d3c80df02ef2a345356d8f0a3cbe0287b785b63b`（1,419,416B）。Windows ARM64正式PE为 `9cf240d3336646bdd2a031ff72ad2cf5f0a18b2de0895cb1f5eb371503f0a6a6`（68,257,179B），x64为 `5c20b96566f080ca2e3ef6ff6667b7f00f1ddae7ee785259d08a9f003fd59c43`（72,080,922B）。后续Mac窗口修复必须产生新的冻结SHA及实际回归。
+
+以下编号章节保留本轮重设计之前的历史结果与原始失败。它们只适用于各自列明 SHA，不能用其中“当前／最新”字样覆盖本节，也不能替代本轮新候选验收。Excel 专用加载项、锁屏扩展、未具备的原生硬件／最低系统矩阵仍分别记录。
 
 ## 1. 当前候选、组件与环境
 

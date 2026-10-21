@@ -69,6 +69,7 @@ internal sealed class AiCursorOverlay : IDisposable
     private const int WakeMessage = 0x8000 + 73;
     private static readonly ConcurrentDictionary<IntPtr, byte> cursorWindows = new();
     private readonly AiCursorState state = new();
+    private readonly AiCursorState operation = new();
     private readonly Func<long, bool> leaseIsCurrent;
     private readonly Thread? thread;
     private readonly ManualResetEventSlim ready = new(false);
@@ -76,20 +77,48 @@ internal sealed class AiCursorOverlay : IDisposable
     private int wakePosted;
     private int disposed;
     private long paintedGeneration = -1;
+    private long paintedOperationGeneration = -1;
+    private OperationForm? operationForm;
     private readonly WinEvent foregroundCallback;
     internal static bool IsCursorWindow(IntPtr handle) => cursorWindows.ContainsKey(handle);
     internal AiCursorOverlay(Func<long, bool> leaseIsCurrent, bool enabled)
     {
         this.leaseIsCurrent = leaseIsCurrent;
-        foregroundCallback = (_, _, _, _, _, _, _) => { var value = state.Read(); if (value.Pending && !Eligible(value)) { state.HideGeneration(value.Generation); Wake(); } };
+        foregroundCallback = (_, _, _, _, _, _, _) => {
+            var value = state.Read(); if (value.Pending && !Eligible(value)) { state.HideGeneration(value.Generation); Wake(); }
+            var activity = operation.Read(); if (activity.Pending && !EligibleOperation(activity)) { operation.HideGeneration(activity.Generation); Wake(); }
+        };
         if (!enabled) return;
         thread = new Thread(Pump) { IsBackground = true, Name = "QiuYaTools AI pointer display" };
         thread.SetApartmentState(ApartmentState.STA); thread.Start();
         ready.Wait(2000);
     }
-    internal void Lease(long epoch, bool isAi) { if (state.Lease(epoch, isAi)) Wake(); }
-    internal void Revoke(long epoch) { if (state.Revoke(epoch)) Wake(); }
-    internal void Hide(long epoch) { if (state.Hide(epoch)) Wake(); }
+    internal void Lease(long epoch, bool isAi) { operation.Lease(epoch, isAi); if (state.Lease(epoch, isAi)) Wake(); }
+    internal void Revoke(long epoch) { operation.Revoke(epoch); state.Revoke(epoch); Wake(); }
+    internal void Hide(long epoch) { operation.Hide(epoch); state.Hide(epoch); Wake(); }
+    internal void OperationStart(long epoch, string targetId, IntPtr target, Rectangle bounds)
+    {
+        if (Volatile.Read(ref disposed) != 0 || !leaseIsCurrent(epoch)) return;
+        var old = operation.Read();
+        if (old.Epoch == epoch && old.Pending && old.TargetId == targetId && old.Target == target && old.Bounds == bounds) return;
+        Native.GetWindowThreadProcessId(target, out var pid);
+        if (operation.Move(epoch, targetId, target, pid, bounds, new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2))) Wake();
+    }
+    internal void OperationEnd(long epoch) { if (operation.Hide(epoch)) Wake(); }
+    internal object OperationSnapshot()
+    {
+        var value = operation.Read();
+        if (value.Pending && !EligibleOperation(value)) { operation.HideGeneration(value.Generation); Wake(); }
+        var snapshot = operation.Snapshot();
+        return new { visible = snapshot.Visible, actor = "ai", text = "AI 操作中", targetId = snapshot.TargetId, epoch = value.Epoch > 0 ? (long?)value.Epoch : null };
+    }
+    private bool EligibleOperation(AiCursorFrame value)
+    {
+        if (Volatile.Read(ref disposed) != 0 || value.Epoch <= 0 || !value.IsAi || !value.Pending || !leaseIsCurrent(value.Epoch) ||
+            !Native.IsWindow(value.Target) || !Native.IsWindowVisible(value.Target) || Native.IsIconic(value.Target) || Native.GetForegroundWindow() != value.Target ||
+            !Native.GetWindowRect(value.Target, out var rectangle) || Rectangle.FromLTRB(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom) != value.Bounds) return false;
+        Native.GetWindowThreadProcessId(value.Target, out var pid); return pid == value.TargetPid;
+    }
     internal void Move(long epoch, string targetId, IntPtr target, Rectangle bounds, Point point)
     {
         if (Volatile.Read(ref disposed) != 0 || !leaseIsCurrent(epoch)) return;
@@ -118,11 +147,14 @@ internal sealed class AiCursorOverlay : IDisposable
     }
     private void Pump()
     {
-        IntPtr hook = IntPtr.Zero;
+        IntPtr hook = IntPtr.Zero, badgeHandle = IntPtr.Zero;
         try {
             using var context = new ApplicationContext();
             using var form = new PointerForm(this, context);
+            using var badge = new OperationForm();
+            operationForm = badge;
             var handle = form.Handle; cursorWindows.TryAdd(handle, 0); Volatile.Write(ref window, handle);
+            badgeHandle = badge.Handle; cursorWindows.TryAdd(badgeHandle, 0);
             // This excludes our own visual from supported DWM captures. It is
             // not a guarantee about every third-party or fallback capture API.
             if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041)) _ = SetWindowDisplayAffinity(handle, 0x11);
@@ -133,14 +165,26 @@ internal sealed class AiCursorOverlay : IDisposable
         } catch { var value = state.Read(); state.HideGeneration(value.Generation); }
         finally {
             var handle = Interlocked.Exchange(ref window, IntPtr.Zero);
+            operationForm = null; if (badgeHandle != IntPtr.Zero) cursorWindows.TryRemove(badgeHandle, out _);
             if (handle != IntPtr.Zero) cursorWindows.TryRemove(handle, out _);
             if (hook != IntPtr.Zero) UnhookWinEvent(hook);
             ready.Set(); GC.KeepAlive(foregroundCallback);
         }
     }
+    private void RenderOperation(OperationForm badge)
+    {
+        var value = operation.Read();
+        if (!EligibleOperation(value)) { operation.HideGeneration(value.Generation); badge.HideSurface(); paintedOperationGeneration = -1; return; }
+        if (paintedOperationGeneration == value.Generation) return;
+        try {
+            if (!badge.Present(value) || !EligibleOperation(value) || !operation.CommitRendered(value.Generation)) { badge.HideSurface(); paintedOperationGeneration = -1; return; }
+            paintedOperationGeneration = value.Generation;
+        } catch { operation.HideGeneration(value.Generation); badge.HideSurface(); paintedOperationGeneration = -1; }
+    }
     private void Render(PointerForm form, ApplicationContext context)
     {
         Volatile.Write(ref wakePosted, 0);
+        if (operationForm != null) RenderOperation(operationForm);
         if (Volatile.Read(ref disposed) != 0) { form.HideSurface(); context.ExitThread(); return; }
         var value = state.Read();
         if (!Eligible(value)) { state.HideGeneration(value.Generation); form.HideSurface(); paintedGeneration = -1; return; }
@@ -154,8 +198,58 @@ internal sealed class AiCursorOverlay : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-        var value = state.Read(); state.Revoke(value.Epoch); Wake();
+        var value = state.Read(); state.Revoke(value.Epoch); var activity = operation.Read(); operation.Revoke(activity.Epoch); Wake();
         if (thread == null || (Thread.CurrentThread != thread && thread.Join(2000))) ready.Dispose();
+    }
+    internal static Rectangle? OperationBounds(Rectangle target, float scale)
+    {
+        scale = Math.Clamp(scale, 0.75f, 4f);
+        var width = (int)Math.Ceiling(146 * scale); var height = (int)Math.Ceiling(30 * scale);
+        var margin = (int)Math.Ceiling(12 * scale); var top = (int)Math.Ceiling(40 * scale);
+        if (target.Width < width + margin * 2 || target.Height < top + height + margin) return null;
+        return new Rectangle(target.Right - margin - width, target.Top + top, width, height);
+    }
+    private sealed class OperationForm : Form
+    {
+        private float scale = 1;
+        internal OperationForm()
+        {
+            FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
+            Text = "QiuYaTools AI operation"; Enabled = false; Opacity = .96; BackColor = Color.FromArgb(7, 44, 51);
+            SetStyle(ControlStyles.Selectable, false); DoubleBuffered = true;
+        }
+        protected override bool ShowWithoutActivation => true;
+        protected override CreateParams CreateParams { get { var value = base.CreateParams; value.ExStyle |= 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080 | 0x00000008; value.Style |= 0x08000000; return value; } }
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == 0x0084) { message.Result = new IntPtr(-1); return; }
+            if (message.Msg == 0x0021) { message.Result = new IntPtr(3); return; }
+            base.WndProc(ref message);
+        }
+        internal void HideSurface() { if (IsHandleCreated && Native.IsWindowVisible(Handle)) ShowWindow(Handle, 0); }
+        internal bool Present(AiCursorFrame value)
+        {
+            scale = Math.Clamp(Native.GetDpiForWindow(value.Target) / 96f, .75f, 4f);
+            var rect = OperationBounds(value.Bounds, scale); if (!rect.HasValue) return false;
+            var r = rect.Value;
+            using var rounded = new GraphicsPath(); var diameter = Math.Min(r.Height, 30 * scale);
+            rounded.AddArc(0, 0, diameter, diameter, 180, 90); rounded.AddArc(r.Width - diameter, 0, diameter, diameter, 270, 90);
+            rounded.AddArc(r.Width - diameter, r.Height - diameter, diameter, diameter, 0, 90); rounded.AddArc(0, r.Height - diameter, diameter, diameter, 90, 90); rounded.CloseFigure();
+            var old = Region; Region = new Region(rounded); old?.Dispose();
+            if (!Native.SetWindowPos(Handle, new IntPtr(-1), r.X, r.Y, r.Width, r.Height, 0x0010 | 0x0040 | 0x0200)) return false;
+            Invalidate();
+            const long required = 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080 | 0x00000008;
+            return Native.IsWindowVisible(Handle) && !IsWindowEnabled(Handle) && (GetWindowLongPtr(Handle, -20).ToInt64() & required) == required;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e); var g = e.Graphics; g.ScaleTransform(scale, scale); g.SmoothingMode = SmoothingMode.AntiAlias;
+            using var cyan = new SolidBrush(Color.FromArgb(82, 230, 237)); using var outline = new Pen(Color.FromArgb(130, 82, 230, 237), 1.1f);
+            g.DrawRectangle(outline, 11, 7, 18, 14); g.DrawLine(outline, 20, 21, 20, 24); g.DrawLine(outline, 17, 24, 23, 24);
+            using var q = new Font("Segoe UI", 8, FontStyle.Bold, GraphicsUnit.Pixel); g.DrawString("Q", q, cyan, 16, 8);
+            using var text = new Font("Segoe UI", 12, FontStyle.Regular, GraphicsUnit.Pixel); using var white = new SolidBrush(Color.FromArgb(225, 252, 255));
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit; g.DrawString("AI 操作中", text, white, 38, 7);
+        }
     }
     private sealed class PointerForm : Form
     {

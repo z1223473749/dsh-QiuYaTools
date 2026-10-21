@@ -56,6 +56,30 @@ test('Agent target switching preserves owner grants and cannot resume paused con
   await f.service.dispose()
 })
 
+test('pending Agent target discovery cannot return titles after owner stops control', async () => {
+  const f = fixture(); await start(f)
+  const entered = deferred(), result = deferred()
+  f.driver.targets = async () => { entered.resolve(); return result.promise }
+  const pending = f.service.permittedTargets('chat')
+  const rejected = assert.rejects(pending, { code: 'CONTROL_CHANGED' })
+  await entered.promise; await f.service.stop('chat')
+  result.resolve([{ ...f.target }]); await rejected
+  await f.service.dispose()
+})
+
+test('pending Agent target discovery filters the latest application grants', async () => {
+  const f = fixture(); await start(f)
+  const other = { ...f.target, id: 'private-other-window', appId: 'revoked.app', title: 'Revoked private title' }
+  await f.service.setAppAllowed(other.appId, true)
+  const entered = deferred(), result = deferred()
+  f.driver.targets = async () => { entered.resolve(); return result.promise }
+  const pending = f.service.permittedTargets('chat')
+  await entered.promise; await f.service.setAppAllowed(other.appId, false)
+  result.resolve([{ ...f.target }, other])
+  assert.deepEqual((await pending).map(row => row.id), [f.target.id])
+  await f.service.dispose()
+})
+
 test('owner pause during Agent target switching cancels the pending restart', async () => {
   const f = fixture(); await start(f)
   const release = f.driver.release
@@ -368,4 +392,16 @@ test('transport geometry cannot replace the authorized app, PID, or window ident
   await f.service.act('chat', request(observed)); await f.service.pause('chat'); await f.service.resume('chat')
   assert.equal(f.service.get('chat').target.id, f.target.id); assert.equal(f.service.get('chat').target.appId, 'fixture.app')
   await f.service.dispose()
+})
+
+test('switching a one-time authorized window rejects an application or process replaced during restart', async () => {
+  for (const replacement of [{ appId: 'unapproved.app' }, { pid: 999 }]) {
+    const f = fixture(); await start(f)
+    let reads = 0
+    f.driver.targets = async () => [{ ...f.target, id: 'next-window', ...(++reads === 1 ? {} : replacement) }]
+    await assert.rejects(f.service.selectTarget('chat', 'next-window'), { code: 'TARGET_CHANGED' })
+    assert.equal(f.records.filter(row => row[0] === 'lease').length, 1, 'The changed identity must not acquire another input lease')
+    assert.equal(f.records.filter(row => row[0] === 'input').length, 0)
+    await f.service.dispose()
+  }
 })

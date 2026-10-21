@@ -13,7 +13,7 @@ import { build } from 'esbuild'
 
 const require = createRequire(import.meta.url), base = fileURLToPath(new URL('../', import.meta.url))
 const panelSource = (await build({ entryPoints: [join(base, 'src/features/computer-use/panel.tsx')], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external' })).outputFiles[0].text
-const module = { exports: {} }; new Function('require', 'module', 'exports', panelSource)(require, module, module.exports)
+const module = { exports: {} }; new Function('require', 'module', 'exports', panelSource)(id => id === '@deepseek-ai/dsh-client-ui-primitives' ? { Switch: ({ checked, disabled, label, onChange, className }) => React.createElement('button', { role: 'switch', disabled, 'aria-label': label, 'aria-checked': checked, className, onClick: () => onChange(!checked) }) } : require(id), module, module.exports)
 const { ComputerPanel } = module.exports
 const source = (await build({ entryPoints: [join(base, 'src/features/computer-use/exchange.ts')], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { ComputerExchange } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)

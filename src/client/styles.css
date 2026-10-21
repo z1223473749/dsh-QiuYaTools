@@ -150,3 +150,71 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-computer-inline-detached { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px; }
 .qyt-computer-inline-detached > button { flex: none; }
 .qyt-computer-inline-card > p { margin: 0; padding: 6px 10px 9px; color: #b44242; }
+/* Computer controls share toolbox cards and scoped tokens in chat and WebViews. */
+.qyt-computer-panel .qyt-computer-summary-meta { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; }
+.qyt-computer-section-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+.qyt-computer-section-heading > div { min-width:0; }
+.qyt-computer-section-heading > button { flex:none; }
+.qyt-computer-permission-list { margin-top:12px; }
+.qyt-computer-permission-row { display:flex; align-items:center; gap:12px; min-width:0; padding:12px 0; border-top:1px solid var(--qyt-computer-line); }
+.qyt-computer-permission-row > div:first-child { flex:1; min-width:0; }
+.qyt-computer-permission-row strong { font-size:12px; overflow-wrap:anywhere; }
+.qyt-computer-permission-row .qyt-computer-caption { overflow-wrap:anywhere; }
+.qyt-computer-panel .qyt-computer-empty { margin-top:14px; color:var(--qyt-computer-secondary); font-size:12px; line-height:1.7; }
+.qyt-computer-panel .qyt-computer-notice { margin-top:12px; padding:10px 12px; border-radius:9px; background:var(--qyt-computer-soft); font-size:12px; }
+.qyt-computer-panel .qyt-computer-error { color:var(--qyt-computer-error); font-size:12px; overflow-wrap:anywhere; }
+.qyt-computer-add-application { display:flex; flex-wrap:wrap; align-items:end; gap:8px; margin-top:14px; padding:12px; border:1px solid var(--qyt-computer-line); border-radius:10px; background:var(--qyt-computer-muted-bg); }
+.qyt-computer-add-application > label { flex:1; min-width:140px; display:grid; gap:5px; font-size:12px; }
+.qyt-computer-fields { display:grid; gap:12px; margin-top:14px; }
+.qyt-computer-fields label { display:grid; gap:6px; font-size:12px; }
+.qyt-computer-fields input:not([type="checkbox"]), .qyt-computer-fields select, .qyt-computer-fields textarea, .qyt-computer-add-application select { width:100%; min-width:0; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
+.qyt-computer-fields .qyt-computer-check { display:flex; align-items:center; gap:7px; }
+.qyt-computer-advanced > summary { cursor:pointer; font-size:13px; font-weight:600; }
+.qyt-computer-advanced > summary > span { display:block; margin-top:5px; color:var(--qyt-computer-secondary); font-size:11px; font-weight:400; }
+.qyt-computer-task { display:grid; gap:11px; padding-top:13px; margin-top:13px; border-top:1px solid var(--qyt-computer-line); }
+.qyt-computer-task strong { font-size:12px; overflow-wrap:anywhere; }
+.qyt-computer-inline-toggle { border-color:var(--qyt-computer-line); background:var(--qyt-computer-soft); color:var(--qyt-computer-text); }
+.qyt-computer-inline-card { background:var(--qyt-computer-bg); color:var(--qyt-computer-text); border-color:var(--qyt-computer-line); box-shadow:0 9px 30px #18252c20; }
+.qyt-computer-inline-title { color:var(--qyt-computer-secondary); padding:10px; }
+.qyt-computer-inline-frame { background:var(--qyt-computer-muted-bg); }
+.qyt-computer-inline-card > .qyt-computer-approval { margin:0 8px 8px; padding:11px; }
+.qyt-computer-inline-card .qyt-computer-approval .qyt-button { font-size:11px; padding:6px 8px; }
+.qyt-computer-inline-actions { border-top:1px solid var(--qyt-computer-line); flex-wrap:wrap; }
+.qyt-computer-inline-actions > button, .qyt-computer-inline-detached > button { border-color:var(--qyt-computer-line); }
+.qyt-computer-inline-settings { display:block; margin:0 10px 9px auto; padding:2px 0; border:0; background:transparent; color:var(--qyt-computer-secondary); cursor:pointer; font:inherit; font-size:10px; }
+.qyt-computer-inline-settings:hover { color:var(--qyt-computer-accent); }
+@media(max-width:620px){.qyt-computer-permission-row{gap:8px;flex-wrap:wrap}.qyt-computer-permission-row>div:first-child{min-width:130px}.qyt-computer-section-heading{gap:10px}}
+
+.qyt-computer-inline-card > .qyt-computer-system-permissions { margin:0 8px 8px; padding:10px; border:1px solid var(--qyt-computer-line); border-radius:10px; background:var(--qyt-computer-muted-bg); }
+.qyt-computer-inline-card .qyt-computer-permission-row { flex-wrap:wrap; gap:7px; padding:8px 0; }
+.qyt-computer-inline-card .qyt-computer-permission-row > div:first-child { flex-basis:155px; }
+.qyt-computer-inline-card .qyt-computer-system-permissions .qyt-button { padding:5px 7px; font-size:10px; }
+.qyt-computer-inline-card .qyt-computer-notice { margin:0; font-size:11px; line-height:1.6; }
+/* Image-first chat preview. Input belongs to the iframe in human-control mode;
+   only the explicit hover grip moves the surrounding preview in that mode. */
+.qyt-computer-inline-card { width:min(300px,calc(100vw - 16px)); border:1px solid color-mix(in srgb,var(--qyt-computer-text) 13%,transparent); border-radius:11px; box-shadow:0 7px 24px #24343c20,0 1px 4px #24343c0d; transition:box-shadow 140ms ease; }
+.qyt-computer-inline-card[data-dragging="true"] { box-shadow:0 14px 36px #24343c32,0 3px 9px #24343c14; }
+.qyt-computer-inline-card[data-has-approval="true"] { max-height:calc(100vh - 16px); overflow:auto; padding-top:8px; }
+.qyt-computer-inline-image { position:relative; width:100%; height:min(178px,calc(100vh - 18px)); overflow:hidden; }
+.qyt-computer-inline-image .qyt-computer-inline-frame { width:100%; height:100%; outline:none; }
+.qyt-computer-inline-image .qyt-computer-inline-detached { height:100%; min-height:0; padding:16px; background:var(--qyt-computer-muted-bg); color:var(--qyt-computer-secondary); font-size:11px; }
+.qyt-computer-inline-detached > svg { width:32px; height:32px; opacity:.5; }
+.qyt-computer-inline-drag-surface { position:absolute; inset:0; z-index:1; cursor:grab; touch-action:none; user-select:none; }
+.qyt-computer-inline-card[data-dragging="true"] .qyt-computer-inline-drag-surface { cursor:grabbing; }
+.qyt-computer-inline-card[data-dragging="true"] iframe { pointer-events:none; }
+.qyt-computer-inline-image > .qyt-computer-inline-actions { position:absolute; z-index:2; top:6px; right:6px; left:6px; display:flex; flex-wrap:nowrap; gap:3px; align-items:center; padding:4px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:color-mix(in srgb,var(--qyt-computer-bg) 91%,transparent); backdrop-filter:blur(9px); box-shadow:0 2px 9px #24343c10; opacity:0; pointer-events:none; transform:translateY(-3px); transition:opacity 120ms ease,transform 120ms ease; }
+.qyt-computer-inline-card:hover .qyt-computer-inline-actions,.qyt-computer-inline-card:focus-within .qyt-computer-inline-actions,.qyt-computer-inline-card[data-dragging="true"] .qyt-computer-inline-actions { opacity:1; pointer-events:auto; transform:none; }
+/* Dismiss controls without resizing the live frame. A held gesture returning
+   from outside must keep them dismissed until a later, unpressed re-entry. */
+.qyt-computer-inline-card[data-controls-hidden="true"] .qyt-computer-inline-actions { opacity:0; pointer-events:none; transform:translateY(-3px); }
+.qyt-computer-inline-image .qyt-computer-inline-actions > button { flex:1; min-width:0; font-size:10px; padding:5px 3px; white-space:nowrap; border:0; background:transparent; }
+.qyt-computer-inline-image .qyt-computer-inline-actions > button:hover:enabled { background:var(--qyt-computer-soft); }
+.qyt-computer-inline-image .qyt-computer-inline-actions > .qyt-computer-inline-grip,.qyt-computer-inline-image .qyt-computer-inline-actions > .qyt-computer-inline-collapse { flex:0 0 20px; padding:4px 2px; }
+.qyt-computer-inline-grip { cursor:grab!important; touch-action:none; }
+.qyt-computer-inline-grip > svg { display:block; width:15px; height:15px; }
+.qyt-computer-inline-card[data-dragging="true"] .qyt-computer-inline-grip { cursor:grabbing!important; }
+@media(prefers-color-scheme:dark){.qyt-computer-inline-card{box-shadow:0 8px 26px #00000032,0 1px 5px #00000014}.qyt-computer-inline-card[data-dragging="true"]{box-shadow:0 16px 38px #0000004d,0 3px 10px #00000022}}
+body[data-ds-dark-theme] .qyt-computer-inline-card{box-shadow:0 8px 26px #00000032,0 1px 5px #00000014}
+body[data-ds-dark-theme] .qyt-computer-inline-card[data-dragging="true"]{box-shadow:0 16px 38px #0000004d,0 3px 10px #00000022}
+@media(prefers-reduced-motion:reduce){.qyt-computer-inline-card,.qyt-computer-inline-image>.qyt-computer-inline-actions{transition:none}}
+@media(forced-colors:active){.qyt-computer-inline-card{border-color:CanvasText;box-shadow:none}.qyt-computer-inline-image>.qyt-computer-inline-actions{background:Canvas;border-color:ButtonText}}

@@ -50,7 +50,7 @@ export function apply(ctx: Context, config: Config): void {
         if (stopped) return host.dispose()
         cleanup = host.dispose
         child.inject(['tools', 'attachments'], tools => {
-          tools.effect(() => installComputerTools(tools, host.service, { enabled: () => config.enabled.get() && config.computerUseEnabled.get() }))
+          tools.effect(() => installComputerTools(tools, host.service, { enabled: () => config.enabled.get() && config.computerUseEnabled.get(), entry: host.entry }))
         })
       }).catch(error => child.logger.error('电脑操控初始化失败：%s', error instanceof Error ? error.message : '初始化失败'))
       return async () => { stopped = true; await cleanup?.() }

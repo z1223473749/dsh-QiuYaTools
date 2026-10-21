@@ -5,8 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { ComputerSessionService } from './session.ts'
 import { ComputerDriverRouter } from './driver-router.ts'
 import { ComputerEnvironmentManager, type ComputerServiceFacade, type ComputerEnvironmentOptions, type ComputerConnectionOptions } from './environment-manager.ts'
-import { computerError, requireIdentity, type DeviceDriver } from './contract.ts'
+import { ComputerError, computerError, requireIdentity, type ComputerSystemPermission, type DeviceDriver } from './contract.ts'
 import { computerPreviewPage } from './preview-page.ts'
+import { ComputerPermissionCoordinator, type ComputerEntryBackend } from './permission-coordinator.ts'
 
 export const COMPUTER_ENDPOINT = 'qiuya-tools.computer.control'
 export const COMPUTER_PREVIEW_PATH = '/api/qiuya-tools.computer.preview'
@@ -16,7 +17,7 @@ interface Services {
   webServer: { port: number }
   get?(name: string): unknown
 }
-export interface ComputerHost { service: ComputerServiceFacade; manager?: ComputerEnvironmentManager; dispose(): Promise<void> }
+export interface ComputerHost { entry: ComputerPermissionCoordinator; service: ComputerServiceFacade; manager?: ComputerEnvironmentManager; dispose(): Promise<void> }
 
 /** App approvals are owned by the Host profile, never by model tool arguments. */
 export async function installComputerHost(ctx: Context, enabled: () => boolean, options: { driver?: DeviceDriver; environments?: Pick<ComputerEnvironmentOptions, 'createRouter' | 'maxEnvironments' | 'idleMs' | 'now'> } = {}): Promise<ComputerHost> {
@@ -47,6 +48,44 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
   const legacyService = driver ? new ComputerSessionService(driver, { ...permissions, enabled: () => enabled() && !switching }) : undefined
   const manager = legacyService ? undefined : new ComputerEnvironmentManager({ ...options.environments, ...permissions, enabled, directory })
   const service: ComputerServiceFacade = legacyService ?? manager!
+  // Public Agent identity is object identity, not a model supplied session id.
+  const publicService = (name: string): unknown => { try { return services.get?.(name) } catch { return undefined } }
+  const legacyGenerations = new Map<string, number>()
+  const invalidate = (sessionId?: string) => {
+    entry.cancelSession(sessionId)
+    if (legacyService) for (const id of sessionId ? [sessionId] : new Set([...legacyGenerations.keys(), ...service.list().map(item => item.sessionId)])) legacyGenerations.set(id, (legacyGenerations.get(id) ?? 0) + 1)
+  }
+  const backend: ComputerEntryBackend = manager ?? {
+    get: id => service.get(id), allowedApps: () => service.allowedApps(), setAppAllowed: (id, value) => service.setAppAllowed(id, value),
+    ...(driver?.applications ? { applicationsFor: (_id: string, signal?: AbortSignal) => driver.applications!(signal) } : {}),
+    targetsFor: (_id, signal) => legacyService!.targets(signal),
+    authorizationStatus: (_id, signal) => legacyService!.status(signal),
+    authorizationGeneration: id => legacyGenerations.get(id) ?? 0,
+    ...(driver?.launchApplication ? { launchApplicationFor: (_id: string, appId: string, signal?: AbortSignal) => driver.launchApplication!(appId, signal) } : {}),
+    authorizationStart: async (id, targetId, options) => {
+      options.signal.throwIfAborted()
+      if ((legacyGenerations.get(id) ?? 0) !== options.expectedGeneration) throw new ComputerError('REQUEST_STALE', '控制权已变化，请重新申请。')
+      const current = service.get(id)
+      if (current && ['paused', 'humanControl', 'pausing', 'handingOver', 'resuming', 'stopping'].includes(current.state)) throw new ComputerError('OWNER_RESUME_REQUIRED', '需要用户先恢复控制。')
+      if (current && ['ready', 'running'].includes(current.state)) {
+        if (current.target?.id === targetId) {
+          if (current.target.appId !== options.expectedTarget.appId || current.target.pid !== options.expectedTarget.pid) throw new ComputerError('TARGET_CHANGED', '应用窗口身份已变化，请重新申请。')
+          return current
+        }
+        throw new ComputerError('OWNER_SWITCH_REQUIRED', '请先停止当前电脑会话，再切换到新应用。')
+      }
+      return service.start(id, targetId, options)
+    },
+  }
+  const entry = new ComputerPermissionCoordinator({ backend, enabled,
+    lookupAgent: id => (publicService('agents') as { get?(id: string): unknown } | undefined)?.get?.(id),
+    isRootAgent: agent => (publicService('agents') as { roots?(): unknown[] } | undefined)?.roots?.().includes(agent) === true,
+    canRequest: agent => {
+      const approval = publicService('approval') as { overrideOf?(session: unknown): string | undefined; config?: { policy?: string } } | undefined
+      return ((agent.session ? approval?.overrideOf?.(agent.session) : undefined) ?? approval?.config?.policy) !== 'never'
+    },
+  })
+  const removePermissionWatch = service.subscribe(() => { if (!enabled()) entry.cancelSession() })
   let disposed = false, wasEnabled = enabled()
   let cleanupError: ReturnType<typeof computerError> | undefined, shutdown: Promise<void> | undefined, lastSweep = 0
   const fileRequests = new Set<AbortController>()
@@ -54,7 +93,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
   const poll = setInterval(() => {
     const current = enabled()
     if (!current && (wasEnabled || cleanupError) && !shutdown) {
-      cancelFiles()
+      invalidate(); cancelFiles()
       const stopping = manager ? manager.stopAll() : Promise.allSettled(service.list().map(item => service.stop(item.sessionId))).then(rows => {
         const failed = rows.find((row): row is PromiseRejectedResult => row.status === 'rejected'); if (failed) throw failed.reason
       })
@@ -62,7 +101,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
       void stopping.then(() => { cleanupError = undefined; shutdown = undefined }, error => { cleanupError = computerError(error); shutdown = undefined })
     }
     if (manager && current && Date.now() - lastSweep >= 5000) {
-      lastSweep = Date.now(); void manager.sweep().catch(error => { cleanupError = computerError(error) })
+      lastSweep = Date.now(); void manager.sweep(entry.pending().map(request => request.sessionId)).catch(error => { cleanupError = computerError(error) })
     }
     wasEnabled = current
   }, 100)
@@ -86,11 +125,24 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         let value: unknown
         if (input.op === 'status') {
           const changing = manager ? manager.isSwitching(sessionId) : switching
-          value = { enabled: enabled(), switching: changing, sessions: service.list(), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments() } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? manager.statusFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
+          value = { enabled: enabled(), switching: changing, sessions: service.list(), pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments() } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? sessionId === undefined ? manager.authorizationStatus(undefined, request.signal) : manager.statusIfPresentFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
         } else {
-          if (!['pause', 'stop'].includes(input.op)) assertEnabled(sessionId)
-          if (input.op === 'targets') value = await (manager ? manager.targetsFor(sessionId, request.signal) : legacyService!.targets(request.signal))
+          if (!['pause', 'stop', 'cancelRequest'].includes(input.op) && !(input.op === 'allow' && input.allowed === false)) assertEnabled(sessionId)
+          if (input.op === 'pending') value = { pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal) }
+          else if (input.op === 'decide' || input.op === 'cancelRequest') {
+            if (!sessionId) throw new Error('授权决定必须绑定发起请求的聊天。')
+            const requestId = requireIdentity(input.requestId, '授权请求')
+            value = input.op === 'decide' ? await entry.decide(sessionId, requestId, input.requestVersion, input.decision) : entry.cancelRequest(sessionId, requestId, input.requestVersion)
+          }
+          else if (input.op === 'openSettings') {
+            if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(input.kind)) throw new Error('系统权限类型无效。')
+            value = manager ? await manager.openSystemSettings(input.kind as ComputerSystemPermission, request.signal) : await driver?.openSystemSettings?.(input.kind as ComputerSystemPermission, request.signal)
+            if (value === undefined) throw new Error('当前执行器不支持打开系统权限设置。')
+          }
+          else if (input.op === 'applications') value = manager ? await manager.applicationsFor(sessionId, request.signal) : driver?.applications ? await driver.applications(request.signal) : []
+          else if (input.op === 'targets') value = await (manager ? manager.targetsFor(sessionId, request.signal) : legacyService!.targets(request.signal))
           else if (input.op === 'connect') {
+            invalidate(sessionId)
             if (manager) value = await manager.connect(sessionId, input as ComputerConnectionOptions, request.signal)
             else {
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('此执行器不支持切换设备')
@@ -122,9 +174,10 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
             finally { fileRequests.delete(controller) }
             }
           }
-          else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
+          else if (input.op === 'allow') { requireIdentity(input.appId, '应用'); if (input.allowed !== true) { if (legacyService) invalidate(); else entry.cancelApp(input.appId) }; await service.setAppAllowed(input.appId, input.allowed === true); value = { allowedApps: service.allowedApps() } }
           else if (!sessionId) throw new Error('请先选择要关联的聊天。')
           else if (input.op === 'start') {
+            invalidate(sessionId)
             const sessions = services.get?.('sessions') as { get(id: string): unknown } | undefined
             if (!sessions?.get(sessionId)) throw new Error('关联聊天不可用，请重新选择。')
             value = await service.start(sessionId, requireIdentity(input.targetId, '目标'), { allowOnce: true, signal: request.signal })
@@ -136,12 +189,12 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
               if (!current) throw new Error('电脑会话不存在，请重新选择。')
               // No await may separate this check from pause's synchronous
               // invalidation. An old preview error cannot stop a new session.
-              value = current.epoch === input.expectedEpoch ? await service.pause(sessionId) : current
-            } else value = await service.pause(sessionId)
+              if (current.epoch === input.expectedEpoch) { invalidate(sessionId); value = await service.pause(sessionId) } else value = current
+            } else { invalidate(sessionId); value = await service.pause(sessionId) }
           }
-          else if (input.op === 'takeover') value = await service.takeover(sessionId)
-          else if (input.op === 'resume') value = await service.resume(sessionId)
-          else if (input.op === 'stop') value = await service.stop(sessionId)
+          else if (input.op === 'takeover') { invalidate(sessionId); value = await service.takeover(sessionId) }
+          else if (input.op === 'resume') { invalidate(sessionId); value = await service.resume(sessionId) }
+          else if (input.op === 'stop') { invalidate(sessionId); value = await service.stop(sessionId) }
           else if (input.op === 'frame') value = await service.preview(sessionId, request.signal)
           else if (input.op === 'act') value = await service.humanAct(sessionId, input.request, request.signal)
           else if (input.op === 'preview') {
@@ -161,9 +214,9 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     path: COMPUTER_PREVIEW_PATH, methods: ['GET'], requestBody: 'buffered',
     fetch: async () => owner() ? new Response(computerPreviewPage, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } }) : new Response('Forbidden', { status: 403 }),
   })]
-  return { service, ...(manager ? { manager } : {}), async dispose() {
+  return { entry, service, ...(manager ? { manager } : {}), async dispose() {
     if (disposed) { if (manager) await manager.dispose(); return }
-    disposed = true; clearInterval(poll); cancelFiles()
+    disposed = true; clearInterval(poll); entry.dispose(); removePermissionWatch(); cancelFiles()
     let failure: unknown
     try { await shutdown } catch (error) { failure = error }
     try { await (manager ?? legacyService)!.dispose() } catch (error) { failure ??= error }

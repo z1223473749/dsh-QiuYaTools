@@ -60,18 +60,39 @@ try {
   await page.waitForFunction(() => document.querySelector('#screen').width === 320 && window.__previewResources.closed >= 2)
   assert.equal(await page.getByRole('img', { name: '实时电脑画面', exact: true }).count(), 1)
   assert.equal(await page.locator('#screen').evaluate(node => node.tagName), 'CANVAS')
+  const previewLayouts = []
+  await page.setViewportSize({ width: 600, height: 420 })
+  for (const colorScheme of ['light', 'dark']) {
+    const beforePaint = await page.evaluate(() => window.__previewResources.frames.length)
+    await page.emulateMedia({ colorScheme })
+    await page.waitForFunction(count => window.__previewResources.frames.length > count, beforePaint)
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+    const layout = await page.evaluate(() => {
+      const bounds = node => { const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }
+      return { background: getComputedStyle(document.body).backgroundColor, color: getComputedStyle(document.body).color, stage: bounds(document.querySelector('#stage')), canvas: bounds(document.querySelector('#screen')), header: bounds(document.querySelector('header')), footer: bounds(document.querySelector('footer')), controls: [...document.querySelectorAll('button,input')].map(node => ({ label: node.getAttribute('aria-label') || node.textContent, ...bounds(node) })), scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight }
+    })
+    assert.ok(layout.stage.height >= 140); assert.ok(layout.footer.y + layout.footer.height <= 420)
+    assert.equal(layout.scrollWidth, 600); assert.equal(layout.scrollHeight, 420)
+    for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(layout.canvas[key] - layout.stage[key]) < 1, 'The entire preview stage must be filled by the canvas')
+    for (const control of layout.controls) { assert.ok(control.width > 0 && control.height > 0); assert.ok(control.x >= 0 && control.x + control.width <= 600) }
+    previewLayouts.push({ colorScheme, ...layout })
+    await page.screenshot({ path: join(output, `preview-${colorScheme}-600x420.png`) })
+  }
+  assert.notEqual(previewLayouts[0].background, previewLayouts[1].background, 'isolated WebView follows system light/dark without depending on the host theme CSS')
+  await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 800, height: 600 })
   await page.getByRole('button', { name: '接管', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'humanControl')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'humanControl')
+  assert.equal(await page.locator('#status').textContent(), '你正在接管')
   await page.locator('#screen').click({ position: { x: 100, y: 80 } })
   await page.waitForFunction(() => document.querySelector('#message').hidden)
   assert.equal(received.filter(e => e.op === 'act').length, 1)
   const oldGestureActions = actFrames.length, rectangle = await page.locator('#screen').boundingBox()
   await page.mouse.move(rectangle.x + 30, rectangle.y + 30); await page.mouse.down()
   await page.getByRole('button', { name: '暂停', exact: true }).evaluate(button => button.click())
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'paused')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'paused')
   await page.getByRole('button', { name: '接管', exact: true }).evaluate(button => button.click())
   const takeoverFrameCount = await page.evaluate(() => window.__previewResources.frames.length)
-  await page.waitForFunction(count => document.querySelector('#status').textContent === 'humanControl' && window.__previewResources.frames.length > count, takeoverFrameCount)
+  await page.waitForFunction(count => document.querySelector('#status').dataset.state === 'humanControl' && window.__previewResources.frames.length > count, takeoverFrameCount)
   await page.mouse.move(rectangle.x + 160, rectangle.y + 100); await page.mouse.up()
   await page.waitForTimeout(100)
   assert.equal(actFrames.length, oldGestureActions, 'Pointer down from before Pause cannot become a drag in a new takeover epoch')
@@ -90,7 +111,7 @@ try {
   }, position)
   liveCursor = { x: 250, y: 40, visible: true }; await cursorAt(null)
   await page.getByRole('button', { name: '继续', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'ready')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'ready')
   await cursorAt(liveCursor)
   liveCursor = { x: 260, y: 50, visible: true }; await cursorAt(liveCursor)
   liveCursor.visible = false; await cursorAt(null)
@@ -104,7 +125,7 @@ try {
   assert.equal(await page.locator('#cursor svg path').getAttribute('stroke-width'), '1.25')
   await page.screenshot({ path: join(output, 'ai-arrow-preview.png') })
   await page.getByRole('button', { name: '接管', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'humanControl')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'humanControl')
   await cursorAt(null)
   await page.locator('#text').fill('实时接管 中文 ✓')
   await page.getByRole('button', { name: '输入', exact: true }).click()
@@ -120,7 +141,7 @@ try {
   await page.evaluate(() => window.__releaseBitmap())
   await page.waitForFunction(() => window.__previewResources.closed === window.__previewResources.created)
   await page.getByRole('button', { name: '继续', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'ready')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'ready')
   await page.evaluate(() => { window.__holdNextBitmap = true })
   await page.waitForFunction(() => typeof window.__releaseBitmap === 'function')
   const framesBeforeStop = await page.evaluate(() => window.__previewResources.frames.length)
@@ -129,7 +150,7 @@ try {
   while (host.service.get('preview-test').state !== 'stopped' && Date.now() < stopDeadline) await new Promise(done => setTimeout(done, 10))
   assert.equal(host.service.get('preview-test').state, 'stopped')
   await page.evaluate(() => window.__releaseBitmap())
-  await page.waitForFunction(() => document.querySelector('#status').textContent === 'stopped')
+  await page.waitForFunction(() => document.querySelector('#status').dataset.state === 'stopped')
   await page.waitForFunction(() => window.__previewResources.closed === window.__previewResources.created)
   const bitmapResources = await page.evaluate(() => window.__previewResources)
   assert.equal(bitmapResources.frames.length, framesBeforeStop, 'A bitmap decoded before Stop must not repaint or restore an actionable frame afterward')
@@ -158,6 +179,25 @@ try {
   await inlinePage.goto(`${endpoint}/api/qiuya-tools.computer.preview?session=inline-test&view=inline`)
   await inlinePage.waitForFunction(() => document.querySelector('#screen').width === 320)
   assert.equal(await inlinePage.locator('header').evaluate(node => getComputedStyle(node).display), 'none')
+  await inlinePage.waitForFunction(() => document.querySelector('#message').hidden)
+  const filledImage = await inlinePage.screenshot({ path: join(output, 'inline-fixed-rectangle-filled.png') })
+  const cornerPixels = await inlinePage.evaluate(async image => {
+    const blob = await (await fetch('data:image/png;base64,' + image)).blob(), bitmap = await createImageBitmap(blob)
+    try {
+      const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height
+      const painter = canvas.getContext('2d'); painter.drawImage(bitmap, 0, 0)
+      return [[3, 3], [296, 3], [3, 176], [296, 176]].map(([x,y]) => [...painter.getImageData(x,y,1,1).data])
+    } finally { bitmap.close() }
+  }, filledImage.toString('base64'))
+  for (const pixel of cornerPixels) for (const [index, expected] of [23, 79, 89, 255].entries()) assert.ok(Math.abs(pixel[index] - expected) <= 3, 'Every corner must contain the known frame pixels, without letterboxing or cropping')
+  await host.service.takeover('inline-test')
+  await inlinePage.waitForFunction(() => document.querySelector('#status').dataset.state === 'humanControl')
+  const beforeCornerClick = received.filter(row => row.op === 'act').length
+  await inlinePage.locator('#screen').click({ position: { x: 297, y: 177 } })
+  for (let attempt = 0; received.filter(row => row.op === 'act').length === beforeCornerClick && attempt < 100; attempt++) await new Promise(done => setTimeout(done, 10))
+  const mappedCornerClick = received.filter(row => row.op === 'act').at(-1).action
+  assert.equal(mappedCornerClick.kind, 'click'); assert.ok(Math.abs(mappedCornerClick.x - 316.8) < 0.1); assert.ok(Math.abs(mappedCornerClick.y - 177) < 0.1)
+  await host.service.resume('inline-test')
   await inlinePage.close(); await new Promise(done => setTimeout(done, 150))
   assert.equal(host.service.get('inline-test').state, 'ready', 'Switching chat/unmounting its small frame must not pause background input')
   await host.service.stop('inline-test')
@@ -170,7 +210,7 @@ try {
   assert.equal(host.service.get('redock-test').state, 'ready', 'Acknowledged explicit redock must preserve its session')
   await host.service.stop('redock-test')
   await page.screenshot({ path: join(output, 'preview.png') })
-  await writeFile(join(output, 'report.json'), JSON.stringify({ status: reproduceOldPause ? 'reproduced' : 'passed', kind: 'real-Chromium-UI-with-deterministic-driver', stalePauseRace, tests: ['frames-rendered', 'takeover', 'scaled-click', 'native-ai-cursor-overrides-old-action', 'ai-cursor-moves-with-new-frames', 'off-target-ai-cursor-hidden', 'human-takeover-hides-ai-arrow', 'inline-unmount-preserves-background-task', 'explicit-redock-preserves-session', 'completed-drag-fallback-at-destination', 'Unicode-input', 'resume', 'stop', 'accessible-canvas-image-role', 'bitmap-close-after-every-draw', 'real-JPEG-decode-failure-does-not-expose-frame', 'stop-fences-pending-bitmap-and-closes-it', 'control-drops-old-pointer-down', 'same-epoch-canvas-drag', ...(reproduceOldPause ? [] : ['old-frame-error-cannot-pause-new-epoch'])], frames: frame, bitmapResources, actFrames, received }, null, 2))
+  await writeFile(join(output, 'report.json'), JSON.stringify({ status: reproduceOldPause ? 'reproduced' : 'passed', kind: 'real-Chromium-UI-with-deterministic-driver', stalePauseRace, tests: ['fixed-rectangle-canvas-fills-entire-stage', 'inline-four-corners-show-frame-without-bars-or-crop', 'full-frame-corner-input-coordinate-mapping', 'frames-rendered', 'takeover', 'scaled-click', 'native-ai-cursor-overrides-old-action', 'ai-cursor-moves-with-new-frames', 'off-target-ai-cursor-hidden', 'human-takeover-hides-ai-arrow', 'inline-unmount-preserves-background-task', 'explicit-redock-preserves-session', 'completed-drag-fallback-at-destination', 'Unicode-input', 'resume', 'stop', 'accessible-canvas-image-role', 'light-dark-600x420-controls-fit', 'Chinese-state-with-machine-readable-state', 'bitmap-close-after-every-draw', 'real-JPEG-decode-failure-does-not-expose-frame', 'stop-fences-pending-bitmap-and-closes-it', 'control-drops-old-pointer-down', 'same-epoch-canvas-drag', ...(reproduceOldPause ? [] : ['old-frame-error-cannot-pause-new-epoch'])], frames: frame, previewLayouts, bitmapResources, actFrames, received }, null, 2))
   console.log(`${reproduceOldPause ? '旧帧错误自动暂停竞态已复现' : '预览浏览器测试通过'}，证据：${output}`)
 } catch (error) { await writeFile(join(output, 'report.json'), JSON.stringify({ status: 'failed', reason: error.message })); throw error }
 finally { releaseOldError(); await host?.dispose(); server.closeAllConnections(); await new Promise(done => server.close(done)); await browser.close() }

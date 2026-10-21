@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -11,12 +11,14 @@ import {
   type FeatureField, type Preferences,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
-import { installAccountMenuEntry } from './account-menu.ts'
+import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation } from './account-menu.ts'
 import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { ComputerPanel } from '../features/computer-use/panel.tsx'
 import { installInlineComputerPreview } from '../features/computer-use/inline-preview.tsx'
+import { ComputerIcon } from '../features/computer-use/presentation.tsx'
+import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
@@ -51,14 +53,15 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'promptSuggestionsEnabled', tab: 'promptSuggestionsTab', label: 'promptSuggestions', hint: 'promptSuggestionsHint', steps: ['promptSuggestionsWhen', 'promptSuggestionsAccept', 'promptSuggestionsModel'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
+  { id: 'computer', label: 'computerTab' },
   ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
   { id: 'qTheme', label: 'qThemeTab' },
   { id: 'about', label: 'aboutTab' },
   { id: 'updates', label: 'updatesTab' },
-  { id: 'computer', label: 'computerTab' },
 ]
 
 function SettingsIcon({ name }: { name: SettingsTab }) {
+  if (name === 'computer') return <ComputerIcon/>
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     {name === 'pastedTextEnabled' ? <><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></>
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
@@ -83,7 +86,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [thresholdDraft, setThresholdDraft] = useState<ThresholdDraft | null>(null)
   const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
-  const [activeTab, setActiveTab] = useState<SettingsTab>('pastedTextEnabled')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => consumeComputerSettingsNavigation(ctx) ? 'computer' : 'pastedTextEnabled')
   const [aboutVisited, setAboutVisited] = useState(false)
   const [updatesVisited, setUpdatesVisited] = useState(false)
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
@@ -107,6 +110,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     setActiveTab(tab)
     tabs.current[TABS.findIndex(item => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
+  useEffect(() => subscribeComputerSettingsNavigation(ctx, () => { if (consumeComputerSettingsNavigation(ctx)) activateTab('computer') }), [ctx])
 
   function navigateTabs(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
     const next = event.key === 'ArrowRight' ? (index + 1) % TABS.length
@@ -190,7 +194,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
-        {tab.id === 'computer' ? activeTab === 'computer' && <ComputerPanel ctx={ctx} enabled={preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([{ op: 'set', path: ['computerUseEnabled'], value }]) }}/>
+        {tab.id === 'computer' ? activeTab === 'computer' && <ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/>
           : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
           : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} />
             : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
@@ -250,7 +254,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-qiuya-tools'
-    style.textContent = css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
+    style.textContent = computerVisualStyles + css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
     document.head.append(style)
     return () => { style.remove() }
   })

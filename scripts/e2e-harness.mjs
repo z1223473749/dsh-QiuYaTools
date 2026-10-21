@@ -317,33 +317,42 @@ try {
       assert.ok(independentTarget && independentTarget.pid === beforeSetup.pid && independentTarget.appId === beforeSetup.appId, 'Own fixture identity must remain stable after pre-authorization setup')
       await writeFile(join(output, 'fixture-setup-target-geometry.json'), JSON.stringify({ beforeSetup, afterSetup: independentTarget, authorizationStarted: false }, null, 2))
     }
+    const application = (await driver.applications()).find(app => app.appId === independentTarget.appId)
+    assert.ok(application, 'The own synthetic fixture must be discoverable without window contents')
+    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ query: application.name, targetId: independentTarget.id }), { mode: 0o600 })
     await openSettings()
     await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
-    const enable = page.getByRole('checkbox', { name: '启用', exact: true })
+    const enable = page.getByRole('switch', { name: '启用电脑操控', exact: true })
     if (!await enable.isChecked()) await enable.click()
     await waitFor(() => enable.isChecked(), 'Computer-use setting did not persist')
-    await page.getByRole('combobox', { name: /^关联聊天/u }).selectOption(alphaId)
-    await page.getByRole('button', { name: '刷新窗口', exact: true }).click()
-    await page.getByRole('combobox', { name: /^应用窗口/u }).selectOption(independentTarget.id)
-    await page.getByRole('button', { name: '允许本次并开始', exact: true }).click()
-    await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes('ready'), 'Computer session did not become ready')
-    await screenshot('computer-authorized')
+    assert.equal(await page.getByRole('combobox', { name: /^关联聊天/u }).count(), 0, 'Normal setup must not require linking a chat')
+    assert.equal(await page.getByRole('button', { name: '允许本次并开始', exact: true }).count(), 0, 'Starting belongs to the calling chat')
+    await waitFor(async () => !(await page.getByRole('region', { name: '系统权限', exact: true }).innerText()).includes('正在检查本机状态'), 'The permission preflight did not finish before the setup screenshot')
+    await screenshot('computer-settings-before-chat-request')
     await page.getByRole('button', { name: '关闭', exact: true }).click()
-    const inlinePreview = page.locator(`[data-qyt-computer-inline="${alphaId}"]`)
-    await inlinePreview.waitFor()
-    const smallFrame = inlinePreview.locator('iframe')
-    assert.equal(await smallFrame.getAttribute('src'), `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(alphaId)}&view=inline`)
-    await smallFrame.contentFrame().getByRole('img', { name: '实时电脑画面', exact: true }).waitFor()
-    await screenshot('chat-inline-preview')
+    // Submit before any computer session exists. The model must discover and
+    // request its own current chat, then wait for the real owner approval card.
     if (process.platform === 'win32') {
-      // Keep the fixture user's foreground target. DOM input submits the main
-      // Agent request without focusing another desktop/browser window.
       await page.evaluate(() => {
         const send = [...document.querySelectorAll('button')].find(button => button.getAttribute('aria-label') === '发送消息' || button.title === '发送消息')
         if (!send || send.disabled) throw new Error('Fixture composer send button was not ready')
         send.click()
       })
     } else { await editor().fill('E2E:computer-move'); await page.getByRole('button', { name: '发送消息', exact: true }).click() }
+    const inlinePreview = page.locator(`[data-qyt-computer-inline="${alphaId}"]`)
+    const approval = inlinePreview.getByRole('region', { name: '电脑操作授权', exact: true })
+    await approval.waitFor({ timeout: 25000 })
+    await screenshot('chat-application-approval')
+    const beforeApproval = await page.evaluate(async sessionId => {
+      const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+      const result = (await response.json()).result
+      if (!response.ok || !result.ok) throw new Error('Pre-approval status failed')
+      return { sessions: result.value.sessions.filter(row => row.sessionId === sessionId), pending: result.value.pendingRequests.map(row => ({ requestId: row.requestId, sessionId: row.sessionId, appName: row.appName })) }
+    }, alphaId)
+    assert.deepEqual(beforeApproval.sessions, [], 'No control session may start before the owner approves')
+    assert.equal(beforeApproval.pending.length, 1); assert.equal(beforeApproval.pending[0].sessionId, alphaId)
+    await writeFile(join(output, 'chat-authorization-before-owner.json'), JSON.stringify(beforeApproval, null, 2))
+    await approval.getByRole('button', { name: '允许一次', exact: true }).click()
     try { await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).waitFor({ timeout: 25000 }) }
     finally {
       const diagnostic = await page.evaluate(captureHarnessComputerDiagnostic, { sessionId: alphaId, codes: HARNESS_COMPUTER_DIAGNOSTIC_CODES }).catch(() => ({ status: 'unavailable', code: 'SNAPSHOT_UNAVAILABLE' }))
@@ -358,6 +367,17 @@ try {
     assert.ok(images.flatMap(request => request.actionResults).some(result => result?.performed), 'The main Agent must receive a successful native move-action receipt')
     await writeFile(join(output, 'agent-image-adapter-evidence.json'), JSON.stringify(images, null, 2))
     await screenshot('agent-computer-image')
+    const smallFrame = inlinePreview.locator('iframe')
+    assert.equal(await smallFrame.getAttribute('src'), `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(alphaId)}&view=inline`)
+    await smallFrame.contentFrame().getByRole('img', { name: '实时电脑画面', exact: true }).waitFor()
+    await smallFrame.contentFrame().locator('#screen').evaluate(async canvas => { if (!canvas.width || !canvas.height) throw new Error('The inline canvas has no frame geometry'); await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))) })
+    await page.mouse.move(300, 950)
+    await waitFor(() => inlinePreview.locator('.qyt-computer-inline-actions').evaluate(node => getComputedStyle(node).opacity === '0'), 'Inline controls must hide when the mouse leaves')
+    assert.equal(await inlinePreview.locator('.qyt-computer-inline-title,.qyt-computer-inline-settings').count(), 0, 'The default small preview must contain the image without persistent title/settings text')
+    await screenshot('chat-inline-preview')
+    await inlinePreview.hover()
+    await waitFor(() => inlinePreview.locator('.qyt-computer-inline-actions').evaluate(node => getComputedStyle(node).opacity === '1'), 'Inline controls must appear on hover')
+    await screenshot('chat-inline-preview-hover')
     await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
     let previewTimeline
     if (windowStateDiagnostic) {
@@ -376,7 +396,7 @@ try {
         return readFile(ready, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return undefined; throw error })
       }, 'The profile-bound read-only preview timeline did not become ready', 20000)
     }
-    try { await page.getByRole('button', { name: '弹出大预览', exact: true }).click() }
+    try { await page.getByRole('button', { name: '弹出预览', exact: true }).click() }
     finally { if (previewTimeline) await previewTimeline }
     await sleep(1000)
     const nativeStatus = await page.evaluate(async sessionId => {
@@ -404,7 +424,7 @@ try {
           targetExecutable: await realpath(join(library, 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window')),
           previewTitle: 'QiuYaTools · 电脑操控' })
         await writeFile(join(output, 'mac-preview-owned-binding.json'), JSON.stringify(bound, null, 2))
-        macPreview = (op, extra = {}) => request({ op, binding: bound.binding, ...extra })
+        macPreview = (op, extra = {}) => request({ op, binding: bound.binding, diagnosticOutput: join(output, 'mac-preview-physical-hit.json'), ...extra })
         macPreviewRetirement = () => macPreview('retirement')
         // AX may publish the buttons before a first frame and omit WebKit's
         // small metrics text entirely. Keep the same visible latency oracle
@@ -490,7 +510,7 @@ try {
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
       try {
-        await waitFor(async () => (await page.locator('.qyt-feature-panel [role="status"]').innerText()).includes(state), `Computer ${button} did not enter ${state}`)
+        await waitFor(async () => await page.locator(`[data-qyt-computer-session="${alphaId}"]`).getAttribute('data-state') === state, `Computer ${button} did not enter ${state}`)
       } catch (error) {
         // Preserve the actual backend state and native error before case cleanup
         // can change focus or pause the session. A timeout alone is not a cause.
@@ -499,7 +519,7 @@ try {
           return { httpStatus: response.status, body: await response.json() }
         }, alphaId).catch(failure => ({ error: failure.message }))
         const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : macPreview ? await macPreview('observe', { output: join(output, `preview-control-${state}-failed.jpg`) }).catch(failure => ({ error: failure.message })) : undefined
-        const panelText = await page.locator('.qyt-feature-panel [role="status"]').innerText().catch(failure => failure.message)
+        const panelText = await page.locator(`[data-qyt-computer-session="${alphaId}"]`).innerText().catch(failure => failure.message)
         await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: sanitizeHarnessDiagnostic(error.message), backend, native, panelText }, null, 2))
         const pixels = windowsPreview ? await driver.observe(preview.id).catch(() => undefined) : undefined
         if (pixels) await writeFile(join(output, `preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
@@ -631,14 +651,14 @@ try {
     const evidence = { candidateSHA256, source: 'actual packaged server + real Harness SDK owner route + React file input + browser download',
       boundary: 'status/targets-only stub; no native screenshot, input, lease, or external model capability claimed', calls }
     try {
-      await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
-      const enable = page.getByRole('checkbox', { name: '启用', exact: true }); if (!await enable.isChecked()) await enable.click()
-      await page.getByRole('combobox', { name: /^关联聊天/u }).selectOption(alphaId)
+      await row(alpha).click(); await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
+      const enable = page.getByRole('switch', { name: '启用电脑操控', exact: true }); if (!await enable.isChecked()) await enable.click()
+      await page.locator('.qyt-computer-advanced > summary').click()
       await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('remote')
       await page.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
       await page.getByLabel('配对密钥', { exact: true }).fill(pairing)
-      await page.getByRole('checkbox', { name: /允许通过受信任的私有网络连接/u }).check()
-      await page.getByRole('button', { name: '为此聊天连接环境', exact: true }).click()
+      await page.getByRole('checkbox', { name: /允许连接受信任的私有网络/u }).check()
+      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()
       const pane = page.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')
       await pane.waitFor()
       await pane.getByRole('button', { name: '检查并刷新交换目录', exact: true }).click()
@@ -664,7 +684,7 @@ try {
       Object.assign(evidence, { name, size: bytes.length, sha256, uploadedBytesVerified: true, browserDownloadVerified: true, duplicateRejectedWithoutOverwrite: true })
       await screenshot('file-exchange-ui')
       await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('local')
-      await page.getByRole('button', { name: '为此聊天连接环境', exact: true }).click()
+      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()
       await waitFor(async () => await page.getByRole('heading', { name: '手动文件交换', exact: true }).count() === 0, 'The file-only remote environment did not disconnect')
       await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
       assert.ok(calls.status > 0)

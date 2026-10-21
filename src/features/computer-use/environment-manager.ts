@@ -6,7 +6,7 @@ import { ComputerInputScheduler, ScheduledComputerDriver } from './scheduled-dri
 import { NativeCompanionDriver } from './native.ts'
 import { RemoteComputerDriver } from './remote.ts'
 import { ComputerError, computerError, requireIdentity } from './contract.ts'
-import type { ComputerActionRequest, ComputerSessionSnapshot } from './contract.ts'
+import type { ComputerActionRequest, ComputerSessionSnapshot, ComputerSystemPermission, NativeTarget } from './contract.ts'
 
 export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget'>
 export interface ComputerConnectionOptions {
@@ -51,6 +51,11 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private permissionVersion = 0
   private permissionTail: Promise<void> = Promise.resolve()
   private readonly permissionWrites = new Set<Promise<void>>()
+  private authorizationSerial = 0
+  private authorizationBase = 0
+  private readonly authorizationVersions = new Map<string, number>()
+  private readonly authorizationStarts = new Set<string>()
+  private readonly authorizationLaunches = new Map<string, Set<AbortController>>()
   // A fresh Host/HMR lifetime also starts far from the old page's cached
   // epochs. Native physical epochs remain the driver's separate counter.
   private epochHighWater = randomInt(1, 2 ** 40)
@@ -67,6 +72,17 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private assertEnabled() { this.assertLive(); if (this.options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用') }
   private notify() { for (const listener of this.listeners) { try { listener() } catch {} } }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  authorizationGeneration(sessionId: string) { requireIdentity(sessionId, '会话'); return this.authorizationVersions.get(sessionId) ?? this.authorizationBase }
+  private invalidateAuthorization(sessionId?: string) {
+    if (sessionId === undefined) { this.authorizationBase = ++this.authorizationSerial; this.authorizationVersions.clear() }
+    else this.authorizationVersions.set(sessionId, ++this.authorizationSerial)
+    const controllers = sessionId === undefined ? [...this.authorizationLaunches.values()].flatMap(values => [...values]) : [...this.authorizationLaunches.get(sessionId) ?? []]
+    for (const controller of controllers) controller.abort(new ComputerError('CONTROL_CHANGED', '应用启动已被用户控制动作取消'))
+  }
+  private invalidateEntryAuthorization(entry: Environment) {
+    if (entry.sessionId !== undefined) this.invalidateAuthorization(entry.sessionId)
+    else for (const row of entry.service.list()) this.invalidateAuthorization(row.sessionId)
+  }
   allowedApps(): string[] { return [...this.allowed].filter(app => !this.denied.has(app)).sort() }
   setAppAllowed(appId: string, allowed: boolean): Promise<void> {
     this.assertLive(); requireIdentity(appId, '应用')
@@ -74,6 +90,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (allowed && !this.allowedApps().includes(appId)) this.denied.add(appId)
     let stopping: Promise<unknown> = Promise.resolve()
     if (!allowed) {
+      this.invalidateAuthorization()
       this.denied.add(appId); this.allowed.delete(appId)
       // Call stop synchronously on all services before waiting for disk. This
       // invalidates action epochs and aborts queued native input immediately.
@@ -115,7 +132,10 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
         }
         created.lastUsed = this.now(); this.trimSnapshots(); this.notify()
       })
-      const unDriver = driver.subscribe(event => { if (event.event === 'previewClosed' && (event.sessionId === undefined || event.sessionId === sessionId)) { created.previewIntent++; created.previewDetached = false; this.notify() } })
+      const unDriver = driver.subscribe(event => {
+        if (['humanInput', 'disconnected', 'previewClosed'].includes(event.event) && (event.sessionId === undefined || event.sessionId === sessionId)) this.invalidateEntryAuthorization(created)
+        if (event.event === 'previewClosed' && (event.sessionId === undefined || event.sessionId === sessionId)) { created.previewIntent++; created.previewDetached = false; this.notify() }
+      })
       created.unsubscribe = () => { unService(); unDriver() }
       if (sessionId === undefined) this.legacy = created; else this.entries.set(sessionId, created)
       entry = created
@@ -132,7 +152,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private forSession(sessionId: string, create = false) {
     requireIdentity(sessionId, '会话'); this.assertLive()
     const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined) ?? (create ? this.entry(sessionId) : undefined)
-    if (!entry) throw new ComputerError('SESSION_NOT_STARTED', '请先在电脑操控面板选择应用并开始')
+    if (!entry) throw new ComputerError('SESSION_NOT_STARTED', '请先在当前聊天请求操作应用并完成授权')
     if (entry.retiring) throw new ComputerError('ENVIRONMENT_RETIRING', '此聊天的电脑环境正在清理')
     entry.lastUsed = this.now(); return entry
   }
@@ -146,15 +166,70 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
   async statusFor(sessionId?: string, signal?: AbortSignal) {
     this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
-    const entry = this.existing(sessionId)
-    if (!entry) return { available: false, mode: 'local', uninitialized: true, message: '请选择应用以检测此聊天的本机电脑操控权限' }
+    const entry = this.entry(sessionId)
     if (entry.switching || entry.retiring) return { available: false, mode: entry.driver.mode, message: entry.retiring ? '电脑环境正在清理' : '正在切换操作环境' }
+    entry.lastUsed = this.now()
     return entry.service.status(signal)
   }
+  async statusIfPresentFor(sessionId: string, signal?: AbortSignal) {
+    this.assertLive(); requireIdentity(sessionId, '会话')
+    if (!this.existing(sessionId)) return null
+    return this.statusFor(sessionId, signal)
+  }
   status(signal?: AbortSignal) { return this.statusFor(undefined, signal) }
+  authorizationStatus(sessionId?: string, signal?: AbortSignal) { return this.statusFor(sessionId, signal) }
+  applicationsFor(sessionId?: string, signal?: AbortSignal) {
+    this.assertEnabled(); const entry = this.entry(sessionId)
+    if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境')
+    entry.lastUsed = this.now(); return entry.driver.applications(signal)
+  }
+  async launchApplicationFor(sessionId: string, appId: string, signal?: AbortSignal) {
+    this.assertEnabled(); requireIdentity(appId, '应用'); const entry = this.entry(sessionId)
+    if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境')
+    const controller = new AbortController(), pending = this.authorizationLaunches.get(sessionId) ?? new Set<AbortController>()
+    pending.add(controller); this.authorizationLaunches.set(sessionId, pending)
+    const generation = this.authorizationGeneration(sessionId)
+    try {
+      entry.lastUsed = this.now()
+      const result = await entry.driver.launchApplication(appId, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal)
+      controller.signal.throwIfAborted(); this.assertEnabled()
+      if (this.authorizationGeneration(sessionId) !== generation) throw new ComputerError('CONTROL_CHANGED', '应用启动期间控制权已变化')
+      return result
+    } finally { pending.delete(controller); if (!pending.size) this.authorizationLaunches.delete(sessionId) }
+  }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+    this.assertEnabled()
+    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
+    return this.entry().driver.openSystemSettings(kind, signal)
+  }
   targetsFor(sessionId?: string, signal?: AbortSignal) { this.assertEnabled(); const entry = this.entry(sessionId); if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境'); entry.lastUsed = this.now(); return entry.service.targets(signal) }
   targets(signal?: AbortSignal) { return this.targetsFor(undefined, signal) }
   start(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal } = {}) { this.assertEnabled(); return this.forSession(sessionId, true).service.start(sessionId, targetId, options) }
+  /** Owner-approved transition. External pause/stop/revoke/connect invalidates
+   * every awaited boundary, while this internal target switch keeps its token. */
+  async authorizationStart(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal; expectedGeneration: number; expectedTarget: Pick<NativeTarget, 'id' | 'appId' | 'pid'> }) {
+    const check = () => {
+      this.assertEnabled(); options.signal?.throwIfAborted()
+      if (this.authorizationGeneration(sessionId) !== options.expectedGeneration) throw new ComputerError('CONTROL_CHANGED', '授权请求已失效，请在当前聊天重新请求')
+    }
+    check()
+    if (this.authorizationStarts.has(sessionId)) throw new ComputerError('CONTROL_CHANGED', '此聊天正在处理另一个应用授权')
+    this.authorizationStarts.add(sessionId)
+    try {
+      const entry = this.forSession(sessionId, true), current = entry.service.get(sessionId)
+      if (current && ['paused', 'humanControl', 'pausing', 'handingOver', 'resuming', 'stopping'].includes(current.state)) throw new ComputerError('OWNER_RESUME_REQUIRED', '此聊天已暂停或接管，请由用户点击继续')
+      if (current && ['ready', 'running'].includes(current.state)) {
+        if (current.target?.id === targetId) {
+          if (current.target.appId !== options.expectedTarget.appId || current.target.pid !== options.expectedTarget.pid || targetId !== options.expectedTarget.id) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新申请授权')
+          return current
+        }
+        await entry.service.stop(sessionId); check()
+      }
+      const result = await entry.service.start(sessionId, targetId, options)
+      try { check() } catch (error) { if (entry.service.get(sessionId)?.epoch === result.epoch) await entry.service.stop(sessionId); throw error }
+      return result
+    } finally { this.authorizationStarts.delete(sessionId) }
+  }
   observe(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.observe(sessionId, signal) }
   preview(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.preview(sessionId, signal) }
   act(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.act(sessionId, request, signal) }
@@ -163,6 +238,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   selectTarget(sessionId: string, targetId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.selectTarget(sessionId, targetId, signal) }
   private stopOrPause(sessionId: string, pause: boolean): Promise<ComputerSessionSnapshot> {
     this.assertLive(); requireIdentity(sessionId, '会话')
+    this.invalidateAuthorization(sessionId)
     const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined)
     if (entry?.retiring) {
       // A failed retirement is still an owner. Do not acknowledge its old
@@ -177,7 +253,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     return pause ? service.pause(sessionId) : service.stop(sessionId)
   }
   pause(sessionId: string) { return this.stopOrPause(sessionId, true) }
-  takeover(sessionId: string) { return this.forSession(sessionId).service.takeover(sessionId) }
+  takeover(sessionId: string) { this.invalidateAuthorization(sessionId); return this.forSession(sessionId).service.takeover(sessionId) }
   resume(sessionId: string) { return this.forSession(sessionId).service.resume(sessionId) }
   stop(sessionId: string) { return this.stopOrPause(sessionId, false) }
   cancelFiles(sessionId?: string, all = false) {
@@ -185,8 +261,15 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   }
   async connect(sessionId: string | undefined, options: ComputerConnectionOptions, signal?: AbortSignal) {
     this.assertEnabled(); signal?.throwIfAborted()
+    const previous = this.existing(sessionId)
+    if (previous?.driver.requiresOwnerReconnect) {
+      // Only this explicit owner route may replace an uncertain launch owner.
+      // Automatic discovery/sweep never acknowledges the physical-surface fence.
+      await this.retire(previous); this.assertEnabled(); signal?.throwIfAborted()
+    }
     const entry = this.entry(sessionId)
     if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境，请稍候')
+    this.invalidateEntryAuthorization(entry)
     entry.switching = true; entry.lastUsed = this.now(); this.cancelFiles(sessionId); this.notify()
     try {
       const stopped = await Promise.allSettled(entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
@@ -200,7 +283,12 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
         if (options.initialUrl !== undefined && (typeof options.initialUrl !== 'string' || options.initialUrl.length > 8192) || options.cdpEndpoint !== undefined && (typeof options.cdpEndpoint !== 'string' || options.cdpEndpoint.length > 2048)) throw new ComputerError('INVALID_BROWSER_OPTIONS', '浏览器地址无效')
         await entry.driver.useBrowser({ browser: options.browser, profileDir: join(this.options.directory, 'browser-profiles', sessionId === undefined ? 'legacy' : hash(sessionId), options.browser!), allowedOrigins: options.allowedOrigins, ...(options.cdpEndpoint ? { cdpEndpoint: options.cdpEndpoint } : {}) }, options.initialUrl, signal)
       } else throw new ComputerError('INVALID_CONNECTION', '请选择本机或提供独立电脑的配对地址与密钥')
-      this.assertEnabled(); signal?.throwIfAborted(); return await entry.driver.status(signal)
+      this.assertEnabled(); signal?.throwIfAborted()
+      const status = await entry.driver.status(signal)
+      this.assertEnabled(); signal?.throwIfAborted()
+      if (status.available === true) entry.driver.acknowledgeOwnerReconnect()
+      else if (entry.driver.requiresOwnerReconnect) throw new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '新执行器尚未就绪，不能恢复此电脑的输入。')
+      return status
     } finally { entry.switching = false; entry.lastUsed = this.now(); this.notify() }
   }
   async exchange(sessionId: string | undefined, request: unknown, signal?: AbortSignal) {
@@ -225,12 +313,14 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     this.notify(); return result
   }
   async stopAll() {
+    this.invalidateAuthorization()
     this.cancelFiles(undefined, true)
     const stopped = this.all().flatMap<Promise<unknown>>(entry => entry.retiring ? [this.retire(entry)] : entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
     const result = await Promise.allSettled(stopped); failMany(failures(result), '部分电脑环境尚未完成停止')
   }
   private retire(entry: Environment): Promise<void> {
     if (entry.retirement) return entry.retirement
+    this.invalidateEntryAuthorization(entry)
     entry.retiring = true; this.cancelFiles(entry.sessionId); this.notify()
     const retiring = (async () => {
       const errors: unknown[] = []
@@ -259,17 +349,18 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     void retiring.catch(error => { entry.cleanupError = computerError(error); entry.retirement = undefined; this.notify() })
     return retiring
   }
-  sweep(): Promise<void> {
+  sweep(protectedSessions: readonly string[] = []): Promise<void> {
     if (this.sweeping) return this.sweeping
     if (this.disposed) return Promise.resolve()
-    const now = this.now(), ready = this.all().filter(entry => !entry.switching && !entry.files.size && (entry.retiring || now - entry.lastUsed >= (this.options.idleMs ?? 60_000) && entry.service.list().every(row => terminal(row.state))))
+    const protectedIds = new Set(protectedSessions)
+    const now = this.now(), ready = this.all().filter(entry => !entry.switching && !entry.files.size && (entry.retiring || (entry.sessionId === undefined || !protectedIds.has(entry.sessionId)) && now - entry.lastUsed >= (this.options.idleMs ?? 60_000) && entry.service.list().every(row => terminal(row.state))))
     const pending = Promise.allSettled(ready.map(entry => this.retire(entry))).then(rows => failMany(failures(rows), '闲置电脑环境清理未完成'))
     this.sweeping = pending
     void pending.then(() => { this.sweeping = undefined }, () => { this.sweeping = undefined }); return pending
   }
   dispose(): Promise<void> {
     if (this.disposing) return this.disposing
-    this.disposed = true; this.cancelFiles(undefined, true)
+    this.disposed = true; this.invalidateAuthorization(); this.cancelFiles(undefined, true)
     const pending = Promise.allSettled([...this.all().map(entry => this.retire(entry)), ...this.permissionWrites]).then(rows => { failMany(failures(rows), '部分电脑环境未能退出'); this.listeners.clear() })
     this.disposing = pending
     void pending.catch(() => { this.disposing = undefined }); return pending

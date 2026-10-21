@@ -77,7 +77,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, leaseActor, aiCursor = aiCursor.Snapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
     internal object[] Targets()
     {
         var targets = new List<object>();
@@ -92,7 +92,7 @@ internal sealed class ComputerDriver : IDisposable
                 var born = process.StartTime.ToUniversalTime().Ticks;
                 var id = $"window:{handle.ToInt64():x}:{pid}:{born}";
                 var imagePath = Path.GetFullPath(process.MainModule?.FileName ?? throw new InvalidOperationException());
-                var appId = imagePath.Length <= 512 ? imagePath.ToLowerInvariant() : "winexe:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(imagePath.ToUpperInvariant()))).ToLowerInvariant();
+                var appId = NativeApplicationCatalog.AppId(imagePath);
                 targets.Add(new { id, appId, title, pid, x = rect.Left, y = rect.Top, width = rect.Width, height = rect.Height, scale = Native.GetDpiForWindow(handle) / 96.0 });
             } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
             return targets.Count < 256;
@@ -247,7 +247,7 @@ internal sealed class ComputerDriver : IDisposable
     private void Send(long requested, params Native.INPUT[] inputs)
     {
         lock (inputLock) {
-            try { Check(requested); if (inputTarget != IntPtr.Zero && Native.GetForegroundWindow() != inputTarget) throw new NativeFailure("foreground-changed", "Target lost foreground input ownership"); if (writeInputs(inputs) != inputs.Length) throw new NativeFailure("input-denied", "Windows refused input; the target may require a higher integrity level"); }
+            try { Check(requested); if (inputTarget != IntPtr.Zero && Native.GetForegroundWindow() != inputTarget) throw new NativeFailure("foreground-changed", "Target lost foreground input ownership"); if (writeInputs(inputs) != inputs.Length) throw new NativeFailure("input-denied", "Windows refused input; the target may require a higher integrity level"); if (inputTargetId != null) aiCursor.OperationStart(requested, inputTargetId, inputTarget, inputTargetBounds); }
             catch { aiCursor.Hide(requested); throw; }
         }
     }
@@ -256,7 +256,7 @@ internal sealed class ComputerDriver : IDisposable
         if (!actionGate.Wait(0)) throw new NativeFailure("input-busy", "Another input action is still running");
         try { return await ActCore(request); }
         catch { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.Hide(requested); throw; }
-        finally { actionGate.Release(); }
+        finally { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.OperationEnd(requested); actionGate.Release(); }
     }
     private async Task<object> ActCore(JsonElement request)
     {

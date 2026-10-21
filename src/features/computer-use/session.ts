@@ -120,11 +120,15 @@ export class ComputerSessionService {
   }
   private isAllowed(record: SessionRecord): boolean { return record.allowOnce || this.allowedApps().includes(record.snapshot.target?.appId ?? '') }
   async permittedTargets(sessionId: string, signal?: AbortSignal): Promise<NativeTarget[]> {
-    const record = this.record(sessionId)
-    this.fence(record, record.snapshot.epoch)
+    const record = this.record(sessionId), epoch = record.snapshot.epoch
+    this.fence(record, epoch)
+    const targets = await this.targets(signal)
+    this.fence(record, epoch); signal?.throwIfAborted()
+    // Discovery may finish after a different application's grant is revoked.
+    // Only publish titles against the owner's current grants and control epoch.
     const apps = new Set(this.allowedApps())
     if (record.allowOnce && record.snapshot.target) apps.add(record.snapshot.target.appId)
-    return (await this.targets(signal)).filter(target => apps.has(target.appId))
+    return targets.filter(target => apps.has(target.appId))
   }
   /** Agents may change targets only within grants the owner has already made. */
   async selectTarget(sessionId: string, targetId: string, signal?: AbortSignal): Promise<ComputerSessionSnapshot> {
@@ -138,7 +142,7 @@ export class ComputerSessionService {
     await this.transition(sessionId, 'stopped')
     signal?.throwIfAborted()
     if (this.ownerControlVersion !== controlVersion || record.snapshot.state !== 'stopped') throw new ComputerError('CONTROL_CHANGED', '切换目标已被用户控制动作取消')
-    return this.start(sessionId, targetId, { allowOnce, signal })
+    return this.start(sessionId, targetId, { allowOnce, signal, expectedTarget: { id: target.id, appId: target.appId, pid: target.pid } })
   }
   private fence(record: SessionRecord, epoch: number, human = false): void {
     this.assertEnabled()
@@ -162,7 +166,7 @@ export class ComputerSessionService {
     record.pending.add(promise)
     try { return await promise } finally { record.pending.delete(promise); record.controllers.delete(controller); signal?.removeEventListener('abort', abort) }
   }
-  async start(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal } = {}): Promise<ComputerSessionSnapshot> {
+  async start(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal; expectedTarget?: Pick<NativeTarget, 'id' | 'appId' | 'pid'> } = {}): Promise<ComputerSessionSnapshot> {
     this.assertEnabled(); requireIdentity(sessionId, '会话'); requireIdentity(targetId, '目标')
     if (this.activeSession && this.activeSession !== sessionId) throw new ComputerError('DEVICE_BUSY', '另一个会话正在控制此电脑，请先停止')
     const previous = this.sessions.get(sessionId)
@@ -183,6 +187,8 @@ export class ComputerSessionService {
         if (!target || !validGeometry(target)) throw new ComputerError('TARGET_NOT_FOUND', '目标窗口已关闭或不可用')
         requireIdentity(target.appId, '应用')
         if (!Number.isSafeInteger(target.pid) || target.pid <= 0 || typeof target.title !== 'string') throw new ComputerError('INVALID_TARGET', '执行器返回的应用身份无效')
+        const expected = options.expectedTarget
+        if (expected && (target.id !== expected.id || target.appId !== expected.appId || target.pid !== expected.pid)) throw new ComputerError('TARGET_CHANGED', '目标应用身份已变化，请重新申请授权')
         record.snapshot.target = { ...target }
         if (!this.isAllowed(record)) throw new ComputerError('APP_NOT_ALLOWED', '请先允许此应用，或从面板授权本次操作')
         await this.acquireLease(record, epoch, signal)

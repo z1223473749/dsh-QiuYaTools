@@ -3,7 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
 import { ComputerError, computerError, parseComputerAction, requireIdentity } from './contract.ts'
-import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
+import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 import { ComputerExchange, EXCHANGE_MAX_BYTES, EXCHANGE_CHUNK_BYTES, parseExchangeRequest, type ExchangeResult } from './exchange.ts'
 export { NativeCompanionDriver } from './native.ts'
 
@@ -11,7 +11,7 @@ export const COMPUTER_AGENT_VERSION = 1
 export const COMPUTER_AGENT_PATH = '/v1/computer'
 const REQUEST_LIMIT = 512 * 1024
 const RESPONSE_LIMIT = 48 * 1024 * 1024
-const operations = new Set(['status', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat', 'exchange'])
+const operations = new Set(['status', 'applications', 'launchApplication', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat', 'exchange'])
 function pairToken(value: string): string {
   if (typeof value !== 'string' || value.length < 32 || value.length > 512 || /\s|[\x00-\x1f\x7f]/u.test(value)) throw new ComputerError('INVALID_PAIR_TOKEN', '配对令牌必须至少 32 字符且不包含空白')
   return value
@@ -84,24 +84,31 @@ export class RemoteComputerDriver implements DeviceDriver {
   }
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private emit(event: NativeComputerEvent): void { for (const listener of this.listeners) { try { listener(event) } catch {} } }
-  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, cleanup = false): Promise<T> {
+  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, cleanup = false, awaitIssuedReply = false): Promise<T> {
     if (this.disposed && !cleanup) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     signal?.throwIfAborted()
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(new ComputerError('REMOTE_TIMEOUT', '远端操作超时')), this.options.timeoutMs ?? 20_000)
-    const abort = () => controller.abort(signal?.reason)
+    let issued = false, acknowledged = false
+    const abort = () => { if (!awaitIssuedReply || !issued) controller.abort(signal?.reason) }
     signal?.addEventListener('abort', abort, { once: true }); this.pending.add(controller)
     const requestId = ++this.requestId
     try {
       if (signal?.aborted) abort()
       const body = JSON.stringify({ version: COMPUTER_AGENT_VERSION, clientId: this.clientId, requestId, op, payload })
       if (op === 'exchange' && Buffer.byteLength(body) > 256000) throw new ComputerError('EXCHANGE_REQUEST_LIMIT', '文件交换请求超过分块限制。')
+      controller.signal.throwIfAborted(); issued = true
       const response = await this.fetcher(this.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` }, body, signal: controller.signal, redirect: 'error' })
       const limit = op === 'exchange' ? Math.min(256000, this.options.maxResponseBytes ?? RESPONSE_LIMIT) : this.options.maxResponseBytes ?? RESPONSE_LIMIT
       const value = await readResponse(response, limit) as { version?: unknown; requestId?: unknown; ok?: unknown; result?: T; error?: { code?: unknown; message?: unknown } }
       if (value?.version !== COMPUTER_AGENT_VERSION) throw new ComputerError('VERSION_MISMATCH', '远端电脑代理协议版本不兼容')
+      if (awaitIssuedReply && value.requestId === requestId) acknowledged = true
       if (!response.ok || value.ok !== true) throw new ComputerError(typeof value.error?.code === 'string' ? value.error.code : 'REMOTE_FAILED', typeof value.error?.message === 'string' ? value.error.message : '远端操作失败')
       if (value.requestId !== requestId) throw new ComputerError('REMOTE_PROTOCOL', '远端响应身份不匹配')
+      if (awaitIssuedReply) signal?.throwIfAborted()
       return value.result as T
+    } catch (error) {
+      if (awaitIssuedReply && issued && !acknowledged) throw new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '独立电脑的应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接并确认当前窗口。')
+      throw error
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); this.pending.delete(controller) }
   }
   private startHeartbeat(): void {
@@ -147,6 +154,16 @@ export class RemoteComputerDriver implements DeviceDriver {
     const targets = await this.rpc<NativeTarget[]>('targets', {}, signal)
     if (!Array.isArray(targets)) throw new ComputerError('REMOTE_PROTOCOL', '远端目标列表无效')
     return targets.map(target => ({ ...target, appId: `${this.deviceId}:${target.appId}` }))
+  }
+  async applications(signal?: AbortSignal): Promise<NativeApplication[]> {
+    const applications = await this.rpc<NativeApplication[]>('applications', {}, signal)
+    if (!Array.isArray(applications) || applications.length > 1024 || applications.some(app => !app || typeof app.appId !== 'string' || !app.appId || app.appId.length > 512 || typeof app.name !== 'string' || !app.name || app.name.length > 640 || Array.from(app.name).length > 160 || typeof app.running !== 'boolean')) throw new ComputerError('REMOTE_PROTOCOL', '远端应用目录无效')
+    return applications.map(({ appId, name, running, launchable }) => ({ appId: `${this.deviceId}:${appId}`, name, running, ...(launchable === undefined ? {} : { launchable }) }))
+  }
+  launchApplication(appId: string, signal?: AbortSignal) {
+    const prefix = `${this.deviceId}:`
+    if (!appId.startsWith(prefix)) throw new ComputerError('APPLICATION_DEVICE_CHANGED', '应用不属于当前配对设备')
+    return this.rpc('launchApplication', { appId: requireIdentity(appId.slice(prefix.length), '应用') }, signal, false, true)
   }
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
@@ -310,6 +327,19 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       response.once('close', cancel)
       let result: unknown
       if (op === 'status') result = { ...await driver.status(controller.signal), protocolVersion: COMPUTER_AGENT_VERSION, leaseTimeoutMs: leaseTimeout, cleanupPending: pendingReleases.size > 0 }
+      else if (op === 'applications') {
+        if (Object.keys(payload).length) throw new ComputerError('INVALID_REQUEST', '应用目录参数无效')
+        result = driver.applications ? await driver.applications(controller.signal) : [...new Map((await driver.targets(controller.signal)).map(target => [target.appId, { appId: target.appId, name: target.appId, running: true, launchable: false }])).values()]
+      }
+      else if (op === 'launchApplication') {
+        if (Object.keys(payload).some(key => key !== 'appId')) throw new ComputerError('INVALID_REQUEST', '启动应用参数无效')
+        if (!driver.applications || !driver.launchApplication) throw new ComputerError('APPLICATION_LAUNCH_UNSUPPORTED', '请先在独立电脑上手动打开该应用')
+        const appId = requireIdentity(payload.appId, '应用')
+        if (!(await driver.applications(controller.signal)).some(app => app.appId === appId && app.launchable === true)) throw new ComputerError('APPLICATION_UNAVAILABLE', '此应用不在独立电脑的可启动目录中')
+        controller.signal.throwIfAborted()
+        if (closing || generation !== pairingGeneration) throw new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销')
+        result = await driver.launchApplication(appId, controller.signal)
+      }
       else if (op === 'targets') result = await driver.targets(controller.signal)
       else if (op === 'observe') result = payload.preview === true && driver.preview ? await driver.preview(requireIdentity(payload.targetId, '目标'), controller.signal) : await driver.observe(requireIdentity(payload.targetId, '目标'), controller.signal)
       else if (op === 'exchange') {

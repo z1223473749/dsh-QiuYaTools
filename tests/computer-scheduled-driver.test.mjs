@@ -87,3 +87,25 @@ test('failed disposal retains a closed input fence but permits explicit cleanup 
   await assert.rejects(f.driver.lease(2), { code: 'DISPOSED' })
   await f.driver.dispose(); assert.equal(attempts, 2)
 })
+
+test('application activation waits for physical input and is dispatched once without an input lease', async () => {
+  const scheduler = new ComputerInputScheduler(), a = fixture('a', scheduler), b = fixture('b', scheduler), gate = deferred(), order = []
+  a.inner.act = async () => { order.push('typing'); await gate.promise; order.push('typed'); return {} }
+  b.inner.launchApplication = async id => { order.push('launch:' + id); return { launched: true } }
+  await a.driver.lease(1)
+  const action = a.driver.act(1, 'a', { kind: 'type', text: 'owned text' }); await tick()
+  const launch = b.driver.launchApplication('appB'); await tick(); assert.deepEqual(order, ['typing'])
+  gate.resolve(); await Promise.all([action, launch]); assert.deepEqual(order, ['typing', 'typed', 'launch:appB'])
+  assert.equal(b.records.some(row => row[0] === 'lease'), false)
+  await Promise.all([a.driver.dispose(), b.driver.dispose()])
+})
+
+test('disposing a queued application launch removes it before activation without replay', async () => {
+  const scheduler = new ComputerInputScheduler(), a = fixture('a', scheduler), b = fixture('b', scheduler), gate = deferred()
+  let launched = 0
+  a.inner.act = () => gate.promise; b.inner.launchApplication = async () => { launched++ }
+  await a.driver.lease(1); const action = a.driver.act(1, 'a', { kind: 'drag' }); await tick()
+  const launch = b.driver.launchApplication('appB'), rejected = assert.rejects(launch, { code: 'DISPOSED' })
+  await b.driver.dispose(); await rejected; assert.equal(launched, 0)
+  gate.resolve({}); await action; await a.driver.dispose()
+})

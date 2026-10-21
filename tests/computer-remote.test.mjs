@@ -96,14 +96,16 @@ test('bounded request and response streams reject excess payloads', async t => {
 })
 
 test('server watchdog fences disconnected clients while heartbeats keep healthy ownership', async t => {
-  const f = await fixture(t, { leaseTimeoutMs: 150 }), a = f.remote('live', { heartbeatMs: 35 })
+  // Exercise the production lease timeout. An accelerated 150ms lease measures
+  // the VM's timer/HTTP scheduling jitter instead of a live client's heartbeat.
+  const f = await fixture(t), a = f.remote('live', { heartbeatMs: 200 })
   await a.lease(1)
-  await delay(260)
+  await delay(5500)
   await a.act(1, 'window-1', { kind: 'key', key: 'Enter' })
   await a.release(1)
-  const dormant = f.remote('disconnected', { heartbeatMs: 10_000 })
+  const dormant = f.remote('disconnected', { heartbeatMs: 60_000 })
   await dormant.lease(1)
-  const deadline = Date.now() + 1000
+  const deadline = Date.now() + 7000
   while (f.released.length < 2 && Date.now() < deadline) await delay(20)
   assert.ok(f.released.includes(2), 'server released the native lease without needing client cleanup')
   await assert.rejects(dormant.act(1, 'window-1', { kind: 'key', key: 'Enter' }), { code: 'CONTROL_CHANGED' })
@@ -198,4 +200,18 @@ test('physical intervention in the guest revokes its lease and pauses the paired
   await a.lease(2)
   await a.act(2, 'window-1', { kind: 'key', key: 'Enter' })
   assert.equal(f.input.length, 1, 'explicit fresh lease may resume after physical intervention')
+})
+
+test('paired application discovery stays metadata-only and launches only namespaced catalog identities', async t => {
+  const f = await fixture(t), a = f.remote('catalog-owner'), calls = []
+  f.driver.applications = async () => [{ appId: 'fixture.app', name: '测试应用', running: false, launchable: true }]
+  f.driver.launchApplication = async appId => { calls.push(appId); return { launched: true } }
+  const applications = await a.applications()
+  assert.deepEqual(applications, [{ appId: `${a.deviceId}:fixture.app`, name: '测试应用', running: false, launchable: true }])
+  assert.deepEqual(await a.launchApplication(applications[0].appId), { launched: true }); assert.deepEqual(calls, ['fixture.app'])
+  assert.throws(() => a.launchApplication('remote:other-device:fixture.app'), { code: 'APPLICATION_DEVICE_CHANGED' })
+  assert.equal((await f.raw({ op: 'launchApplication', payload: { appId: 'anything.exe', args: ['--unsafe'] } })).value.error.code, 'INVALID_REQUEST')
+  assert.equal((await f.raw({ op: 'launchApplication', payload: { appId: 'anything.exe' } })).value.error.code, 'APPLICATION_UNAVAILABLE')
+  assert.equal((await f.raw({ op: 'openSystemSettings', payload: { kind: 'accessibility' } })).value.error.code, 'OP_NOT_ALLOWED')
+  assert.deepEqual(f.input, []); assert.deepEqual(f.leased, [])
 })

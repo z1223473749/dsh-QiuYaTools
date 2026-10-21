@@ -26,19 +26,21 @@ async function fixture(t, { initial = { status: 'ready', value: { enabled: true,
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://127.0.0.1/' })
   const saved = new Map(['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
-  const scheduled = new Map(), subscribers = new Set(), calls = [], planned = [], states = new Map([['A', snapshot('A')], ['B', snapshot('B', 'running')]]), detached = new Map()
+  const scheduled = new Map(), subscribers = new Set(), calls = [], planned = [], states = new Map([['A', snapshot('A')], ['B', snapshot('B', 'running')]]), detached = new Map(), requests = new Map(), native = { value: { platform: 'win32', available: true } }
   let sequence = 0, preferences = initial, disposeFeature, declarationInjection, featureInjection
   const clock = { setTimeout(callback, milliseconds) { assert.equal(milliseconds, 1200, 'only the component polling clock is controlled'); const id = ++sequence; scheduled.set(id, callback); return id }, clearTimeout(id) { scheduled.delete(id) } }
   const module = { exports: {} }
   new Function('require', 'module', 'exports', 'setTimeout', 'clearTimeout', source)(require, module, module.exports, clock.setTimeout, clock.clearTimeout)
   const form = { getSnapshot: () => preferences, subscribe(listener) { subscribers.add(listener); return () => subscribers.delete(listener) } }
-  const status = () => ({ sessions: [...states.values()].map(value => structuredClone(value)), environments: [...states.keys()].map(sessionId => ({ sessionId, previewDetached: detached.get(sessionId) === true })) })
+  const status = () => ({ native: structuredClone(native.value), pendingRequests: [...requests.values()].map(value => structuredClone(value)), sessions: [...states.values()].map(value => structuredClone(value)), environments: [...states.keys()].map(sessionId => ({ sessionId, previewDetached: detached.get(sessionId) === true })) })
   const connection = { rpc: { async call(channel, method, input, signal) {
     assert.equal(channel, '/api'); assert.equal(method, endpoint)
     const call = { input: structuredClone(input), signal }; calls.push(call)
     const index = planned.findIndex(row => row.op === input.op && row.sessionId === input.sessionId)
     if (index >= 0) return planned.splice(index, 1)[0].pending.promise // Deliberately ignores abort to exercise fencing.
     if (input.op === 'status') return { ok: true, value: status() }
+    if (input.op === 'openSettings') { assert.ok(['screenRecording', 'accessibility', 'inputMonitoring'].includes(input.kind)); return { ok: true, value: { opened: true } } }
+    if (input.op === 'decide') { const request = requests.get(input.requestId); assert.ok(request); assert.equal(request.sessionId, input.sessionId); assert.equal(request.requestVersion, input.requestVersion); requests.delete(input.requestId); if (input.decision !== 'deny') states.set(input.sessionId, snapshot(input.sessionId)); return { ok: true, value: { requestId: input.requestId, state: input.decision === 'deny' ? 'denied' : 'approved' } } }
     const current = states.get(input.sessionId); assert.ok(current, 'control needs a fixture-owned session')
     if (input.op === 'preview' || input.op === 'redock') detached.set(input.sessionId, input.op === 'preview')
     else if (['pause', 'takeover', 'resume', 'stop'].includes(input.op)) states.set(input.sessionId, { ...current, state: { pause: 'paused', takeover: 'humanControl', resume: 'ready', stop: 'stopped' }[input.op] })
@@ -79,7 +81,7 @@ async function fixture(t, { initial = { status: 'ready', value: { enabled: true,
     await declarationPlugin.dispose(); await peerPlugin.dispose(); await registryPlugin.dispose(); dom.window.close()
     for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]
   })
-  return { dom, registry, calls, states, detached, status, render, container, button, click, plan, mutations, updatePreferences, poll, scheduled, subscribers,
+  return { dom, registry, calls, states, detached, requests, native, status, render, container, button, click, plan, mutations, updatePreferences, poll, scheduled, subscribers,
     async disposeSlot() { await act(async () => { disposeFeature(); await settle() }) },
     async unmount() { await act(async () => { root.unmount(); await settle() }) },
   }
@@ -96,24 +98,23 @@ test('two real public-slot instances render their own inline iframe and route pa
   }
   await f.click('left', '暂停电脑任务')
   assert.equal(f.states.get('A').state, 'paused'); assert.equal(f.states.get('B').state, 'running')
-  assert.match(f.container('right').textContent, /正在操作/u); assert.equal(f.button('left', '继续电脑任务').disabled, false)
+  assert.equal(f.container('right').querySelector('[data-qyt-computer-inline]').dataset.state, 'running'); assert.equal(f.button('left', '继续电脑任务').disabled, false)
   await f.click('left', '继续电脑任务'); await f.click('right', '接管电脑任务'); await f.click('right', '停止电脑任务')
   assert.deepEqual(f.mutations(), [{ op: 'pause', sessionId: 'A' }, { op: 'resume', sessionId: 'A' }, { op: 'takeover', sessionId: 'B' }, { op: 'stop', sessionId: 'B' }])
   assert.ok(f.container('left').querySelector('iframe')); assert.equal(f.container('right').querySelector('iframe'), null)
 })
 
-test('detach shows a placeholder and redock restores the inline view without stop; collapse restores the same chat', async t => {
+test('detach and redock retain the same live inline frame; hiding controls never collapses its picture', async t => {
   const f = await fixture(t); await f.render({ left: 'A', right: 'B' })
-  const rightFrame = f.container('right').querySelector('iframe')
+  const leftFrame = f.container('left').querySelector('iframe'), rightFrame = f.container('right').querySelector('iframe')
   await f.click('left', '弹出电脑预览')
-  assert.equal(f.container('left').querySelector('iframe'), null); assert.match(f.container('left').textContent, /预览已弹出/u)
+  assert.equal(f.container('left').querySelector('iframe'), leftFrame); assert.equal(f.container('left').querySelector('[aria-label="预览已弹出"]'), null)
+  assert.ok(f.button('left', '收回电脑预览'))
   assert.equal(f.container('right').querySelector('iframe'), rightFrame)
-  await f.click('left', '收回到聊天')
-  assert.equal(new URL(f.container('left').querySelector('iframe').src).searchParams.get('session'), 'A')
-  await f.click('left', '收起电脑实时预览')
-  assert.equal(f.container('left').querySelector('iframe'), null); assert.equal(f.button('left', '显示电脑实时预览').getAttribute('aria-expanded'), 'false')
-  await f.click('left', '显示电脑实时预览')
-  assert.ok(f.container('left').querySelector('iframe')); assert.equal(f.button('left', '收起电脑实时预览').getAttribute('aria-expanded'), 'true')
+  await f.click('left', '收回电脑预览')
+  assert.equal(f.container('left').querySelector('iframe'), leftFrame)
+  await f.click('left', '隐藏预览控件')
+  assert.equal(f.container('left').querySelector('iframe'), leftFrame); assert.equal(f.container('left').querySelector('[data-qyt-computer-inline]').dataset.controlsHidden, 'true')
   assert.deepEqual(f.mutations(), [{ op: 'preview', sessionId: 'A' }, { op: 'redock', sessionId: 'A' }])
 })
 
@@ -122,10 +123,10 @@ test('a late status from the old session is aborted and cannot replace the new c
   await f.render({ seat: 'A' }); const oldCall = f.calls[0]
   assert.equal(f.container('seat').querySelector('iframe'), null)
   f.detached.set('B', true); await f.render({ seat: 'B' })
-  assert.equal(oldCall.signal.aborted, true); assert.match(f.container('seat').textContent, /Target B/u)
+  assert.equal(oldCall.signal.aborted, true); assert.equal(f.container('seat').querySelector('[data-qyt-computer-inline]').dataset.targetId, 'window-B')
   await act(async () => { old.resolve({ ok: true, value: { sessions: [snapshot('A')], environments: [{ sessionId: 'A', previewDetached: false }] } }); await settle() })
   assert.equal(f.container('seat').querySelector('[data-qyt-computer-chat]').dataset.qytComputerChat, 'B')
-  assert.match(f.container('seat').textContent, /Target B/u); assert.match(f.container('seat').textContent, /预览已弹出/u)
+  assert.equal(f.container('seat').querySelector('[data-qyt-computer-inline]').dataset.targetId, 'window-B'); assert.ok(f.button('seat', '收回电脑预览')); assert.ok(f.container('seat').querySelector('iframe'))
   assert.deepEqual(f.mutations(), [])
 })
 
@@ -141,7 +142,7 @@ for (const outcome of ['success', 'error']) test(`a late ${outcome} control for 
   assert.equal(f.calls.filter(row => row.input.op === 'status').length, requestsBefore, 'former success must not request another old-session refresh')
   f.states.set('B', snapshot('B', 'humanControl'))
   await act(async () => { current.resolve({ ok: true, value: snapshot('B', 'humanControl') }); await settle() })
-  assert.equal(f.button('seat', '暂停电脑任务').disabled, false); assert.match(f.container('seat').textContent, /你正在接管/u)
+  assert.equal(f.button('seat', '暂停电脑任务').disabled, false); assert.equal(f.container('seat').querySelector('[data-qyt-computer-inline]').dataset.state, 'humanControl')
   assert.deepEqual(f.mutations(), [{ op: 'pause', sessionId: 'A' }, { op: 'takeover', sessionId: 'B' }])
 })
 
@@ -155,7 +156,7 @@ test('disabled preferences hide both instances and abort polling; enabling resto
   await f.updatePreferences({ status: 'ready', value: { enabled: true, computerUseEnabled: true } })
   assert.equal(f.dom.window.document.querySelectorAll('iframe').length, 2)
   f.states.set('A', snapshot('A', 'paused')); await f.poll()
-  assert.match(f.container('left').textContent, /已暂停/u); assert.match(f.container('right').textContent, /正在操作/u)
+  assert.equal(f.container('left').querySelector('[data-qyt-computer-inline]').dataset.state, 'paused'); assert.equal(f.container('right').querySelector('[data-qyt-computer-inline]').dataset.state, 'running')
   assert.deepEqual(f.mutations(), [])
 })
 
@@ -185,4 +186,125 @@ test('loading and master-disabled preference snapshots do not read status or dis
   assert.deepEqual(f.calls, []); assert.equal(f.dom.window.document.querySelector('iframe'), null)
   await f.updatePreferences({ status: 'ready', value: { enabled: true, computerUseEnabled: true } })
   assert.equal(f.calls[0].input.sessionId, 'A'); assert.ok(f.dom.window.document.querySelector('iframe'))
+})
+
+const approval = (sessionId, overrides = {}) => ({ requestId: `request-${sessionId}`, requestVersion: 1, sessionId, appId: 'own-app', appName: '<b>自有应用</b>', targetTitle: '<img src=x onerror=alert(1)>', reason: '读取图表并填写中文', createdAt: Date.now(), expiresAt: Date.now() + 60000, state: 'pending', ...overrides })
+
+test('pending-only public chat card presents plain text and routes exact request identity without manual setup', async t => {
+  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.requests.set('request-B', approval('B'))
+  await f.render({ left: 'A', right: 'B' })
+  assert.equal(f.container('left').querySelector('iframe'), null)
+  assert.equal(f.container('left').querySelector('img,b'), null, 'model text must never become markup')
+  assert.match(f.container('left').textContent, /<b>自有应用<\/b>/u)
+  await f.click('left', '允许一次')
+  assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'once' }])
+  assert.ok(f.container('left').querySelector('iframe')); assert.equal(f.container('right').querySelector('iframe'), null)
+  await f.click('right', '拒绝'); assert.equal(f.container('right').querySelector('[data-qyt-computer-chat]'), null)
+})
+
+test('Mac pending card opens fixed permission settings, reads refreshed permissions and gates grants while denial remains available', async t => {
+  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.native.value = { platform: 'darwin', permissions: { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false } }
+  await f.render({ seat: 'A' })
+  for (const label of ['允许一次', '始终允许']) assert.equal(f.button('seat', label).disabled, true)
+  assert.equal(f.button('seat', '拒绝').disabled, false)
+  await f.click('seat', '前往开启屏幕录制'); await f.click('seat', '前往开启辅助功能'); await f.click('seat', '前往开启输入监控')
+  assert.deepEqual(f.mutations(), ['screenRecording', 'accessibility', 'inputMonitoring'].map(kind => ({ op: 'openSettings', sessionId: 'A', kind })))
+  assert.equal(f.button('seat', '允许一次').disabled, true, 'opening Settings is not evidence of permission')
+  f.native.value.permissions = { screenRecording: true, accessibility: true, postEvents: true, inputMonitoring: false }
+  await f.click('seat', '刷新权限')
+  assert.equal(f.button('seat', '允许一次').disabled, false); assert.equal(f.button('seat', '始终允许').disabled, false)
+  assert.match(f.container('seat').textContent, /建议开启输入监控/u)
+  assert.equal(f.mutations().some(row => row.op === 'refresh'), false, 'refresh reads status, not a fabricated mutation')
+  await f.click('seat', '始终允许'); assert.equal(f.mutations().at(-1).decision, 'always')
+})
+
+test('Windows and independent-browser pending cards do not inherit macOS TCC gates', async t => {
+  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.native.value = { platform: 'win32', available: true, permissions: { screenRecording: false, accessibility: false } }
+  await f.render({ seat: 'A' })
+  assert.equal(f.button('seat', '允许一次').disabled, false); assert.equal(f.container('seat').querySelector('[aria-label="系统权限引导"]'), null)
+  f.native.value = { mode: 'browser', available: true }; await f.poll()
+  assert.equal(f.button('seat', '允许一次').disabled, false)
+  await f.click('seat', '拒绝'); assert.equal(f.mutations().at(-1).decision, 'deny')
+})
+
+test('expired request stays noninteractive and a late former-chat approval cannot refresh or unlock the current card', async t => {
+  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.requests.set('request-B', approval('B'))
+  await f.render({ seat: 'A' }); const old = f.plan('decide', 'A'); await f.click('seat', '允许一次')
+  await f.render({ seat: 'B' }); const fresh = f.plan('decide', 'B'); await f.click('seat', '始终允许')
+  const statusCount = f.calls.filter(row => row.input.op === 'status').length
+  await act(async () => { old.resolve({ ok: true, value: { requestId: 'request-A', state: 'approved' } }); await settle() })
+  assert.equal(f.button('seat', '拒绝').disabled, true); assert.equal(f.calls.filter(row => row.input.op === 'status').length, statusCount)
+  f.requests.set('request-B', approval('B', { expiresAt: Date.now() - 1 }))
+  await act(async () => { fresh.resolve({ ok: true, value: { requestId: 'request-B', state: 'denied' } }); await settle() })
+  assert.match(f.container('seat').textContent, /请求已过期/u); assert.equal(f.button('seat', '允许一次'), undefined)
+})
+
+
+test('active inline preview is image-first and keeps controls in a hover/focus overlay without permanent title/status/settings', async t => {
+  const f = await fixture(t); await f.render({ seat: 'A' })
+  const card = f.container('seat').querySelector('[data-qyt-computer-inline]')
+  assert.equal(card.querySelector('.qyt-computer-inline-title,.qyt-computer-status-badge,.qyt-computer-inline-settings'), null)
+  assert.equal(card.textContent.includes('Target A'), false); assert.equal(card.textContent.includes('已就绪'), false)
+  assert.equal(f.button('seat', '显示电脑实时预览'), undefined)
+  const image = card.querySelector('.qyt-computer-inline-image'); assert.ok(image.querySelector('iframe'))
+  assert.ok(image.querySelector('[aria-label="电脑预览悬浮控件"]')); assert.ok(f.button('seat', '拖动电脑小预览'))
+  const css = await readFile(new URL('../src/client/styles.css', import.meta.url), 'utf8')
+  assert.match(css, /\.qyt-computer-inline-card:hover \.qyt-computer-inline-actions,\.qyt-computer-inline-card:focus-within \.qyt-computer-inline-actions/u)
+  assert.match(css, /opacity:0; pointer-events:none/u); assert.match(css, /data-dragging="true"[^}]*box-shadow/u)
+  assert.deepEqual(f.mutations(), [])
+})
+
+function installGeometry(f) {
+  const view = f.dom.window
+  Object.defineProperty(view, 'innerWidth', { configurable: true, value: 800 }); Object.defineProperty(view, 'innerHeight', { configurable: true, value: 600 })
+  view.HTMLElement.prototype.getBoundingClientRect = function() {
+    const widget = this.matches('[data-qyt-computer-inline]'), x = widget ? parseFloat(this.style.left) || 0 : 760, y = widget ? parseFloat(this.style.top) || 0 : 40, width = widget ? Math.min(300, view.innerWidth - 16) : 0, height = widget ? Math.min(180, view.innerHeight - 18) : 0
+    return { x, y, left: x, top: y, right: x + width, bottom: y + height, width, height }
+  }
+  const pointer = async (node, type, x, y, pointerId = 1) => act(async () => { const event = new view.MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y, cancelable: true }); Object.defineProperty(event, 'pointerId', { value: pointerId }); Object.defineProperty(event, 'isPrimary', { value: true }); node.dispatchEvent(event); await settle() })
+  return { pointer, async resize(width, height) { await act(async () => { Object.defineProperty(view, 'innerWidth', { configurable: true, value: width }); Object.defineProperty(view, 'innerHeight', { configurable: true, value: height }); view.dispatchEvent(new view.Event('resize')); await settle() }) } }
+}
+
+test('AI image dragging clamps to this viewport and never sends input; resize and chat changes recheck containment', async t => {
+  const f = await fixture(t), g = installGeometry(f); await f.render({ seat: 'A' })
+  let card = f.container('seat').querySelector('[data-qyt-computer-inline]'), surface = card.querySelector('.qyt-computer-inline-drag-surface')
+  assert.equal(card.style.left, '460px'); assert.equal(card.style.top, '50px')
+  await g.pointer(surface, 'pointerdown', 500, 100); await g.pointer(card, 'pointermove', -1000, 2000)
+  assert.equal(card.style.left, '8px'); assert.equal(card.style.top, '412px'); assert.equal(card.dataset.dragging, 'true')
+  await g.pointer(card, 'pointerup', -1000, 2000); assert.equal(card.dataset.dragging, 'false'); assert.deepEqual(f.mutations(), [])
+  await g.resize(200, 130); assert.equal(card.style.left, '8px'); assert.equal(card.style.top, '10px')
+  await f.render({ seat: 'B' }); card = f.container('seat').querySelector('[data-qyt-computer-inline]')
+  assert.equal(card.style.left, '8px'); assert.equal(card.style.top, '10px'); assert.equal(card.dataset.dragging, 'false')
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('human takeover leaves the entire canvas free; only the grip drags, keyboard nudges clamp and blur cancels capture', async t => {
+  const f = await fixture(t), g = installGeometry(f); f.states.set('A', snapshot('A', 'humanControl')); await f.render({ seat: 'A' })
+  const card = f.container('seat').querySelector('[data-qyt-computer-inline]'), frame = card.querySelector('iframe'), grip = f.button('seat', '拖动电脑小预览')
+  assert.equal(card.querySelector('.qyt-computer-inline-drag-surface'), null)
+  const original = { left: card.style.left, top: card.style.top }
+  await g.pointer(frame, 'pointerdown', 20, 30); await g.pointer(card, 'pointermove', 200, 200); await g.pointer(card, 'pointerup', 200, 200)
+  assert.equal(card.style.left, original.left); assert.equal(card.style.top, original.top)
+  await g.pointer(grip, 'pointerdown', 500, 100); await g.pointer(card, 'pointermove', 510, 120)
+  assert.equal(card.style.left, '470px'); assert.equal(card.style.top, '70px')
+  await act(async () => { f.dom.window.dispatchEvent(new f.dom.window.Event('blur')); await settle() }); assert.equal(card.dataset.dragging, 'false')
+  await g.pointer(card, 'pointermove', 600, 300); assert.equal(card.style.left, '470px')
+  await act(async () => { grip.dispatchEvent(new f.dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true })); await settle() })
+  assert.equal(card.style.left, '492px'); assert.deepEqual(f.mutations(), [])
+})
+
+test('hidden controls restore on unpressed re-entry or keyboard focus and cannot follow another chat', async t => {
+  const f = await fixture(t); f.states.set('A', snapshot('A', 'humanControl')); f.states.set('B', snapshot('B', 'humanControl')); await f.render({ seat: 'A' })
+  let card = f.container('seat').querySelector('[data-qyt-computer-inline]'); const frame = card.querySelector('iframe')
+  await f.click('seat', '隐藏预览控件'); assert.equal(card.dataset.controlsHidden, 'true')
+  const enter = buttons => act(async () => { card.dispatchEvent(new f.dom.window.MouseEvent('pointerover', { bubbles: true, buttons, relatedTarget: null })); await settle() })
+  await enter(1); assert.equal(card.dataset.controlsHidden, 'true', 'A returning held drag cannot re-cover the target pixels')
+  await enter(0); assert.equal(card.dataset.controlsHidden, 'false')
+  await f.click('seat', '隐藏预览控件')
+  await act(async () => { f.button('seat', '拖动电脑小预览').focus(); await settle() })
+  assert.equal(card.dataset.controlsHidden, 'false', 'Keyboard focus restores the same live controls')
+  await f.click('seat', '隐藏预览控件'); assert.equal(card.querySelector('iframe'), frame)
+  await f.render({ seat: 'B' }); card = f.container('seat').querySelector('[data-qyt-computer-inline]')
+  assert.equal(card.dataset.controlsHidden, 'false')
+  assert.deepEqual(f.mutations(), [])
 })

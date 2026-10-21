@@ -2,6 +2,9 @@
 export type ComputerState = 'idle' | 'connecting' | 'awaitingPermission' | 'ready' | 'running' | 'pausing' | 'paused' | 'handingOver' | 'humanControl' | 'resuming' | 'stopping' | 'stopped' | 'disconnected' | 'faulted'
 export interface ComputerGeometry { x: number; y: number; width: number; height: number; scale: number }
 export interface NativeTarget extends ComputerGeometry { id: string; appId: string; title: string; pid: number }
+/** Metadata only: discovery never includes window contents or executable paths. */
+export interface NativeApplication { appId: string; name: string; running: boolean; launchable?: boolean }
+export type ComputerSystemPermission = 'screenRecording' | 'accessibility' | 'inputMonitoring'
 export interface ComputerObservation {
   targetId: string; frameId: string; imageBase64: string; mediaType: 'image/jpeg'
   width: number; height: number; elements: string; geometry: ComputerGeometry
@@ -25,6 +28,9 @@ export interface ComputerSessionSnapshot {
 }
 export interface DeviceDriver {
   status(signal?: AbortSignal): Promise<ComputerStatus>
+  applications?(signal?: AbortSignal): Promise<NativeApplication[]>
+  launchApplication?(appId: string, signal?: AbortSignal): Promise<unknown>
+  openSystemSettings?(kind: ComputerSystemPermission, signal?: AbortSignal): Promise<unknown>
   targets(signal?: AbortSignal): Promise<NativeTarget[]>
   observe(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
   preview?(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>

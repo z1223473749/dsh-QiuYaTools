@@ -1,8 +1,23 @@
 # 双平台适配与电脑操控实施记录
 
-本文件为2026-10-21的证据快照，版本`0.6.0-beta.1`、分支`codex/cross-platform-computer-use`。已完成步骤由root分别使用中文Git提交；本轮没有push、Release或npm publish。详细SHA、实际JSON和历史失败见[测试报告](computer-use-test-report.md)，原始门槛见[开发计划](windows-and-computer-use-development-plan.md)。
+本文件为2026-10-21的证据快照，版本`0.6.0-beta.1`、分支`codex/cross-platform-computer-use`。提交规则已统一为完整功能的代码、构建与测试一起中文提交；本轮没有 push、Release 或 npm publish。详细SHA、实际JSON和历史失败见[测试报告](computer-use-test-report.md)，原始门槛见[开发计划](windows-and-computer-use-development-plan.md)。
 
-当前重点已经从最初的基础输入扩展到**每聊天环境隔离、聊天内实时小框、主动弹出/收回，以及目标应用上的独立AI指针**。独立预览保留原尺寸；没有把它默认缩成小悬浮窗。整体仍未通过“全部功能跨平台、完全复刻”的验收，不能把组件绿色移记到未跑的新tgz。
+当前实施依据已统一到[开发计划](windows-and-computer-use-development-plan.md)。提交粒度为可独立使用的完整功能，代码、构建和相关测试一起中文提交；不把整套长稳及真实模型矩阵当作所有功能提交的前置条件。本批统一交互源码已冻结、生成验证包并完成相关回归，尚未宣称完整交付。
+
+## 本批完整功能与后续顺序
+
+| 完整功能 | 当前状态 | 依据与下一步 |
+| --- | --- | --- |
+| 聊天自动入口与应用授权 | 已实现并完成相关回归 | discover／request_control、owner三选授权、generation取消、最终窗口身份绑定、launch FIFO及未知结果围栏；标准shell相关91/91；Mac旧候选实际主Agent Move与图片链通过 |
+| 系统权限与应用管理 | 已实现，实际系统跳转矩阵继续验收 | 无聊天预检、固定设置入口、手动添加／撤销；Windows正式PE两架构目录／权限18/18纯无界面通过 |
+| 统一设置与满幅小预览 | 已实现并完成相关回归 | 首位电脑导航、工具箱卡片／Switch、聊天授权与权限引导；固定300×180、X/Y铺满、hover/focus控件、−仅隐藏控件、弹出后同iframe保持实时；UI54/54、真实headless小框13/13、预览页25项；Mac全量730/730及universal构建通过 |
+| 双平台原生操作与指针 | 原生基线已验证，独立风险继续修复 | Windows正式PE两架构各52＋29通过；Mac已发现同PID重叠窗口前台身份不足，下一次独立修复后冻结新helper，未计为已解决 |
+| 后续独立修复与验收 | 继续执行 | 先修Mac exact窗口输入边界，再新候选Mac／PD Harness实际流程和安装；随后真实模型三任务、多聊天、双端长稳、反向严格清理及现有功能完整矩阵。历史通过仍只适用其SHA |
+| 本批构建与Git | 本批统一提交，未公开发布 | 验证包 `artifacts/candidates-chat-full-frame-feature/`，完整SHA见相邻JSON；记录未通过项，后续修复各自构建、测试、中文提交 |
+
+本轮开始前，已精确终止视觉测试第四轮的自有 carrier，两个已运行 fixture／helper 自然清理且 oracle 自然退出，`cleanupErrors=[]`；实际 Harness 官方卸载回执为 `changed=true/application=applied`。第四轮任务 1 通过、任务 2 达预算且出现一次拒绝，任务 3 未运行，未算作三任务通过。证据见 `artifacts/model-capability-resumed/actual-vision-external-attempt-4/`，私有模型正文未归档。
+
+以下为本轮 UI／流程调整之前的历史快照。历史具体资产与结果保留用于对照，当前交付仍须以本轮冻结源码和包的实际报告为准。
 
 ## 阶段快照
 
@@ -21,7 +36,7 @@
 | P9 完整验收 | 未通过 | 当前Mac原生指针/WK/默认manager、严格反向delivery、真实视觉三任务、新Win完整包与新组件性能、完整硬件系统矩阵均有未完成项 |
 | P10 完整Codex对齐扩展 | not-run，尚未实现 | Excel专用加载项、macOS锁屏扩展、随包日常profile浏览器扩展没有由普通鼠标/独立profile结果代替 |
 
-## 当前候选和组件
+## 历史候选和组件（本轮重设计前）
 
 最新候选独立存放于`artifacts/candidates-capture-fifo-rounded/`；Mac为`e0a99a113c90a8b17aa05520f1519b55c47252ddc6c6aad55e4d521cfd1a7fdc`，Windows ARM64为`50499928e9e14d77ffe7cfc835ef7019e6171fe94c51fece2e12327b35d59901`，Windows x64为`752bc49871e64dc77b9881b7426ec3626415d3370d45acc8a00e25f2ecb2bcc5`。详见测试报告资产表。
 
@@ -42,4 +57,4 @@
 
 最新Windows[52采样ARM64](../artifacts/computer-use/windows-preview-sampler-arm64-formal/baseline-52/acceptance-summary.json)、[52采样x64](../artifacts/computer-use/windows-preview-sampler-x64-formal/baseline-52/acceptance-summary.json)、[29 ARM64](../artifacts/computer-use/windows-preview-slots-arm64-formal-2/acceptance-summary.json)、[29 x64](../artifacts/computer-use/windows-preview-slots-x64-pointer29-formal/acceptance-summary.json)均passed，但物理HID点击自己的预览仍unverified；真正VM Escape中断与Win32 SendInput分开记。x64不能涂绿为原生x64硬件。
 
-下一步按桌面gate串行收口：先补当前模型可展示回复/实际工具schema诊断并保留首两轮失败，再处理Mac系统指针合成、完整原生13项/默认manager多聊天/真实WK性能资源、严格反向delivery，以及新Win候选整包UI/install与同SHA性能。任何必测项failed/blocked/not-run时均不报告完整复刻。正式签名、公证、发布与Office/锁屏扩展另列，不擅自改变用户登录和系统安全配置。
+后续顺序以统一开发计划第 5 节为准。任何必测项 failed／blocked／not-run 均不报告完整复刻；正式签名、公证、公开发布与 Office／锁屏扩展分别记录，不擅自改变用户登录与系统安全配置。

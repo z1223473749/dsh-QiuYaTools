@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { ComputerError } from './contract.ts'
-import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
+import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 
 export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[] }
 export function computerCompanionPath(platform: NodeJS.Platform = process.platform, architecture: string = process.arch, base = new URL('./', import.meta.url)): string {
@@ -10,7 +10,7 @@ export function computerCompanionPath(platform: NodeJS.Platform = process.platfo
   if (platform === 'win32' && ['arm64', 'x64'].includes(architecture)) return fileURLToPath(new URL(`./native/win32-${architecture}/qiuya-windows.exe`, base))
   throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无电脑操控执行器')
 }
-interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void }
+interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void; transportFailure?: (error: unknown) => void }
 interface CaptureWaiter { resolve: (value: ComputerObservation) => void; reject: (error: unknown) => void }
 interface NativeCapture {
   controller: AbortController
@@ -55,7 +55,7 @@ export class NativeCompanionDriver implements DeviceDriver {
       capture.controller.abort(error)
       for (const waiter of [...capture.waiters]) waiter.reject(error)
     }
-    for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }
+    for (const entry of this.pending.values()) { entry.clean(); if (entry.transportFailure) entry.transportFailure(error); else entry.reject(error) }
     this.pending.clear()
     this.emit({ event: 'disconnected' })
   }
@@ -127,7 +127,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     child.once('close', () => this.fail(new ComputerError('NATIVE_EXITED', '原生执行器已退出'), child))
     return child
   }
-  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal): Promise<T> {
+  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, awaitIssuedReply = false): Promise<T> {
     await this.retiring
     if (signal?.aborted) return Promise.reject(signal.reason)
     if (this.pending.size >= 128) return Promise.reject(new ComputerError('QUEUE_FULL', '执行器请求过多'))
@@ -135,17 +135,22 @@ export class NativeCompanionDriver implements DeviceDriver {
     try { child = this.start() } catch (error) { return Promise.reject(error) }
     return new Promise<T>((resolve, reject) => {
       const requestId = ++this.nextRequestId
+      let issued = false
       const timer = setTimeout(() => {
         // A timed-out mutating native request has unknown outcome. Kill the worker;
         // reconnecting requires a fresh service lease and observation.
         this.fail(new ComputerError('NATIVE_TIMEOUT', '原生操作超时，执行器已停止'), child)
       }, this.options.timeoutMs ?? 20_000)
-      const abort = () => { const entry = this.pending.get(requestId); if (!entry) return; this.pending.delete(requestId); entry.clean(); reject(signal?.reason ?? new ComputerError('ABORTED', '操作已取消')) }
+      const abort = () => { const entry = this.pending.get(requestId); if (!entry || awaitIssuedReply && issued) return; this.pending.delete(requestId); entry.clean(); reject(signal?.reason ?? new ComputerError('ABORTED', '操作已取消')) }
       const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
-      this.pending.set(requestId, { resolve: value => resolve(value as T), reject, clean })
+      this.pending.set(requestId, {
+        resolve: value => { if (awaitIssuedReply && signal?.aborted) reject(signal.reason); else resolve(value as T) }, reject, clean,
+        ...(awaitIssuedReply ? { transportFailure: (error: unknown) => reject(issued ? new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接后确认当前窗口。') : error) } : {}),
+      })
       signal?.addEventListener('abort', abort, { once: true })
       // Close the aborted-between-check-and-listener race before writing input.
       if (signal?.aborted) { abort(); return }
+      issued = true
       child.stdin.write(`${JSON.stringify({ requestId, op, ...payload })}\n`, error => { if (error) this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child) })
     })
   }
@@ -157,11 +162,11 @@ export class NativeCompanionDriver implements DeviceDriver {
     })
     return this.protocol
   }
-  private async checked<T>(op: string, payload: object = {}, signal?: AbortSignal): Promise<T> {
+  private async checked<T>(op: string, payload: object = {}, signal?: AbortSignal, awaitIssuedReply = false): Promise<T> {
     signal?.throwIfAborted()
     await this.compatible()
     signal?.throwIfAborted()
-    return this.rpc<T>(op, payload, signal)
+    return this.rpc<T>(op, payload, signal, awaitIssuedReply)
   }
   async status(signal?: AbortSignal): Promise<ComputerStatus> {
     try { signal?.throwIfAborted(); await this.compatible(); return await this.rpc<ComputerStatus>('status', {}, signal) }
@@ -172,6 +177,20 @@ export class NativeCompanionDriver implements DeviceDriver {
     const targets = Array.isArray(result) ? result : result?.targets
     if (!Array.isArray(targets)) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的窗口列表无效')
     return targets
+  }
+  async applications(signal?: AbortSignal): Promise<NativeApplication[]> {
+    const result = await this.checked<{ applications: NativeApplication[] }>('applications', {}, signal)
+    if (!Array.isArray(result?.applications) || result.applications.length > 1024 || result.applications.some(app => !app || typeof app.appId !== 'string' || !app.appId || app.appId.length > 512 || /[\x00-\x1f\x7f]/u.test(app.appId) || typeof app.name !== 'string' || !app.name || app.name.length > 640 || Array.from(app.name).length > 160 || /[\x00-\x1f\x7f]/u.test(app.name) || typeof app.running !== 'boolean' || app.launchable !== undefined && typeof app.launchable !== 'boolean')) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的应用目录无效')
+    return result.applications.map(({ appId, name, running, launchable }) => ({ appId, name, running, ...(launchable === undefined ? {} : { launchable }) }))
+  }
+  launchApplication(appId: string, signal?: AbortSignal) {
+    // Once written, cancelling a caller cannot undo NSWorkspace/Shell launch.
+    // Retain the transport slot until its real reply, or report uncertainty.
+    return this.checked('launchApplication', { appId }, signal, true)
+  }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) return Promise.reject(new ComputerError('INVALID_PERMISSION', '系统权限类型无效'))
+    return this.checked('openSystemSettings', { kind }, signal)
   }
   private capture(targetId: string, preview: boolean, signal?: AbortSignal): Promise<ComputerObservation> {
     if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))

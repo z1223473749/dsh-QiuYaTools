@@ -8,8 +8,8 @@ import ScreenCaptureKit
 import Vision
 import CoreText
 
-private struct Failure: Error { let code: String }
-private func fail(_ code: String) -> Failure { Failure(code: code) }
+private struct Failure: Error { let code: String; var diagnostic: [String: Any]? = nil }
+private func fail(_ code: String, diagnostic: [String: Any]? = nil) -> Failure { Failure(code: code, diagnostic: diagnostic) }
 private struct Identity: Codable, Equatable {
     let pid: Int32
     let birthMicros: String
@@ -67,6 +67,106 @@ private func row(_ id: UInt32, _ pid: Int32) -> [String: Any]? {
     windowRows().first { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id && ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid && (($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0 }
 }
 private func jsonRect(_ value: CGRect) -> [String: Double] { ["x": value.minX, "y": value.minY, "width": value.width, "height": value.height] }
+private struct AXPhysicalHit {
+    let copyResult: Int32
+    let elementAvailable: Bool
+    let pidResult: Int32?
+    let pid: pid_t?
+}
+private func axPhysicalHit(_ point: CGPoint, diagnosticOnly: Bool = false) -> AXPhysicalHit {
+    var element: AXUIElement?
+    let system = AXUIElementCreateSystemWide()
+    if diagnosticOnly { AXUIElementSetMessagingTimeout(system, 0.1) }
+    let copied = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
+    guard copied == .success, let element else { return AXPhysicalHit(copyResult: copied.rawValue, elementAvailable: false, pidResult: nil, pid: nil) }
+    if diagnosticOnly { AXUIElementSetMessagingTimeout(element, 0.1) }
+    var pid: pid_t = 0
+    let hitWindow = attribute(element, kAXWindowAttribute).flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil } ?? element
+    let result = AXUIElementGetPid(hitWindow, &pid)
+    return AXPhysicalHit(copyResult: copied.rawValue, elementAvailable: true, pidResult: result.rawValue, pid: result == .success ? pid : nil)
+}
+private func systemWindowOwner(_ pid: pid_t) -> Bool {
+    // A diagnostic label only. This broad label never controls input guards.
+    if pid == 0 { return true }
+    var path = [CChar](repeating: 0, count: 4096)
+    guard pid > 0, proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return false }
+    return String(cString: path).hasPrefix("/System/Library/")
+}
+private func verifiedWindowServer(_ pid: pid_t) -> Bool {
+    guard pid > 0 else { return false }
+    func path() -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(validatingUTF8: buffer)
+    }
+    guard let executablePath = path() else { return false }
+    var executable = stat()
+    guard stat(executablePath, &executable) == 0, executable.st_uid == 0, (executable.st_mode & S_IFMT) == S_IFREG else { return false }
+    let trustedPaths = ["/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+                        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"]
+    let trusted = trustedPaths.contains { candidate in
+        var system = stat()
+        return stat(candidate, &system) == 0 && system.st_uid == 0 && (system.st_mode & S_IFMT) == S_IFREG &&
+            executable.st_dev == system.st_dev && executable.st_ino == system.st_ino
+    }
+    // BSD birth metadata for WindowServer can be denied across user IDs even
+    // when the kernel's executable path is readable. Re-read that path instead
+    // of caching a bare PID: the owner must still execute this root-owned exact
+    // protected system inode, never merely claim a process or window name.
+    return trusted && path() == executablePath
+}
+private func systemCursorWindow(_ row: [String: Any], verifyOwner: (pid_t) -> Bool = verifiedWindowServer) -> Bool {
+    guard let layer = row[kCGWindowLayer as String] as? NSNumber, layer.int64Value == Int64(CGWindowLevelForKey(.cursorWindow)),
+          let owner = row[kCGWindowOwnerPID as String] as? NSNumber, owner.int64Value > 0, owner.int64Value <= Int64(Int32.max) else { return false }
+    return verifyOwner(owner.int32Value)
+}
+private func firstPhysicalWindow(_ rows: [[String: Any]], point: CGPoint,
+                                 verifyCursorOwner: (pid_t) -> Bool = verifiedWindowServer) -> [String: Any]? {
+    rows.first { value in
+        guard ((value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0,
+              (try? bounds(value).contains(point)) == true else { return false }
+        // The actual system cursor is a CG window but does not intercept
+        // clicks. Exclude only the SDK cursor level AND verified WindowServer
+        // executable identity; system/high-layer/third-party overlays remain.
+        return !systemCursorWindow(value, verifyOwner: verifyCursorOwner)
+    }
+}
+private func physicalDiagnostic(_ point: CGPoint, binding: Binding, rows: [[String: Any]], ax: AXPhysicalHit,
+                                isSystem: (pid_t) -> Bool = systemWindowOwner) -> [String: Any] {
+    var projected = [[String: Any]]()
+    for row in rows {
+        guard let rect = try? bounds(row), rect.contains(point),
+              [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }) else { continue }
+        let id = (row[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let pid = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        let tag: String
+        if id == binding.previewWindowId && pid == binding.preview.pid { tag = "ownedPreview" }
+        else if id == binding.targetWindowId && pid == binding.target.pid { tag = "ownedTarget" }
+        else if let pid, isSystem(pid) { tag = "system" }
+        else { tag = "other" }
+        let alpha = (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue
+        projected.append(["id": id as Any? ?? NSNull(), "pid": pid as Any? ?? NSNull(),
+                          "layer": (row[kCGWindowLayer as String] as? NSNumber)?.intValue as Any? ?? NSNull(),
+                          "alpha": alpha.flatMap { $0.isFinite ? $0 : nil } as Any? ?? NSNull(), "bounds": jsonRect(rect), "tag": tag])
+        if projected.count == 8 { break }
+    }
+    return ["schemaVersion": 1, "point": ["x": point.x, "y": point.y],
+            "previewWindowId": binding.previewWindowId, "previewPid": binding.preview.pid,
+            "targetWindowId": binding.targetWindowId, "targetPid": binding.target.pid,
+            "containsPointWindows": projected, "limit": 8, "order": "CGWindowList-front-to-back",
+            "axHitPid": ax.pid as Any? ?? NSNull(), "axHitResult": ax.copyResult,
+            "axPidResult": ax.pidResult as Any? ?? NSNull()]
+}
+private func writeDiagnostic(_ value: [String: Any], to path: String) throws {
+    let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    guard bytes.count <= 16384 else { throw fail("physical-diagnostic-too-large") }
+    let descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
+    guard descriptor >= 0 else { throw fail("physical-diagnostic-write-failed") }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    defer { try? handle.close() }
+    do { try handle.write(contentsOf: bytes); try handle.write(contentsOf: Data([10])) }
+    catch { throw fail("physical-diagnostic-write-failed") }
+}
 private func project(_ point: CGPoint, from target: CGRect, into canvas: CGRect) throws -> CGPoint {
     guard target.width > 0, target.height > 0, canvas.width > 0, canvas.height > 0,
           [target.minX, target.minY, target.width, target.height, canvas.minX, canvas.minY, canvas.width, canvas.height].allSatisfy({ $0.isFinite }),
@@ -180,19 +280,20 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         return last
     }
     func physicalHit(_ point: CGPoint) throws -> pid_t {
-        let hit = windowRows().first { value in
-            guard ((value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0 else { return false }
-            return (try? bounds(value).contains(point)) == true
-        }
+        let rows = windowRows()
+        let hit = firstPhysicalWindow(rows, point: point)
         guard (hit?[kCGWindowNumber as String] as? NSNumber)?.uint32Value == binding.previewWindowId,
-              (hit?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == binding.preview.pid else { throw fail("owned-preview-physical-point-obscured") }
-        var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
-              let element else { throw fail("physical-ax-hit-unavailable") }
-        var hitPid: pid_t = 0
-        let hitWindow = attribute(element, kAXWindowAttribute).flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil } ?? element
-        guard AXUIElementGetPid(hitWindow, &hitPid) == .success, hitPid == binding.preview.pid else { throw fail("physical-ax-hit-owner-mismatch") }
-        return hitPid
+              (hit?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == binding.preview.pid else {
+            throw fail("owned-preview-physical-point-obscured", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: axPhysicalHit(point, diagnosticOnly: true)))
+        }
+        let ax = axPhysicalHit(point)
+        guard ax.copyResult == AXError.success.rawValue, ax.elementAvailable else {
+            throw fail("physical-ax-hit-unavailable", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: ax))
+        }
+        guard ax.pidResult == AXError.success.rawValue, ax.pid == binding.preview.pid else {
+            throw fail("physical-ax-hit-owner-mismatch", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: ax))
+        }
+        return ax.pid!
     }
     func click(_ point: CGPoint) async throws -> [String: Any] {
         _ = try validate()
@@ -304,6 +405,7 @@ private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerializa
 
 @main @MainActor private struct Main {
     static func main() async {
+        var diagnosticOutput: String?
         do {
             if CommandLine.arguments.dropFirst() == ["--self-test"] {
                 let p = try project(CGPoint(x: -50, y: 250), from: CGRect(x: -250, y: 50, width: 400, height: 400), into: CGRect(x: 100, y: 500, width: 200, height: 200))
@@ -322,11 +424,63 @@ private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerializa
                 let text = NSAttributedString(string: "38 ms", attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font, NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1)])
                 pixels.textPosition = CGPoint(x: 20, y: 25); CTLineDraw(CTLineCreateWithAttributedString(text), pixels)
                 guard let image = pixels.makeImage(), try footerText(image, region: CGRect(x: 0, y: 0, width: 1, height: 1)).contains(where: { $0.range(of: #"\d+\s*ms"#, options: .regularExpression) != nil }) else { throw fail("visible-latency-ocr-self-test-failed") }
+                // Pure projection tests: never inspect real system windows or
+                // query AX, activate applications, or send native input.
+                let own = Identity(pid: 81, birthMicros: "1", executable: "/private-test-secret", parentPid: 80)
+                let target = Identity(pid: 82, birthMicros: "1", executable: "/private-target-secret", parentPid: 80)
+                let binding = Binding(ancestor: own, preview: own, target: target, previewWindowId: 1, targetWindowId: 2, previewTitle: "PRIVATE-TITLE")
+                var rows = [[String: Any]]()
+                for i in 1...12 {
+                    let pid = i == 1 ? 81 : i == 2 ? 82 : i == 3 ? 0 : 90
+                    var value: [String: Any] = [kCGWindowNumber as String: NSNumber(value: i), kCGWindowOwnerPID as String: NSNumber(value: pid)]
+                    value[kCGWindowLayer as String] = NSNumber(value: 20 - i)
+                    value[kCGWindowAlpha as String] = NSNumber(value: i == 1 ? 0 : 1)
+                    value[kCGWindowBounds as String] = CGRect(x: 0, y: 0, width: 50, height: 50).dictionaryRepresentation
+                    value[kCGWindowName as String] = "PRIVATE-TITLE"; value[kCGWindowOwnerName as String] = "PRIVATE-CONTENT"
+                    rows.append(value)
+                }
+                let diagnostic = physicalDiagnostic(CGPoint(x: 25, y: 25), binding: binding, rows: rows,
+                    ax: AXPhysicalHit(copyResult: 0, elementAvailable: true, pidResult: 0, pid: 81), isSystem: { $0 == 0 })
+                guard let projected = diagnostic["containsPointWindows"] as? [[String: Any]], projected.count == 8,
+                      projected[0]["tag"] as? String == "ownedPreview", projected[1]["tag"] as? String == "ownedTarget",
+                      projected[2]["tag"] as? String == "system", projected[3]["tag"] as? String == "other",
+                      projected.allSatisfy({ Set($0.keys) == Set(["id", "pid", "layer", "alpha", "bounds", "tag"]) }),
+                      !String(data: try JSONSerialization.data(withJSONObject: diagnostic), encoding: .utf8)!.contains("PRIVATE"),
+                      !String(data: try JSONSerialization.data(withJSONObject: diagnostic), encoding: .utf8)!.contains("secret") else { throw fail("physical-diagnostic-projection-self-test-failed") }
+                var previewRow = rows[0]; previewRow[kCGWindowAlpha as String] = 1
+                var cursor = rows[3]
+                cursor[kCGWindowNumber as String] = 91; cursor[kCGWindowOwnerPID as String] = 700
+                cursor[kCGWindowLayer as String] = CGWindowLevelForKey(.cursorWindow)
+                let point = CGPoint(x: 25, y: 25), trusted: (pid_t) -> Bool = { $0 == 700 }
+                func selectedId(_ values: [[String: Any]], verify: (pid_t) -> Bool = trusted) -> UInt32? {
+                    (firstPhysicalWindow(values, point: point, verifyCursorOwner: verify)?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+                }
+                guard selectedId([cursor, previewRow]) == 1, selectedId([cursor, previewRow], verify: { _ in false }) == 91 else { throw fail("system-cursor-owner-fence-self-test-failed") }
+                var otherSystem = cursor; otherSystem[kCGWindowLayer as String] = CGWindowLevelForKey(.floatingWindow)
+                guard selectedId([otherSystem, previewRow]) == 91 else { throw fail("other-system-layer-was-ignored") }
+                var overlay = cursor; overlay[kCGWindowNumber as String] = 92; overlay[kCGWindowOwnerPID as String] = 701
+                guard selectedId([overlay, cursor, previewRow]) == 92 else { throw fail("real-overlay-before-preview-was-ignored") }
+                var missing = cursor; missing.removeValue(forKey: kCGWindowLayer as String)
+                guard selectedId([missing, previewRow]) == 91 else { throw fail("unknown-cursor-layer-was-ignored") }
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("qiuya-preview-diagnostic-" + UUID().uuidString)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let file = directory.appendingPathComponent("diagnostic.json")
+                try writeDiagnostic(diagnostic, to: file.path)
+                let original = try Data(contentsOf: file)
+                do { try writeDiagnostic(["unexpected": true], to: file.path); throw fail("physical-diagnostic-overwrite-accepted") }
+                catch let error as Failure { guard error.code == "physical-diagnostic-write-failed" else { throw error } }
+                guard try Data(contentsOf: file) == original else { throw fail("physical-diagnostic-existing-evidence-changed") }
                 try emit(["ok": true, "result": ["projection": true, "outsideRejected": true, "identityRetirement": true, "visibleLatencyRecognition": true, "inputEventsPosted": 0, "activationCalls": 0]]); return
             }
             guard CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--request", let bytes = CommandLine.arguments[2].data(using: .utf8), bytes.count <= 16384,
                   let request = try JSONSerialization.jsonObject(with: bytes) as? [String: Any], let op = request["op"] as? String,
                   ["bind", "observe", "button", "click-composer", "type-footer", "close", "retirement"].contains(op) else { throw fail("invalid-owned-preview-request") }
+            if let supplied = request["diagnosticOutput"] {
+                guard let path = supplied as? String, path.hasPrefix("/"), path.utf8.count <= 4096, !path.contains("\0"), path.hasSuffix(".json"),
+                      URL(fileURLWithPath: path).standardizedFileURL.path == path else { throw fail("invalid-physical-diagnostic-output") }
+                diagnosticOutput = path
+            }
             if op == "retirement" {
                 guard let value = request["binding"] else { throw fail("missing-owned-binding") }
                 let binding = try JSONDecoder().decode(Binding.self, from: JSONSerialization.data(withJSONObject: value))
@@ -362,7 +516,15 @@ private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerializa
             try emit(["ok": true, "result": result])
         } catch {
             let code = (error as? Failure)?.code ?? "owned-preview-observer-failed"
-            try? emit(["ok": false, "error": code]); FileHandle.standardError.write(Data((code + "\n").utf8)); exit(1)
+            var response: [String: Any] = ["ok": false, "error": code]
+            if let diagnostic = (error as? Failure)?.diagnostic {
+                response["diagnostic"] = diagnostic
+                if let diagnosticOutput {
+                    do { try writeDiagnostic(["ok": false, "error": code, "diagnostic": diagnostic], to: diagnosticOutput); response["diagnosticOutputWritten"] = true }
+                    catch { response["diagnosticOutputWritten"] = false; response["diagnosticOutputError"] = "physical-diagnostic-write-failed" }
+                }
+            }
+            try? emit(response); FileHandle.standardError.write(Data((code + "\n").utf8)); exit(1)
         }
     }
     static func emit(_ value: [String: Any]) throws { FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])); FileHandle.standardOutput.write(Data([10])) }

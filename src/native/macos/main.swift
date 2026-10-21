@@ -6,6 +6,7 @@ import ScreenCaptureKit
 @MainActor final class ComputerApplication: NSObject, NSApplicationDelegate {
     private let capture = WindowCapture()
     private let input = NativeInput()
+    private let applications = NativeApplicationCatalog()
     private var preview: FloatingPreview?
     private var geometries: [String: FrameGeometry] = [:]
     private var observationBusy = false
@@ -95,10 +96,16 @@ import ScreenCaptureKit
             Wire.success(requestId, ["platform": "darwin", "available": true, "protocolVersion": 1,
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
-                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor"],
+                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
-                "aiCursor": input.aiCursorState, "preview": preview?.navigationState as Any? ?? NSNull()])
+                "aiCursor": input.aiCursorState, "aiOperation": input.aiOperationState,
+                "focusAttempt": input.focusAttempt as Any? ?? NSNull(), "preview": preview?.navigationState as Any? ?? NSNull()])
+            return
+        }
+        if op == "openSystemSettings" {
+            do { Wire.success(requestId, try NativeApplicationCatalog.openSystemSettings(command["kind"])) }
+            catch { Wire.failure(requestId, error) }
             return
         }
         if op == "closePreview" {
@@ -134,6 +141,15 @@ import ScreenCaptureKit
         Task { @MainActor in
             do {
                 switch op {
+                case "applications":
+                    let result = try await applications.applications()
+                    guard !closing else { return }
+                    Wire.success(requestId, result)
+                case "launchApplication":
+                    guard let appId = command["appId"] as? String else { throw ComputerError("APPLICATION_NOT_LISTED", "Select a listed application.") }
+                    let result = try await applications.launch(appId)
+                    guard !closing else { return }
+                    Wire.success(requestId, result)
                 case "targets": Wire.success(requestId, ["targets": try capture.targets().map { $0.json }])
                 case "observe":
                     guard !observationBusy else { throw ComputerError("CAPTURE_BUSY", "Another frame is being prepared.") }

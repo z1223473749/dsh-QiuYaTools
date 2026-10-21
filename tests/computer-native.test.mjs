@@ -15,7 +15,7 @@ const script = join(directory, 'fixture.cjs'), records = join(directory, 'reques
 await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
 
 let captureFixtureSequence = 0
-async function captureFixture({ captureDelay = 120, timeoutMs = 2000, gated = false, exitOnCapture = false } = {}) {
+async function captureFixture({ captureDelay = 120, timeoutMs = 10_000, gated = false, exitOnCapture = false } = {}) {
   const number = ++captureFixtureSequence, executable = join(directory, `capture-slot-${number}.cjs`), journal = join(directory, `capture-slot-${number}.jsonl`), gate = join(directory, `capture-slot-${number}.gate`)
   await writeFile(executable, `const fs=require('node:fs');let busy=false,sequence=0;const record=r=>fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({...r,pid:process.pid})+'\\n'),reply=(r,result)=>process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);record({...r,phase:'received',busy});if(r.op==='observe'){if(busy){record({...r,phase:'rejected',code:'CAPTURE_BUSY'});process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CAPTURE_BUSY',message:'Another frame is being prepared.'}})+'\\n');return}busy=true;if(${exitOnCapture})process.exit(77);const frameId=String(++sequence),finish=()=>{busy=false;record({...r,phase:'completed'});reply(r,{targetId:r.targetId,frameId,imageBase64:'/9j/2Q==',mediaType:'image/jpeg',width:1,height:1,elements:r.preview?'':'fixture AX',geometry:{x:0,y:0,width:1,height:1,scale:1}})};if(${gated}){const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(gate)})){clearInterval(timer);finish()}},5)}else setTimeout(finish,${captureDelay});return}reply(r,r.op==='status'?{available:true,protocolVersion:1,busy}:r)});rl.on('close',()=>{record({phase:'eof'});process.exit(0)});`)
   const read = async () => (await readFile(journal, 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).trim().split('\n').filter(Boolean).map(JSON.parse)
@@ -237,5 +237,15 @@ test('unexpected native exit rejects active and queued captures without creating
     assert.ok(result.every(value => value.status === 'rejected' && value.reason.code === 'NATIVE_EXITED'))
     const rows = await fixture.read(); assert.equal(new Set(rows.map(row => row.pid)).size, 1)
     assert.deepEqual(rows.filter(row => row.op === 'observe' && row.phase === 'received').map(row => row.targetId), ['active'])
+  } finally { await driver.dispose() }
+})
+
+test('native application metadata accepts bounded Unicode scalars and strips unlisted transport fields', async () => {
+  const worker = join(directory, 'catalog.cjs'), name = '🖥'.repeat(160)
+  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1}:{applications:[{appId:'fixture',name:${JSON.stringify(name)},running:false,launchable:true,executablePath:'/private/should-not-project'}]}})+'\\n')})`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker] })
+  try {
+    assert.deepEqual(await driver.applications(), [{ appId: 'fixture', name, running: false, launchable: true }])
+    await assert.rejects(driver.openSystemSettings('arbitrary-url'), { code: 'INVALID_PERMISSION' })
   } finally { await driver.dispose() }
 })

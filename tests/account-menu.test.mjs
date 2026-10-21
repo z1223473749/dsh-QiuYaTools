@@ -9,7 +9,7 @@ import { defineStore } from '@deepseek-ai/dsh-client-store'
 const compiled = await build({ entryPoints: ['src/client/account-menu.ts'], bundle: true, write: false, format: 'cjs', platform: 'node', target: 'node22' })
 const module = { exports: {} }
 vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.exports, queueMicrotask })
-const { installAccountMenuEntry, settingsSectionOpener } = module.exports
+const { installAccountMenuEntry, settingsSectionOpener, openComputerSettings, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation } = module.exports
 
 function settingsStore() {
   const handle = defineStore({ init: () => ({ open: false, activeId: undefined }), actions: {
@@ -210,4 +210,28 @@ test('unloading removes only the added row and cancels queued menu work', async 
 test('a browser-less client harness needs neither a document nor a slot declaration', () => {
   assert.doesNotThrow(() => installAccountMenuEntry({}, () => 'QiuYaTools', {})())
   assert.equal(settingsSectionOpener({ entriesOfSlot: () => [] }), undefined)
+})
+
+
+test('chat computer settings navigation opens only the public plugin section and consumes its tab request exactly once', t => {
+  const f = fixture(t); let notifications = 0
+  const dispose = subscribeComputerSettingsNavigation(f.ctx, () => { notifications++ })
+  assert.equal(consumeComputerSettingsNavigation(f.ctx), false)
+  assert.equal(openComputerSettings(f.ctx), true)
+  assert.equal(f.store.instance.getSnapshot().activeId, 'qiuya-tools')
+  assert.equal(f.store.instance.getSnapshot().open, true)
+  assert.equal(notifications, 1)
+  assert.equal(consumeComputerSettingsNavigation(f.ctx), true)
+  assert.equal(consumeComputerSettingsNavigation(f.ctx), false)
+  assert.deepEqual(f.nativeActions, [])
+  dispose(); assert.equal(openComputerSettings(f.ctx), true); assert.equal(notifications, 1)
+  assert.equal(consumeComputerSettingsNavigation(f.ctx), true)
+})
+
+test('unavailable settings bridge neither opens another store nor leaves a queued computer-tab request', t => {
+  const f = fixture(t, { settings: false })
+  assert.equal(openComputerSettings(f.ctx), false)
+  assert.equal(consumeComputerSettingsNavigation(f.ctx), false)
+  assert.equal(f.store.instance.getSnapshot().open, false)
+  assert.equal(openComputerSettings({}), false)
 })

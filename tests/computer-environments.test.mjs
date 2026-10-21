@@ -242,3 +242,99 @@ test('Host and model tools route only their selected chat while status aggregate
   await call('preview', 'A'); const before = host.service.get('A').epoch
   assert.equal((await call('redock', 'A')).ok, true); assert.equal(host.service.get('A').epoch, before)
 })
+
+test('discovery and permission preflight work before a task without reading windows or leasing input', async t => {
+  const f = fixture({ router(_id, _router, local) {
+    local.status = async () => ({ available: true, platform: 'darwin', permissions: { screenRecording: false, accessibility: false } })
+    local.targets = async () => { throw Error('Window contents must stay unavailable before permission') }
+    local.applications = async () => [{ appId: 'fixture.app', name: '测试应用', running: false, launchable: true }]
+    local.openSystemSettings = async kind => { local.calls.push(['settings', kind]); return { opened: true, kind } }
+  } }); t.after(() => f.manager.dispose())
+  assert.equal((await f.manager.status()).permissions.screenRecording, false)
+  assert.deepEqual(await f.manager.applicationsFor('chat'), [{ appId: 'fixture.app', name: '测试应用', running: false, launchable: true }])
+  assert.deepEqual(f.manager.list(), [])
+  assert.equal([...f.locals.values()].flatMap(local => local.calls).length, 0)
+  assert.deepEqual(await f.manager.openSystemSettings('accessibility'), { opened: true, kind: 'accessibility' })
+  assert.throws(() => f.manager.openSystemSettings('file:///arbitrary'), { code: 'INVALID_PERMISSION' })
+})
+
+test('authorization generations isolate chats and legacy connections while owner controls cancel pending grants', async t => {
+  const f = fixture(); t.after(() => f.manager.dispose())
+  await Promise.all(['A', 'B'].map(id => f.manager.authorizationStatus(id)))
+  const a = f.manager.authorizationGeneration('A'), b = f.manager.authorizationGeneration('B')
+  await f.manager.connect(undefined, { mode: 'local' })
+  assert.equal(f.manager.authorizationGeneration('A'), a); assert.equal(f.manager.authorizationGeneration('B'), b)
+  f.locals.get('A').emit({ event: 'humanInput' })
+  assert.notEqual(f.manager.authorizationGeneration('A'), a); assert.equal(f.manager.authorizationGeneration('B'), b)
+  await assert.rejects(f.manager.authorizationStart('A', target.id, { allowOnce: true, expectedGeneration: a, expectedTarget: target }), { code: 'CONTROL_CHANGED' })
+  await f.manager.authorizationStart('B', target.id, { allowOnce: true, expectedGeneration: b, expectedTarget: target })
+  await f.manager.pause('B')
+  assert.notEqual(f.manager.authorizationGeneration('B'), b)
+  await assert.rejects(f.manager.authorizationStart('B', target.id, { allowOnce: true, expectedGeneration: f.manager.authorizationGeneration('B'), expectedTarget: target }), { code: 'OWNER_RESUME_REQUIRED' })
+})
+
+test('owner-approved application switch cleans the old task and keeps the exact grant generation', async t => {
+  const next = { ...target, id: 'second-window', appId: 'second.app' }
+  const f = fixture({ router(_id, _router, local) { local.targets = async () => [target, next] } }); t.after(() => f.manager.dispose())
+  const generation = f.manager.authorizationGeneration('A')
+  await f.manager.authorizationStart('A', target.id, { allowOnce: true, expectedGeneration: generation, expectedTarget: target })
+  const before = f.manager.get('A').epoch
+  await f.manager.authorizationStart('A', next.id, { allowOnce: true, expectedGeneration: generation, expectedTarget: next })
+  assert.equal(f.manager.get('A').target.appId, 'second.app'); assert.ok(f.manager.get('A').epoch > before)
+  assert.equal(f.manager.authorizationGeneration('A'), generation)
+  await f.manager.setAppAllowed('second.app', false)
+  assert.notEqual(f.manager.authorizationGeneration('A'), generation)
+  assert.equal(f.manager.get('A').state, 'stopped')
+})
+
+test('a target switch waiting for discovery cannot start after an owner stop', async t => {
+  const gate = deferred(), entered = deferred()
+  const f = fixture({ router(_id, _router, local) { local.targets = async () => { entered.resolve(); await gate.promise; return [target] } } }); t.after(() => { gate.resolve(); return f.manager.dispose() })
+  const generation = f.manager.authorizationGeneration('A')
+  const starting = f.manager.authorizationStart('A', target.id, { allowOnce: true, expectedGeneration: generation, expectedTarget: target })
+  const rejected = assert.rejects(starting)
+  await entered.promise; const stopping = f.manager.stop('A'); gate.resolve(); await Promise.all([stopping, rejected])
+  assert.equal(f.manager.get('A').state, 'stopped')
+  assert.equal(f.locals.get('A').calls.filter(row => ['lease', 'act'].includes(row[0])).length, 0)
+})
+
+test('a one-time approval pins application and process through the final start enumeration', async t => {
+  const changed = { ...target, appId: 'unapproved.app', pid: 20 }
+  const f = fixture({ router(_id, _router, local) { local.targets = async () => [changed] } }); t.after(() => f.manager.dispose())
+  await assert.rejects(f.manager.authorizationStart('A', target.id, { allowOnce: true, expectedGeneration: f.manager.authorizationGeneration('A'), expectedTarget: target }), { code: 'TARGET_CHANGED' })
+  assert.equal(f.manager.get('A').state, 'faulted'); assert.equal(f.manager.get('A').target, null)
+  assert.equal(f.locals.get('A').calls.some(row => ['lease', 'act'].includes(row[0])), false)
+})
+
+test('idle chat status never creates a native environment, while explicit preflight does', async t => {
+  const f = fixture(); t.after(() => f.manager.dispose())
+  for (let i = 0; i < 40; i++) assert.equal(await f.manager.statusIfPresentFor('unrequested-' + i), null)
+  assert.equal(f.locals.size, 0)
+  await f.manager.authorizationStatus(); assert.equal(f.locals.size, 1)
+  await f.manager.authorizationStatus('requested'); assert.equal(f.locals.size, 2)
+  await f.manager.statusIfPresentFor('requested'); assert.equal(f.locals.size, 2)
+  assert.deepEqual(f.manager.list(), [])
+})
+
+test('pending authorization protects only its own idle environment until the request ends', async t => {
+  let now = 0
+  const f = fixture({ now: () => now, idleMs: 60_000 }); t.after(() => f.manager.dispose())
+  await f.manager.authorizationStatus('awaiting-owner'); await f.manager.authorizationStatus('unprotected')
+  now = 119_000; await f.manager.sweep(['awaiting-owner'])
+  assert.deepEqual(f.manager.environments().map(row => row.sessionId), ['awaiting-owner'])
+  assert.equal(f.locals.get('awaiting-owner').calls.some(row => row[0] === 'dispose'), false)
+  await f.manager.sweep([]); assert.deepEqual(f.manager.environments(), [])
+  assert.equal(f.locals.get('awaiting-owner').calls.filter(row => row[0] === 'dispose').length, 1)
+})
+
+test('owner stop cancels application activation still queued behind another chat input', async t => {
+  const gate = deferred(), entered = deferred(); let launches = 0
+  const f = fixture({ router(_id, _router, local) { local.launchApplication = async () => { launches++; return {} } } }); t.after(() => { gate.resolve(); return f.manager.dispose() })
+  await f.manager.start('A', target.id, { allowOnce: true }); const frame = await f.manager.observe('A')
+  f.locals.get('A').act = async () => { entered.resolve(); await gate.promise; return {} }
+  const acting = f.manager.act('A', request(frame.frameId)); await entered.promise
+  const launching = f.manager.launchApplicationFor('B', 'fixture.app'), rejected = assert.rejects(launching, { code: 'CONTROL_CHANGED' })
+  await assert.rejects(Promise.resolve().then(() => f.manager.stop('B')), { code: 'SESSION_NOT_STARTED' })
+  await rejected; assert.equal(launches, 0)
+  gate.resolve(); await acting
+})

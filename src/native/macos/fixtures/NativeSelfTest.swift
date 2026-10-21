@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 @main struct NativeSelfTest {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let geometry = FrameGeometry(frame: CGRect(x: -1280, y: 100, width: 800, height: 600), pixelWidth: 1600, pixelHeight: 1200)
         let point = try geometry.point(x: 400, y: 600)
         precondition(point == CGPoint(x: -1080, y: 400), "Retina/negative-display mapping")
@@ -14,6 +14,39 @@ import Foundation
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
         try approvedSmallGlyph()
         try cursorSuppressionStateMachine()
+        try await boundedFocusPreparation()
+        for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
+            let (returned, url) = try NativeApplicationCatalog.settingsURL(kind)
+            precondition(returned == kind && url.scheme == "x-apple.systempreferences" && url.absoluteString.hasPrefix("x-apple.systempreferences:com.apple.preference.security?Privacy_"))
+        }
+        for value: Any in ["file:///tmp/launch", "https://example.com", "screenRecording?url=x", "", NSNull(), 1] {
+            do { _ = try NativeApplicationCatalog.settingsURL(value); preconditionFailure("Arbitrary system-settings destination accepted") } catch {}
+        }
+        precondition(NativeApplicationCatalog.validAppId("com.qiuya.中文") == false && NativeApplicationCatalog.validAppId("com.apple.finder"))
+        precondition(!NativeApplicationCatalog.validAppId("../../launch") && NativeApplicationCatalog.displayName("工具\n箱\0").contains("\n") == false)
+        precondition(!NativeApplicationCatalog.validAppId("com.apple.finder\n"), "An app identity must end at the actual string boundary")
+        let boundedName = NativeApplicationCatalog.displayName("A" + String(repeating: "\u{301}", count: 10_000))
+        precondition(boundedName.unicodeScalars.count <= 160 && boundedName.utf8.count <= 640, "A single large combining grapheme cannot exceed the metadata wire budget")
+        let badgeTarget = CGRect(x: -900, y: 80, width: 640, height: 460)
+        let badge = AIOperationBadge.frame(target: badgeTarget)!
+        precondition(badgeTarget.contains(badge) && badge.minY >= badgeTarget.minY + 40 && badge.maxX <= badgeTarget.maxX - 12, "Operation receipt stays inside its target below title buttons")
+        precondition(AIOperationBadge.frame(target: CGRect(x: 0, y: 0, width: 150, height: 80)) == nil, "A tiny target must omit its optional operation receipt")
+        do {
+            var epoch = 20, eligible = true, frames = [CGRect](), hides = 0
+            let receipt = AIOperationBadge(backend: OperationBadgeBackend(eligible: { _ in eligible }, present: { frame in frames.append(frame); return true }, hide: { hides += 1 }))
+            receipt.isLeaseCurrent = { $0 == epoch }
+            let target = NativeTarget(id: "own-receipt", appId: "own.receipt", title: "own", pid: 99, windowId: 99, frame: badgeTarget, scale: 2)
+            receipt.beginLease(epoch)
+            precondition(receipt.snapshot["visible"] as? Bool == false && frames.isEmpty, "A lease or status read is not an actual operation")
+            receipt.interrupt(epoch); receipt.posted(epoch: epoch, target: target)
+            precondition(receipt.snapshot["visible"] as? Bool == false && frames.isEmpty, "Human input before first posted operation latches out the receipt")
+            epoch = 21; receipt.beginLease(epoch); receipt.posted(epoch: epoch, target: target)
+            precondition(receipt.snapshot["visible"] as? Bool == true && receipt.snapshot["targetId"] as? String == target.id && receipt.snapshot["epoch"] as? Int == epoch && frames.allSatisfy { $0 == badge }, "Actual posted operation exposes only its bounded exact target receipt")
+            receipt.hide(epoch: 20); precondition(receipt.snapshot["visible"] as? Bool == true, "An old action cannot hide its successor")
+            eligible = false; precondition(receipt.snapshot["visible"] as? Bool == false && hides > 0, "Focus/visibility/geometry loss withdraws the receipt")
+            eligible = true; receipt.posted(epoch: epoch, target: target); receipt.hide(epoch: epoch)
+            precondition(receipt.snapshot["visible"] as? Bool == false, "Action completion withdraws the receipt without extending input ownership")
+        }
         let cursorLayer = CGWindowLevelForKey(.cursorWindow)
         precondition(AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { $0 == 415 }), "Only an independently verified system cursor owner is excluded")
         precondition(!AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: 415, verifyOwner: { _ in false }), "An unverified or spoofed cursor-level owner still occludes")
@@ -55,7 +88,96 @@ import Foundation
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }
         precondition(integer(true) == nil && integer(1.5) == nil && integer(-1) == nil && integer(4) == 4)
-        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), bounded focus readiness/human/cancel/epoch/deadline matrices (no real activation/AX/input), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+    }
+
+    @MainActor private static func boundedFocusPreparation() async throws {
+        final class Fake {
+            var time = 0.0, requests = 0, samples = 0, foreground: pid_t? = 42
+            var accepted = true, sequence: [pid_t?] = [42, 99, 99]
+            var readError: ComputerError?, requestError: ComputerError?, sampleCost = 0.0, requestCost = 0.0
+            var onSleep: (() throws -> Void)?, afterSample: (() -> Void)?
+            var records = [[String: Any]]()
+            var backend: FocusPreparationBackend {
+                FocusPreparationBackend(now: { self.time }, frontmost: { self.foreground }, request: { _, result in
+                    self.requests += 1; result.accepted = self.accepted; self.time += self.requestCost
+                    result.axSettableResult = 0; result.axFrontmostResult = 0
+                    if let error = self.requestError { throw error }
+                }, sample: {
+                    self.samples += 1; self.time += self.sampleCost
+                    if let error = self.readError { throw error }
+                    if !self.sequence.isEmpty { self.foreground = self.sequence.removeFirst() }
+                    self.afterSample?()
+                    return FocusPreparationSample(frontmostPid: self.foreground)
+                }, sleep: { nanos in self.time += Double(nanos) / 1_000_000_000; try self.onSleep?() })
+            }
+            func run(_ checkpoint: () throws -> Void = {}) async throws {
+                try await BoundedFocusPreparation.run(targetPid: 99, backend: backend, checkpoint: checkpoint, record: { self.records.append($0) })
+            }
+        }
+        do {
+            let f = Fake(); f.sequence = [42, 99, 42, 99, 99]
+            try await f.run()
+            precondition(f.requests == 1 && f.samples == 5 && f.time < 0.5, "A transient foreground match cannot satisfy two consecutive reads; no activation replay")
+            let value = f.records.last!
+            precondition(value["beforePid"] as? Int32 == 42 && value["afterPid"] as? Int32 == 99 && value["inputPosted"] as? Bool == false)
+            precondition(Set(value.keys) == Set(["targetPid", "beforePid", "afterPid", "activationAccepted", "settledMs", "axSettableResult", "axFrontmostResult", "raiseResult", "inputPosted"]), "Focus status contains only bounded owner diagnostics, never titles, paths or text")
+        }
+        do {
+            let f = Fake(); f.accepted = false; f.sequence = [99, 99]
+            try await f.run()
+            precondition(f.requests == 1 && f.records.last?["activationAccepted"] as? Bool == false, "Request acceptance is not the foreground readiness oracle")
+        }
+        do {
+            let f = Fake(); f.sequence = []
+            do { try await f.run(); preconditionFailure("Unfocused target accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.requests == 1 && f.time <= 0.500001 && f.records.last?["inputPosted"] as? Bool == false, "Deadline cannot retry activation or post input")
+        }
+        do {
+            let f = Fake(); f.readError = ComputerError("GEOMETRY_CHANGED", "fake")
+            do { try await f.run(); preconditionFailure("Changed geometry accepted") } catch let error as ComputerError { precondition(error.code == "GEOMETRY_CHANGED") }
+            precondition(f.samples == 1 && f.requests == 1)
+        }
+        do {
+            let f = Fake(); var generation = 1
+            f.onSleep = { generation += 1 }
+            do { try await f.run { if generation != 1 { throw ComputerError("HUMAN_INPUT_INTERRUPTED", "fake") } }; preconditionFailure("Human intervention ignored") }
+            catch let error as ComputerError { precondition(error.code == "HUMAN_INPUT_INTERRUPTED") }
+            precondition(f.samples == 1 && f.requests == 1, "Human input during focus preparation aborts before the next readiness read")
+        }
+        do {
+            let f = Fake(), fence = EpochFence(); try fence.lease(8)
+            f.onSleep = { fence.release(8) }
+            do { try await f.run { try fence.check(8) }; preconditionFailure("Revoked preparation accepted") }
+            catch let error as ComputerError { precondition(error.code == "STALE_EPOCH") }
+            precondition(f.samples == 1 && f.requests == 1)
+        }
+        do {
+            let f = Fake(); f.onSleep = { throw CancellationError() }
+            do { try await f.run(); preconditionFailure("Cancelled preparation accepted") } catch is CancellationError {}
+            precondition(f.requests == 1 && f.samples == 1 && f.records.last?["inputPosted"] as? Bool == false)
+        }
+        do {
+            let f = Fake(); f.requestError = ComputerError("STALE_EPOCH", "fake")
+            do { try await f.run(); preconditionFailure("Failed activation preparation accepted") } catch let error as ComputerError { precondition(error.code == "STALE_EPOCH") }
+            precondition(f.samples == 0 && f.records.last?["activationAccepted"] as? Bool == true, "Partial activation receipt survives later failure without claiming input")
+        }
+        do {
+            let f = Fake(); f.requestCost = 0.51; f.sequence = [99, 99]
+            do { try await f.run(); preconditionFailure("Late request accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.samples == 0 && f.requests == 1)
+        }
+        do {
+            let f = Fake(); f.sequence = [99, 99]; f.sampleCost = 0.25
+            do { try await f.run(); preconditionFailure("Readiness arriving beyond budget accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.samples == 2)
+        }
+        do {
+            let f = Fake(); var valid = true; f.sequence = [99, 99]; f.afterSample = { valid = false }
+            do { try await f.run { if !valid { throw ComputerError("STALE_EPOCH", "fake") } }; preconditionFailure("Epoch revoked inside readiness read accepted") }
+            catch let error as ComputerError { precondition(error.code == "STALE_EPOCH") }
+            precondition(f.samples == 1)
+        }
     }
 
     @MainActor private static func cursorSuppressionStateMachine() throws {

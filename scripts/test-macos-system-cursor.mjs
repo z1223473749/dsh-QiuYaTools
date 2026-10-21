@@ -33,10 +33,10 @@ if (arg('--parent-proxy')) {
   if (arg('--prepared')) preparation = JSON.parse(await readFile(join(resolve(arg('--prepared')), 'preparation.json'), 'utf8'))
   else {
     const binary = join(output, 'cursor-experiment'), observer = join(output, 'independent-sck-observer')
-    const sources = [source, observerSource, join(root, 'src/native/macos/Protocol.swift'), join(root, 'src/native/macos/CursorOverlay.swift'), fileURLToPath(import.meta.url)]
+    const sources = [source, observerSource, join(root, 'src/native/macos/Protocol.swift'), join(root, 'src/native/macos/OperationBadge.swift'), join(root, 'src/native/macos/CursorOverlay.swift'), fileURLToPath(import.meta.url)]
     const hashes = Object.fromEntries(await Promise.all(sources.map(async path => [path, digest(await readFile(path))])))
     const flags = ['-swift-version', '5', '-parse-as-library', '-framework', 'AppKit', '-module-cache-path', '/private/tmp/qiuya-system-cursor-module-cache']
-    await execute('/usr/bin/swiftc', [...flags, '-framework', 'ApplicationServices', '-framework', 'ImageIO', join(root, 'src/native/macos/Protocol.swift'), join(root, 'src/native/macos/CursorOverlay.swift'), source, '-o', binary], { timeout: 90000 })
+    await execute('/usr/bin/swiftc', [...flags, '-framework', 'ApplicationServices', '-framework', 'ImageIO', join(root, 'src/native/macos/Protocol.swift'), join(root, 'src/native/macos/OperationBadge.swift'), join(root, 'src/native/macos/CursorOverlay.swift'), source, '-o', binary], { timeout: 90000 })
     await execute('/usr/bin/swiftc', [...flags, '-framework', 'ScreenCaptureKit', '-framework', 'CoreImage', '-framework', 'CoreMedia', observerSource, '-o', observer], { timeout: 90000 })
     const selfTest = JSON.parse((await execute(binary, ['--self-test'], { timeout: 10000 })).stdout)
     assert.equal(selfTest.passed, true); assert.equal(selfTest.actualCursorCalls, 0)
