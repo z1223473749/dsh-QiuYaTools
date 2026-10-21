@@ -1,4 +1,33 @@
 /** Public Harness workspace setup for disposable-profile UI tests. */
+export function sanitizeHarnessDiagnostic(message) {
+  return String(message).replace(/https?:\/\/[^\s"'<>]+/giu, value => {
+    try { const url = new URL(value); return url.origin + url.pathname } catch { return '<URL redacted>' }
+  }).replace(/([?&]token=)[^&\s"'<>]+/giu, '$1<redacted>')
+}
+
+/** Observe the initial same-origin navigation without waiting for every asset's load event. */
+export async function navigateHarnessPage(page, url, record) {
+  const origin = new URL(url).origin, start = Date.now(), pending = new Map(), completed = []
+  const describe = request => {
+    const parsed = new URL(request.url())
+    return parsed.origin === origin ? { path: parsed.pathname, resourceType: request.resourceType(), startedAfterMs: Date.now() - start } : undefined
+  }
+  const started = request => { const detail = describe(request); if (detail) pending.set(request, detail) }
+  const finished = request => {
+    const detail = pending.get(request); pending.delete(request)
+    if (detail && completed.length < 64) completed.push({ ...detail, finishedAfterMs: Date.now() - start, ...(request.failure() ? { reason: sanitizeHarnessDiagnostic(request.failure().errorText) } : {}) })
+  }
+  page.on('request', started); page.on('requestfinished', finished); page.on('requestfailed', finished)
+  let error
+  try { await page.goto(url, { waitUntil: 'domcontentloaded' }) }
+  catch (failure) { error = sanitizeHarnessDiagnostic(failure.message); throw failure }
+  finally {
+    page.off('request', started); page.off('requestfinished', finished); page.off('requestfailed', finished)
+    const document = await page.evaluate(() => ({ readyState: globalThis.document.readyState })).catch(failure => ({ error: sanitizeHarnessDiagnostic(failure.message) }))
+    await record({ milestone: 'domcontentloaded', elapsedMs: Date.now() - start, document, pendingSameOrigin: [...pending.values()].slice(0, 64), completedSameOrigin: completed, ...(error ? { error } : {}), boundary: 'Only same-origin URL paths; query/hash/auth values and foreign origins are excluded. Public UI and workspace readiness retain their existing 15-second checks.' })
+  }
+}
+
 export function captureHarnessWorkspaceDom() {
   const visible = element => !!element?.getClientRects().length && getComputedStyle(element).visibility !== 'hidden'
   return {

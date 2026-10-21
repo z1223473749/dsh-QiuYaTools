@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join, resolve, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
+import { sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 import { loadWindowsTestRuntime } from './prepare-windows-test-runtime.mjs'
 const run = promisify(execFile)
 const vm = process.env.QIUYA_PD_VM, host = process.env.QIUYA_PD_HOST_IP
@@ -83,13 +84,13 @@ import{readFile,writeFile}from'node:fs/promises';import{dirname,join}from'node:p
 const base=dirname(fileURLToPath(import.meta.url)),c=JSON.parse(await readFile(join(base,'config.json'),'utf8'));
 process.env.PATH=dirname(c.node)+';'+join(c.portable,'node_modules','.bin')+';'+process.env.PATH;
 process.env.PNPM_HOME=join(base,'pnpm-home');process.env.npm_config_cache=join(base,'npm-cache');process.env.npm_config_userconfig=join(base,'isolated.npmrc');await writeFile(process.env.npm_config_userconfig,'registry=https://registry.npmjs.org\\n');
-const cli=JSON.stringify([c.node,join(c.portable,'node_modules','@deepseek-ai','dsh','lib','bin.js')]);
+const cli=JSON.stringify([c.node,join(c.portable,'node_modules','@deepseek-ai','dsh','lib','bin.js')]);const redact=${sanitizeHarnessDiagnostic.toString()};
 try{
 if(process.platform!=='win32'||process.arch!==c.architecture)throw new Error('The actual Windows Host Node architecture does not match the selected candidate');
 process.argv=[c.node,join(c.portable,'scripts','e2e-harness.mjs'),'--package',c.candidate,'--output',join(base,'evidence'),'--browser','msedge','--cli-json',cli,'--native',c.helper,'--keep-profile',...(c.manualPreview?['--manual-preview-e2e']:[]),...(c.dragWindow?['--drag-window-e2e']:[]),...(c.fileExchange?['--file-exchange-e2e']:[]),...(c.windowStateDiagnostic?['--preview-window-state-diagnostic']:[]),...(c.inputFaults?['--input-faults-json',c.inputFaults]:[])];
 await import(pathToFileURL(process.argv[1]).href);
 if(c.installLifecycle){process.argv=[c.node,join(base,'test-harness-install.mjs'),'--old-package',join(base,'previous.tgz'),'--package',c.candidate,'--output',join(base,'install-evidence'),'--cli-json',cli];await import(pathToFileURL(process.argv[1]).href)}
-}catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:error.message,stack:error.stack}));process.exitCode=1}
+}catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:redact(error.message),stack:redact(error.stack)}));process.exitCode=1}
 finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:process.exitCode||0}))}
 `))
   for (const name of ['config.json', 'launch.mjs']) await download(name, win32.join(guestRoot, name))
@@ -118,7 +119,7 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   await writeFile(join(output, 'environment.json'), JSON.stringify({ vm, guestRoot, output, node, architecture, candidateSha256: createHash('sha256').update(files.get('candidate.tgz')).digest('hex'), helperSha256: createHash('sha256').update(files.get('helper.exe')).digest('hex'), officialRuntime: '@deepseek-ai/dsh@0.2.1-rc.2; Node v22.23.3; installed Microsoft Edge', runtimePreparation: runtime.preparation, runtimePortableSha256: runtime.portableSha256, nodeArchiveSha256: runtime.nodeSha256, runtimeLockSha256: runtime.lockSha256, testSourceHashes, userProfileIsolated: true }, null, 2) + '\n')
   console.log(JSON.stringify({ status: report.status, tests: report.tests.map(({ name, status }) => ({ name, status })), installStatus: install?.status, output, guestRoot }, null, 2)); if (!(report.status === 'passed' || windowStateDiagnostic && report.status === 'diagnostic') || install?.status === 'failed') process.exitCode = 1
 } catch (error) {
-  await writeFile(join(output, 'orchestration-error.json'), JSON.stringify({ error: error.message, stack: error.stack, guestRoot }, null, 2)); console.error(JSON.stringify({ error: error.message, output, guestRoot }, null, 2)); process.exitCode = 1
+  await writeFile(join(output, 'orchestration-error.json'), JSON.stringify({ error: sanitizeHarnessDiagnostic(error.message), stack: sanitizeHarnessDiagnostic(error.stack), guestRoot }, null, 2)); console.error(JSON.stringify({ error: sanitizeHarnessDiagnostic(error.message), output, guestRoot }, null, 2)); process.exitCode = 1
 } finally {
   if (task) await ps(`Stop-ScheduledTask -TaskName ${quote(task)} -ErrorAction SilentlyContinue;Unregister-ScheduledTask -TaskName ${quote(task)} -Confirm:$false -ErrorAction SilentlyContinue`).catch(() => {})
   server.closeAllConnections(); await new Promise(done => server.close(done))

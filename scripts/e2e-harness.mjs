@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
-import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
+import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -34,7 +34,7 @@ const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
   const child = spawn(cli[0], [...cli.slice(1), ...args], { env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => { child.kill(); reject(new Error('Isolated Harness command timed out')) }, timeoutMs)
-  child.once('error', error => { clearTimeout(timer); reject(error) }); child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error(output.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>').slice(-12000))) })
+  child.once('error', error => { clearTimeout(timer); reject(error) }); child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error(sanitizeHarnessDiagnostic(output).slice(-12000))) })
 })
 const nativeCommand = (command, args) => new Promise((resolve, reject) => {
   const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -48,13 +48,13 @@ async function test(name, operation) {
   const start = Date.now()
   try { const details = await operation(); const status = details?.diagnostic ? 'diagnostic' : 'passed'; tests.push({ name, status, elapsedMs: Date.now() - start, ...(details ? { details } : {}) }); console.log(`${status === 'passed' ? 'PASS' : 'DIAGNOSTIC'} ${name}`); return true }
   catch (error) {
-    tests.push({ name, status: 'failed', elapsedMs: Date.now() - start, error: error.message })
+    tests.push({ name, status: 'failed', elapsedMs: Date.now() - start, error: sanitizeHarnessDiagnostic(error.message) })
     await screenshot(`failed-${tests.length}`).catch(() => {})
     // A failure inside Settings must not leave its modal covering later cases.
     const close = page?.getByRole('button', { name: '关闭', exact: true })
     if (await close?.isVisible().catch(() => false)) await close.click().catch(() => {})
     await page?.keyboard.press('Escape').catch(() => {})
-    console.log(`FAIL ${name}: ${error.message}`); return false
+    console.log(`FAIL ${name}: ${sanitizeHarnessDiagnostic(error.message)}`); return false
   }
 }
 async function waitFor(predicate, message, milliseconds = 15000) {
@@ -141,9 +141,9 @@ try {
     let log = ''; let exited = false
     const accept = chunk => { log += chunk }; host.stdout.on('data', accept); host.stderr.on('data', accept); host.once('exit', () => { exited = true })
     try {
-      url = await waitFor(() => { if (exited) throw new Error(log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>')); return log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0] }, 'Isolated Harness did not start', 90000)
+      url = await waitFor(() => { if (exited) throw new Error(sanitizeHarnessDiagnostic(log)); return log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0] }, 'Isolated Harness did not start', 90000)
     } finally {
-      await writeFile(join(output, 'host-startup.log'), log.replace(/([?&]token=)[^&\s]+/gu, '$1<redacted>'))
+      await writeFile(join(output, 'host-startup.log'), sanitizeHarnessDiagnostic(log))
     }
   }
   browser = await chromium.launch({ channel: arg('--browser', 'chrome'), headless: !process.argv.includes('--headed') })
@@ -151,7 +151,7 @@ try {
   // The isolated browser owns this API spy; the user's system clipboard is never read or changed.
   await context.addInitScript(() => { window.__e2eClipboard = null; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { async writeText(text) { window.__e2eClipboard = text } } }) })
   await context.route('**/*', route => { const requestURL = new URL(route.request().url()); return ['http:', 'https:'].includes(requestURL.protocol) && !['127.0.0.1', 'localhost'].includes(requestURL.hostname) ? route.abort() : route.continue() })
-  page = await context.newPage(); page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(15000)
+  page = await context.newPage(); page.on('pageerror', error => errors.push(sanitizeHarnessDiagnostic(error.message))); page.setDefaultTimeout(15000)
   page.on('response', response => {
     const endpoint = new URL(response.url()).pathname
     if (!endpoint.startsWith('/api/qiuya-tools.session-windows.')) return
@@ -160,7 +160,7 @@ try {
       windowRpc.push({ endpoint, status: response.status(), result: envelope.result, ...(payload ? { request: { sessionId: payload.sessionId, source: payload.source, action: payload.action } } : {}) })
     }).catch(() => {})
   })
-  await page.goto(url)
+  await navigateHarnessPage(page, url, evidence => writeFile(join(output, 'initial-navigation.json'), JSON.stringify(evidence, null, 2)))
   const onboarding = page.getByRole('button', { name: '继续', exact: true })
   await onboarding.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
   if (await onboarding.isVisible()) await onboarding.click()
@@ -500,7 +500,7 @@ try {
         }, alphaId).catch(failure => ({ error: failure.message }))
         const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : macPreview ? await macPreview('observe', { output: join(output, `preview-control-${state}-failed.jpg`) }).catch(failure => ({ error: failure.message })) : undefined
         const panelText = await page.locator('.qyt-feature-panel [role="status"]').innerText().catch(failure => failure.message)
-        await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: error.message, backend, native, panelText }, null, 2))
+        await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: sanitizeHarnessDiagnostic(error.message), backend, native, panelText }, null, 2))
         const pixels = windowsPreview ? await driver.observe(preview.id).catch(() => undefined) : undefined
         if (pixels) await writeFile(join(output, `preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
         throw error
@@ -561,7 +561,7 @@ try {
           else { const floatingAfter = await driver.observe(preview.id); await writeFile(join(output, 'manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64')) }
         } finally {
           if (!evidence.actualTargetSubmission) {
-            evidence.failurePreview = macPreview ? await macPreview('observe', { output: join(output, 'manual-preview-failed-floating.jpg') }).catch(error => ({ error: error.message })) : await windowsPreview().then(JSON.parse).catch(error => ({ error: error.message }))
+            evidence.failurePreview = macPreview ? await macPreview('observe', { output: join(output, 'manual-preview-failed-floating.jpg') }).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) })) : await windowsPreview().then(JSON.parse).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) }))
             for (const [name, targetId] of [['target', independentTarget.id], ...macPreview ? [] : [['floating', preview.id]]]) {
               const failed = await driver.observe(targetId).catch(() => undefined)
               if (failed) await writeFile(join(output, `manual-preview-failed-${name}.jpg`), Buffer.from(failed.imageBase64, 'base64'))
@@ -680,7 +680,7 @@ try {
   if (error instanceof PreviewWindowDiagnosticStop) {
     console.log(`DIAGNOSTIC preview window phases ${diagnosticComplete ? 'completed' : 'stopped after a failure'}; UI12 acceptance was not run`)
   } else {
-  tests.push({ name: 'runner', status: 'failed', error: error.message }); console.log(`FAIL runner: ${error.message}`)
+  tests.push({ name: 'runner', status: 'failed', error: sanitizeHarnessDiagnostic(error.message) }); console.log(`FAIL runner: ${sanitizeHarnessDiagnostic(error.message)}`)
   await screenshot('failed-runner').catch(() => {})
   const requests = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8').catch(() => '')
   if (requests) await writeFile(join(output, 'runner-adapter-requests.json'), JSON.stringify(requests.trim().split('\n').map(JSON.parse).slice(-40), null, 2))
@@ -692,7 +692,7 @@ finally {
     // A separately packaged diagnostic companion can emit sanitized native
     // presentation phases. Preserve them before shutting down this own Host;
     // the ordinary frozen candidate does not create this optional file.
-    await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + error.message) })
+    await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + sanitizeHarnessDiagnostic(error.message)) })
   }
   await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
   let forcedHostTermination = false
@@ -710,7 +710,7 @@ finally {
         last = await macPreviewRetirement()
         return last.allRetired ? last : undefined
       }, 'The same owned Host/preview/session process identities did not retire after Host shutdown', 10000)
-    } catch (error) { failure = error.message; errors.push(failure) }
+    } catch (error) { failure = sanitizeHarnessDiagnostic(error.message); errors.push(failure) }
     if (forcedHostTermination) errors.push('The owned Mac Host required SIGKILL instead of graceful retirement')
     await writeFile(join(output, 'mac-preview-process-retirement.json'), JSON.stringify({ elapsedMs: Date.now() - start, last, failure, forcedHostTermination, source: 'read-only proc_pidinfo exact PID + birth + executable; no signal or kill by this observer', boundary: 'Host receives the runner’s existing normal SIGTERM shutdown; helper processes are not directly killed by this oracle.' }, null, 2))
   }

@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runInNewContext } from 'node:vm'
 import { JSDOM } from 'jsdom'
-import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession } from './fixtures/harness-workspace-prerequisite.mjs'
+import { EventEmitter } from 'node:events'
+import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from './fixtures/harness-workspace-prerequisite.mjs'
 
 const workspace = { workspaceId: 'workspace-own', path: 'C:\\test-own\\workspace-uuid', title: 'workspace-uuid', sessionIds: [] }
 function pageWith(result, observe = () => {}) {
@@ -50,5 +51,37 @@ test('DOM diagnostics retain public identity and readiness attributes without ed
   assert.equal(state.conversations[0].composers[0].textLength, 13)
   assert.equal(state.workspaceChips[0].text, workspace.title)
   assert.doesNotMatch(JSON.stringify(state), /private draft|credential-secret/u)
+  assert.equal(sanitizeHarnessDiagnostic('Failed "http://127.0.0.1:1234/?token=private-token#secret" and /api/test?token=relative-secret&next=1'), 'Failed "http://127.0.0.1:1234/" and /api/test?token=<redacted>&next=1')
+  assert.equal(sanitizeHarnessDiagnostic('ordinary error'), 'ordinary error')
   dom.window.close()
+})
+
+test('first navigation waits for DOMContentLoaded and records only bounded same-origin resource paths', async () => {
+  const page = new EventEmitter(), url = 'http://127.0.0.1:1234/?token=private-token', request = (url, type) => ({ url: () => url, resourceType: () => type, failure: () => null })
+  let options, evidence
+  page.evaluate = async () => ({ readyState: 'interactive' })
+  page.goto = async (actual, selected) => {
+    assert.equal(actual, url, 'Authentication is preserved for the actual navigation')
+    options = selected
+    const doc = request(url, 'document'); page.emit('request', doc); page.emit('requestfinished', doc)
+    for (let index = 0; index < 70; index++) page.emit('request', request('http://127.0.0.1:1234/asset-' + index + '?token=resource-private#hash', 'image'))
+    page.emit('request', request('https://foreign.example/private?secret=value', 'script'))
+  }
+  await navigateHarnessPage(page, url, value => { evidence = value })
+  assert.deepEqual(options, { waitUntil: 'domcontentloaded' }, 'The existing page timeout is retained')
+  assert.equal(evidence.document.readyState, 'interactive')
+  assert.equal(evidence.pendingSameOrigin.length, 64)
+  assert.equal(evidence.completedSameOrigin[0].path, '/')
+  assert.doesNotMatch(JSON.stringify(evidence), /private-token|resource-private|foreign\.example|#hash/u)
+  for (const event of ['request', 'requestfinished', 'requestfailed']) assert.equal(page.listenerCount(event), 0)
+})
+test('a failed first navigation preserves failure and read-only state while redacting its URL', async () => {
+  const page = new EventEmitter(), failure = new Error('Timeout at "http://127.0.0.1:1234/?token=private-token#hash"')
+  let evidence
+  page.evaluate = async () => ({ readyState: 'complete' })
+  page.goto = async () => { throw failure }
+  await assert.rejects(navigateHarnessPage(page, 'http://127.0.0.1:1234/?token=private-token', value => { evidence = value }), error => error === failure)
+  assert.equal(evidence.document.readyState, 'complete')
+  assert.equal(evidence.error, 'Timeout at "http://127.0.0.1:1234/"')
+  for (const event of ['request', 'requestfinished', 'requestfailed']) assert.equal(page.listenerCount(event), 0)
 })
