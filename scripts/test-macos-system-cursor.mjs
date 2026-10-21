@@ -12,13 +12,14 @@ import { createHash } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 const root = fileURLToPath(new URL('../', import.meta.url)), arg = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1] }
 const digest = bytes => createHash('sha256').update(bytes).digest('hex'), execute = promisify(execFile)
+const appKitCounter = process.argv.includes('--appkit-counter'), counterArgs = appKitCounter ? ['--appkit-counter'] : []
 
 // A test-only parent proxies its private child's stdin/stdout. Killing this
 // parent closes the child's pipe; only that child balances its own Hide.
 if (arg('--parent-proxy')) {
   const worker = await realpath(arg('--parent-proxy'))
   assert.equal(digest(await readFile(worker)), arg('--worker-sha256'))
-  const child = spawn(worker, ['--hider'], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = spawn(worker, ['--hider', ...counterArgs], { stdio: ['pipe', 'pipe', 'pipe'] })
   child.stdin.on('error', () => {}); child.stderr.resume(); child.stdout.pipe(process.stdout, { end: false }); process.stdin.pipe(child.stdin)
   const timer = setTimeout(() => child.stdin.end(), 18000)
   child.once('error', () => { clearTimeout(timer); process.exitCode = 1 })
@@ -91,7 +92,7 @@ if (arg('--parent-proxy')) {
       return { before,after,crop,difference,cursorWindowOwner:after.cursorWindows.some(row=>row.ownerVerification==='verified-WindowServer-executable')?'verified-WindowServer-executable':'unknown' }
     }
     async function holder(proxy=false) {
-      const value=proxy?endpoint(process.execPath,[fileURLToPath(import.meta.url),'--parent-proxy',preparation.binary,'--worker-sha256',preparation.binarySHA256],'proxy-parent'):endpoint(preparation.binary,['--hider'],'hider')
+      const value=proxy?endpoint(process.execPath,[fileURLToPath(import.meta.url),'--parent-proxy',preparation.binary,'--worker-sha256',preparation.binarySHA256,...counterArgs],'proxy-parent'):endpoint(preparation.binary,['--hider',...counterArgs],'hider')
       const ready=await value.ready(),worker=await pin(ready.identity,'hider');assert.equal(ready.role,'hider');if(preparation.experimentControl)assert.equal(ready.activationPolicy,preparation.experimentControl.hiderActivationPolicy);const parent=proxy?await pin(await identify(value.child.pid),'proxy-parent'):null
       assert.equal(worker.parentPid,proxy?parent.pid:process.pid);return{value,worker,parent}
     }
@@ -131,7 +132,7 @@ if (arg('--parent-proxy')) {
       for(const value of[camera,probe].filter(Boolean)){value.child.stdin.end();try{await waitExit(value)}catch{cleanup.failures.push('Read-only observer natural exit unconfirmed')}}
       for(const value of endpoints)value.lines.close()
       cleanup.passed=cleanup.failures.length===0; if(!cleanup.passed){report.status='failed';process.exitCode=1}
-      await writeFile(join(output,'report.json'),JSON.stringify({...report,preparation,owned,pictures,snapshots,cleanup,actualCGEventPosts:0,actualCursorWarpCalls:0,actualMouseAssociationCalls:0,otherProcessShowCalls:0,productionDefaultChanged:false,testedAt:new Date().toISOString()},null,2))
+      await writeFile(join(output,'report.json'),JSON.stringify({...report,preparation,counterAPI:appKitCounter?'NSCursor.hide/unhide':'CGDisplayHideCursor/ShowCursor',counterAPIReturnsStatus:!appKitCounter,owned,pictures,snapshots,cleanup,actualCGEventPosts:0,actualCursorWarpCalls:0,actualMouseAssociationCalls:0,otherProcessShowCalls:0,productionDefaultChanged:false,testedAt:new Date().toISOString()},null,2))
       await writeFile(join(output,'transcripts.json'),JSON.stringify(endpoints.map(value=>({role:value.role,pid:value.child.pid,transcript:value.transcript,stderrBytes:value.stderrBytes})),null,2))
       console.log(JSON.stringify({status:report.status,cases:cases.length,cleanup,output},null,2))
     }

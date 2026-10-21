@@ -114,8 +114,15 @@ private final class BalancedHide {
         let mainId = main.map { unsafeBitCast($0, to: ConnectionFn.self)() }, fallbackId = fallback.map { unsafeBitCast($0, to: ConnectionFn.self)() }
         let cid = mainId ?? fallbackId ?? 0, set = unsafeBitCast(setter, to: PropertyFn.self)
         guard cid > 0 else { throw issue("connection-unavailable") }
-        let evidence: [String: Any] = ["CGSMainConnectionID": mainId as Any? ?? NSNull(), "_CGSDefaultConnection": fallbackId as Any? ?? NSNull(), "selectedSymbol": main != nil ? "CGSMainConnectionID" : "_CGSDefaultConnection", "selectedId": cid, "spiDiagnosticOnly": true]
-        return BalancedHide(connectionEvidence: evidence, setBackground: { enabled in set(cid, cid, "SetsCursorInBackground" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse) }, hide: { Int32(CGDisplayHideCursor(CGMainDisplayID()).rawValue) }, show: { Int32(CGDisplayShowCursor(CGMainDisplayID()).rawValue) })
+        let appKit = CommandLine.arguments.contains("--appkit-counter")
+        let evidence: [String: Any] = ["CGSMainConnectionID": mainId as Any? ?? NSNull(), "_CGSDefaultConnection": fallbackId as Any? ?? NSNull(), "selectedSymbol": main != nil ? "CGSMainConnectionID" : "_CGSDefaultConnection", "selectedId": cid, "spiDiagnosticOnly": true, "counterAPI": appKit ? "NSCursor.hide/unhide" : "CGDisplayHideCursor/ShowCursor", "counterAPIReturnsStatus": !appKit]
+        return BalancedHide(connectionEvidence: evidence, setBackground: { enabled in set(cid, cid, "SetsCursorInBackground" as CFString, enabled ? kCFBooleanTrue : kCFBooleanFalse) }, hide: {
+            if appKit { MainActor.assumeIsolated { NSCursor.hide() }; return 0 }
+            return Int32(CGDisplayHideCursor(CGMainDisplayID()).rawValue)
+        }, show: {
+            if appKit { MainActor.assumeIsolated { NSCursor.unhide() }; return 0 }
+            return Int32(CGDisplayShowCursor(CGMainDisplayID()).rawValue)
+        })
     }
 }
 @MainActor private final class ExperimentCanvas: NSView {
