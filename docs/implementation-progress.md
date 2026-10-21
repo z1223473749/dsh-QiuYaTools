@@ -14,6 +14,7 @@
 | 双平台原生操作与指针 | 原生基线已验证；Mac窗口校验独立修复已构建并完成全量回归 | Windows正式PE两架构各52＋29通过；Mac新helper715d增加进程出生／精确窗口／几何／前台校验和有界AX组件归属，733/733通过。同几何兄弟窗口click／type真实拒绝且零输入；合法单窗口闭环仍待本机空闲复验，不宣称整体验收完成 |
 | 后续独立修复与验收 | 继续执行 | 完成Mac合法单窗口闭环与新候选Mac／PD Harness实际流程和安装；随后真实模型三任务、多聊天、双端长稳、反向严格清理及现有功能完整矩阵。历史通过仍只适用其SHA |
 | 本批构建与Git | 本批统一提交，未公开发布 | 验证包 `artifacts/candidates-chat-full-frame-feature/`，完整SHA见相邻JSON；记录未通过项，后续修复各自构建、测试、中文提交 |
+| Codex工作台／用户自动验收扩展 | 已收集并纳入计划，尚未实现新增产品能力 | 开发计划第16节：27项能力、7个完整交付单元、8组自动化／实机门槛；来源区分官方文档、用户截图、现有源码及设计。基线A→F继续优先，自动验收／开发测试／执行审批分开 |
 
 本轮开始前，已精确终止视觉测试第四轮的自有 carrier，两个已运行 fixture／helper 自然清理且 oracle 自然退出，`cleanupErrors=[]`；实际 Harness 官方卸载回执为 `changed=true/application=applied`。第四轮任务 1 通过、任务 2 达预算且出现一次拒绝，任务 3 未运行，未算作三任务通过。证据见 `artifacts/model-capability-resumed/actual-vision-external-attempt-4/`，私有模型正文未归档。
 
