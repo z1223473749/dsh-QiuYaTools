@@ -173,6 +173,7 @@ import Foundation
             var readError: ComputerError?, requestError: ComputerError?, sampleCost = 0.0, requestCost = 0.0
             var onSleep: (() throws -> Void)?, afterSample: (() -> Void)?
             var records = [[String: Any]]()
+            var diagnosticValues = [String: Any]()
             var backend: FocusPreparationBackend {
                 FocusPreparationBackend(now: { self.time }, frontmost: { self.foreground }, request: { _, result in
                     self.requests += 1; result.accepted = self.accepted; self.time += self.requestCost
@@ -185,7 +186,8 @@ import Foundation
                     if !self.windowSequence.isEmpty { self.frontmostWindowId = self.windowSequence.removeFirst() }
                     self.afterSample?()
                     return FocusPreparationSample(frontmostPid: self.foreground, frontmostWindowId: self.frontmostWindowId)
-                }, sleep: { nanos in self.time += Double(nanos) / 1_000_000_000; try self.onSleep?() })
+                }, sleep: { nanos in self.time += Double(nanos) / 1_000_000_000; try self.onSleep?() },
+                diagnostics: { self.diagnosticValues })
             }
             func run(_ checkpoint: () throws -> Void = {}) async throws {
                 try await BoundedFocusPreparation.run(targetPid: 99, targetWindowId: 11, backend: backend, checkpoint: checkpoint, record: { self.records.append($0) })
@@ -212,7 +214,29 @@ import Foundation
             precondition(f.requests == 1 && f.samples == 5 && f.time < 0.5, "A transient foreground match cannot satisfy two consecutive reads; no activation replay")
             let value = f.records.last!
             precondition(value["beforePid"] as? Int32 == 42 && value["afterPid"] as? Int32 == 99 && value["inputPosted"] as? Bool == false)
-            precondition(Set(value.keys) == Set(["targetPid", "beforePid", "afterPid", "activationAccepted", "settledMs", "axSettableResult", "axFrontmostResult", "raiseResult", "inputPosted"]), "Focus status contains only bounded owner diagnostics, never titles, paths or text")
+            precondition(value["preparationPhase"] as? String == "ready" && value["readinessSamples"] as? Int == 5 && value["consecutiveReadinessSamples"] as? Int == 2)
+            precondition(Set(value.keys) == Set(["targetPid", "beforePid", "afterPid", "activationAccepted", "settledMs", "axSettableResult", "axFrontmostResult", "raiseResult", "inputPosted", "preparationPhase", "readinessSamples", "consecutiveReadinessSamples"]), "Focus status contains only bounded owner diagnostics, never titles, paths or text")
+        }
+        do {
+            let f = Fake(); f.accepted = false; f.sequence = [99, 99]
+            f.diagnosticValues = ["targetPid": -1, "beforePid": -1, "afterPid": -1, "inputPosted": true,
+                "activationAccepted": true, "settledMs": -1, "preparationPhase": "forged", "readinessSamples": 999,
+                "consecutiveReadinessSamples": 999, "metadataSamples": 17, "componentProofCalls": 2,
+                "componentProofMs": 12, "acceptedComponentProofs": 1, "componentProofStage": "complete", "componentAXError": NSNull()]
+            try await f.run()
+            let value = f.records.last!
+            precondition(f.requests == 1 && f.samples == 2, "Diagnostic success never substitutes for the two real exact-window readiness samples")
+            precondition(value["targetPid"] as? Int == 99 && value["beforePid"] as? Int32 == 42 && value["afterPid"] as? Int32 == 99 && value["inputPosted"] as? Bool == false,
+                "Backend diagnostic collisions cannot replace selected identity or claim an input post")
+            precondition(value["activationAccepted"] as? Bool == false && value["settledMs"] as? Int == 10 &&
+                value["preparationPhase"] as? String == "ready" && value["readinessSamples"] as? Int == 2 && value["consecutiveReadinessSamples"] as? Int == 2,
+                "Control-owned progress and acceptance fields cannot be forged by a diagnostic hook")
+            precondition(value["metadataSamples"] as? Int == 17 && value["componentProofCalls"] as? Int == 2 &&
+                value["componentProofMs"] as? Int == 12 && value["acceptedComponentProofs"] as? Int == 1 && value["componentProofStage"] as? String == "complete",
+                "Independent bounded metadata counters survive alongside authoritative readiness fields")
+            precondition(f.records.first?["preparationPhase"] as? String == "request" && f.records.first?["readinessSamples"] as? Int == 0)
+            precondition(f.records.filter { $0["preparationPhase"] as? String == "ready" }.count == 1,
+                "Only the completed strict preparation emits its terminal ready receipt")
         }
         do {
             let f = Fake(); f.accepted = false; f.sequence = [99, 99]
@@ -221,13 +245,23 @@ import Foundation
         }
         do {
             let f = Fake(); f.sequence = []
+            f.diagnosticValues = ["activationAccepted": true, "inputPosted": true, "preparationPhase": "ready",
+                "readinessSamples": 999, "consecutiveReadinessSamples": 2, "acceptedComponentProofs": 3]
             do { try await f.run(); preconditionFailure("Unfocused target accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
             precondition(f.requests == 1 && f.time <= 0.500001 && f.records.last?["inputPosted"] as? Bool == false, "Deadline cannot retry activation or post input")
+            precondition(f.records.last?["preparationPhase"] as? String == "readiness" && f.records.last?["readinessSamples"] as? Int == f.samples && f.records.last?["consecutiveReadinessSamples"] as? Int == 0,
+                "Diagnostic acceptance/proof counters do not make an unfocused target ready; timeout records the actual readiness attempts")
+            precondition(!f.records.contains { $0["preparationPhase"] as? String == "ready" })
         }
         do {
             let f = Fake(); f.readError = ComputerError("GEOMETRY_CHANGED", "fake")
+            f.diagnosticValues = ["componentProofStage": "copy-focused-window", "componentAXError": Int32(-25204)]
             do { try await f.run(); preconditionFailure("Changed geometry accepted") } catch let error as ComputerError { precondition(error.code == "GEOMETRY_CHANGED") }
             precondition(f.samples == 1 && f.requests == 1)
+            precondition(f.records.last?["preparationPhase"] as? String == "readiness" && f.records.last?["readinessSamples"] as? Int == 1 && f.records.last?["consecutiveReadinessSamples"] as? Int == 0,
+                "A throwing readiness read records its attempt without claiming a valid consecutive observation")
+            precondition(f.records.last?["componentProofStage"] as? String == "copy-focused-window" && f.records.last?["componentAXError"] as? Int32 == -25204 && f.records.last?["inputPosted"] as? Bool == false,
+                "A failed read retains its finite backend diagnostic without changing the geometry rejection")
         }
         do {
             let f = Fake(); var generation = 1
@@ -244,14 +278,19 @@ import Foundation
             precondition(f.samples == 1 && f.requests == 1)
         }
         do {
-            let f = Fake(); f.onSleep = { throw CancellationError() }
+            let f = Fake(); f.sequence = [99, 99]; f.onSleep = { throw CancellationError() }
             do { try await f.run(); preconditionFailure("Cancelled preparation accepted") } catch is CancellationError {}
             precondition(f.requests == 1 && f.samples == 1 && f.records.last?["inputPosted"] as? Bool == false)
+            precondition(f.records.last?["preparationPhase"] as? String == "readiness" && f.records.last?["readinessSamples"] as? Int == 1 && f.records.last?["consecutiveReadinessSamples"] as? Int == 1,
+                "Cancellation after one exact match preserves that observation but never claims the second or terminal readiness")
         }
         do {
             let f = Fake(); f.requestError = ComputerError("STALE_EPOCH", "fake")
+            f.diagnosticValues = ["preparationPhase": "ready", "readinessSamples": 999, "inputPosted": true]
             do { try await f.run(); preconditionFailure("Failed activation preparation accepted") } catch let error as ComputerError { precondition(error.code == "STALE_EPOCH") }
             precondition(f.samples == 0 && f.records.last?["activationAccepted"] as? Bool == true, "Partial activation receipt survives later failure without claiming input")
+            precondition(f.records.last?["preparationPhase"] as? String == "request" && f.records.last?["readinessSamples"] as? Int == 0 && f.records.last?["consecutiveReadinessSamples"] as? Int == 0 && f.records.last?["inputPosted"] as? Bool == false,
+                "Request failure retains its actual phase and zero reads even when diagnostics claim success")
         }
         do {
             let f = Fake(); f.requestCost = 0.51; f.sequence = [99, 99]
@@ -262,6 +301,8 @@ import Foundation
             let f = Fake(); f.sequence = [99, 99]; f.sampleCost = 0.25
             do { try await f.run(); preconditionFailure("Readiness arriving beyond budget accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
             precondition(f.samples == 2)
+            precondition(f.records.last?["preparationPhase"] as? String == "readiness" && f.records.last?["readinessSamples"] as? Int == 2 && f.records.last?["consecutiveReadinessSamples"] as? Int == 1,
+                "A sample returning beyond the budget is recorded without completing the consecutive readiness requirement")
         }
         do {
             let f = Fake(); var valid = true; f.sequence = [99, 99]; f.afterSample = { valid = false }

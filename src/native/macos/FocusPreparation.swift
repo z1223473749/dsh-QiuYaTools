@@ -22,6 +22,7 @@ struct FocusPreparationSample {
     var request: @MainActor (_ deadline: TimeInterval, _ result: FocusActivationResult) async throws -> Void
     var sample: @MainActor () throws -> FocusPreparationSample
     var sleep: @MainActor (_ nanoseconds: UInt64) async throws -> Void
+    var diagnostics: @MainActor () -> [String: Any] = { [:] }
 }
 
 @MainActor enum BoundedFocusPreparation {
@@ -30,28 +31,32 @@ struct FocusPreparationSample {
         let begin = backend.now(), deadline = begin + 0.5
         let result = FocusActivationResult(), before = backend.frontmost()
         var after = before
+        var phase = "request", samples = 0, consecutive = 0
         var receipt: [String: Any] {
-            ["targetPid": Int(targetPid), "beforePid": before as Any? ?? NSNull(), "afterPid": after as Any? ?? NSNull(),
+            var value: [String: Any] = ["targetPid": Int(targetPid), "beforePid": before as Any? ?? NSNull(), "afterPid": after as Any? ?? NSNull(),
              "activationAccepted": result.accepted, "settledMs": max(0, Int(((backend.now() - begin) * 1000).rounded())),
              "axSettableResult": result.axSettableResult as Any? ?? NSNull(),
              "axFrontmostResult": result.axFrontmostResult as Any? ?? NSNull(), "raiseResult": result.raiseResult as Any? ?? NSNull(),
-             "inputPosted": false]
+             "inputPosted": false, "preparationPhase": phase, "readinessSamples": samples, "consecutiveReadinessSamples": consecutive]
+            value.merge(backend.diagnostics()) { original, _ in original }
+            return value
         }
         record(receipt)
         defer { after = backend.frontmost(); record(receipt) }
         try Task.checkCancellation(); try checkpoint()
         try await backend.request(deadline, result)
         try Task.checkCancellation(); try checkpoint()
-        var consecutive = 0
+        phase = "readiness"
         while backend.now() < deadline {
             try Task.checkCancellation(); try checkpoint()
+            samples += 1
             let sample = try backend.sample()
             after = sample.frontmostPid
             try checkpoint()
             if backend.now() >= deadline { break }
             if after == targetPid && sample.frontmostWindowId == targetWindowId { consecutive += 1 } else { consecutive = 0 }
             record(receipt)
-            if consecutive >= 2 { return }
+            if consecutive >= 2 { phase = "ready"; return }
             let remaining = deadline - backend.now()
             if remaining <= 0 { break }
             try await backend.sleep(max(1, UInt64((min(0.01, remaining) * 1_000_000_000).rounded(.up))))
@@ -136,6 +141,20 @@ private struct FocusProcessBirth: Equatable {
     }
 }
 
+/// Bounded, metadata-only action diagnostics. No AX values, titles, paths or
+/// UI text are retained; these counters never participate in authorization.
+@MainActor private final class FocusIdentityDiagnostics {
+    var metadataSamples = 0, proofCalls = 0, acceptedProofs = 0
+    var proofSeconds: TimeInterval = 0
+    var lastStage = "not-requested", lastAXError: Int32?
+    var snapshot: [String: Any] {
+        ["metadataSamples": metadataSamples, "componentProofCalls": proofCalls,
+         "componentProofMs": max(0, Int((proofSeconds * 1000).rounded())),
+         "acceptedComponentProofs": acceptedProofs, "componentProofStage": lastStage,
+         "componentAXError": lastAXError as Any? ?? NSNull()]
+    }
+}
+
 /// One identity is captured before preparation and retained through every
 /// normal input post. Owned key/button cleanup deliberately has its own path.
 @MainActor struct NativeFocusIdentity {
@@ -143,13 +162,16 @@ private struct FocusProcessBirth: Equatable {
     let geometry: FrameGeometry
     let application: NSRunningApplication
     private let birth: FocusProcessBirth
+    private let diagnostics = FocusIdentityDiagnostics()
+    var diagnosticSnapshot: [String: Any] { diagnostics.snapshot }
     init(target: NativeTarget, geometry: FrameGeometry) throws {
         guard let birth = FocusProcessBirth(target.pid), let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else {
             throw ComputerError("TARGET_GONE", "The target application exited.")
         }
         self.target = target; self.geometry = geometry; self.birth = birth; application = app
     }
-    func sample(requireFrontmost: Bool = false) throws -> FocusPreparationSample {
+    func sample(requireFrontmost: Bool = false, includeComponentProofs: Bool = true) throws -> FocusPreparationSample {
+        diagnostics.metadataSamples += 1
         guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
         var windows = try currentWindows()
         let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -160,7 +182,8 @@ private struct FocusProcessBirth: Equatable {
            let index = normal.firstIndex(where: { $0.windowId == target.windowId }), index > 0 && index <= 3 {
             let selected = normal[index], blockers = Array(normal.prefix(index))
             if blockers.allSatisfy({ $0.pid == target.pid && selected.frame.contains($0.frame) }) {
-                proofs = componentProofs(blockers, selected: selected)
+                if includeComponentProofs { proofs = componentProofs(blockers, selected: selected) }
+                if includeComponentProofs { diagnostics.acceptedProofs = blockers.filter { component in proofs.contains { ExactWindowFocus.provesComponent(component, selected: selected, proof: $0) } }.count }
                 // Public AX calls are synchronous. Never reuse a proof after
                 // its CG surface or the front order changed during those reads.
                 windows = try currentWindows()
@@ -192,12 +215,16 @@ private struct FocusProcessBirth: Equatable {
         return windows
     }
     private func componentProofs(_ components: [FocusWindowState], selected: FocusWindowState) -> [FocusWindowComponentProof] {
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.06
+        let begin = ProcessInfo.processInfo.systemUptime, deadline = begin + 0.06
+        diagnostics.proofCalls += 1; diagnostics.acceptedProofs = 0; diagnostics.lastAXError = nil
+        defer { diagnostics.proofSeconds += max(0, ProcessInfo.processInfo.systemUptime - begin) }
         func read(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
             guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             AXUIElementSetMessagingTimeout(element, 0.01)
             var value: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
+            let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+            diagnostics.lastAXError = result.rawValue
+            guard result == .success,
                   ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             return value
         }
@@ -216,15 +243,24 @@ private struct FocusProcessBirth: Equatable {
             var result: pid_t = 0; return AXUIElementGetPid(value, &result) == .success ? result : nil
         }
         let app = AXUIElementCreateApplication(target.pid)
-        guard let focused = element(read(app, kAXFocusedWindowAttribute)), let focusedFrame = rect(focused),
+        diagnostics.lastStage = "focused-window"
+        guard let focused = element(read(app, kAXFocusedWindowAttribute)) else { return [] }
+        diagnostics.lastStage = "focused-window-geometry"
+        guard let focusedFrame = rect(focused),
               let focusedPid = pid(focused), focusedPid == target.pid, ExactWindowFocus.sameGeometry(focusedFrame, selected.frame) else { return [] }
         let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system, 0.01)
         var proofs = [FocusWindowComponentProof]()
         for component in components {
             guard ProcessInfo.processInfo.systemUptime < deadline else { return [] }
             var hit: AXUIElement?
-            guard AXUIElementCopyElementAtPosition(system, Float(component.frame.midX), Float(component.frame.midY), &hit) == .success,
-                  let hit, let hitWindow = element(read(hit, kAXWindowAttribute)), let hitFrame = rect(hit),
+            diagnostics.lastStage = "component-hit"
+            let hitResult = AXUIElementCopyElementAtPosition(system, Float(component.frame.midX), Float(component.frame.midY), &hit)
+            diagnostics.lastAXError = hitResult.rawValue
+            guard hitResult == .success, let hit else { return [] }
+            diagnostics.lastStage = "component-window"
+            guard let hitWindow = element(read(hit, kAXWindowAttribute)) else { return [] }
+            diagnostics.lastStage = "component-geometry"
+            guard let hitFrame = rect(hit),
                   let hitPid = pid(hit), let hitWindowPid = pid(hitWindow),
                   let currentFocus = element(read(app, kAXFocusedWindowAttribute)), CFEqual(currentFocus, focused),
                   ProcessInfo.processInfo.systemUptime < deadline else { return [] }
@@ -232,6 +268,7 @@ private struct FocusProcessBirth: Equatable {
                 focusedPid: focusedPid, focusedFrame: focusedFrame, hitPid: hitPid, hitWindowPid: hitWindowPid, hitFrame: hitFrame,
                 hitWindowIsFocused: CFEqual(hitWindow, focused), hitIsTopLevel: CFEqual(hit, hitWindow)))
         }
+        diagnostics.lastStage = "complete"
         return proofs
     }
 }
@@ -241,7 +278,11 @@ private struct FocusProcessBirth: Equatable {
         let target = identity.target, geometry = identity.geometry, application = identity.application
         func validate() throws {
             try checkpoint()
-            _ = try identity.sample()
+            // Activation preparation checks identity, geometry and ambiguity;
+            // it does not consume the returned foreground-window decision.
+            // Avoid repeated AX proofs here so the bounded request leaves time
+            // for the two strict readiness samples and per-input checks below.
+            _ = try identity.sample(includeComponentProofs: false)
         }
         return FocusPreparationBackend(now: { ProcessInfo.processInfo.systemUptime },
             frontmost: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, request: { deadline, result in
@@ -301,6 +342,6 @@ private struct FocusProcessBirth: Equatable {
                     }
                 }
             }, sample: { try checkpoint(); return try identity.sample() },
-            sleep: { try await Task.sleep(nanoseconds: $0) })
+            sleep: { try await Task.sleep(nanoseconds: $0) }, diagnostics: { identity.diagnosticSnapshot })
     }
 }
