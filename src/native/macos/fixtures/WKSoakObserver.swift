@@ -11,6 +11,16 @@ import Darwin
 import Foundation
 import ScreenCaptureKit
 
+// Cryptex/firmlink paths can name the same system binary. Compare file
+// identity with the exact public framework executables, never basename alone.
+private let systemWebKitFiles: [(kind: String, device: dev_t, inode: ino_t)] = ["WebContent", "Networking", "GPU"].compactMap { kind in
+    let name = "com.apple.WebKit.\(kind)"
+    let path = "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/\(name).xpc/Contents/MacOS/\(name)"
+    var value = stat()
+    guard stat(path, &value) == 0, value.st_uid == 0, (value.st_mode & S_IFMT) == S_IFREG else { return nil }
+    return (kind, value.st_dev, value.st_ino)
+}
+
 private struct Identity: Codable {
     var pid: Int32
     var birthMicros: String
@@ -31,9 +41,9 @@ private struct ProcessRow {
     var systemTime: UInt64?
     var errors: [String]
     var kind: String? {
-        guard identity.path.hasPrefix("/System/Library/"), identity.path.contains("/WebKit") else { return nil }
-        let name = URL(fileURLWithPath: identity.path).lastPathComponent
-        return ["WebContent", "Networking", "GPU"].first(where: { name.contains("WebKit.\($0)") })
+        var file = stat()
+        guard stat(identity.path, &file) == 0, file.st_uid == 0, (file.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return systemWebKitFiles.first { $0.device == file.st_dev && $0.inode == file.st_ino }?.kind
     }
     var json: [String: Any] {
         var result: [String: Any] = ["pid": identity.pid, "parentPid": bsd.pbi_ppid,
@@ -183,6 +193,9 @@ private func snapshot(_ request: [String: Any]) throws -> [String: Any] {
     }
     adoptDescendants()
     let natives = owned.values.filter { $0.identity.role == "native" }
+    if request["requireSelfResponsibleNative"] as? Bool == true {
+        for native in natives where native.responsiblePid != native.identity.pid { errors.append("native-responsibility-not-disclaimed:\(native.identity.pid)") }
+    }
     if responsible == nil { errors.append("responsibility-query-unavailable") }
     for var candidate in rows where candidate.kind != nil && owned[candidate.identity.pid] == nil {
         let native = natives.first { $0.identity.pid == candidate.responsiblePid && UInt64(candidate.identity.birthMicros)! >= UInt64($0.identity.birthMicros)! }

@@ -4,6 +4,14 @@ import { installWebViewClockProbe, WebViewClockAccumulator } from './computer-we
 
 export { WebViewClockAccumulator }
 
+/** The test carrier is accepted only after independent post-exec metadata. */
+export function macSelfResponsibleNative(row, { helperPath, runnerPid }) {
+  return Number.isSafeInteger(row?.pid) && row.pid > 0 && row.role === 'native' &&
+    row.path === helperPath && row.parentPid === runnerPid && row.responsiblePid === row.pid &&
+    typeof row.birthMicros === 'string' && /^\d+$/u.test(row.birthMicros) &&
+    typeof row.uniqueId === 'string' && /^\d+$/u.test(row.uniqueId) && row.uniqueId !== '0'
+}
+
 /** Cleanup ACKs must cover every exact identity and contain only proven gone states. */
 export function macProcessCheckPassed(value, expected) {
   if (value?.passed !== true || !Array.isArray(value.results) || !Array.isArray(expected) || value.results.length !== expected.length) return false

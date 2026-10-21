@@ -1,10 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, wkPreviewInstrumentation } from '../scripts/computer-wkwebview-soak-evidence.mjs'
+import { WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, macSelfResponsibleNative, wkPreviewInstrumentation } from '../scripts/computer-wkwebview-soak-evidence.mjs'
 
 const frame = (generation, sequence, atMs) => ({ kind: 'frame', generation, sequence, atMs, stamp: atMs % 2 ** 32, width: 1280, height: 720 })
 const batch = (generation, index, events) => ({ generation, batch: index, events, transportFailures: 0, document: { visibility: 'visible' } })
+
+test('SETEXEC carrier attribution requires the actual native PID, executable and parent, never shared Codex responsibility', () => {
+  const row = { pid: 100, role: 'native', parentPid: 99, responsiblePid: 100, path: '/owned/companion', birthMicros: '100001', uniqueId: '42' }
+  const expected = { helperPath: row.path, runnerPid: 99 }
+  assert.equal(macSelfResponsibleNative(row, expected), true)
+  for (const change of [{ responsiblePid: 76586 }, { path: '/owned/launcher' }, { parentPid: 1 }, { role: 'descendant' }, { uniqueId: '0' }, { birthMicros: null }, { birthMicros: 100001 }, { uniqueId: 42 }]) assert.equal(macSelfResponsibleNative({ ...row, ...change }, expected), false)
+})
 
 test('WK delivery deduplicates immutable HTTP retry and rejects missing frame batches', () => {
   const receiver = new WKFrameReceiver(); receiver.useGeneration(1); receiver.stats.begin(1000)
