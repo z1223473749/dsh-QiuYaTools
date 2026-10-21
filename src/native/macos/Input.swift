@@ -37,6 +37,7 @@ final class EpochFence {
     private var heldKeys = Set<CGKeyCode>()
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
+    private var actionFocus: NativeFocusIdentity?
     private var desktopLease: DesktopLeaseGuard?
     private(set) var leaseActor = NativeLeaseActor.ai
     private lazy var aiPointer: AICursorOverlay = {
@@ -164,7 +165,9 @@ final class EpochFence {
         guard abs(dx) <= 20_000, abs(dy) <= 20_000 else { throw ComputerError("INVALID_ACTION", "Scroll delta is too large.") }
         busy = true
         started()
-        defer { busy = false }
+        defer { busy = false; actionFocus = nil }
+        let focusIdentity = try NativeFocusIdentity(target: target, geometry: geometry)
+        actionFocus = focusIdentity
         let expectedHumanInputGeneration = humanInputGeneration
         let preparationCheckpoint = { [unowned self] in
             try self.fence.check(epoch)
@@ -175,8 +178,8 @@ final class EpochFence {
         }
         prepareFocus?()
         if let point = start { try preparePointerRegion?(destination.map { [point, $0] } ?? [point]) }
-        let focusBackend = try FocusPreparationBackend.native(target: target, geometry: geometry, checkpoint: preparationCheckpoint)
-        try await BoundedFocusPreparation.run(targetPid: target.pid, backend: focusBackend, checkpoint: preparationCheckpoint,
+        let focusBackend = try FocusPreparationBackend.native(identity: focusIdentity, checkpoint: preparationCheckpoint)
+        try await BoundedFocusPreparation.run(targetPid: target.pid, targetWindowId: target.windowId, backend: focusBackend, checkpoint: preparationCheckpoint,
             record: { [unowned self] in self.focusAttempt = $0 })
         try preparationCheckpoint()
         try check(epoch, target, geometry)
@@ -266,16 +269,10 @@ final class EpochFence {
     private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry) throws {
         try fence.check(epoch)
         guard !aiPointer.restorationBlocked else { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else { aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The target application lost focus; input stopped.") }
-        guard let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, target.windowId) as? [[String: Any]],
-              let item = info.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId }),
-              let bounds = item[kCGWindowBounds as String] as? [String: Any],
-              let current = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-              abs(current.minX - geometry.frame.minX) < 1, abs(current.minY - geometry.frame.minY) < 1,
-              abs(current.width - geometry.frame.width) < 1, abs(current.height - geometry.frame.height) < 1 else {
-            aiPointer.hide()
-            throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.")
+        guard let identity = actionFocus, identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
+            aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The action's selected window identity is unavailable; input stopped.")
         }
+        do { _ = try identity.sample(requireFrontmost: true) } catch { aiPointer.hide(); throw error }
     }
 }
 

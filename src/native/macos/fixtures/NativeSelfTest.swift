@@ -14,6 +14,7 @@ import Foundation
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
         try approvedSmallGlyph()
         try cursorSuppressionStateMachine()
+        try exactWindowReadiness()
         try await boundedFocusPreparation()
         for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
             let (returned, url) = try NativeApplicationCatalog.settingsURL(kind)
@@ -88,13 +89,87 @@ import Foundation
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }
         precondition(integer(true) == nil && integer(1.5) == nil && integer(-1) == nil && integer(4) == 4)
-        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), bounded focus readiness/human/cancel/epoch/deadline matrices (no real activation/AX/input), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), exact-window CG metadata/ambiguity/front-order zero-post matrices, associated AppKit CG component matrices, bounded focus readiness/human/cancel/epoch/deadline matrices (no real activation/AX/input), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+    }
+
+    private static func exactWindowReadiness() throws {
+        let frame = CGRect(x: 100, y: 200, width: 800, height: 600)
+        let target = NativeTarget(id: "mac-window:11", appId: "fixture.own", title: "", pid: 99, windowId: 11, frame: frame, scale: 2)
+        let geometry = FrameGeometry(frame: frame, pixelWidth: 1600, pixelHeight: 1200)
+        let a = FocusWindowState(windowId: 11, pid: 99, frame: frame)
+        let overlapping = FocusWindowState(windowId: 22, pid: 99, frame: frame)
+        let b = FocusWindowState(windowId: 22, pid: 99, frame: frame.offsetBy(dx: 30, dy: 0))
+        func rejected(_ windows: [FocusWindowState], pid: pid_t? = 99, code: String) throws {
+            var posts = 0
+            do { _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: pid, windows: windows, requireFrontmost: true); posts += 1 }
+            catch let error as ComputerError { precondition(error.code == code) }
+            precondition(posts == 0, "An invalid exact-window identity must not reach the posting boundary")
+        }
+        let valid = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [a, b], requireFrontmost: true)
+        precondition(valid.frontmostPid == 99 && valid.frontmostWindowId == 11, "CG metadata alone permits a unique foreground target without AX content")
+        try rejected([overlapping, a], code: "FOCUS_CHANGED")
+        try rejected([a, overlapping], code: "FOCUS_CHANGED")
+        try rejected([b, a], code: "FOCUS_CHANGED")
+        try rejected([a, b], pid: 88, code: "FOCUS_CHANGED")
+        try rejected([FocusWindowState(windowId: 33, pid: 88, frame: frame.offsetBy(dx: 60, dy: 0)), a], code: "FOCUS_CHANGED")
+        try rejected([FocusWindowState(windowId: 11, pid: 88, frame: frame)], code: "GEOMETRY_CHANGED")
+        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame.offsetBy(dx: 1, dy: 0))], code: "GEOMETRY_CHANGED")
+        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, onscreen: false)], code: "GEOMETRY_CHANGED")
+        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, alpha: 0)], code: "GEOMETRY_CHANGED")
+        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, layer: CGWindowLevelForKey(.floatingWindow))], code: "GEOMETRY_CHANGED")
+        try rejected([overlapping], code: "GEOMETRY_CHANGED")
+        let hidden = FocusWindowState(windowId: 22, pid: 99, frame: frame, onscreen: false)
+        let transparent = FocusWindowState(windowId: 23, pid: 99, frame: frame, alpha: 0)
+        let overlay = FocusWindowState(windowId: 24, pid: 88, frame: frame, layer: CGWindowLevelForKey(.floatingWindow))
+        _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [overlay, hidden, transparent, a], requireFrontmost: true)
+        // A once-valid preparation cannot authorize a later post after the same
+        // process switches to another window, even if its PID never changes.
+        _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [a, b], requireFrontmost: true)
+        try rejected([b, a], code: "FOCUS_CHANGED")
+        // Actual regression: AppKit exposes a 66x20 traffic-light component as
+        // a separate normal-layer CG surface in front of its main window.
+        let component = FocusWindowState(windowId: 44, pid: 99, frame: CGRect(x: 106, y: 206, width: 66, height: 20))
+        let hit = CGRect(x: 133, y: 210, width: 14, height: 14)
+        func proof(windowId: CGWindowID = 44, pid: pid_t = 99, componentFrame: CGRect? = nil, focusedPid: pid_t = 99,
+                   focusedFrame: CGRect? = nil, hitPid: pid_t = 99, hitWindowPid: pid_t = 99, hitFrame: CGRect? = nil,
+                   associated: Bool = true, topLevel: Bool = false) -> FocusWindowComponentProof {
+            FocusWindowComponentProof(windowId: windowId, pid: pid, componentFrame: componentFrame ?? component.frame,
+                focusedPid: focusedPid, focusedFrame: focusedFrame ?? frame, hitPid: hitPid, hitWindowPid: hitWindowPid,
+                hitFrame: hitFrame ?? hit, hitWindowIsFocused: associated, hitIsTopLevel: topLevel)
+        }
+        let accepted = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [component, a], components: [proof()], requireFrontmost: true)
+        precondition(accepted.frontmostWindowId == a.windowId, "Only a geometrically contained AX child associated with the selected focused window may represent its CG surface")
+        func rejectsComponent(_ windows: [FocusWindowState], _ proofs: [FocusWindowComponentProof]) throws {
+            var posts = 0
+            do { _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: windows, components: proofs, requireFrontmost: true); posts += 1 }
+            catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(posts == 0, "Small siblings, foreign windows, stale or unavailable AX associations must remain zero-post")
+        }
+        try rejectsComponent([component, a], [])
+        try rejectsComponent([component, a], [proof(associated: false)]) // Real sibling B owns the AX hit.
+        try rejectsComponent([component, a], [proof(topLevel: true)])
+        try rejectsComponent([component, a], [proof(hitWindowPid: 88)])
+        try rejectsComponent([component, a], [proof(hitPid: 88)])
+        try rejectsComponent([component, a], [proof(focusedPid: 88)])
+        try rejectsComponent([component, a], [proof(focusedFrame: component.frame)])
+        try rejectsComponent([component, a], [proof(hitFrame: frame)]) // Underlying whole canvas is not a component hit.
+        try rejectsComponent([component, a], [proof(hitFrame: hit.offsetBy(dx: 80, dy: 0))])
+        let movedComponent = FocusWindowState(windowId: 44, pid: 99, frame: component.frame.offsetBy(dx: 0.5, dy: 0))
+        try rejectsComponent([movedComponent, a], [proof()])
+        let foreign = FocusWindowState(windowId: 44, pid: 88, frame: component.frame)
+        try rejectsComponent([foreign, a], [proof(pid: 88)])
+        try rejectsComponent([overlapping, component, a], [proof()])
+        let edge = FocusWindowState(windowId: 44, pid: 99, frame: CGRect(x: frame.minX, y: 206, width: 66, height: 20))
+        try rejectsComponent([edge, a], [proof(componentFrame: edge.frame)])
+        let tooMany = (44...47).map { FocusWindowState(windowId: CGWindowID($0), pid: 99, frame: component.frame) }
+        try rejectsComponent(tooMany + [a], tooMany.map { proof(windowId: $0.windowId) })
     }
 
     @MainActor private static func boundedFocusPreparation() async throws {
         final class Fake {
             var time = 0.0, requests = 0, samples = 0, foreground: pid_t? = 42
             var accepted = true, sequence: [pid_t?] = [42, 99, 99]
+            var frontmostWindowId: CGWindowID? = 11, windowSequence: [CGWindowID?] = []
             var readError: ComputerError?, requestError: ComputerError?, sampleCost = 0.0, requestCost = 0.0
             var onSleep: (() throws -> Void)?, afterSample: (() -> Void)?
             var records = [[String: Any]]()
@@ -107,13 +182,29 @@ import Foundation
                     self.samples += 1; self.time += self.sampleCost
                     if let error = self.readError { throw error }
                     if !self.sequence.isEmpty { self.foreground = self.sequence.removeFirst() }
+                    if !self.windowSequence.isEmpty { self.frontmostWindowId = self.windowSequence.removeFirst() }
                     self.afterSample?()
-                    return FocusPreparationSample(frontmostPid: self.foreground)
+                    return FocusPreparationSample(frontmostPid: self.foreground, frontmostWindowId: self.frontmostWindowId)
                 }, sleep: { nanos in self.time += Double(nanos) / 1_000_000_000; try self.onSleep?() })
             }
             func run(_ checkpoint: () throws -> Void = {}) async throws {
-                try await BoundedFocusPreparation.run(targetPid: 99, backend: backend, checkpoint: checkpoint, record: { self.records.append($0) })
+                try await BoundedFocusPreparation.run(targetPid: 99, targetWindowId: 11, backend: backend, checkpoint: checkpoint, record: { self.records.append($0) })
             }
+        }
+        do {
+            let f = Fake(); f.sequence = [99, 99]; f.frontmostWindowId = 22
+            var posts = 0
+            do { try await f.run(); posts += 1 } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(posts == 0 && f.requests == 1, "Same-PID B-front/A-selected must remain zero-post and cannot replay activation")
+        }
+        do {
+            let f = Fake(); f.foreground = 99; f.sequence = []; f.windowSequence = [11, 22, 11, 11]
+            try await f.run()
+            precondition(f.samples == 4 && f.requests == 1, "Switching between same-process windows resets consecutive readiness")
+        }
+        do {
+            let f = Fake(); f.foreground = 99; f.sequence = []; f.frontmostWindowId = nil
+            do { try await f.run(); preconditionFailure("Unknown foreground window accepted") } catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
         }
         do {
             let f = Fake(); f.sequence = [42, 99, 42, 99, 99]

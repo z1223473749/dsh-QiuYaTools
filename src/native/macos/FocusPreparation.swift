@@ -11,6 +11,7 @@ final class FocusActivationResult {
 
 struct FocusPreparationSample {
     let frontmostPid: pid_t?
+    let frontmostWindowId: CGWindowID?
 }
 
 /// Injectable boundaries keep the cancellation, deadline and consecutive-read
@@ -24,7 +25,7 @@ struct FocusPreparationSample {
 }
 
 @MainActor enum BoundedFocusPreparation {
-    static func run(targetPid: pid_t, backend: FocusPreparationBackend, checkpoint: () throws -> Void,
+    static func run(targetPid: pid_t, targetWindowId: CGWindowID, backend: FocusPreparationBackend, checkpoint: () throws -> Void,
                     record: ([String: Any]) -> Void) async throws {
         let begin = backend.now(), deadline = begin + 0.5
         let result = FocusActivationResult(), before = backend.frontmost()
@@ -44,10 +45,11 @@ struct FocusPreparationSample {
         var consecutive = 0
         while backend.now() < deadline {
             try Task.checkCancellation(); try checkpoint()
-            after = try backend.sample().frontmostPid
+            let sample = try backend.sample()
+            after = sample.frontmostPid
             try checkpoint()
             if backend.now() >= deadline { break }
-            if after == targetPid { consecutive += 1 } else { consecutive = 0 }
+            if after == targetPid && sample.frontmostWindowId == targetWindowId { consecutive += 1 } else { consecutive = 0 }
             record(receipt)
             if consecutive >= 2 { return }
             let remaining = deadline - backend.now()
@@ -55,6 +57,71 @@ struct FocusPreparationSample {
             try await backend.sleep(max(1, UInt64((min(0.01, remaining) * 1_000_000_000).rounded(.up))))
         }
         throw ComputerError("FOCUS_CHANGED", "The target application did not become ready for input; input stopped.")
+    }
+}
+
+/// CG metadata only: no AX text, title or content is needed to identify the
+/// selected normal-level window and its position in WindowServer's front order.
+struct FocusWindowState {
+    let windowId: CGWindowID
+    let pid: pid_t
+    let frame: CGRect
+    var layer: Int32 = 0
+    var onscreen = true
+    var alpha = 1.0
+    var normalVisible: Bool { layer == CGWindowLevelForKey(.normalWindow) && onscreen && alpha.isFinite && alpha > 0 }
+}
+
+/// A normal-layer CG surface can be an AppKit child component. Treat it as
+/// part of the selected window only with public AX hit/window association;
+/// its size, name, PID or location alone is never sufficient.
+struct FocusWindowComponentProof {
+    let windowId: CGWindowID
+    let pid: pid_t
+    let componentFrame: CGRect
+    let focusedPid: pid_t
+    let focusedFrame: CGRect
+    let hitPid: pid_t
+    let hitWindowPid: pid_t
+    let hitFrame: CGRect
+    let hitWindowIsFocused: Bool
+    let hitIsTopLevel: Bool
+}
+
+enum ExactWindowFocus {
+    static func sameGeometry(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+    }
+    static func provesComponent(_ component: FocusWindowState, selected: FocusWindowState, proof: FocusWindowComponentProof) -> Bool {
+        let outer = selected.frame, inner = component.frame
+        return component.pid == selected.pid && proof.windowId == component.windowId && proof.pid == component.pid && proof.componentFrame == inner &&
+            inner.minX > outer.minX && inner.minY > outer.minY && inner.maxX < outer.maxX && inner.maxY < outer.maxY &&
+            proof.focusedPid == selected.pid && proof.hitPid == selected.pid && proof.hitWindowPid == selected.pid &&
+            sameGeometry(proof.focusedFrame, outer) && proof.hitWindowIsFocused && !proof.hitIsTopLevel &&
+            [proof.hitFrame.minX, proof.hitFrame.minY, proof.hitFrame.width, proof.hitFrame.height].allSatisfy(\.isFinite) &&
+            proof.hitFrame.width > 0 && proof.hitFrame.height > 0 && inner.contains(proof.hitFrame) &&
+            proof.hitFrame.contains(CGPoint(x: inner.midX, y: inner.midY))
+    }
+    static func sample(target: NativeTarget, geometry: FrameGeometry, frontmostPid: pid_t?, windows: [FocusWindowState], components: [FocusWindowComponentProof] = [], requireFrontmost: Bool = false) throws -> FocusPreparationSample {
+        let normal = windows.filter(\.normalVisible)
+        guard let selected = normal.first(where: { $0.windowId == target.windowId }), selected.pid == target.pid,
+              sameGeometry(selected.frame, geometry.frame) else {
+            throw ComputerError("GEOMETRY_CHANGED", "The selected window moved, changed owner, or became unavailable. Observe it again before acting.")
+        }
+        let matching = normal.filter { $0.pid == target.pid && sameGeometry($0.frame, geometry.frame) }
+        guard matching.count == 1 else {
+            throw ComputerError("FOCUS_CHANGED", "Overlapping app windows have the same geometry; input stopped. Separate the selected window before continuing.")
+        }
+        var frontWindowId = normal.first?.windowId
+        if frontmostPid == target.pid, let index = normal.firstIndex(where: { $0.windowId == target.windowId }), index > 0 && index <= 3 {
+            let blockers = normal.prefix(index)
+            if blockers.allSatisfy({ component in components.contains { provesComponent(component, selected: selected, proof: $0) } }) { frontWindowId = target.windowId }
+        }
+        let sample = FocusPreparationSample(frontmostPid: frontmostPid, frontmostWindowId: frontWindowId)
+        if requireFrontmost && (sample.frontmostPid != target.pid || sample.frontmostWindowId != target.windowId) {
+            throw ComputerError("FOCUS_CHANGED", "The selected window lost foreground input; input stopped.")
+        }
+        return sample
     }
 }
 
@@ -69,23 +136,112 @@ private struct FocusProcessBirth: Equatable {
     }
 }
 
-@MainActor extension FocusPreparationBackend {
-    static func native(target: NativeTarget, geometry: FrameGeometry, checkpoint: @escaping () throws -> Void) throws -> FocusPreparationBackend {
-        guard let birth = FocusProcessBirth(target.pid), let application = NSRunningApplication(processIdentifier: target.pid), !application.isTerminated else {
+/// One identity is captured before preparation and retained through every
+/// normal input post. Owned key/button cleanup deliberately has its own path.
+@MainActor struct NativeFocusIdentity {
+    let target: NativeTarget
+    let geometry: FrameGeometry
+    let application: NSRunningApplication
+    private let birth: FocusProcessBirth
+    init(target: NativeTarget, geometry: FrameGeometry) throws {
+        guard let birth = FocusProcessBirth(target.pid), let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else {
             throw ComputerError("TARGET_GONE", "The target application exited.")
         }
+        self.target = target; self.geometry = geometry; self.birth = birth; application = app
+    }
+    func sample(requireFrontmost: Bool = false) throws -> FocusPreparationSample {
+        guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+        var windows = try currentWindows()
+        let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let initial = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: foreground, windows: windows)
+        var proofs = [FocusWindowComponentProof]()
+        let normal = windows.filter(\.normalVisible)
+        if foreground == target.pid, initial.frontmostWindowId != target.windowId,
+           let index = normal.firstIndex(where: { $0.windowId == target.windowId }), index > 0 && index <= 3 {
+            let selected = normal[index], blockers = Array(normal.prefix(index))
+            if blockers.allSatisfy({ $0.pid == target.pid && selected.frame.contains($0.frame) }) {
+                proofs = componentProofs(blockers, selected: selected)
+                // Public AX calls are synchronous. Never reuse a proof after
+                // its CG surface or the front order changed during those reads.
+                windows = try currentWindows()
+            }
+        }
+        let result = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, windows: windows, components: proofs, requireFrontmost: requireFrontmost)
+        guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+        return result
+    }
+    private func currentWindows() throws -> [FocusWindowState] {
+        guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.")
+        }
+        var windows = [FocusWindowState]()
+        for row in rows {
+            // All potentially input-owning normal windows must be understood;
+            // malformed metadata cannot silently expose a lower window.
+            guard let layer = row[kCGWindowLayer as String] as? NSNumber else { throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.") }
+            guard layer.int32Value == CGWindowLevelForKey(.normalWindow) else { continue }
+            guard let id = row[kCGWindowNumber as String] as? NSNumber, let pid = row[kCGWindowOwnerPID as String] as? NSNumber,
+                  let alpha = row[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue.isFinite,
+                  let onscreen = row[kCGWindowIsOnscreen as String] as? Bool,
+                  let bounds = row[kCGWindowBounds as String] as? [String: Any], let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.minX.isFinite, frame.minY.isFinite, frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0 else {
+                throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.")
+            }
+            windows.append(FocusWindowState(windowId: id.uint32Value, pid: pid.int32Value, frame: frame, layer: layer.int32Value, onscreen: onscreen, alpha: alpha.doubleValue))
+        }
+        return windows
+    }
+    private func componentProofs(_ components: [FocusWindowState], selected: FocusWindowState) -> [FocusWindowComponentProof] {
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.06
+        func read(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            AXUIElementSetMessagingTimeout(element, 0.01)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
+                  ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            return value
+        }
+        func element(_ value: CFTypeRef?) -> AXUIElement? {
+            guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }; return (value as! AXUIElement)
+        }
+        func rect(_ value: AXUIElement) -> CGRect? {
+            guard let position = read(value, kAXPositionAttribute), let size = read(value, kAXSizeAttribute),
+                  CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+            var point = CGPoint.zero, dimensions = CGSize.zero
+            guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions),
+                  [point.x, point.y, dimensions.width, dimensions.height].allSatisfy(\.isFinite), dimensions.width > 0, dimensions.height > 0 else { return nil }
+            return CGRect(origin: point, size: dimensions)
+        }
+        func pid(_ value: AXUIElement) -> pid_t? {
+            var result: pid_t = 0; return AXUIElementGetPid(value, &result) == .success ? result : nil
+        }
+        let app = AXUIElementCreateApplication(target.pid)
+        guard let focused = element(read(app, kAXFocusedWindowAttribute)), let focusedFrame = rect(focused),
+              let focusedPid = pid(focused), focusedPid == target.pid, ExactWindowFocus.sameGeometry(focusedFrame, selected.frame) else { return [] }
+        let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system, 0.01)
+        var proofs = [FocusWindowComponentProof]()
+        for component in components {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return [] }
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(system, Float(component.frame.midX), Float(component.frame.midY), &hit) == .success,
+                  let hit, let hitWindow = element(read(hit, kAXWindowAttribute)), let hitFrame = rect(hit),
+                  let hitPid = pid(hit), let hitWindowPid = pid(hitWindow),
+                  let currentFocus = element(read(app, kAXFocusedWindowAttribute)), CFEqual(currentFocus, focused),
+                  ProcessInfo.processInfo.systemUptime < deadline else { return [] }
+            proofs.append(FocusWindowComponentProof(windowId: component.windowId, pid: component.pid, componentFrame: component.frame,
+                focusedPid: focusedPid, focusedFrame: focusedFrame, hitPid: hitPid, hitWindowPid: hitWindowPid, hitFrame: hitFrame,
+                hitWindowIsFocused: CFEqual(hitWindow, focused), hitIsTopLevel: CFEqual(hit, hitWindow)))
+        }
+        return proofs
+    }
+}
+
+@MainActor extension FocusPreparationBackend {
+    static func native(identity: NativeFocusIdentity, checkpoint: @escaping () throws -> Void) throws -> FocusPreparationBackend {
+        let target = identity.target, geometry = identity.geometry, application = identity.application
         func validate() throws {
             try checkpoint()
-            guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited.") }
-            guard let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, target.windowId) as? [[String: Any]],
-                  let row = rows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId &&
-                      ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == target.pid }),
-                  row[kCGWindowIsOnscreen as String] as? Bool == true,
-                  let bounds = row[kCGWindowBounds as String] as? [String: Any], let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  abs(frame.minX - geometry.frame.minX) < 1, abs(frame.minY - geometry.frame.minY) < 1,
-                  abs(frame.width - geometry.frame.width) < 1, abs(frame.height - geometry.frame.height) < 1 else {
-                throw ComputerError("GEOMETRY_CHANGED", "The window moved, resized, or became unavailable. Observe it again before acting.")
-            }
+            _ = try identity.sample()
         }
         return FocusPreparationBackend(now: { ProcessInfo.processInfo.systemUptime },
             frontmost: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, request: { deadline, result in
@@ -131,6 +287,7 @@ private struct FocusProcessBirth: Equatable {
                     }
                     // The public AX API exposes no CGWindowID. Refuse to pick
                     // between overlapping, identically sized app windows.
+                    guard matching.count <= 1 else { throw ComputerError("FOCUS_CHANGED", "The selected accessibility window is ambiguous; input stopped.") }
                     if matching.count == 1 {
                         let window = matching[0]
                         result.raiseResult = AXUIElementPerformAction(window, kAXRaiseAction as CFString).rawValue
@@ -143,7 +300,7 @@ private struct FocusProcessBirth: Equatable {
                         try await turn()
                     }
                 }
-            }, sample: { try validate(); return FocusPreparationSample(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier) },
+            }, sample: { try checkpoint(); return try identity.sample() },
             sleep: { try await Task.sleep(nanoseconds: $0) })
     }
 }

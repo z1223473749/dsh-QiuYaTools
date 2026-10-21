@@ -16,12 +16,24 @@
 | Windows应用／权限自测 | **两架构各18/18** | `artifacts/computer-use/windows-applications-permissions-selftest/report.json`，指定正式PE、Session0纯无界面、自然退出，无桌面输入 |
 | Mac实际Harness已验证快照 | **11/12；主Agent发现→owner允许一次→图片→实际Move→图片通过** | `artifacts/harness-e2e/macos-chat-first-minimal-preview/report.json`，绑定此前 `a6342c30…58f6`。失败在独立预览的严格测试命中检查；后续证据识别为系统WindowServer指针层并窄修夹具，接续轮次另遇AX窗口定位失败。失败均保留，未把人工接管记为通过，最新满幅整包仍待回归 |
 | Mac官方安装已验证快照 | **5/5通过** | `artifacts/install-e2e/macos-chat-first-minimal-preview/report.json`；此前a634包的安装／升级／坏包恢复／回滚／重装，不能替代本批新包安装 |
-| Mac同应用窗口边界 | **已复现，尚未修复** | `artifacts/computer-use/macos-exact-focus-static/red.log`：同PID的B前台、A被选中仍可到达模拟posting boundary。当前仅检查应用前台不足以保证exact窗口；下一次独立修复必须在每次输入前校验窗口身份。本批不得据单元全绿声称该边界已安全 |
+| Mac同应用窗口边界 | **已增加精确窗口校验；全量回归通过，实机闭环未完成** | 以 `554acb4` 为基线的后续独立修复见下节；同几何兄弟窗口的真实 click／type 已拒绝且零输入，合法单窗口仍需完整复验。原始红例及全部失败保留 |
 | 真实视觉模型第四轮 | 任务1通过；任务2到预算并出现1次拒绝；任务3未运行 | `artifacts/model-capability-resumed/actual-vision-external-attempt-4/evidence/report.json`；两个helper／fixture自然清理，oracle自然退出，cleanupErrors为空，官方卸载已应用；私有正文未归档 |
 
 本批验证包保存于 `artifacts/candidates-chat-full-frame-feature/`，各包的完整SHA和字节数见相邻 `.tgz.json`。它们已通过严格包校验，均为未签名的 `0.6.0-beta.1` 开发验证包；整包回归和上述Mac窗口边界修复完成前不作为最终发布。此前 `candidates-chat-first-toolbox/` 和 `candidates-chat-first-minimal-preview/` 保留历史回执，不覆盖原始失败。
 
 Mac本批helper为universal，SHA `ad57146885f640988ac34f23d3c80df02ef2a345356d8f0a3cbe0287b785b63b`（1,419,416B）。Windows ARM64正式PE为 `9cf240d3336646bdd2a031ff72ad2cf5f0a18b2de0895cb1f5eb371503f0a6a6`（68,257,179B），x64为 `5c20b96566f080ca2e3ef6ff6667b7f00f1ddae7ee785259d08a9f003fd59c43`（72,080,922B）。后续Mac窗口修复必须产生新的冻结SHA及实际回归。
+
+### Mac选中窗口归属校验的独立修复
+
+修复在每次正常输入前校验同一进程出生身份、所选CG窗口、可见性、几何与前台顺序；同PID／同几何兄弟窗口继续拒绝。自有按键／鼠标释放沿用独立清理路径。公开AX无法读取内容的应用在没有额外组件阻挡时仍可使用CG校验。
+
+实际第4轮发现AppKit标题栏按钮会产生独立normal-layer CG surface，严格前台检查因此误拒绝合法主窗。新增组件判定要求AXFocusedWindow、AX命中元素的AXWindow归属、PID及几何共同证明，最多3个组件、总AX预算60ms，并在证明后重读CG顺序；没有按名称、尺寸或同PID直接忽略窗口。这不等于覆盖所有AX不可见浮层或模态路径。
+
+该修复快照的typecheck、universal构建和全量 **733/733** 通过，0失败／跳过，322个输入测试前后稳定，摘要 `f249de5933079d4c1481152958b6e5f4fc34a488cd3223081e6ac0a0c7e33394`。证据为 `artifacts/computer-use/macos-full-check-current/fd65da7e-2d5a-4806-81af-e2bc7600072f/report.json`。新helper SHA256为 `715d946c7a62c17a1d52160777719b316b1f5cc217e2d9f796b9261debff6174`（1,477,480B）；严格包校验通过的未签名验证包在 `artifacts/candidates-macos-exact-window-component/`，tgz SHA256为 `b5101b80a9add1a5f6a8f237ace2155283af50221ae04787d8f64111158e96da`（997,845B）。它尚未通过新整包验收。
+
+实机原始报告 `artifacts/computer-use/macos-exact-window-focus-actual-4/` 至 `-9/` 全部保留。第7轮click／type歧义拒绝均取得A/B业务计数0、inputPosted=false、OS空输入及最终lease空闲／自然退役证据，但合法单窗前置检查被标题栏组件挡住，整轮仍为failed。测试夹具随后改为独立CG动作中心点命中检查，保留精确key/front PID、CG与AppKit几何一致、连续3次稳定及业务零输入门槛。第5轮中途出现Shift状态，第8轮启动前左键已按下，第9轮在观察期间失去前台；来源不确定，未强制释放其他输入、未重放操作，也未把分项或自然退出改记为整体通过。后续合法单窗实测等待本机空闲。
+
+相关Harness夹具增加精确自有Host父进程／出生身份／路径绑定、独立重复打开的稳定窗口检查与授权前一次AX激活；该准备仅作用于测试自有窗口，不产生业务键鼠事件。先前整包轮次 `artifacts/harness-e2e/macos-full-frame-exact-window/report.json` 为10/12，窗口准备失败仍保留，未由静态全量通过替代。
 
 以下编号章节保留本轮重设计之前的历史结果与原始失败。它们只适用于各自列明 SHA，不能用其中“当前／最新”字样覆盖本节，也不能替代本轮新候选验收。Excel 专用加载项、锁屏扩展、未具备的原生硬件／最低系统矩阵仍分别记录。
 

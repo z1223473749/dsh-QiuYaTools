@@ -11,11 +11,13 @@
 | 聊天自动入口与应用授权 | 已实现并完成相关回归 | discover／request_control、owner三选授权、generation取消、最终窗口身份绑定、launch FIFO及未知结果围栏；标准shell相关91/91；Mac旧候选实际主Agent Move与图片链通过 |
 | 系统权限与应用管理 | 已实现，实际系统跳转矩阵继续验收 | 无聊天预检、固定设置入口、手动添加／撤销；Windows正式PE两架构目录／权限18/18纯无界面通过 |
 | 统一设置与满幅小预览 | 已实现并完成相关回归 | 首位电脑导航、工具箱卡片／Switch、聊天授权与权限引导；固定300×180、X/Y铺满、hover/focus控件、−仅隐藏控件、弹出后同iframe保持实时；UI54/54、真实headless小框13/13、预览页25项；Mac全量730/730及universal构建通过 |
-| 双平台原生操作与指针 | 原生基线已验证，独立风险继续修复 | Windows正式PE两架构各52＋29通过；Mac已发现同PID重叠窗口前台身份不足，下一次独立修复后冻结新helper，未计为已解决 |
-| 后续独立修复与验收 | 继续执行 | 先修Mac exact窗口输入边界，再新候选Mac／PD Harness实际流程和安装；随后真实模型三任务、多聊天、双端长稳、反向严格清理及现有功能完整矩阵。历史通过仍只适用其SHA |
+| 双平台原生操作与指针 | 原生基线已验证；Mac窗口校验独立修复已构建并完成全量回归 | Windows正式PE两架构各52＋29通过；Mac新helper715d增加进程出生／精确窗口／几何／前台校验和有界AX组件归属，733/733通过。同几何兄弟窗口click／type真实拒绝且零输入；合法单窗口闭环仍待本机空闲复验，不宣称整体验收完成 |
+| 后续独立修复与验收 | 继续执行 | 完成Mac合法单窗口闭环与新候选Mac／PD Harness实际流程和安装；随后真实模型三任务、多聊天、双端长稳、反向严格清理及现有功能完整矩阵。历史通过仍只适用其SHA |
 | 本批构建与Git | 本批统一提交，未公开发布 | 验证包 `artifacts/candidates-chat-full-frame-feature/`，完整SHA见相邻JSON；记录未通过项，后续修复各自构建、测试、中文提交 |
 
 本轮开始前，已精确终止视觉测试第四轮的自有 carrier，两个已运行 fixture／helper 自然清理且 oracle 自然退出，`cleanupErrors=[]`；实际 Harness 官方卸载回执为 `changed=true/application=applied`。第四轮任务 1 通过、任务 2 达预算且出现一次拒绝，任务 3 未运行，未算作三任务通过。证据见 `artifacts/model-capability-resumed/actual-vision-external-attempt-4/`，私有模型正文未归档。
+
+Mac窗口校验修复与对应universal构建、733项全量回归、测试夹具及报告作为同一独立提交。验证包在 `artifacts/candidates-macos-exact-window-component/`；完整SHA和实机各轮失败见测试报告。实际第7轮歧义拒绝及最终清理通过，但合法单窗前置校验失败；后续轮次又检测到按住输入或前台变化，因此停止该轮，不降低门槛或重放输入。当前等待本机空闲继续实测。
 
 以下为本轮 UI／流程调整之前的历史快照。历史具体资产与结果保留用于对照，当前交付仍须以本轮冻结源码和包的实际报告为准。
 

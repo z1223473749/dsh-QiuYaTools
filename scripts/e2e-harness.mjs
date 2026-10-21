@@ -27,6 +27,7 @@ const profileHome = join(temporary, 'qiuya-harness-home')
 const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
 const tests = [], errors = [], screenshots = [], windowRpc = []
 let host, browser, page, driver, macPreviewRetirement, diagnosticComplete = false
+let macTargetFixture, macTargetBinding, macTargetEvidenceSequence = 0
 let blankSessionSequence = 0
 class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
@@ -43,6 +44,21 @@ const nativeCommand = (command, args) => new Promise((resolve, reject) => {
   child.once('error', error => { clearTimeout(timeout); reject(error) })
   child.once('exit', code => { clearTimeout(timeout); code === 0 ? resolve(out) : reject(new Error(err || `${command} exited ${code}`)) })
 })
+async function ownMacTarget(op, label, extra = {}) {
+  assert.ok(process.platform === 'darwin' && candidate && host?.pid && host.exitCode === null, 'Mac fixture preparation requires this runner’s live isolated Host')
+  if (!macTargetFixture) {
+    macTargetFixture = join(temporary, 'harness-target-macos')
+    await nativeCommand('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ApplicationServices', join(root, 'tests/fixtures/harness-target-macos.swift'), '-o', macTargetFixture])
+  }
+  const request = op === 'bind' ? { op, label, ancestorPid: host.pid, profileRoot: profileHome,
+    targetExecutable: await realpath(join(profileHome, 'profiles/web/node_modules/dsh-qiuya-tools/lib/QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window')), ...extra }
+    : { op, label, binding: macTargetBinding }
+  const result = JSON.parse(await nativeCommand(macTargetFixture, ['--request', JSON.stringify(request)]))
+  await writeFile(join(output, `mac-target-${String(++macTargetEvidenceSequence).padStart(2, '0')}-${op}.json`), JSON.stringify(result, null, 2))
+  assert.equal(result.ok, true, `Owned Mac target ${op} failed: ${result.error ?? 'unknown'}`)
+  if (op === 'bind') macTargetBinding = result.result.binding
+  return result.result
+}
 async function screenshot(name) { const path = join(output, `${name}.png`); await page.screenshot({ path }); screenshots.push(path) }
 async function test(name, operation) {
   const start = Date.now()
@@ -263,10 +279,13 @@ try {
       }
     }
     independentTarget = target
+    if (process.platform === 'darwin' && candidate) await ownMacTarget('bind', alpha, { targetPid: target.pid, targetWindowId: Number(target.id.replace('mac-window:', '')) })
     const observation = await driver.observe(target.id)
     await writeFile(join(output, 'independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
     assert.ok(observation.elements.includes(alpha), 'The independent WebKit/Windows window should expose the exact target session')
-    await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click(); await sleep(500)
+    await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
+    if (process.platform === 'darwin' && macTargetBinding) await ownMacTarget('wait', alpha)
+    else await sleep(500)
     const second = (await driver.targets()).filter(target => target.title.includes(alpha))
     assert.equal(second.length, 1); assert.equal(second[0].id, target.id)
     return { targetId: target.id, pid: target.pid, screenshotWidth: observation.width }
@@ -330,15 +349,24 @@ try {
     await waitFor(async () => !(await page.getByRole('region', { name: '系统权限', exact: true }).innerText()).includes('正在检查本机状态'), 'The permission preflight did not finish before the setup screenshot')
     await screenshot('computer-settings-before-chat-request')
     await page.getByRole('button', { name: '关闭', exact: true }).click()
+    if (process.platform === 'darwin') {
+      // Finish the browser composer before the explicit own-window activation.
+      // The subsequent public send click runs in-page and cannot steal OS focus.
+      await editor().fill('E2E:computer-move')
+      if (!macTargetBinding) await ownMacTarget('bind', alpha, { targetPid: independentTarget.pid, targetWindowId: Number(independentTarget.id.replace('mac-window:', '')) })
+      const beforeSetup = independentTarget, activation = await ownMacTarget('activate', alpha)
+      assert.equal(activation.stableOnscreen, true)
+      independentTarget = (await driver.targets()).find(target => target.id === beforeSetup.id)
+      assert.ok(independentTarget && independentTarget.pid === beforeSetup.pid && independentTarget.appId === beforeSetup.appId, 'Own Mac fixture identity must remain stable after pre-authorization activation')
+      await writeFile(join(output, 'fixture-setup-target-geometry.json'), JSON.stringify({ beforeSetup, afterSetup: independentTarget, authorizationStarted: false, inputEventsPosted: 0 }, null, 2))
+    }
     // Submit before any computer session exists. The model must discover and
     // request its own current chat, then wait for the real owner approval card.
-    if (process.platform === 'win32') {
-      await page.evaluate(() => {
+    await page.evaluate(() => {
         const send = [...document.querySelectorAll('button')].find(button => button.getAttribute('aria-label') === '发送消息' || button.title === '发送消息')
         if (!send || send.disabled) throw new Error('Fixture composer send button was not ready')
         send.click()
-      })
-    } else { await editor().fill('E2E:computer-move'); await page.getByRole('button', { name: '发送消息', exact: true }).click() }
+    })
     const inlinePreview = page.locator(`[data-qyt-computer-inline="${alphaId}"]`)
     const approval = inlinePreview.getByRole('region', { name: '电脑操作授权', exact: true })
     await approval.waitFor({ timeout: 25000 })
