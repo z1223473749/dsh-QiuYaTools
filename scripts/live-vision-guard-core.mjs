@@ -19,6 +19,41 @@ export function projectVisionNativeStatus(value) {
 }
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 export const syntheticHash = text => createHash('sha256').update(text).digest('hex')
+export function projectVisionToolSchema(tool) {
+  const description = tool?.description; let serialized
+  try { serialized = tool?.parameters === undefined ? undefined : JSON.stringify(tool.parameters) } catch {}
+  return { name: VISION_TOOLS.includes(tool?.name) ? tool.name : 'other',
+    descriptionPresent: typeof description === 'string', ...(typeof description === 'string' ? { descriptionLength: description.length, descriptionSha256: syntheticHash(description) } : {}),
+    parametersPresent: tool?.parameters !== undefined, parametersSerializable: typeof serialized === 'string',
+    ...(typeof serialized === 'string' ? { parametersBytes: Buffer.byteLength(serialized), parametersSha256: syntheticHash(serialized) } : {}) }
+}
+/** The SDK distinguishes visible TextBlock from ReasoningBlock. Never inspect
+ * raw stream/chunks, provider metadata or tool-call arguments for this oracle. */
+export function visionAssistantDisplayEvidence(session, expectedSessionId) {
+  if (!expectedSessionId || session?.id !== expectedSessionId || typeof session.snapshotEvents !== 'function') fail('VISION_SESSION_NOT_OWNED')
+  const all = session.snapshotEvents(), events = all.slice(-512), messages = []; let remaining = 32768, remainingSerialized = 49152, truncated = all.length > events.length, attempts = 0, assistantMessages = 0
+  for (const event of [...events].reverse()) {
+    if (event.type === 'assistant/attempt') { attempts++; continue }
+    if (event.type !== 'assistant/message' || event.data?.message?.role !== 'assistant') continue
+    assistantMessages++
+    if (messages.length >= 32) { truncated = true; continue }
+    const text = (event.data.message.content ?? []).filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+    const bytes = Buffer.from(text); let accepted = new TextDecoder().decode(bytes.subarray(0, remaining), { stream: true })
+    if (bytes.length > remaining) truncated = true
+    while (accepted && Buffer.byteLength(JSON.stringify(accepted)) > remainingSerialized) {
+      accepted = new TextDecoder().decode(Buffer.from(accepted).subarray(0, Math.floor(Buffer.byteLength(accepted) / 2)), { stream: true }); truncated = true
+    }
+    remainingSerialized = Math.max(0, remainingSerialized - Buffer.byteLength(JSON.stringify(accepted)))
+    const size = Buffer.byteLength(accepted); remaining -= size
+    messages.push({ seq: Number.isSafeInteger(event.seq) ? event.seq : null, turn: Number.isSafeInteger(event.data.turn) ? event.data.turn : null,
+      step: Number.isSafeInteger(event.data.step) ? event.data.step : null, interrupted: event.data.interrupted === true, text: accepted })
+  }
+  messages.reverse()
+  const display = messages.map(row => row.text).join('\n'), summary = { status: 'collected', assistantMessages, nonSurfaceAttempts: attempts, retainedMessages: messages.length,
+    displayCharacters: messages.reduce((sum, row) => sum + row.text.length, 0), displayUtf8Bytes: messages.reduce((sum, row) => sum + Buffer.byteLength(row.text), 0),
+    displaySha256: syntheticHash(display), truncated, classes: { withText: messages.filter(row => row.text.length > 0).length, withoutText: messages.filter(row => !row.text).length, interrupted: messages.filter(row => row.interrupted).length } }
+  return { summary, privateEvidence: { version: 1, sessionId: expectedSessionId, messages, excludes: ['reasoning', 'thinking', 'raw-stream', 'provider-metadata', 'tool-call-arguments'] } }
+}
 const actionFields = Object.freeze(['action', 'frameId', 'kind', 'text', 'key', 'x', 'y', 'toX', 'toY', 'deltaX', 'deltaY', 'button'])
 const actionKinds = Object.freeze(['click', 'move', 'drag', 'scroll', 'type', 'key'])
 const valueType = value => value === null ? 'null' : Array.isArray(value) ? 'array' : ['object', 'string', 'number', 'boolean', 'undefined'].includes(typeof value) ? typeof value : 'other'
@@ -53,7 +88,7 @@ export function assertVisionAnswerHidden(elements, syntheticNonce) {
   return true
 }
 export function projectVisionRequest(options) {
-  return { provider: options.provider, model: options.model, tools: (options.tools ?? []).map(tool => tool.name),
+  return { provider: options.provider, model: options.model, tools: (options.tools ?? []).map(tool => tool.name), toolSchemas: (options.tools ?? []).map(projectVisionToolSchema),
     images: (options.messages ?? []).flatMap(message => (message.content ?? []).filter(block => block.type === 'image').map(block => ({
       attachmentId: block.attachment?.attachmentId, mediaType: block.attachment?.mediaType, width: block.attachment?.width,
       height: block.attachment?.height, bytes: block.attachment?.bytes, offloaded: block.offloaded === true,

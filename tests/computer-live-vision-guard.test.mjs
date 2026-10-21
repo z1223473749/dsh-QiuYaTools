@@ -1,12 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus, projectVisionActionDenial, visionActionUsage } from '../scripts/live-vision-guard-core.mjs'
+import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus, projectVisionActionDenial, visionActionUsage, visionAssistantDisplayEvidence, projectVisionToolSchema } from '../scripts/live-vision-guard-core.mjs'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
+import { Session } from '@deepseek-ai/dsh-session'
 import { visionBundleManifest, visionBundlePatch, visionBundleConsole, visionBundleRunCommand, VISION_TEST_BUNDLE } from '../scripts/prepare-live-vision.mjs'
 import { bundlePatchPaths, loadOverlayPatches, composeEntries } from '@deepseek-ai/dsh-app-boot'
-import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, rm, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import vm from 'node:vm'
@@ -100,6 +101,45 @@ test('metadata projection omits prompt text, action plaintext, replay state, aut
   assert.doesNotMatch(JSON.stringify({ projected, tool }), /PRIVATE_|fixture-not|private-url/)
   assert.equal(tool.action.textLength, 12); assert.equal(tool.action.textSha256.length, 64)
 })
+test('final model-tool schema fingerprints bind descriptions and parameters without publishing their raw object', () => {
+  const tool = { name: 'qiuya_computer_act', description: 'PRIVATE_DESCRIPTION', parameters: { type: 'object', secret: 'PRIVATE_PARAMETER' }, auth: 'PRIVATE_AUTH' }
+  const result = projectVisionToolSchema(tool)
+  assert.equal(result.descriptionLength, tool.description.length); assert.match(result.descriptionSha256, /^[a-f0-9]{64}$/u); assert.match(result.parametersSha256, /^[a-f0-9]{64}$/u)
+  assert.notEqual(projectVisionToolSchema({ ...tool, description: 'changed' }).descriptionSha256, result.descriptionSha256)
+  assert.notEqual(projectVisionToolSchema({ ...tool, parameters: { type: 'string' } }).parametersSha256, result.parametersSha256)
+  assert.equal(projectVisionRequest(request({ tools: [tool] })).toolSchemas[0].descriptionSha256, result.descriptionSha256)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_/u)
+})
+test('assistant display evidence reads only the exact own public session and excludes reasoning, raw attempts and tool arguments', () => {
+  const events = [{ type: 'user/message', data: { message: { role: 'user', content: [{ type: 'text', text: 'PRIVATE_USER' }] } } },
+    { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'reasoning', text: 'PRIVATE_REASONING' }, { type: 'thinking', text: 'PRIVATE_THINKING' }, { type: 'text', text: 'VISIBLE_REPLY' }, { type: 'tool-call', arguments: 'PRIVATE_ARGUMENTS' }] }, stream: [{ text: 'PRIVATE_STREAM' }] } },
+    { seq: 3, type: 'assistant/attempt', data: { stream: [{ text: 'PRIVATE_ATTEMPT' }] } }]
+  let reads = 0; const session = { id, snapshotEvents() { reads++; return events } }
+  assert.throws(() => visionAssistantDisplayEvidence(session, 'someone-else'), /VISION_SESSION_NOT_OWNED/u); assert.equal(reads, 0)
+  const result = visionAssistantDisplayEvidence(session, id)
+  assert.equal(result.privateEvidence.messages[0].text, 'VISIBLE_REPLY'); assert.equal(result.summary.nonSurfaceAttempts, 1)
+  assert.equal(result.summary.displayCharacters, 13); assert.equal(result.summary.classes.withText, 1)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_/u); assert.doesNotMatch(JSON.stringify(result.summary), /VISIBLE_REPLY/u)
+})
+test('assistant display evidence keeps recent messages within a strict UTF8 budget and exposes truncation', () => {
+  const events = Array.from({ length: 40 }, (_, seq) => ({ seq, type: 'assistant/message', data: { turn: 1, step: seq, message: { role: 'assistant', content: [{ type: 'text', text: seq === 39 ? '🙂'.repeat(12000) : 'old-' + seq }] } } }))
+  const result = visionAssistantDisplayEvidence({ id, snapshotEvents: () => events }, id)
+  assert.ok(result.summary.displayUtf8Bytes <= 32768); assert.equal(result.summary.retainedMessages, 32); assert.equal(result.summary.truncated, true)
+  assert.equal(result.privateEvidence.messages.at(-1).seq, 39); assert.equal(result.privateEvidence.messages.at(-1).text.includes('\uFFFD'), false)
+  const controls = visionAssistantDisplayEvidence({ id, snapshotEvents: () => [{ type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: '\u0000'.repeat(65536) }] } } }] }, id)
+  assert.ok(Buffer.byteLength(JSON.stringify(controls.privateEvidence)) <= 65536, 'JSON escaping cannot expand the private file past its bound')
+})
+test('private assistant display publisher creates bounded 0600 evidence and refuses a different SID', { skip: process.platform !== 'darwin' }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-display-private-')); t.after(() => rm(directory, { recursive: true, force: true }))
+  const plugin = await bundledVisionPlugin(directory), session = Session.create(id)
+  session.append('assistant/message', { turn: 1, step: 1, message: { id: 'synthetic-sdk-message', role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture', replayState: { secret: 'PRIVATE_REPLAY' } },
+    content: [{ type: 'text', text: 'VISIBLE_PRIVATE_REPLY' }, { type: 'reasoning', text: 'PRIVATE_REASONING' }] }, stream: [] }, { surfaceOp: 'append' })
+  const evidence = join(directory, 'evidence'); await assert.rejects(plugin.persistVisionAssistantDisplay(evidence, session, 'unrelated', 1), /VISION_SESSION_NOT_OWNED/u)
+  const summary = await plugin.persistVisionAssistantDisplay(evidence, session, id, 1), file = join(evidence, 'task-1-assistant-display.private.json')
+  assert.equal(summary.privateTextEvidenceStored, true); assert.equal((await stat(file)).mode & 0o777, 0o600); assert.ok((await stat(file)).size <= 65536)
+  assert.match(await readFile(file, 'utf8'), /VISIBLE_PRIVATE_REPLY/u); assert.doesNotMatch(await readFile(file, 'utf8'), /PRIVATE_REASONING|PRIVATE_REPLAY/u)
+  assert.doesNotMatch(JSON.stringify(summary), /VISIBLE_PRIVATE_REPLY/u)
+})
 
 test('actual public ToolRuntime scope hides shell and applies final guards without changing another agent', async () => {
   const root = new Context(), calls = [], agent = { id }, other = { id: 'unrelated-existing-session' }
@@ -124,6 +164,9 @@ test('actual public ToolRuntime scope hides shell and applies final guards witho
   try {
     assert.ok(runtime, 'public service injection must be ready')
     assert.deepEqual(runtime.schemas(agent).map(tool => tool.name).sort(), [...VISION_TOOLS].sort())
+    const published = projectVisionRequest(request({ tools: runtime.schemas(agent) })).toolSchemas
+    assert.equal(published.length, VISION_TOOLS.length)
+    assert.ok(published.every(tool => tool.descriptionPresent && tool.parametersSerializable), 'Actual public ToolRuntime publishes the description/parameters being fingerprinted')
     assert.ok(runtime.schemas(other).some(tool => tool.name === 'bash'))
     const invoke = (subject, name, args = {}) => runtime.execute({ callId: name + '-' + subject.id, agent: subject, name, arguments: args, signal: new AbortController().signal })
     assert.equal((await invoke(agent, 'qiuya_computer_observe')).isError, false)

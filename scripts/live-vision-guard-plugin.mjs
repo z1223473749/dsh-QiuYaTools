@@ -1,11 +1,11 @@
 /** Temporary test plugin. Install only through the owner's official HMR gate. */
 import { spawn } from 'node:child_process'
-import { cp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
@@ -25,6 +25,16 @@ const prompts = {
 }
 export function visionOwnerClientSource() {
   return `const VISION_DIAGNOSTIC_PHASES=${JSON.stringify(VISION_DIAGNOSTIC_PHASES)},VISION_DIAGNOSTIC_CODES=${JSON.stringify(VISION_DIAGNOSTIC_CODES)};const projectVisionFailure=${projectVisionFailure.toString()};export const run=${runInOwnerRenderer.toString()};`
+}
+/** Test-only publisher. It cannot read any session outside the exact own SID. */
+export async function persistVisionAssistantDisplay(directory, session, sessionId, task) {
+  const value = visionAssistantDisplayEvidence(session, sessionId)
+  if (process.platform !== 'darwin' || typeof process.getuid !== 'function' || ![1, 2, 3].includes(task)) fail('VISION_SESSION_NOT_OWNED')
+  await mkdir(directory, { recursive: true }); const info = await lstat(directory)
+  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) fail('VISION_EXTERNAL_FILE_BOUNDARY')
+  const canonical = await realpath(directory); await chmod(canonical, 0o700)
+  await writePrivateJSON(join(canonical, `task-${task}-assistant-display.private.json`), value.privateEvidence)
+  return { ...value.summary, privateTextEvidenceStored: true }
 }
 
 export function apply(ctx, config) {
@@ -229,7 +239,10 @@ export function apply(ctx, config) {
     const errors = []; let fixtureForced = false
     if (record.handle) {
       record.handle.agent.cancel({ kind: 'hook', reason: 'owned-visual-test-cleanup' })
-      try { await bounded(record.handle.agent.whenIdle(), 15000, 'VISION_AGENT_DRAIN_TIMEOUT') } catch (error) { errors.push(safeError(error)) }
+      let idleConfirmed = false
+      try { await bounded(record.handle.agent.whenIdle(), 15000, 'VISION_AGENT_DRAIN_TIMEOUT'); idleConfirmed = true } catch (error) { errors.push(safeError(error)) }
+      try { record.assistantDisplay = { ...await persistVisionAssistantDisplay(join(directory, 'evidence'), record.handle.agent.session, record.sessionId, record.task), idleConfirmed } }
+      catch { errors.push('VISION_DIAGNOSTIC_WRITE_FAILED') }
       if (record.policy?.startedAt) try {
         await record.deadlineRelease
         await originals.get('qiuya_computer_pause').execute({}, { agent: record.handle.agent, callId: 'test-final-release', signal: AbortSignal.timeout(15000) })
@@ -303,7 +316,7 @@ export function apply(ctx, config) {
           const result = { ...record.policy.summary({ businessPassed: oracle.passed === true, nonceRead: record.completedText.includes(record.nonce), syntheticNonce: record.nonce }),
             oracle, events: record.events, target: { id: record.target.id, pid: record.target.pid, appId: record.target.appId }, fatal: record.fatal ?? null }
           try { await checkNative(record); const image = await record.native.preview(record.target.id); await writeFile(join(directory, `evidence/task-${record.task}-final.jpg`), Buffer.from(image.imageBase64, 'base64')) } catch { result.finalImageUnavailable = true }
-          result.cleanup = await cleanup(record); if (!result.cleanup.passed || result.fatal) result.passed = false
+          result.cleanup = await cleanup(record); result.assistantDisplay = record.assistantDisplay ?? { status: 'not-collected' }; if (!result.cleanup.passed || result.fatal) result.passed = false
           reports.push(result); if (active === record) active = undefined; await save(); value = result
         } else if (input.op === 'cancel') { record.handle?.agent.cancel({ kind: 'user' }); value = { accepted: true } }
         else fail('VISION_OPERATION_NOT_ALLOWED')
