@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { build } from 'esbuild'
 
 const source = (await build({ stdin: { contents: `export {ComputerEnvironmentManager} from './src/features/computer-use/environment-manager.ts';export {ComputerDriverRouter} from './src/features/computer-use/driver-router.ts';export {ScheduledComputerDriver} from './src/features/computer-use/scheduled-driver.ts';export {installComputerHost} from './src/features/computer-use/host.ts';export {installComputerTools} from './src/features/computer-use/tools.ts';export {createComputerAgentServer} from './src/features/computer-use/remote.ts';`, resolveDir: fileURLToPath(new URL('../', import.meta.url)) }, bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
@@ -91,7 +91,11 @@ test('browser profiles are isolated by chat hashes, with neither session paths n
   const options = { mode: 'browser', browser: 'chrome', allowedOrigins: ['https://example.com'] }
   await Promise.all([f.manager.connect('A/../B', options), f.manager.connect('B', options)])
   assert.equal(f.browsers.length, 2); assert.notEqual(f.browsers[0].profileDir, f.browsers[1].profileDir)
-  for (const row of f.browsers) assert.match(row.profileDir, /browser-profiles\/[a-f0-9]{64}\/chrome$/u)
+  for (const row of f.browsers) {
+    assert.equal(basename(row.profileDir), 'chrome')
+    assert.match(basename(dirname(row.profileDir)), /^[a-f0-9]{64}$/u)
+    assert.equal(dirname(dirname(row.profileDir)), join('/tmp/synthetic-profile', 'browser-profiles'))
+  }
 })
 
 test('global revocation stops every affected chat before its single serialized permission write settles', async t => {
