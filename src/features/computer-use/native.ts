@@ -161,11 +161,11 @@ export class NativeCompanionDriver implements DeviceDriver {
   }
   observe(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId }, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.checked<ComputerObservation>('observe', { targetId, preview: true }, signal) }
-  lease(epoch: number, signal?: AbortSignal) { return this.checked('lease', { epoch }, signal) }
+  lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal) }
   release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.checked('act', { epoch, targetId, action }, signal) }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
-  closePreview(signal?: AbortSignal) { return this.checked('closePreview', {}, signal) }
+  closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { return this.checked('closePreview', options?.preserveSession ? { preserveSession: true } : {}, signal) }
   async dispose(): Promise<void> {
     if (this.disposed) { await this.retiring; return }
     this.disposed = true

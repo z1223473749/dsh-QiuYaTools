@@ -105,7 +105,7 @@ export class ComputerDriverRouter implements DeviceDriver {
   }
   observe(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.observe(targetId, signal) }
   preview(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
-  lease(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.lease(epoch, signal) }
+  lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { this.assertLive(); return this.current.lease(epoch, signal, options) }
   release(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.release(epoch, signal) }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) {
     this.assertLive()
@@ -118,7 +118,7 @@ export class ComputerDriverRouter implements DeviceDriver {
     return this.current.resolveActionTarget(target, action, result, signal)
   }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { this.assertLive(); return this.local.openPreview(url, title, sessionId, signal) }
-  closePreview(signal?: AbortSignal) { this.assertLive(); return this.local.closePreview(signal) }
+  closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { this.assertLive(); return this.local.closePreview(signal, options) }
   dispose(): Promise<void> {
     if (this.disposing) return this.disposing
     this.disposed = true; this.generation++

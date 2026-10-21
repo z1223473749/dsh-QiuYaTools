@@ -104,7 +104,7 @@ export class ComputerSessionService {
       await pending
     }
   }
-  private async acquireLease(record: SessionRecord, epoch: number, signal?: AbortSignal): Promise<void> {
+  private async acquireLease(record: SessionRecord, epoch: number, signal?: AbortSignal, actor: 'ai' | 'human' = 'ai'): Promise<void> {
     await this.releaseLeases(record.snapshot.sessionId)
     signal?.throwIfAborted()
     if (record.snapshot.epoch !== epoch) throw new ComputerError('CONTROL_CHANGED', '租约建立已取消')
@@ -112,7 +112,7 @@ export class ComputerSessionService {
     if (this.leases.size) throw new ComputerError('NATIVE_LEASE_UNRELEASED', '旧电脑输入租约尚未完成清理')
     // Record before dispatch: a lost reply can still mean the native lease ran.
     this.leases.set(epoch, record.snapshot.sessionId)
-    await this.driver.lease(epoch, signal)
+    await this.driver.lease(epoch, signal, { actor })
   }
   private isAllowed(record: SessionRecord): boolean { return record.allowOnce || this.allowedApps().includes(record.snapshot.target?.appId ?? '') }
   async permittedTargets(sessionId: string, signal?: AbortSignal): Promise<NativeTarget[]> {
@@ -320,7 +320,7 @@ export class ComputerSessionService {
         // A cancelled acquisition may have registered its uncertain native
         // lease while we were waiting for its owned operation to settle.
         await this.releaseLeases(sessionId)
-        if (state === 'humanControl') await this.acquireLease(record, record.snapshot.epoch)
+        if (state === 'humanControl') await this.acquireLease(record, record.snapshot.epoch, undefined, 'human')
         this.change(record, state)
         if (state === 'stopped') { record.allowOnce = false; if (this.activeSession === sessionId) this.activeSession = undefined }
         return this.get(sessionId)!

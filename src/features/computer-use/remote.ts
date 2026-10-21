@@ -150,14 +150,14 @@ export class RemoteComputerDriver implements DeviceDriver {
   }
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
-  async lease(epoch: number, signal?: AbortSignal): Promise<unknown> {
+  async lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown> {
     if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     epochNumber(epoch)
     if (epoch <= this.issuedEpoch) throw new ComputerError('STALE_EPOCH', '远端控制周期必须递增')
     this.issuedEpoch = epoch
     // A timeout does not prove that the remote native lease was never acquired.
     this.ownedEpochs.add(epoch)
-    const result = await this.rpc('lease', { epoch }, signal)
+    const result = await this.rpc('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal)
     if (this.disposed || this.issuedEpoch !== epoch) { if (!this.disposed) await this.release(epoch).catch(() => {}); throw new ComputerError('CONTROL_CHANGED', '远端租约已被更新的控制周期替代') }
     // The server confirms cleanup of this client's older leases before granting this one.
     for (const previous of this.ownedEpochs) if (previous < epoch) this.ownedEpochs.delete(previous)
@@ -323,6 +323,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       else {
         const epoch = epochNumber(payload.epoch)
         if (op === 'lease') {
+          if (payload.actor !== undefined && payload.actor !== 'ai' && payload.actor !== 'human') throw new ComputerError('INVALID_ACTOR', '输入来源无效')
           const operationController = controller
           const acquiring = leaseTail.catch(() => {}).then(async () => {
             operationController.signal.throwIfAborted()
@@ -336,7 +337,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
             clients.set(clientId, epoch); interruptions.delete(clientId)
             const candidate: ActiveLease = { clientId, epoch, nativeEpoch: ++nextNativeEpoch, lastSeen: Date.now(), controller: operationController }
             active = candidate
-            candidate.acquisition = Promise.resolve().then(() => driver.lease(candidate.nativeEpoch, operationController.signal))
+            candidate.acquisition = Promise.resolve().then(() => driver.lease(candidate.nativeEpoch, operationController.signal, { actor: payload.actor === 'human' ? 'human' : 'ai' }))
             try {
               await candidate.acquisition
               candidate.acquisition = undefined; candidate.controller = undefined

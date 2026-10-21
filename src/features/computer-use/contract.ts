@@ -6,6 +6,7 @@ export interface ComputerObservation {
   targetId: string; frameId: string; imageBase64: string; mediaType: 'image/jpeg'
   width: number; height: number; elements: string; geometry: ComputerGeometry
   cursor?: { x: number; y: number; visible: boolean }
+  aiCursor?: { x: number; y: number; visible: boolean; actor: 'ai'; epoch?: number; phase?: string }
 }
 export interface ComputerAction {
   kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType'
@@ -27,12 +28,12 @@ export interface DeviceDriver {
   targets(signal?: AbortSignal): Promise<NativeTarget[]>
   observe(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
   preview?(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
-  lease(epoch: number, signal?: AbortSignal): Promise<unknown>
+  lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown>
   release(epoch: number, signal?: AbortSignal): Promise<unknown>
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown>
   resolveActionTarget?(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal): Promise<NativeTarget | null>
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal): Promise<unknown>
-  closePreview(signal?: AbortSignal): Promise<unknown>
+  closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }): Promise<unknown>
   subscribe?(listener: (event: NativeComputerEvent) => void): () => void
   dispose?(): void | Promise<void>
 }

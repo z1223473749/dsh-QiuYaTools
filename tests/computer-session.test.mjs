@@ -28,6 +28,20 @@ function fixture() {
 async function start(f) { await f.service.start('chat', f.target.id, { allowOnce: true }); return f.service.observe('chat') }
 const request = (frame, id = 'a1', action = { kind: 'click', x: 30, y: 40 }) => ({ frameId: frame.frameId, actionId: id, action })
 
+test('only owner takeover marks a human lease and resume restores the AI source', async () => {
+  const f = fixture(), actors = [], original = f.driver.lease
+  f.driver.lease = async (epoch, signal, options) => { actors.push(options?.actor); return original(epoch, signal) }
+  await start(f)
+  await f.service.takeover('chat')
+  const frame = await f.service.preview('chat')
+  await f.service.humanAct('chat', request(frame, 'human-owned'))
+  await f.service.resume('chat')
+  assert.deepEqual(actors, ['ai', 'human', 'ai'])
+  const fresh = await f.service.observe('chat')
+  assert.throws(() => f.service.act('chat', request(fresh, 'smuggled', { kind: 'move', x: 1, y: 1, actor: 'human' })), { code: 'INVALID_ACTION' })
+  await f.service.dispose()
+})
+
 test('Agent target switching preserves owner grants and cannot resume paused control', async () => {
   const f = fixture()
   const original = { ...f.target }, other = { ...f.target, id: 'other-window', appId: 'not-authorized' }
