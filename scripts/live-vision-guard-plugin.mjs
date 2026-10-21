@@ -1,11 +1,12 @@
 /** Temporary test plugin. Install only through the owner's official HMR gate. */
 import { spawn } from 'node:child_process'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
-import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver } from '../src/features/computer-use/remote.ts'
+import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
 import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
+import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
 export const inject = ['agents', 'tools', 'connection', 'webServer', 'agentDefaultModel', 'sessionController', 'llm']
@@ -28,9 +29,9 @@ export function visionOwnerClientSource() {
 
 export function apply(ctx, config) {
   if (process.platform !== 'darwin') fail('VISION_MAC_REQUIRED')
-  if (!config || config.fixtureTemplate !== undefined && typeof config.fixtureTemplate !== 'string' || typeof config?.native !== 'string' || typeof config?.directory !== 'string') fail('VISION_CONFIG_REQUIRED')
+  if (!config || config.fixtureTemplate !== undefined && typeof config.fixtureTemplate !== 'string' || config.externalCarrierConfig !== undefined && typeof config.externalCarrierConfig !== 'string' || typeof config?.native !== 'string' || typeof config?.directory !== 'string') fail('VISION_CONFIG_REQUIRED')
   const directory = resolve(config.directory), template = resolve(config.fixtureTemplate ?? fileURLToPath(new URL('./fixture-template.app', import.meta.url))), native = resolve(config.native)
-  const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure
+  const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure, externalConfig
   const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))
   if ([...originals.values()].some(value => !value)) fail('VISION_PRODUCTION_TOOLS_MISSING')
   const owner = () => ctx.connection.browserPeer?.principal?.kind === 'owner'
@@ -38,7 +39,12 @@ export function apply(ctx, config) {
   async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: ownerFailure || preparationFailures.length || reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, preparationFailures, ...(ownerFailure ? { ownerFailure } : {}), delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
   async function checkNative(record, targetId = record.target.id) {
     if (targetId !== record.target.id || record.fixture.exitCode !== null || record.fixture.signalCode !== null) fail('VISION_FIXTURE_RETIRED')
-    const current = (await record.native.targets()).find(row => row.id === targetId)
+    let current = (await record.native.targets()).find(row => row.id === targetId)
+    if (record.external && current) {
+      const prefix = `${record.native.deviceId}:`
+      if (!current.appId.startsWith(prefix)) fail('VISION_TARGET_CHANGED')
+      current = { ...current, appId: current.appId.slice(prefix.length) }
+    }
     if (!sameVisionTarget(current, record.target)) fail('VISION_TARGET_CHANGED')
     return current
   }
@@ -54,6 +60,37 @@ export function apply(ctx, config) {
     const value = await originals.get('qiuya_computer_status').execute({}, exec)
     if (!value?.target || value.target.id !== record.target.id || value.target.pid !== record.target.pid || value.target.appId !== record.authorizedAppId) fail('VISION_SELECTED_TARGET_CHANGED')
     return value
+  }
+  async function externalRead(path, ms = 20000) {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      try { return await readPrivateJSON(path) } catch (error) { if (error.code !== 'ENOENT') throw error }
+      await sleep(50)
+    }
+    fail('VISION_EXTERNAL_DEADLINE')
+  }
+  async function externalPrepare(record, ready, bundleId, app) {
+    record.phase = 'external-wait'
+    const cfg = validateExternalConfig(await readPrivateJSON(resolve(config.externalCarrierConfig))); externalConfig = cfg
+    if (cfg.directory !== directory || cfg.native !== await realpath(native) || visionDigest(await readFile(cfg.native)) !== cfg.nativeSha256 ||
+        visionDigest(await readFile(join(app, 'Contents/MacOS/fixture'))) !== cfg.fixtureSha256 || visionDigest(await readFile(cfg.carrier)) !== cfg.carrierSha256) fail('VISION_EXTERNAL_SOURCE_CHANGED')
+    const carrier = await externalRead(join(cfg.directory, 'external', 'carrier-ready.json'))
+    if (carrier.runId !== cfg.runId || carrier.rendezvousNonce !== cfg.rendezvousNonce || !carrier.carrierIdentity?.pid) fail('VISION_EXTERNAL_BINDING')
+    const request = { version: 1, runId: cfg.runId, rendezvousNonce: cfg.rendezvousNonce, requestId: randomUUID(), task: record.task,
+      sessionId: record.sessionId, pid: ready.pid, parentPid: process.pid, bundleId, windowId: ready.windowId,
+      executablePath: await realpath(join(app, 'Contents/MacOS/fixture')), fixtureSha256: cfg.fixtureSha256, nativeSha256: cfg.nativeSha256 }
+    record.external = { config: cfg, request }
+    await writePrivateJSON(externalFile(cfg, record.task, 'request'), request)
+    const paired = validateExternalBinding(await externalRead(externalFile(cfg, record.task, 'ready')), request, cfg)
+    const url = new URL(paired.endpoint)
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.pathname !== COMPUTER_AGENT_PATH || url.username || url.password || url.search || url.hash ||
+        !/^[a-f0-9]{64}$/u.test(paired.token) || !sameExternalIdentity(paired.carrierIdentity, carrier.carrierIdentity) ||
+        paired.fixtureIdentity?.pid !== ready.pid || paired.fixtureIdentity?.parentPid !== process.pid || paired.fixtureIdentity?.executablePath !== request.executablePath ||
+        paired.nativeIdentity?.parentPid !== carrier.carrierIdentity.pid || paired.nativeIdentity?.executablePath !== cfg.native ||
+        paired.target?.id !== `mac-window:${ready.windowId}` || paired.target.pid !== ready.pid || paired.target.appId !== bundleId) fail('VISION_EXTERNAL_BINDING')
+    record.external.fixtureIdentity = paired.fixtureIdentity; record.external.nativeIdentity = paired.nativeIdentity
+    record.target = paired.target; record.pairToken = paired.token; record.pairEndpoint = paired.endpoint
+    record.native = new RemoteComputerDriver({ endpoint: paired.endpoint, token: paired.token })
   }
   async function prepare(task) {
     if (disposed || active || task !== reports.length + 1 || ![1, 2, 3].includes(task)) fail('VISION_TASK_SEQUENCE')
@@ -84,7 +121,8 @@ export function apply(ctx, config) {
       record.phase = 'fixture-ready'
       for (let i = 0; i < 150 && !ready; i++) { if (record.fixture.exitCode !== null || record.fatal) fail('VISION_FIXTURE_STARTUP'); await sleep(100) }
       if (!ready || ready.pid !== record.fixture.pid || ready.bundleId !== bundleId) fail('VISION_FIXTURE_IDENTITY')
-      record.native = new NativeCompanionDriver({ executable: native })
+      if (config.externalCarrierConfig) await externalPrepare(record, ready, bundleId, app)
+      else record.native = new NativeCompanionDriver({ executable: native })
       record.phase = 'native-status'
       record.nativeStatus = projectVisionNativeStatus(await record.native.status())
       await writeFile(join(directory, `evidence/native-status-task-${task}.json`), JSON.stringify(record.nativeStatus, null, 2))
@@ -92,7 +130,7 @@ export function apply(ctx, config) {
       if (record.nativeStatus.permissions.screenRecording !== true) fail('VISION_NATIVE_SCREEN_PERMISSION')
       if (record.nativeStatus.permissions.accessibility !== true) fail('VISION_NATIVE_ACCESSIBILITY_PERMISSION')
       record.phase = 'fixture-target'
-      record.target = (await record.native.targets()).find(row => row.id === `mac-window:${ready.windowId}` && row.pid === ready.pid && row.appId === bundleId)
+      if (!record.external) record.target = (await record.native.targets()).find(row => row.id === `mac-window:${ready.windowId}` && row.pid === ready.pid && row.appId === bundleId)
       if (!record.target) fail('VISION_FIXTURE_TARGET_MISSING')
       const fixed = {
         async status(signal) { await checkNative(record); return record.native.status(signal) },
@@ -104,11 +142,14 @@ export function apply(ctx, config) {
         async act(epoch, targetId, action, signal) { await checkNative(record, targetId); return record.native.act(epoch, targetId, action, signal) },
         async openPreview() { fail('VISION_PREVIEW_NOT_EXPOSED') }, async closePreview() {}, subscribe: listener => record.native.subscribe(listener),
       }
-      record.pairToken = randomBytes(32).toString('hex')
-      record.phase = 'pair-server'
-      record.server = await createComputerAgentServer(fixed, { token: record.pairToken, host: '127.0.0.1', port: 0 })
+      if (!record.external) {
+        record.pairToken = randomBytes(32).toString('hex')
+        record.phase = 'pair-server'
+        record.server = await createComputerAgentServer(fixed, { token: record.pairToken, host: '127.0.0.1', port: 0 })
+        record.pairEndpoint = record.server.endpoint
+      }
       record.phase = 'pair-identity'
-      const identityDriver = new RemoteComputerDriver({ endpoint: record.server.endpoint, token: record.pairToken })
+      const identityDriver = new RemoteComputerDriver({ endpoint: record.pairEndpoint, token: record.pairToken })
       record.authorizedAppId = `${identityDriver.deviceId}:${bundleId}`; await identityDriver.dispose()
       record.phase = 'model-selection'; const selection = ctx.agentDefaultModel.currentSelection()
       record.policy = new VisionPolicy({ sessionId, task, target: record.target, selection })
@@ -149,7 +190,7 @@ export function apply(ctx, config) {
         return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
       record.phase = 'prepare-complete'
-      return { sessionId, task, targetId: record.target.id, endpoint: record.server.endpoint, token: record.pairToken, prompt: prompts[task], model: record.policy.selection }
+      return { sessionId, task, targetId: record.target.id, endpoint: record.pairEndpoint, token: record.pairToken, prompt: prompts[task], model: record.policy.selection }
     } catch (error) {
       const diagnostic = projectVisionFailure(error, record.phase); record.fatal = diagnostic.code
       const cleanupResult = await cleanup(record).catch(() => ({ passed: false, errors: ['VISION_CLEANUP_FAILED'] }))
@@ -200,6 +241,13 @@ export function apply(ctx, config) {
     try { await record.server?.close() } catch { errors.push('VISION_PAIR_CLOSE_FAILED') }
     record.pairToken = undefined
     try { await record.native?.dispose() } catch { errors.push('VISION_NATIVE_CLEANUP_FAILED') }
+    if (record.external) try {
+      const { config: cfg, request } = record.external
+      await writePrivateJSON(externalFile(cfg, record.task, 'stop'), { version: 1, runId: cfg.runId, rendezvousNonce: cfg.rendezvousNonce, requestId: request.requestId, sessionId: request.sessionId, task: record.task })
+      const receipt = validateExternalBinding(await externalRead(externalFile(cfg, record.task, 'cleanup'), 30000), request, cfg)
+      if (!externalCleanupPassed(receipt.cleanup)) errors.push('VISION_EXTERNAL_CLEANUP_FAILED')
+      await removePrivateJSON(externalFile(cfg, record.task, 'cleanup'))
+    } catch { errors.push('VISION_EXTERNAL_CLEANUP_FAILED') }
     if (record.fixture && record.fixture.exitCode === null && record.fixture.signalCode === null) {
       record.fixture.stdin.end('quit\n')
       for (let i = 0; i < 50 && record.fixture.exitCode === null && record.fixture.signalCode === null; i++) await sleep(100)
@@ -235,7 +283,13 @@ export function apply(ctx, config) {
       }
       else if (input.op === 'delivery') {
         if (typeof input.restore?.localMode !== 'boolean' || typeof input.restore?.featureFlags !== 'boolean') fail('VISION_DELIVERY_STATE')
-        delivery = { passed: !active && input.restore.localMode && input.restore.featureFlags, noOwnedActiveTask: !active, localModeRestored: input.restore.localMode, originalFeatureFlagsRestored: input.restore.featureFlags }
+        let carrierPassed = !externalConfig
+        if (externalConfig) {
+          const result = await externalRead(join(directory, 'evidence/external-carrier-report.json'), 30000)
+          carrierPassed = result.runId === externalConfig.runId && result.nativeSha256 === externalConfig.nativeSha256 && result.status === 'completed' && result.oracleNaturalExit === true && result.cleanupErrors?.length === 0 && result.records?.length === 3 && result.records.every(row => externalCleanupPassed(row.cleanup) && [...records.values()].some(record => record.external?.request.requestId === row.requestId && record.sessionId === row.sessionId && record.task === row.task))
+        }
+        delivery = { passed: !active && input.restore.localMode && input.restore.featureFlags && carrierPassed, noOwnedActiveTask: !active, localModeRestored: input.restore.localMode, originalFeatureFlagsRestored: input.restore.featureFlags,
+          externalCarrier: externalConfig ? { backendNaturalCleanupPassed: carrierPassed, scope: 'Standard paired remote mode; Harness local permissions are not established; carrier Node exit needs its launching runner receipt.' } : { enabled: false } }
         await save(); value = delivery
       }
       else {
@@ -276,7 +330,7 @@ async function runInOwnerRenderer() {
   }
   const test = async input => { const response = await fetch('/api/qiuya-tools.vision-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const result = await response.json(); if (!result.ok) { const diagnostic = projectVisionFailure({ code: result.error }, result.diagnostic?.phase); throw Object.assign(Error(diagnostic.code), { code: diagnostic.code, diagnostic }) }; return result.value }
   const computer = input => rpc('qiuya-tools.computer.control', input, true)
-  const keys = ['enabled', 'computerUseEnabled'], summary = []; let original, setup, mode, failure, diagnostic, phase = 'owner-settings-read'
+  const keys = ['enabled', 'computerUseEnabled'], summary = [], ownedSessions = []; let original, setup, mode, failure, diagnostic, phase = 'owner-settings-read'
   const restoration = { localMode: false, featureFlags: false }
   const setEnabled = async () => { const described = await rpc('settings/describe'), row = described.namespaces.find(value => value.ns === 'qiuya-tools'); await rpc('settings/mutate', { ns: 'qiuya-tools', ops: keys.map(key => ({ op: 'set', path: [key], value: true })), expectedRevision: row.revision }) }
   try {
@@ -288,7 +342,8 @@ async function runInOwnerRenderer() {
     if (mode !== 'local' || state.sessions.some(session => !['stopped', 'faulted', 'disconnected'].includes(session.state))) throw Object.assign(Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION'), { code: 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION' })
     for (let task = 1; task <= 3; task++) {
       phase = 'owner-prepare'; setup = await test({ op: 'prepare', task })
-      phase = 'owner-connect'; await computer({ op: 'connect', mode: 'remote', endpoint: setup.endpoint, token: setup.token }); delete setup.token
+      ownedSessions.push(setup.sessionId)
+      phase = 'owner-connect'; await computer({ op: 'connect', sessionId: setup.sessionId, mode: 'remote', endpoint: setup.endpoint, token: setup.token }); delete setup.token
       phase = 'owner-start'; await computer({ op: 'start', sessionId: setup.sessionId, targetId: setup.targetId })
       phase = 'owner-arm'; await test({ op: 'arm', sessionId: setup.sessionId })
       phase = 'owner-prompt'
@@ -303,7 +358,7 @@ async function runInOwnerRenderer() {
       await computer({ op: 'stop', sessionId: setup.sessionId })
       const result = await test({ op: 'finish', sessionId: setup.sessionId })
       summary.push({ task, passed: result.passed, steps: result.steps, requestAttempts: result.requestAttempts, retainedImageOccurrences: result.retainedImageOccurrences, businessPassed: result.businessPassed, visualNonceRead: result.visualNonceRead })
-      setup = undefined; phase = 'owner-reset-local'; await computer({ op: 'connect', mode: 'local' })
+      const finishedSession = setup.sessionId; setup = undefined; phase = 'owner-reset-local'; await computer({ op: 'connect', sessionId: finishedSession, mode: 'local' })
       if (!ended || !result.passed) break
     }
   } catch (error) {
@@ -319,8 +374,12 @@ async function runInOwnerRenderer() {
     }
     try {
       if (mode === 'local') {
-        await computer({ op: 'connect', mode: 'local' })
-        const current = await computer({ op: 'status' }); restoration.localMode = current.native?.mode === 'local' && current.sessions.every(session => ['stopped', 'faulted', 'disconnected'].includes(session.state))
+        restoration.localMode = true
+        for (const sessionId of ownedSessions) {
+          await computer({ op: 'connect', sessionId, mode: 'local' })
+          const current = await computer({ op: 'status', sessionId })
+          restoration.localMode &&= current.native?.mode === 'local' && current.sessions.filter(session => session.sessionId === sessionId).every(session => ['stopped', 'faulted', 'disconnected'].includes(session.state))
+        }
       }
     } catch { failure ??= 'VISION_CONNECTION_RESTORE_FAILED' }
     try { if (original) {
