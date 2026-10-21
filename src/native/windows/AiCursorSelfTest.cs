@@ -117,20 +117,34 @@ internal static class AiCursorSelfTest
             state.Lease(6, true); state.Move(6, "own-target", target, 12, bounds, point); state.CommitRendered(state.Read().Generation); continueOld.Set();
             Check(worker.Wait(1000) && !staleCommitted && !staleRevoked && state.Snapshot().Visible, "concurrent-old-queue-and-release-preserve-the-new-visible-lease");
         }
-        using (var bitmap = AiCursorOverlay.DrawPointer(1, new Rectangle(0, 0, 100, 100), Point.Empty)) {
-            var white = 0; var gray = 0; var transparent = 0;
-            for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++) {
-                var pixel = bitmap.GetPixel(x, y);
-                if (pixel.A == 0) transparent++;
-                else if (pixel.R > 235 && pixel.G > 235 && pixel.B > 235) white++;
-                else if (Math.Abs(pixel.R - pixel.G) < 20 && Math.Abs(pixel.G - pixel.B) < 20) gray++;
+        foreach (var scale in new[] { 1f, 2f }) {
+            using (var bitmap = AiCursorOverlay.DrawPointer(scale, new Rectangle(0, 0, 200, 200), Point.Empty)) {
+                var left = bitmap.Width; var top = bitmap.Height; var right = -1; var bottom = -1; var white = 0;
+                for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++) {
+                    var pixel = bitmap.GetPixel(x, y);
+                    if (pixel.A >= 180) { left = Math.Min(left, x); top = Math.Min(top, y); right = Math.Max(right, x); bottom = Math.Max(bottom, y); }
+                    if (pixel.A >= 180 && pixel.R > 235 && pixel.G > 235 && pixel.B > 235) white++;
+                }
+                Check(right - left + 1 >= 13 * scale && right - left + 1 <= 18 * scale && bottom - top + 1 >= 14 * scale && bottom - top + 1 <= 20 * scale && white >= 10 * scale * scale,
+                    $"approved-small-rounded-contour-and-thin-white-outline-at-{scale}x");
+                var body = bitmap.GetPixel((int)((AiCursorOverlay.HotspotX + 4) * scale), (int)((AiCursorOverlay.HotspotY + 5) * scale));
+                Check(body.A >= 115 && body.A < 170 && body.R >= 130 && body.R <= 160 && body.G >= 135 && body.G <= 165 && body.B >= 140 && body.B <= 170,
+                    $"approved-gray-body-remains-translucent-at-{scale}x");
+                var glow = bitmap.GetPixel((int)((AiCursorOverlay.HotspotX - 4) * scale), (int)((AiCursorOverlay.HotspotY + 5) * scale));
+                Check(glow.A > 0 && glow.A < 70 && glow.R >= 50 && glow.R <= 120 && glow.G >= 50 && glow.G <= 120 && glow.B >= 50 && glow.B <= 120,
+                    $"soft-gray-silhouette-glow-outside-the-glyph-at-{scale}x");
+                Check(bitmap.GetPixel((int)(26 * scale), (int)(40 * scale)).A < 6 && bitmap.GetPixel(0, 0).A == 0 && bitmap.GetPixel(bitmap.Width - 1, bitmap.Height - 1).A == 0,
+                    $"no-traditional-long-tail-and-transparent-outsets-at-{scale}x");
+                var hotspot = bitmap.GetPixel((int)(AiCursorOverlay.HotspotX * scale), (int)(AiCursorOverlay.HotspotY * scale));
+                Check(hotspot.A >= 100, $"shared-svg-2-3-hotspot-lies-on-rounded-tip-at-{scale}x");
             }
-            Check(white > 10 && gray > 30 && transparent > 100, "arrow-bitmap-has-white-outline-gray-body-glow-and-transparent-background");
-        }
-        foreach (var scale in new[] { 1f, 2f }) using (var bitmap = AiCursorOverlay.DrawPointer(scale, new Rectangle(100, 100, 12, 12), new Point(95, 95))) {
-            var outside = 0;
-            for (var y = 0; y < bitmap.Height; y++) for (var x = 0; x < bitmap.Width; x++) if ((x < 5 || y < 5 || x >= 17 || y >= 17) && bitmap.GetPixel(x, y).A != 0) outside++;
-            Check(outside == 0, $"pointer-pixels-are-clipped-to-the-controlled-target-at-{scale}x");
+            var clipTarget = new Rectangle(100, 100, 12, 12); var location = new Point(100 - (int)(AiCursorOverlay.HotspotX * scale), 100 - (int)(AiCursorOverlay.HotspotY * scale));
+            using var clipped = AiCursorOverlay.DrawPointer(scale, clipTarget, location);
+            var outside = 0; var inside = 0;
+            for (var y = 0; y < clipped.Height; y++) for (var x = 0; x < clipped.Width; x++) if (clipped.GetPixel(x, y).A != 0) {
+                if (!clipTarget.Contains(x + location.X, y + location.Y)) outside++; else inside++;
+            }
+            Check(outside == 0 && inside > 20, $"pointer-and-glow-are-actually-clipped-at-the-controlled-target-edge-at-{scale}x");
         }
         return new { passed = true, checks = cases.Count, cases, architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), actualOsInput = false, guiStarted = false, systemCursorChanged = false,
             boundary = "State and bitmap tests do not prove HWND click-through, DWM capture exclusion, focus behavior or visual quality on a live desktop." };

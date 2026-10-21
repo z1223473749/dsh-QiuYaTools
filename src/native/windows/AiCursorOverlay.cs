@@ -65,6 +65,7 @@ internal sealed class AiCursorState
 /** A separate, input-free transparent surface. It never changes the system cursor. */
 internal sealed class AiCursorOverlay : IDisposable
 {
+    internal const float HotspotX = 18, HotspotY = 16;
     private const int WakeMessage = 0x8000 + 73;
     private static readonly ConcurrentDictionary<IntPtr, byte> cursorWindows = new();
     private readonly AiCursorState state = new();
@@ -182,7 +183,7 @@ internal sealed class AiCursorOverlay : IDisposable
         {
             var scale = Math.Clamp(Native.GetDpiForWindow(value.Target) / 96f, 0.75f, 4f);
             var width = (int)Math.Ceiling(46 * scale); var height = (int)Math.Ceiling(58 * scale);
-            var location = new Point(value.Position.X - (int)Math.Round(10 * scale), value.Position.Y - (int)Math.Round(8 * scale));
+            var location = new Point(value.Position.X - (int)Math.Round(HotspotX * scale), value.Position.Y - (int)Math.Round(HotspotY * scale));
             using var bitmap = DrawPointer(scale, value.Bounds, location);
             var screen = GetDC(IntPtr.Zero); var memory = CreateCompatibleDC(screen); var nativeBitmap = IntPtr.Zero; var old = IntPtr.Zero;
             try {
@@ -201,13 +202,60 @@ internal sealed class AiCursorOverlay : IDisposable
     internal static Bitmap DrawPointer(float scale, Rectangle target, Point location)
     {
         var bitmap = new Bitmap((int)Math.Ceiling(46 * scale), (int)Math.Ceiling(58 * scale), PixelFormat.Format32bppPArgb);
-        using var graphics = Graphics.FromImage(bitmap); graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.SetClip(new Rectangle(target.X - location.X, target.Y - location.Y, target.Width, target.Height)); graphics.ScaleTransform(scale, scale);
-        using var path = new GraphicsPath(); path.AddPolygon([new PointF(10, 8), new(10, 35), new(17, 28), new(24, 43), new(30, 40), new(23, 26), new(34, 26)]);
-        for (var size = 13; size >= 4; size -= 3) { using var glow = new Pen(Color.FromArgb(18, 148, 153, 160), size) { LineJoin = LineJoin.Round }; graphics.DrawPath(glow, path); }
-        using var fill = new SolidBrush(Color.FromArgb(242, 72, 77, 84)); graphics.FillPath(fill, path);
-        using var outline = new Pen(Color.FromArgb(255, 255, 255, 255), 2.2f) { LineJoin = LineJoin.Round }; graphics.DrawPath(outline, path);
-        return bitmap;
+        try {
+            using var glyph = new Bitmap(bitmap.Width, bitmap.Height, PixelFormat.Format32bppPArgb);
+            using (var graphics = Graphics.FromImage(glyph)) {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                // Approved 18x20 SVG. Its shared desktop/preview hotspot (2,3) is the physical action point.
+                using var transform = new Matrix(scale, 0, 0, scale, (HotspotX - 2) * scale, (HotspotY - 3) * scale);
+                graphics.Transform = transform;
+                using var path = new GraphicsPath();
+                path.AddBezier(3.1f, 2.4f, 2.3f, 2, 1.6f, 2.6f, 1.8f, 3.5f);
+                path.AddLine(1.8f, 3.5f, 4, 16); path.AddBezier(4, 16, 4.2f, 17.1f, 5.4f, 17.3f, 6, 16.3f);
+                path.AddLine(6, 16.3f, 9, 11.4f); path.AddLine(9, 11.4f, 14.4f, 9.1f);
+                path.AddBezier(14.4f, 9.1f, 15.5f, 8.7f, 15.6f, 7.4f, 14.5f, 6.9f); path.CloseFigure();
+                using var fill = new SolidBrush(Color.FromArgb(115, 149, 153, 158)); graphics.FillPath(fill, path);
+                using var outline = new Pen(Color.FromArgb(245, 255, 255, 255), 1.25f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+                graphics.DrawPath(outline, path);
+            }
+            var width = bitmap.Width; var height = bitmap.Height; var source = Pixels(glyph); var horizontal = new double[width * height];
+            var sigma = 5 * scale; var radius = (int)Math.Ceiling(3 * sigma); var kernel = new double[2 * radius + 1]; var total = 0.0;
+            for (var offset = -radius; offset <= radius; offset++) { var weight = Math.Exp(-(double)offset * offset / (2 * sigma * sigma)); kernel[offset + radius] = weight; total += weight; }
+            for (var index = 0; index < kernel.Length; index++) kernel[index] /= total;
+            for (var y = 0; y < height; y++) for (var x = 0; x < width; x++) {
+                var value = 0.0;
+                for (var offset = -radius; offset <= radius; offset++) if (x + offset >= 0 && x + offset < width) value += source[(y * width + x + offset) * 4 + 3] * kernel[offset + radius];
+                horizontal[y * width + x] = value;
+            }
+            var pixels = new byte[width * height * 4]; var down = (int)Math.Round(scale);
+            for (var y = 0; y < height; y++) for (var x = 0; x < width; x++) {
+                var value = 0.0;
+                for (var offset = -radius; offset <= radius; offset++) if (y - down + offset >= 0 && y - down + offset < height) value += horizontal[(y - down + offset) * width + x] * kernel[offset + radius];
+                var alpha = (byte)Math.Clamp((int)Math.Round(value * .44), 0, 255); var index = (y * width + x) * 4;
+                // UpdateLayeredWindow consumes premultiplied BGRA. This is a blurred silhouette, not a painted circle.
+                pixels[index] = (byte)Math.Round(90 * alpha / 255.0); pixels[index + 1] = (byte)Math.Round(84 * alpha / 255.0); pixels[index + 2] = (byte)Math.Round(81 * alpha / 255.0); pixels[index + 3] = alpha;
+            }
+            SetPixels(bitmap, pixels);
+            using (var graphics = Graphics.FromImage(bitmap)) graphics.DrawImageUnscaled(glyph, 0, 0);
+            if (!target.Contains(new Rectangle(location, bitmap.Size))) {
+                pixels = Pixels(bitmap);
+                for (var y = 0; y < height; y++) for (var x = 0; x < width; x++) if (!target.Contains(x + location.X, y + location.Y)) Array.Clear(pixels, (y * width + x) * 4, 4);
+                SetPixels(bitmap, pixels);
+            }
+            return bitmap;
+        } catch { bitmap.Dispose(); throw; }
+    }
+    private static byte[] Pixels(Bitmap bitmap)
+    {
+        var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+        try { var value = new byte[checked(bitmap.Width * bitmap.Height * 4)]; Marshal.Copy(data.Scan0, value, 0, value.Length); return value; }
+        finally { bitmap.UnlockBits(data); }
+    }
+    private static void SetPixels(Bitmap bitmap, byte[] pixels)
+    {
+        var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+        try { Marshal.Copy(pixels, 0, data.Scan0, pixels.Length); }
+        finally { bitmap.UnlockBits(data); }
     }
     private delegate void WinEvent(IntPtr hook, uint kind, IntPtr window, int objectId, int childId, uint thread, uint time);
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint(int x, int y) { internal int X = x, Y = y; }
