@@ -72,7 +72,21 @@ if (arg('--parent-proxy')) {
     async function identify(pid) { return (await probe.ok('identity', { pid })).identity }
     async function pin(value, role) { const actual = await identify(value.pid); assert.ok(same(actual, value), 'Independent PID/birth/path must match'); if (!owned.some(row => same(row.identity, value))) owned.push({ identity: value, role }); return value }
     async function snapshot(label) { const value = await probe.ok('snapshot', { identities: fixtureIdentity ? [fixtureIdentity] : [] }); snapshots.push({ label, ...value }); return value }
-    async function gone(identity) { return until(async () => !(await identify(identity.pid)), 'Exact experiment process did not retire naturally') }
+    async function gone(identity) {
+      // A just-orphaned process can retain its PID briefly after its executable
+      // identity becomes unreadable. Unknown is neither alive nor gone: keep
+      // reading within the original deadline until ESRCH or a proven new birth.
+      const attempts = []
+      try {
+        return await until(async () => {
+          const reply = await probe.request('identity', { pid: identity.pid })
+          attempts.push({ at: new Date().toISOString(), ok: reply.ok, code: reply.error?.code, identity: reply.result?.identity })
+          if (!reply.ok) { assert.equal(reply.error?.code, 'identity-unavailable'); return false }
+          const current = reply.result.identity
+          return !current || !same(current, identity)
+        }, 'Exact experiment process retirement remained unconfirmed', 6000)
+      } finally { snapshots.push({ label: 'retirement-readback', identity, attempts }) }
+    }
     async function waitExit(value, expectedSignal = null) { let timer; const exit = await Promise.race([value.exited, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Experiment process exit timeout')), 6000) })]).finally(() => clearTimeout(timer)); if (expectedSignal) assert.equal(exit.signal, expectedSignal); else { assert.equal(exit.code, 0); assert.equal(exit.signal, null) }; return exit }
     async function assertFixture(label) { const state = await snapshot(label); assert.equal(state.sessionActive, true); assert.equal(state.foregroundPid, fixtureIdentity.pid); assert.equal(state.leftButtonDown, false); assert.equal(state.rightButtonDown, false); assert.equal(state.middleButtonDown, false); assert.equal(state.keysHeldCount, 0); assert.ok(Math.hypot(state.cursor.x-cursor.x,state.cursor.y-cursor.y)<1.5, 'Cursor moved: no further hide permitted'); return state }
     async function pair(label, expectedVisible) {
