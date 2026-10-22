@@ -2,7 +2,7 @@
 
 本分支提供 `0.6.0-beta.1` 本地候选包。新增电脑操控默认关闭，原有功能开关保留。未推送、未公开发布；npm 和旧 GitHub 下载链接不代表本次候选版本。
 
-当前开发版还加入聊天内小预览、多聊天独立环境和原生 AI 箭头。下文说明这些新行为；旧候选的桌面验证不会自动覆盖本次改动，新 GUI 的实际验收以绑定对应版本和哈希的[测试报告](computer-use-test-report.md)为准。
+当前开发版还加入聊天自动发现与授权、满幅小预览、多聊天独立环境和灰白原生 AI 箭头。下文说明这些开发行为；旧候选的桌面验证不会自动覆盖本次改动，新 GUI 的实际验收以绑定对应版本和哈希的[测试报告](computer-use-test-report.md)为准。确定性 provider 只证明工具与图像运输，真实 DeepSeek 模型理解画面并完成任务另行验收。
 
 ## 选择安装包
 
@@ -54,7 +54,7 @@ AI 操作时可直接拖动画面移动小框；人工接管时，画面点击�
 
 Mac 电脑操控需要屏幕录制与辅助功能权限，与普通会话分窗能力分别检查。请通过界面的对应权限入口，在系统设置中允许实际承担执行器权限的 Harness 或 `QiuYaTools Computer`，返回后刷新权限状态；系统显示的责任应用与启动方式有关。若系统明确要求重启，再重启 Harness。插件不会自动更改 TCC 或系统登录配置。
 
-原生应用输入使用前台桌面的实际鼠标和焦点。AI 执行指针动作时，桌面显示单独绘制的 AI 箭头，预览也反馈 AI 的动作位置；箭头随实际 AI 操作出现，暂停、停止或人工接管后隐藏。Mac 在系统能力确认可用时，会在实际 AI 指针操作期间暂时隐藏原系统指针；人类移动、键盘或修饰键介入、释放输入权、焦点改变及退出时恢复。本机能力无法确认时保留原系统指针，诊断状态会说明该能力不可用。此行为不会更改系统鼠标主题，也不代表原生应用能够后台独立操作。Windows 的本地物理输入、Mac 的物理 Escape 或拖动中点击预览会触发当前原生输入的中断。最小化、目标消失、窗口几何改变等情况需要重新观察或重新选择。
+原生应用输入使用前台桌面的实际鼠标和焦点。AI 执行指针动作时，桌面显示单独绘制的小号箭头，采用半透明灰色填充、细白描边和柔和灰色光晕，预览也反馈 AI 的动作位置；箭头随实际 AI 指针操作出现，动作结束、暂停、停止或人工接管后隐藏，不在模型思考时持续占用桌面输入。Mac 在系统能力确认可用时，会在实际 AI 指针操作期间暂时隐藏原系统指针；人类移动、键盘或修饰键介入、释放输入权、焦点改变及退出时恢复。本机能力无法确认时保留原系统指针，诊断状态会说明该能力不可用。此行为不会更改系统鼠标主题，也不代表原生应用能够后台独立操作。Windows 的本地物理输入、Mac 的物理 Escape 或拖动中点击预览会触发当前原生输入的中断。最小化、目标消失、窗口几何改变等情况需要重新观察或重新选择。
 
 Windows 可能拒绝后台进程激活窗口。若提示 `foreground-denied` 或“Activate the target window before input”，请先在桌面点击目标应用使其激活，再明确继续任务；插件会保留焦点校验，失败的输入不会自动重放。
 
@@ -140,8 +140,12 @@ node scripts/computer-preflight.mjs --target local
 node scripts/test-computer-preview.mjs
 node scripts/test-computer-browser.mjs --browser chrome
 node scripts/e2e-macos-computer.mjs --evidence-dir artifacts/computer-use/macos-native
-node scripts/e2e-harness.mjs --package /absolute/path/candidate.tgz
+node scripts/e2e-harness.mjs --package /absolute/path/candidate.tgz \
+  --output artifacts/harness-e2e/run-id \
+  --screenshots-dir /absolute/path/outside-repository/YYYY-MM-DD/harness
 node scripts/soak-computer.mjs --minutes 30 --faults 5
 ```
 
 PD Windows 原生测试由 `scripts/test-windows-native-pd.mjs` 编排，需指定已经选择的 VM UUID 和 Mac 的 host-only IP；详细命令见 `src/native/windows/README.md`。不自动创建、删除或回滚用户 VM。真实模型推理、硬件多屏、旧系统、各架构运行、Excel 加载项与锁屏扩展均单独计入报告，不能用编译或模拟测试替代。
+
+逐功能截图只使用隔离工作区和测试聊天。为本次交付明确传入仓库外的 `--screenshots-dir`，按日期和本轮标识保存成功截图，日志与 JSON 仍写入 `--output`。Windows Harness 载体使用宿主环境变量 `QIUYA_WINDOWS_SCREENSHOTS_DIR` 指定仓库外目录；来宾使用自己的临时目录，回收后按文件大小和 SHA256 校验，宿主路径不传入 Windows。图片位置及字节校验见对应报告的图片清单或 `screenshots-collection.json`。不将新截图复制回仓库、提交 Git 或上传远端，也不在公开文档中写入个人绝对路径。README 的界面预览仅保留交付索引；实际通过／失败与对应包、provider 或真实模型一起记录。
