@@ -62,7 +62,7 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 各系统、架构、旧系统、现有功能、模型、耐久和安装结果按包与组件哈希分别记录。ARM Windows 中运行 x64 程序的结果不等于原生 x64 硬件验收，universal 编译也不等于 Intel Mac 或最低系统已实机通过。参见[测试与交付证据](docs/computer-use-test-report.md)。
 
-当前开发候选明确要求模型在每次成功操作后重新观察，避免沿用旧画面或重复点击。三平台包已严格校验，976项自动化回归与新Mac包安装五项通过；真实模型、逐功能视觉及完整交付仍按包哈希独立验收。[最新候选与进度](docs/computer-frame-guidance-acceptance.md)。
+当前开发候选明确要求模型在每次成功操作后重新观察。三平台包已严格校验，该快照976项回归通过；Windows两包各完成12项功能与5项安装验证，Mac新包安装5项与headless界面8项通过。新指导的Windows真实DeepSeek三任务通过，包含自然发现／申请、中文提交和拖动；一次授权由独立测试驱动模拟。Mac原生及双会话等剩余项仍在修复，完整交付尚未完成。[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)与[构建及进度](docs/computer-frame-guidance-acceptance.md)分别记录实际范围。
 
 电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。确定性测试 provider 证明的工具与图片运输，与真实 DeepSeek 模型理解画面并完成任务分别记录。Excel 专用加载项与 macOS 锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻 Codex。
 

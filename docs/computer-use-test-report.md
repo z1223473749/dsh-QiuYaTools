@@ -6,9 +6,11 @@
 
 ### 最新增量（2026-10-23）
 
-模型帧指导已完成生产JS构建、三平台严格打包和行为回归；集成工作区typecheck与976/976完整直接测试通过，正式native／manifest未漂移。新Mac／ARM64／x64候选分别为`4483c2ce…eddc`、`ce01953d…02d1`、`85ab5eb0…8764`。Mac新包隔离安装五项通过，个人磁盘19份文件匹配归档；实际Host热加载尚未确认。[增量记录](computer-frame-guidance-acceptance.md)列明完整SHA、回执与失败。
+模型帧指导已完成生产JS构建、三平台严格打包和行为回归；该集成快照typecheck与976/976完整直接测试通过。新Mac／ARM64／x64候选分别为`4483c2ce…eddc`、`ce01953d…02d1`、`85ab5eb0…8764`。Windows两包各UI12／安装5及56张状态图通过，Mac新包安装5／headless DOM8及24张状态图通过。用户授权正常重开后，新工具说明已在真实SDK请求中确认加载。[新候选验收](current-candidate-visual-and-model-acceptance.md)列明范围、完整SHA与截图审阅；后续原生修复仍需重新构建与回归。
 
-自然c8-3任务1的真实发现／申请及独立测试驱动模拟一次授权通过，任务2仍因旧帧拒绝及重复点击后耗尽12请求，整轮failed。新增指导后的自然c8-4没有Host激活回执，模型／fixture／输入均零；载体正常取消，临时包已精确移除，运行时退休未确认。个人退出被自动审批拒绝，未重启；Mac仍锁屏，其他Windows与隔离验收继续。
+新指导自然c8-5真实DeepSeek三任务全部通过，分别82.511／94.974／40.211秒，23次SDK请求尝试、5次成功act，无工具错误或重复动作。任务1包含自然discover／request及独立测试驱动通过owner RPC模拟一次授权，授权前observe／preview／lease／act均零；真人点击授权UI未证明。默认模型未改，原连接与开关读回恢复，官方安装／移除及Host patch退休、Windows自然清理／任务注销／idle恢复通过。自然c8-3预算失败、c8-4无激活回执和首次退出审批拒绝原记录保持。
+
+当前仍有明确失败：Mac66ae与隔离1a99键盘正例因AX暂忙停止；Mac双会话实际drag的AI指针被Dock矩形遮挡误判隐藏；Windows默认双helper前台切换未修。最初strict ARM准备传输失败、x64未运行均保留；新尝试2的两架构strict8行为／清理均通过，图片复核范围见新候选记录。当前修复和隔离诊断尚未作为新正式组件通过，不把界面及真实Windows模型通过扩张为整体完成。
 
 下表保留旧包／组件已通过基线。新三包仍需受影响视觉与真实模型分别绑定，client／computer-agent字节不变也不自动等于新归档整体验收通过。
 
@@ -28,7 +30,7 @@
 | 稳定性与剩余原生 | Windows当前c8与3d各30分钟／5次恢复通过。ARM64：24,656帧、13.697fps、P95 44ms；x64：24,490帧、13.605fps、P95 45ms，全自有树峰值1,567,682,560B低于原1.5GiB门，采样器自身计入；两轮最终清退与环境恢复分别通过 | [当前WebView2性能](windows-webview2-performance-evidence.md)。原资源失败及首次C#烟测FPS失败保留。x64仅PD ARM兼容，最大帧间隔14,155ms含故障恢复；性能轮不做实际输入。Mac旧0143长稳不继承到66ae；默认双聊天指针及反向严格闭环未完成 |
 | 项目外视觉画廊 | 已通过截图75张：原72张基线加本轮真实DeepSeek最终画面3张，原文件及旧索引保持；117份来源SHA／字节、75图／报告及200个本地链接自检通过 | 本地目录 `/Users/qiuya/QiuYaTools-验收/2026-10-22/视觉画廊-75图-真实DeepSeek追加-7ea2ea32-11a0-44a2-8182-d46ca7441d0c/`。`index.html`可离线筛选／放大，`self-check.json`与`ui-dom-self-check.json`均passed；截图不进入Git |
 
-当前仍需完成：正式Mac输入／指针与双聊天闭环、Mac当前组件真实DeepSeek三任务及聊天自然发现／授权补验、Windows默认管理器双聊天实测、严格反向独立环境、新正式包本机安装及受影响功能视觉复验与交付汇总。当前源码快照的只读生产JS构建字节核验、typecheck及940/940完整直接测试已通过，四个native和包元数据均保持不变；后续源码变化须重新绑定检查。Mac系统锁屏期间不发送输入或绕过登录，继续独立的Windows、隔离Host与文档工作。Intel Mac及物理x64 Windows不由Apple Silicon／ARM来宾转译结果代替；Office、锁屏扩展和工作台H阶段仍按开发计划独立记录。
+当前仍需完成：Mac原生输入／指针／双聊天、当前Mac真实DeepSeek及完整12项原生视觉、Windows默认双聊天与新包strict补验、严格反向环境和最终冻结交付。新Windows自然入口通过范围及976项回归以上方2026-10-23增量为准。后续原生源码变化仍须重新构建、回归和绑定实测。Intel Mac及物理x64 Windows不由Apple Silicon／ARM来宾转译结果代替；Office、锁屏扩展和工作台H阶段仍按开发计划独立记录。
 
 随后通过一次显式只读owner探针确认当前namespace唯一、可写、revision为7，`enabled`和`computerUseEnabled`均为自有及有效true，本机连接且无活动会话。前后两次有限读回一致，设置mutation、模型推理及连接派发均为零；临时插件正常卸载并确认原patch退场。证据为仓库外 `原始截图/真实DeepSeek-owner只读探针-1/`。这证明当前状态与只读入口，不能追认前一轮缺失的原始快照；完整任务入口将复用已启用状态并仅在实际有差异时更改与恢复。
 
