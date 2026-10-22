@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createComputerAgentServer, NativeCompanionDriver } from '../src/features/computer-use/remote.ts'
-import { projectVisionNativeStatus } from './live-vision-guard-core.mjs'
+import { projectVisionNativeStatus, withVisionFailureEvidence } from './live-vision-guard-core.mjs'
 import { visionDigest, visionExternalFailure as fail, validateExternalConfig, validateExternalRequest, validateExternalBinding,
   verifyExternalFixture, sameExternalIdentity, sameExternalExecutable, externalIdentityRetired, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile } from './live-vision-external-core.mjs'
 
@@ -40,7 +40,7 @@ export async function runExternalVisionCarrier(configPath) {
     carrierDifference: 'Helper inherits this explicitly launched test carrier, not the installed Harness process. This does not establish Harness local TCC or installed local-desktop acceptance.',
     modelRequestsSentByCarrier: 0, permissionsChanged: false, runId: config.runId, nativeSha256: config.nativeSha256, oracleSha256: config.oracleSha256, fixtureSha256: config.fixtureSha256, carrierIdentity,
     records: records.map(row => ({ task: row.task, requestId: row.request?.requestId, sessionId: row.request?.sessionId,
-      fixtureIdentity: row.fixtureIdentity, nativeIdentity: row.nativeIdentity, nativeStatus: row.nativeStatus, cleanup: row.cleanup })), oracleNaturalExit, cleanupErrors, fatal })
+      fixtureIdentity: row.fixtureIdentity, nativeIdentity: row.nativeIdentity, nativeStatus: row.nativeStatus, inputFailures: row.inputFailures ?? [], cleanup: row.cleanup })), oracleNaturalExit, cleanupErrors, fatal })
   const stop = () => { stopping = true }; process.once('SIGTERM', stop); process.once('SIGINT', stop)
   const remember = (value, role) => { if (!value?.pid) fail('VISION_EXTERNAL_IDENTITY'); known.set(`${value.pid}:${value.startSeconds}:${value.startMicroseconds}`, { ...value, role }); return value }
   const identity = async pid => (await oracle.request('identity', { pid })).identity
@@ -65,7 +65,7 @@ export async function runExternalVisionCarrier(configPath) {
     if (record.request) await writePrivateJSON(externalFile(config, record.task, 'cleanup'), { version: 1, runId: config.runId, rendezvousNonce: config.rendezvousNonce,
       requestId: record.request.requestId, sessionId: record.request.sessionId, task: record.task, cleanup: record.cleanup })
     await writeFile(join(evidence, `external-task-${record.task}.json`), JSON.stringify({ task: record.task, requestId: record.request?.requestId,
-      fixtureIdentity: record.fixtureIdentity, nativeIdentity: record.nativeIdentity, nativeStatus: record.nativeStatus, cleanup: record.cleanup }, null, 2))
+      fixtureIdentity: record.fixtureIdentity, nativeIdentity: record.nativeIdentity, nativeStatus: record.nativeStatus, inputFailures: record.inputFailures ?? [], cleanup: record.cleanup }, null, 2))
     return record.cleanup
   }
   try {
@@ -95,7 +95,8 @@ export async function runExternalVisionCarrier(configPath) {
         async status(signal) { await check(); return driver.status(signal) }, async targets() { return [await check()] },
         async observe(targetId, signal) { await check(targetId); return driver.observe(targetId, signal) }, async preview(targetId, signal) { await check(targetId); return driver.preview(targetId, signal) },
         async lease(epoch, signal, options) { await check(); return driver.lease(epoch, signal, options) }, release: (epoch, signal) => driver.release(epoch, signal),
-        async act(epoch, targetId, action, signal) { await check(targetId); return driver.act(epoch, targetId, action, signal) },
+        async act(epoch, targetId, action, signal) { await check(targetId); return withVisionFailureEvidence(() => driver.act(epoch, targetId, action, signal),
+          () => driver.status(AbortSignal.timeout(1000)), failure => { record.inputFailures ??= []; if (record.inputFailures.length < 32) record.inputFailures.push(failure) }) },
         async openPreview() { fail('VISION_PREVIEW_NOT_EXPOSED') }, async closePreview() {}, subscribe: listener => driver.subscribe(listener),
       }
       const token = (await import('node:crypto')).randomBytes(32).toString('hex')

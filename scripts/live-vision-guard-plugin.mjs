@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
@@ -172,6 +172,7 @@ export function apply(ctx, config) {
           const definition = originals.get(name)
           agentCtx.tools.register({ ...definition, async execute(args, exec) {
             if (exec.agent?.id !== sessionId) fail('VISION_CALLER_CHANGED')
+            return withVisionFailureEvidence(async () => {
             record.policy.assertActive(); await selected(record, exec)
             const result = await definition.execute(args, exec)
             await checkNative(record)
@@ -182,6 +183,9 @@ export function apply(ctx, config) {
               record.policy.recordObservation(result, record.nonce)
             }
             record.policy.tools.push(projectVisionTool(name, args, result)); return result
+            }, () => record.native.status(AbortSignal.timeout(1000)), failure => {
+              if (record.policy.tools.length < 128) record.policy.tools.push({ name, isError: true, failure })
+            })
           } })
         }
         agentCtx.on('agent/pre-step', async (payload, next) => {

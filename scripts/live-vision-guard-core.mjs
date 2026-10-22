@@ -17,6 +17,38 @@ export function projectVisionNativeStatus(value) {
   const permissions = Object.fromEntries(['screenRecording', 'accessibility', 'postEvents', 'inputMonitoring'].map(key => [key, typeof value?.permissions?.[key] === 'boolean' ? value.permissions[key] : null]))
   return { available: typeof value?.available === 'boolean' ? value.available : null, platform: ['darwin', 'win32'].includes(value?.platform) ? value.platform : 'unknown', protocolVersion: value?.protocolVersion === 1 ? 1 : null, permissions }
 }
+const runtimeFailureCodes = new Set(['FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'HUMAN_INPUT_INTERRUPTED', 'CONTROL_CHANGED', 'STALE_FRAME', 'FRAME_EXPIRED', 'TARGET_GONE', 'TARGET_CHANGED', 'SESSION_PAUSED', 'OWNER_RESUME_REQUIRED', 'INPUT_CLEANUP_FAILED', 'CURSOR_CLEANUP_FAILED', 'ABORTED', 'INVALID_ACTION', 'NO_FRAME'])
+const focusStages = new Set(['not-requested', 'focused-window', 'focused-window-geometry', 'component-hit', 'component-window', 'component-role', 'component-parent', 'component-geometry', 'logical-root-hit', 'logical-root-geometry', 'complete'])
+/** Failed tool calls must remain failures. Retain bounded native metadata,
+ * never the exception message/stack, target identity or accessibility text. */
+export function projectVisionRuntimeFailure(error, status) {
+  const attempt = status?.focusAttempt
+  const integer = value => Number.isSafeInteger(value) && Math.abs(value) <= 0x7fffffff ? value : null
+  const bool = value => typeof value === 'boolean' ? value : null
+  return {
+    code: runtimeFailureCodes.has(error?.code) || VISION_DIAGNOSTIC_CODES.includes(error?.code) ? error.code : 'unclassified',
+    nativeStatusAvailable: status?.available === true,
+    focus: attempt && typeof attempt === 'object' ? {
+      preparationPhase: ['request', 'readiness', 'ready'].includes(attempt.preparationPhase) ? attempt.preparationPhase : 'unknown',
+      componentProofStage: focusStages.has(attempt.componentProofStage) ? attempt.componentProofStage : 'unknown',
+      componentIdentityMode: ['none', 'child-frame', 'focused-logical-root'].includes(attempt.componentIdentityMode) ? attempt.componentIdentityMode : 'unknown',
+      inputRoute: ['metadata', 'pointer', 'keyboard'].includes(attempt.inputRoute) ? attempt.inputRoute : 'unknown',
+      inputRouteStage: ['not-requested', 'metadata', 'pointer-route', 'keyboard-root', 'metadata-recheck', 'checked', 'deadline'].includes(attempt.inputRouteStage) ? attempt.inputRouteStage : 'unknown',
+      keyboardFocusStage: ['not-requested', 'focused-window', 'owner', 'geometry', 'role', 'root-recheck', 'checked', 'deadline'].includes(attempt.keyboardFocusStage) ? attempt.keyboardFocusStage : 'unknown',
+      ...Object.fromEntries(['settledMs', 'readinessSamples', 'consecutiveReadinessSamples', 'metadataSamples', 'componentProofCalls', 'componentProofMs', 'acceptedComponentProofs', 'componentAXError', 'logicalRootPoints', 'axSettableResult', 'axFrontmostResult', 'raiseResult', 'inputRouteChecks', 'inputRouteMs', 'keyboardFocusSamples', 'keyboardAXError'].map(key => [key, integer(attempt[key])])),
+      inputPosted: bool(attempt.inputPosted), activationAccepted: bool(attempt.activationAccepted), inputRouteAccepted: bool(attempt.inputRouteAccepted), keyboardFocusAccepted: bool(attempt.keyboardFocusAccepted),
+    } : null,
+  }
+}
+export async function withVisionFailureEvidence(run, readStatus, record) {
+  try { return await run() } catch (error) {
+    let timer, status
+    try { status = await Promise.race([Promise.resolve().then(readStatus), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('bounded status diagnostic')), 1000) })]) } catch {} finally { clearTimeout(timer) }
+    // Evidence collection cannot replace the original rejection or replay it.
+    try { record(projectVisionRuntimeFailure(error, status)) } catch {}
+    throw error
+  }
+}
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 export const syntheticHash = text => createHash('sha256').update(text).digest('hex')
 export function projectVisionToolSchema(tool) {

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus, projectVisionActionDenial, visionActionUsage, visionAssistantDisplayEvidence, projectVisionToolSchema } from '../scripts/live-vision-guard-core.mjs'
+import { VisionPolicy, VISION_TOOLS, sameVisionTarget, projectVisionRequest, projectVisionTool, assertVisionAnswerHidden, projectVisionFailure, projectVisionNativeStatus, projectVisionActionDenial, visionActionUsage, visionAssistantDisplayEvidence, projectVisionToolSchema, projectVisionRuntimeFailure, withVisionFailureEvidence } from '../scripts/live-vision-guard-core.mjs'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -17,6 +17,27 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 const id = 'qiuya-vision-12345678-1234-1234-1234-123456789abc'
 const target = { id: 'mac-window:123', pid: 1234, appId: 'com.qiuya.tools.vision-own' }
 const selection = { provider: 'account-route', model: 'visual-model' }
+test('real tool failures retain only finite native focus diagnostics without sensitive metadata', () => {
+  const result = projectVisionRuntimeFailure({ code: 'FOCUS_CHANGED', message: 'PRIVATE_MESSAGE' }, { available: true, token: 'PRIVATE_TOKEN', focusAttempt: {
+    targetPid: 123, beforePid: 456, preparationPhase: 'readiness', componentProofStage: 'component-role', componentIdentityMode: 'focused-logical-root',
+    settledMs: 501, componentAXError: -25205, logicalRootPoints: 5, inputPosted: false, activationAccepted: true, title: 'PRIVATE_TITLE', path: 'PRIVATE_PATH',
+    inputRoute: 'keyboard', inputRouteStage: 'keyboard-root', inputRouteChecks: 2, inputRouteMs: 11, inputRouteAccepted: false, keyboardFocusStage: 'geometry', keyboardAXError: -25204, keyboardFocusAccepted: false,
+  } })
+  assert.equal(result.code, 'FOCUS_CHANGED'); assert.equal(result.focus.componentAXError, -25205); assert.equal(result.focus.logicalRootPoints, 5)
+  assert.equal(result.focus.inputPosted, false); assert.equal(result.focus.settledMs, 501)
+  assert.equal(result.focus.inputRoute, 'keyboard'); assert.equal(result.focus.inputRouteChecks, 2); assert.equal(result.focus.keyboardAXError, -25204); assert.equal(result.focus.inputRouteAccepted, false)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|targetPid|beforePid/u)
+  const unknown = projectVisionRuntimeFailure({ code: 'PRIVATE_CODE' }, { focusAttempt: { componentProofStage: 'PRIVATE_STAGE', settledMs: Infinity, inputPosted: 'PRIVATE_VALUE' } })
+  assert.equal(unknown.code, 'unclassified'); assert.equal(unknown.focus.componentProofStage, 'unknown'); assert.equal(unknown.focus.settledMs, null); assert.equal(unknown.focus.inputPosted, null)
+  assert.doesNotMatch(JSON.stringify(unknown), /PRIVATE_/u)
+})
+test('failure evidence preserves original error identity and never replays an action when diagnostics fail', async () => {
+  const original = Object.assign(Error('PRIVATE_ERROR'), { code: 'HUMAN_INPUT_INTERRUPTED' }); let actions = 0, reads = 0, row
+  await assert.rejects(withVisionFailureEvidence(async () => { actions++; throw original }, async () => { reads++; return { available: true, focusAttempt: { inputPosted: false } } }, value => { row = value }), error => error === original)
+  assert.equal(actions, 1); assert.equal(reads, 1); assert.equal(row.code, original.code); assert.equal(row.focus.inputPosted, false)
+  await assert.rejects(withVisionFailureEvidence(async () => { throw original }, async () => { throw Error('PRIVATE_STATUS_FAILURE') }, () => { throw Error('PRIVATE_RECORDER_FAILURE') }), error => error === original)
+  assert.equal(await withVisionFailureEvidence(async () => 42, () => { throw Error('must not read') }, () => { throw Error('must not record') }), 42)
+})
 function fixture(task = 1) {
   let now = 1000
   const policy = new VisionPolicy({ sessionId: id, target, task, selection, now: () => now })

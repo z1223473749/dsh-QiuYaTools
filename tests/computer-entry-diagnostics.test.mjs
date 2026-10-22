@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-import { projectHarnessComputerToolErrors } from './fixtures/harness-e2e-provider.mjs'
+import { projectHarnessComputerToolErrors, captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from './fixtures/harness-e2e-provider.mjs'
+import vm from 'node:vm'
 const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/tools.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })).outputFiles[0].text
 const { installComputerTools } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 function fixture(error) {
@@ -45,6 +46,24 @@ test('diagnostic projection retains only scoped finite error codes, not arbitrar
   ]
   assert.deepEqual(projectHarnessComputerToolErrors(messages), [{ tool: 'qiuya_computer_request_control', code: 'SYSTEM_PERMISSION_REQUIRED' }])
   assert.equal(/secret|person|token/.test(JSON.stringify(projectHarnessComputerToolErrors(messages))), false)
+})
+
+test('actual serialized browser diagnostic retains routed focus metadata and only the requested disposable session', async () => {
+  const sessionId = 'owned-sid', snapshot = { sessionId, state: 'paused', epoch: 4, error: { code: 'HUMAN_INPUT_INTERRUPTED', message: 'PRIVATE_MESSAGE' } }
+  const native = { available: true, platform: 'darwin', focusAttempt: { inputRoute: 'keyboard', inputRouteStage: 'keyboard-root', keyboardFocusStage: 'geometry', keyboardAXError: -25204,
+    inputRouteChecks: 5, inputRouteMs: 12, keyboardFocusAccepted: false, inputRouteAccepted: false, inputPosted: false, PRIVATE_FIELD: 'PRIVATE_VALUE' } }
+  const run = vm.runInNewContext(`(${captureHarnessComputerDiagnostic.toString()})`, { AbortSignal, crypto: { randomUUID: () => 'own-rpc' }, fetch: async () => ({ ok: true, json: async () => ({ result: { ok: true, value: { sessions: [{ sessionId: 'not-owned', error: { message: 'PRIVATE_OTHER' } }, snapshot], native } } }) }) })
+  const result = await run({ sessionId, codes: HARNESS_COMPUTER_DIAGNOSTIC_CODES })
+  assert.equal(result.session.sessionId, sessionId); assert.equal(result.session.error.code, 'HUMAN_INPUT_INTERRUPTED')
+  assert.equal(result.native.focusAttempt.inputRoute, 'keyboard'); assert.equal(result.native.focusAttempt.keyboardAXError, -25204); assert.equal(result.native.focusAttempt.inputRouteChecks, 5)
+  assert.equal(result.native.focusAttempt.keyboardFocusAccepted, false); assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|not-owned/u)
+  native.focusAttempt.inputRouteStage = 'PRIVATE_STAGE'; native.focusAttempt.keyboardAXError = Infinity
+  const unknown = await run({ sessionId, codes: HARNESS_COMPUTER_DIAGNOSTIC_CODES })
+  assert.equal(unknown.native.focusAttempt.inputRouteStage, null); assert.equal(unknown.native.focusAttempt.keyboardAXError, null)
+  for (const code of ['HUMAN_INPUT_INTERRUPTED', 'CURSOR_CLEANUP_FAILED']) {
+    const projected = projectHarnessComputerToolErrors([{ role: 'assistant', content: [{ type: 'tool-call', id: 'call', name: 'qiuya_computer_act' }] }, { role: 'tool', toolCallId: 'call', isError: true, content: [{ type: 'text', text: `[${code}] PRIVATE_MESSAGE` }] }])
+    assert.deepEqual(projected, [{ tool: 'qiuya_computer_act', code }])
+  }
 })
 
 
