@@ -20,6 +20,16 @@ Mac入口新增 `--screenshots-dir`，Windows载体通过 `QIUYA_WINDOWS_SCREENS
 
 此处仅记验收工具实现及回归通过；实际十页像素、整包和真实模型的结果须按随后运行报告判断，未将jsdom或确定性provider改称真实DeepSeek验收。用户要求的成功截图全部保存在项目外，不作为Git资产。
 
+### 2026-10-22 Windows运行中应用优先发现
+
+修复注册表读取先消耗目录容量与时间预算，导致正在运行的目标应用不进入发现结果的问题。生产路径改为先按与窗口目标相同的可见窗口条件发现运行中应用，再用剩余预算读取App Paths注册；只有成功验证的注册来源能取得启动资格。保留256个窗口候选、512个应用结果及2500／3000ms协作预算，启动前仍重新Pin文件身份。同步OS读取无法被该协作预算强制抢占，不宣称RPC硬截止为3秒。
+
+完整Windows项目以.NET SDK8.0.426交叉构建ARM64／x64通过，输入前后稳定，构建回执为 `artifacts/computer-use/windows-catalog-current-build/e71a0dd1-6492-4db4-9e56-fcbd1e18e929/report.json`。PD中旧实现实际复现容量饥饿、时间饥饿及失败注册误升级三项，新实现两架构各 **30/30纯程序检查**通过并自然退出。最终同步调用取得原生退出码；PowerShell格式化错误正文导致测试标签换行的读回问题由独立审计核对，原失败报告未改写，见 `artifacts/computer-use/windows-catalog-pd/d181d8cf-263b-4004-94ae-44ecd7d7f98f/delivery-verdict.json`。
+
+随后在PD Session1实际启动自有窗口和独立执行器，两架构各 **10/10实际应用发现检查**通过：目标的appId确实进入catalog，running=true、launchable=false；只调用status／targets／applications，不申请输入、不截图、不使用模型。ARM目录耗时3809ms并标记truncated，仍保留自有运行应用；x64耗时495ms。两轮各2个进程自然退出，独立出生身份复查、OS空输入、锁空闲／journal缺席以及任务自然退出／注销通过，见 `artifacts/computer-use/windows-app-discovery-actual-1/matrix.json`。x64运行于ARM Windows转译环境。
+
+新ARM64 helper为 `7c6bb4b668300731828f12ad2417953b990af5e7bfb0ce237342dd1d34864975`（68,261,140B），x64为 `abdc1612e13818cc98e90a937ec1b2d68309533f5bc67d3b5f58eebde06349d4`（72,084,878B）。新包的真实Harness整体验收另有隔离Host启动失败，未由上述原生分项通过替代，也未把旧52＋29项指针／输入结果移记到这两个新SHA。
+
 ## 0. 本批交互功能与当前验证（覆盖下面历史快照的“最新”称呼）
 
 | 项目 | 当前实际结果 | 证据与边界 |

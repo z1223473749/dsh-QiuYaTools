@@ -9,10 +9,14 @@ namespace QiuYaTools.Windows;
 
 internal sealed class NativeApplicationCatalog
 {
-    private sealed record Fingerprint(uint Volume, uint IndexHigh, uint IndexLow, uint SizeHigh, uint SizeLow, long Modified);
-    private sealed record Installation(string Path, string Name, Fingerprint Identity);
+    internal sealed record Fingerprint(uint Volume, uint IndexHigh, uint IndexLow, uint SizeHigh, uint SizeLow, long Modified);
+    internal sealed record Installation(string Path, string Name, Fingerprint Identity);
+    internal delegate void PathSource(Func<bool> canRead, Action markTruncated, Action<string> accept);
+    internal sealed record Sources(PathSource Running, PathSource Registered, Func<string, Installation> Metadata, Func<long> ElapsedMilliseconds);
     private readonly object gate = new();
+    private readonly Sources? sourceOverrides;
     private Dictionary<string, Installation> listed = new(StringComparer.Ordinal);
+    internal NativeApplicationCatalog(Sources? sources = null) { sourceOverrides = sources; }
     internal static string AppId(string path)
     {
         var canonical = System.IO.Path.GetFullPath(path);
@@ -42,52 +46,91 @@ internal sealed class NativeApplicationCatalog
     {
         var found = new Dictionary<string, Installation>(StringComparer.Ordinal);
         var running = new HashSet<string>(StringComparer.Ordinal);
+        var launchableIds = new HashSet<string>(StringComparer.Ordinal);
         var timer = Stopwatch.StartNew(); var truncated = false;
+        var sources = sourceOverrides ?? new Sources(RunningVisibleWindows, RegisteredPaths, ReadMetadata, () => timer.ElapsedMilliseconds);
+        bool CanRead(long limit, bool requireSpace = false)
+        {
+            if (sources.ElapsedMilliseconds() > limit || requireSpace && found.Count >= 512) { truncated = true; return false; }
+            return true;
+        }
         void Add(string path, bool isRunning, bool launchable)
         {
             try {
                 var candidateId = AppId(path);
-                if ((found.Count >= 512 && !found.ContainsKey(candidateId)) || timer.ElapsedMilliseconds > 3000) { truncated = true; return; }
-                var pinned = Pin(path, false); using var handle = pinned.Handle;
-                var id = AppId(pinned.Installation.Path);
+                if ((found.Count >= 512 && !found.ContainsKey(candidateId)) || !CanRead(isRunning ? 2500 : 3000)) { truncated = true; return; }
+                var installation = sources.Metadata(path);
+                var id = AppId(installation.Path);
+                if (id != candidateId) throw new NativeFailure("APPLICATION_CHANGED", "The application path changed");
                 if (isRunning) running.Add(id);
-                if (!found.ContainsKey(id) || launchable) found[id] = pinned.Installation;
+                // A running window is not an application registration. Only a
+                // successful, identity-checked App Paths read permits Launch.
+                if (launchable) launchableIds.Add(id);
+                if (!found.ContainsKey(id) || launchable) found[id] = installation;
             } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or System.Security.SecurityException or System.ComponentModel.Win32Exception or NativeFailure) { }
         }
+        // Reserve the first phase for the apps the user can actually operate.
+        // Registration I/O must not consume their time or all 512 output slots.
+        // These are cooperative budgets; a synchronous OS read is not preempted.
+        sources.Running(() => CanRead(2500), () => truncated = true, path => Add(path, true, false));
+        sources.Registered(() => CanRead(3000, true), () => truncated = true, path => Add(path, false, true));
+        lock (gate) listed = found.Where(pair => launchableIds.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        return new { applications = found.Select(pair => new { appId = pair.Key, name = pair.Value.Name, running = running.Contains(pair.Key), launchable = launchableIds.Contains(pair.Key) }).OrderBy(value => value.name, StringComparer.CurrentCultureIgnoreCase).ToArray(), truncated };
+    }
+    private static Installation ReadMetadata(string path)
+    {
+        var pinned = Pin(path, false); using var handle = pinned.Handle;
+        return pinned.Installation;
+    }
+    private static void RegisteredPaths(Func<bool> canRead, Action markTruncated, Action<string> accept)
+    {
         // App Paths are explicit OS application registrations. Never scan the
         // user's home, shortcuts, command lines, Run keys or uninstall commands.
         foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser }) {
             foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 }) {
-                if (truncated) break;
+                if (!canRead()) return;
                 try {
                     using var root = RegistryKey.OpenBaseKey(hive, view);
                     using var paths = root.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths", false);
                     if (paths == null) continue;
-                    foreach (var name in paths.GetSubKeyNames().Take(1024)) {
-                        if (found.Count >= 512 || timer.ElapsedMilliseconds > 2500) { truncated = true; break; }
+                    var names = paths.GetSubKeyNames();
+                    if (names.Length > 1024) markTruncated();
+                    foreach (var name in names.Take(1024)) {
+                        if (!canRead()) return;
                         using var key = paths.OpenSubKey(name, false);
                         if (key?.GetValue(null, null, RegistryValueOptions.DoNotExpandEnvironmentNames) is not string raw) continue;
                         var path = Environment.ExpandEnvironmentVariables(raw.Trim());
                         if (path.StartsWith('"') && path.EndsWith('"') && path.Length > 2) path = path[1..^1];
-                        Add(path, false, true);
+                        accept(path);
                     }
                 } catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException) { }
             }
         }
-        var launchableIds = found.Keys.ToHashSet(StringComparer.Ordinal);
-        foreach (var process in Process.GetProcesses()) {
-            using (process) {
-                if (timer.ElapsedMilliseconds > 3000) { truncated = true; continue; }
-                try {
-                    var born = process.StartTime.ToUniversalTime().Ticks;
-                    if (process.MainWindowHandle == IntPtr.Zero || process.HasExited || process.MainModule?.FileName is not string path) continue;
-                    if (process.StartTime.ToUniversalTime().Ticks != born) continue;
-                    Add(path, true, false);
-                } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
-            }
-        }
-        lock (gate) listed = found.Where(pair => launchableIds.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        return new { applications = found.Select(pair => new { appId = pair.Key, name = pair.Value.Name, running = running.Contains(pair.Key), launchable = launchableIds.Contains(pair.Key) }).OrderBy(value => value.name, StringComparer.CurrentCultureIgnoreCase).ToArray(), truncated };
+    }
+    private static void RunningVisibleWindows(Func<bool> canRead, Action markTruncated, Action<string> accept)
+    {
+        var accepted = 0;
+        Native.EnumWindows((handle, _) => {
+            if (!canRead()) return false;
+            try {
+                // Match ComputerDriver.Targets instead of MainWindowHandle:
+                // a process may own an eligible secondary or tool window.
+                if (!Native.IsWindowVisible(handle) || Native.IsIconic(handle)) return true;
+                Native.GetWindowThreadProcessId(handle, out var pid);
+                if (pid == 0 || pid == Environment.ProcessId) return true;
+                var title = new StringBuilder(1025); Native.GetWindowText(handle, title, title.Capacity);
+                if (string.IsNullOrWhiteSpace(title.ToString()) || !Native.GetWindowRect(handle, out var rect) || rect.Width < 16 || rect.Height < 16) return true;
+                using var process = Process.GetProcessById((int)pid);
+                var born = process.StartTime.ToUniversalTime().Ticks;
+                if (process.HasExited || process.MainModule?.FileName is not string path || process.StartTime.ToUniversalTime().Ticks != born) return true;
+                Native.GetWindowThreadProcessId(handle, out var currentPid);
+                if (currentPid != pid || !Native.IsWindowVisible(handle) || Native.IsIconic(handle)) return true;
+                accept(Path.GetFullPath(path));
+                accepted++;
+                if (accepted >= 256) { markTruncated(); return false; }
+            } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            return canRead();
+        }, IntPtr.Zero);
     }
     internal object Launch(string appId)
     {
