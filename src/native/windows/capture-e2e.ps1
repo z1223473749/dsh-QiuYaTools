@@ -8,7 +8,7 @@ function Call([string]$op,[hashtable]$body=@{}){$script:requestId++;$body.op=$op
 try{
  Assert ([Environment]::UserInteractive -and [Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0) 'WIN-CAPTURE-INTERACTIVE'
  $test=Start-Native '--self-test-capture' $true;$line=$test.StandardOutput.ReadLineAsync();if(!$line.Wait(30000)){throw 'Capture fault-injection deadline'};$faults=$line.Result|ConvertFrom-Json;if(!$test.WaitForExit(3000)){throw 'Capture test did not exit'}
- Assert ($test.ExitCode -eq 0 -and $faults.passed -and $faults.checks -eq 14) 'WIN-CAPTURE-FAULT-INJECTION-14'
+ Assert ($test.ExitCode -eq 0 -and $faults.passed -and $faults.checks -eq 16 -and $faults.poolScheduling.passed -eq $true -and $faults.poolDeadline.passed -eq $true) 'WIN-CAPTURE-FAULT-INJECTION-16'
  $faults|ConvertTo-Json -Depth 8|Set-Content (Join-Path $Output 'capture-faults.json') -Encoding UTF8
  $fixture=Start-Native ('--fixture --fixture-animate --fixture-output "'+(Join-Path $Output 'fixture-state.json')+'"') $false
  for($i=0;$i -lt 80 -and !(Test-Path (Join-Path $Output 'fixture-state.json'));$i++){Start-Sleep -Milliseconds 100}

@@ -26,7 +26,7 @@ internal static class Program
         if (args.Contains("--self-test-preview")) { Program.Emit(PreviewSelfTest.Run()); return; }
         if (args.Contains("--input-guardian")) { DesktopLeaseGuard.RunGuardian(); return; }
         if (args.Contains("--self-test-input")) { Program.Emit(ComputerDriver.TestReleaseFailures()); return; }
-        if (args.Contains("--release-input")) { EmergencyRelease.Run(); return; }
+        if (args.Contains("--release-input")) { EmergencyRelease.Run(args.Contains("--release-input-test-ready")); return; }
         if (args.Contains("--fixture")) { Application.Run(new FixtureForm(args)); return; }
         using var context = new NativeContext(args.Contains("--computer"));
         Application.Run(context);

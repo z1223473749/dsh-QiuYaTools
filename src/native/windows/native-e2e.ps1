@@ -381,8 +381,9 @@ public sealed class PreviewHoldSampler : IDisposable {
   [void](Good $competitor 'lease' @{epoch=2})
   Assert (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0) 'WIN-GUARDIAN-RECOVER-BEFORE-LEASE-01'
   [void](Good $competitor 'observe' @{targetId=$target.id;preview=$true})
-  $late=Start-Helper '--release-input'
-  Start-Sleep -Milliseconds 150
+  $late=Start-Helper '--release-input --release-input-test-ready'
+  $readyRead=$late.StandardOutput.ReadLineAsync();if(!$readyRead.Wait(10000)){throw 'Late cleanup did not reach its fixed ready handshake'};$lateReady=$readyRead.Result|ConvertFrom-Json
+  if($lateReady.event -ne 'releaseInputReady' -or $lateReady.readyTicks -le 0 -or $lateReady.frequency -ne [Diagnostics.Stopwatch]::Frequency){throw 'Late cleanup ready handshake was invalid'}
   $newDrag=Send-Request $competitor 'act' @{epoch=2;targetId=$target.id;action=@{kind='drag';x=($point.x-180);y=$point.y;toX=($point.x+180);toY=$point.y}}
   $newHeld=$null
   for($i=0;$i -lt 20 -and $null -eq $newHeld;$i++){
@@ -390,10 +391,20 @@ public sealed class PreviewHoldSampler : IDisposable {
     if($event.event){$events.Add($event);if($event.event -eq 'inputHeld' -and @($event.mouseButtons) -contains 'left'){$newHeld=$event}}else{throw 'New owner drag ended too early'}
   }
   Assert ($newHeld.ownerId -and $newHeld.ownerId -ne $held.ownerId) 'WIN-DESKTOP-OWNER-IDENTITY-01'
+  # inputHeld is deliberately durable before SendInput(down). Wait for the OS
+  # transition using the existing bounded read-only polling, without replaying
+  # or prolonging this one original drag.
+  $lateDownWaitBegin=[Diagnostics.Stopwatch]::GetTimestamp()
+  for($i=0;$i -lt 40 -and (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0);$i++){Start-Sleep -Milliseconds 5}
+  if((([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-eq 0)){throw 'Original new-owner drag OS down was not observed before late cleanup; no input retry is permitted'}
+  $lateSentTicks=[Diagnostics.Stopwatch]::GetTimestamp()
   $late.StandardInput.WriteLine((@{keys=@($held.keys);mouseButtons=@($held.mouseButtons);unicodeUnits=@($held.unicodeUnits);ownerId=$held.ownerId}|ConvertTo-Json -Compress));$late.StandardInput.Close()
   $read=$late.StandardOutput.ReadLineAsync();if(!$read.Wait(10000)){throw 'Late old-owner cleanup timed out'};$lateResult=$read.Result|ConvertFrom-Json
   Assert ($lateResult.released -eq $true) 'WIN-OLD-OWNER-CLEANUP-SKIP-01'
-  Assert (([FixtureNative]::GetAsyncKeyState(1)-band 0x8000)-ne 0) 'WIN-OLD-CLEANUP-PRESERVES-NEW-DOWN-01'
+  # Read the OS state on both sides of the actual cleanup call, rather than after
+  # a slow PowerShell pipe round-trip that may outlast the completed normal drag.
+  $overlap=$lateResult.cleanupProbe
+  Assert ($overlap.leftBefore -eq $true -and $overlap.leftAfter -eq $true -and $lateReady.readyTicks -le $lateSentTicks -and $lateSentTicks -le $overlap.enteredTicks -and $overlap.enteredTicks -le $overlap.completedTicks) 'WIN-OLD-CLEANUP-PRESERVES-NEW-DOWN-01' @{ready=$lateReady;downWaitBeginTicks=$lateDownWaitBegin;sentTicks=$lateSentTicks;cleanup=$overlap;oldOwner=$held.ownerId;newOwner=$newHeld.ownerId;extraActions=0;extraInput=0}
   $done=Read-Reply $competitor $newDrag;Assert $done.ok 'WIN-NEW-OWNER-DRAG-COMPLETES-01'
   [void](Good $competitor 'release' @{epoch=2})
   [void][FixtureNative]::SetCursorPos(2,2)

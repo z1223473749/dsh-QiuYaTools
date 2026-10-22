@@ -74,15 +74,26 @@ internal sealed class CaptureBroker : IDisposable
                 var process = GetWorker();
                 try {
                     var requestId = ++sequence;
-                    // Keep both a blocked pipe write and the bounded reply read off the caller's thread.
-                    var response = Task.Run(() => {
+                    // Pipe I/O is blocking and cannot wait behind the shared pool that also
+                    // dispatches observe. A dedicated thread preserves the same deadline
+                    // even while other pool workers are occupied by native operations.
+                    var response = Task.Factory.StartNew(() => {
                         process.StandardInput.WriteLine(JsonSerializer.Serialize(new { requestId, targetId }));
                         process.StandardInput.Flush();
                         return ReadReply(process.StandardOutput, requestId);
-                    });
+                    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
                     // A killed worker closes its pipes. Observe any late task fault even after timeout.
                     _ = response.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
-                    var bytes = response.WaitAsync(TimeSpan.FromMilliseconds(captureTimeout)).GetAwaiter().GetResult();
+                    // A timer-backed async timeout also needs a shared-pool callback.
+                    // This caller already waits synchronously: retain the hard bound
+                    // with a timed wait, then unwrap the original worker fault.
+                    try {
+                        if (!response.Wait(captureTimeout)) throw new TimeoutException();
+                    } catch (AggregateException) {
+                        response.GetAwaiter().GetResult();
+                        throw;
+                    }
+                    var bytes = response.GetAwaiter().GetResult();
                     lock (lifecycle) { CheckLive(); }
                     return bytes;
                 } catch (Exception error) when (error is TimeoutException or IOException or ObjectDisposedException or InvalidOperationException || error is NativeFailure failure && failure.Code is "capture-protocol" or "capture-worker-exited" or "capture-timeout") {
