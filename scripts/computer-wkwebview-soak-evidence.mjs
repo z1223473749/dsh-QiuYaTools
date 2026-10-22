@@ -25,9 +25,10 @@ export function macProcessCheckPassed(value, expected) {
   return remaining.size === 0
 }
 
-export function wkPreviewInstrumentation(html, { generation, reportPath }) {
+export function wkPreviewInstrumentation(html, { generation, reportPath, associationNonce }) {
   if (!Number.isSafeInteger(generation) || generation < 1 || !/^\/__wk_soak\/[a-f0-9-]{36}\/frames$/u.test(reportPath)) throw new Error('Invalid isolated WK probe destination')
-  const source = `(${installWKFrameReporter.toString()})(${JSON.stringify({ generation, reportPath })});(${installWebViewClockProbe.toString()})(${JSON.stringify({ bindingName: '__qytWKSoakFrame', generation })});`
+  if (associationNonce !== undefined && !/^[a-f0-9-]{36}$/u.test(associationNonce)) throw new Error('Invalid isolated WK association nonce')
+  const source = `(${installWKFrameReporter.toString()})(${JSON.stringify({ generation, reportPath, associationNonce })});(${installWebViewClockProbe.toString()})(${JSON.stringify({ bindingName: '__qytWKSoakFrame', generation })});`
   // Install before the production script can draw its first frame. This has the
   // same observation role as addInitScript/CDP, without enabling native debug.
   if (/<head[\s>]/iu.test(html)) return html.replace(/<head\b[^>]*>/iu, match => `${match}<script>${source}</script>`)
@@ -38,10 +39,12 @@ export function wkPreviewInstrumentation(html, { generation, reportPath }) {
 }
 
 /** Runs only inside this UUID's actual production WKWebView document. */
-export function installWKFrameReporter({ generation, reportPath }) {
+export function installWKFrameReporter({ generation, reportPath, associationNonce }) {
+  if (associationNonce) { document.documentElement.dataset.qytAssociationNonce = associationNonce; document.documentElement.dataset.qytAssociationTick = '0' }
   let queue = [], batch = 0, sending = false, stopped = false, sequence = 0, transportFailures = 0, probeError
   let pending
   const flush = async () => {
+    if (associationNonce) document.documentElement.dataset.qytAssociationTick = String(Number(document.documentElement.dataset.qytAssociationTick || 0) + 1)
     if (sending || stopped) return
     sending = true
     if (!pending) pending = { generation, batch: ++batch, events: queue.splice(0, 64), transportFailures, probeError,
@@ -97,4 +100,55 @@ export function macResourceVerdict(samples) {
   const maxOwnedRssBytes = Math.max(0, ...samples.map(sample => sample.processes.reduce((sum, row) => sum + row.residentBytes, 0)))
   return { limits, attributionComplete: complete, maxNodeRssBytes, maxOwnedRssBytes,
     passed: complete && maxNodeRssBytes <= limits.nodeRssBytes && maxOwnedRssBytes <= limits.ownedRssBytes }
+}
+
+/** Read-only WK getter receipts identify participation in one test-owned view.
+ * They do not grant ownership by coalition, process name or a reported PID alone.
+ * The native OS observer must independently pin every returned identity.
+ */
+export class WKAssociationReceipts {
+  constructor({ nonce, native }) { this.nonce = nonce; this.native = native; this.sequence = 0; this.tick = -1; this.samples = []; this.latest = [] }
+  accept(row) {
+    const validIdentity = value => value && Number.isSafeInteger(value.pid) && value.pid > 0 && value.pid <= 2147483647 &&
+      typeof value.birthMicros === 'string' && /^[1-9][0-9]{0,31}$/u.test(value.birthMicros) && typeof value.uniqueId === 'string' && /^[1-9][0-9]{0,31}$/u.test(value.uniqueId) &&
+      typeof value.path === 'string' && value.path.startsWith('/') && value.path.length <= 4096 && !value.path.includes('\0')
+    const same = (a, b) => validIdentity(a) && validIdentity(b) && ['pid', 'birthMicros', 'uniqueId', 'path'].every(key => a[key] === b[key])
+    if (!row || row.schemaVersion !== 1 || row.nonce !== this.nonce || !same(row.helper, this.native) || !Number.isSafeInteger(row.sequence) || row.sequence !== this.sequence + 1) throw new Error('WK association receipt identity/sequence changed')
+    if (row.event === 'probe-ready') { if (row.changesResponsibility !== false) throw new Error('WK association carrier changed responsibility'); this.sequence = row.sequence; return [] }
+    if (row.event === 'probe-ended') { this.sequence = row.sequence; return [] }
+    if (row.event !== 'association') throw new Error('WK association probe did not verify its own page')
+    if (row.verified !== true || row.errors?.length !== 0) {
+      const allowed = new Set(['WebContent-pid-unverified', 'GPU-pid-unverified', 'Networking-pid-unverified'])
+      const reasons = Array.isArray(row.errors) ? row.errors.slice(0, 3).map(value => allowed.has(value) ? value : 'unknown') : ['unknown']
+      throw new Error('WK association resource getters unverified: ' + reasons.join(','))
+    }
+    if (row.page?.nonceVerified !== true || row.page.visibility !== 'visible' || row.page.iframes !== 0 || !Number.isSafeInteger(row.windowId) || row.windowId <= 0) throw new Error('WK association own page nonce, visibility or window was not verified')
+    if (!Number.isSafeInteger(row.page.tick) || row.page.tick <= this.tick) throw new Error('WK association page clock was not continuously advancing')
+    const roles = new Set(['WebContent', 'GPU', 'Networking']), pids = new Set()
+    if (!Array.isArray(row.associated) || row.associated.length !== roles.size) throw new Error('WK association omitted a resource process role')
+    const latest = row.associated.map(item => {
+      if (!roles.delete(item.role) || !validIdentity(item.identity) || !/^[0-9]+$/u.test(item.identity.device) || !/^[1-9][0-9]*$/u.test(item.identity.inode) || pids.has(item.identity.pid) || BigInt(item.identity.birthMicros) < BigInt(this.native.birthMicros)) throw new Error('WK association resource process metadata is invalid')
+      pids.add(item.identity.pid)
+      if (item.role === 'Networking' && (row.networkFence?.verified !== true || row.networkFence.existsBefore !== true || row.networkFence.existsAfter !== true || !/^[1-9][0-9]*$/u.test(row.networkFence.getterBeforeUnixMicros) || BigInt(item.identity.birthMicros) >= BigInt(row.networkFence.getterBeforeUnixMicros))) throw new Error('WK network process did not predate its guarded getter')
+      return { native: this.native, process: item.identity, kind: item.role }
+    })
+    this.sequence = row.sequence; this.tick = row.page.tick; this.latest = latest; this.samples.push({ sequence: row.sequence, tick: row.page.tick, windowId: row.windowId, associated: latest })
+    if (this.samples.length > 3600) throw new Error('WK association sample bound exceeded')
+    return latest
+  }
+}
+
+/** Persist a bounded own-probe row before validating it so a failed getter or
+ * page check remains reviewable. Recording never turns a rejection into an ACK.
+ */
+export function consumeWKAssociationRows(state, bytes) {
+  if (typeof bytes !== 'string' || Buffer.byteLength(bytes) > 8 * 1024 ** 2) throw new Error('WK association receipt file bound')
+  const lines = bytes.slice(0, bytes.lastIndexOf('\n') + 1).split('\n').filter(Boolean)
+  if (lines.length > 4000 || lines.length < state.rowsRead) throw new Error('WK association receipt sequence/file bound')
+  for (const line of lines.slice(state.rowsRead)) {
+    const row = JSON.parse(line)
+    state.rows.push(row); state.rowsRead++
+    state.receiver.accept(row)
+  }
+  return state.receiver.latest
 }

@@ -49,7 +49,8 @@ async function prepare() {
   assert.equal(selftest.passed, true); assert.equal(selftest.checks, 6); assert.equal(selftest.productionHelperSpawned, false)
   await save(join(directory, 'compile-and-fake.json'), { passed: true, commands: logs, selftest })
   const record = { schemaVersion: 1, status: 'prepared-not-run', directory, helper, helperSha256: await hash(helper), library, librarySha256: await hash(library), metadata, metadataSha256: await hash(metadata),
-    sourceSha256: await hash(source), metadataSourceSha256: await hash(join(root, 'src/native/macos/fixtures/WKSoakObserver.swift')), scriptSha256: await hash(fileURLToPath(import.meta.url)), helperSourceCommit: pinned.sourceCommit,
+    sourceSha256: await hash(source), metadataSourceSha256: await hash(join(root, 'src/native/macos/fixtures/WKSoakObserver.swift')), scriptSha256: await hash(fileURLToPath(import.meta.url)), helperSourceCommit: (await hash(helper)) === pinned.sha256 ? pinned.sourceCommit : null,
+    sourceCommitBinding: (await hash(helper)) === pinned.sha256 ? 'default-pin-exact-SHA-match' : 'explicit-helper-SHA-differs-from-default-pin-source-commit-unverified',
     carrier: 'test-only DYLD read-only getter instrumentation in the explicitly launched formal helper; no responsibility/TCC changes; not official Harness acceptance',
     limitations: ['Private WebKit selectors must be available with the expected ABI at runtime.', 'Getter associations do not alone prove complete resource attribution or natural cleanup.', 'Network getter is used only in one main-thread synchronous exists=true→PID→exists/PID stack; birth must predate the getter.'],
     smokeCommand: `node scripts/prepare-wk-association-probe.mjs --smoke --prepared ${join(directory, 'prepared.json')}` }

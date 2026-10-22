@@ -77,3 +77,30 @@ test('WK probe accepts the actual shipped implicit-head preview and preserves it
   assert.ok(result.includes(computerPreviewPage.slice(computerPreviewPage.indexOf('<script>'))))
   assert.throws(() => wkPreviewInstrumentation('<html>no scripts</html>', { generation: 1, reportPath: '/__wk_soak/12345678-1234-1234-1234-123456789abc/frames' }), /script was not found/)
 })
+
+test('WK view receipts reject wrong helpers, stale page clocks, missing roles and a newly created network process before OS adoption', async () => {
+  const { WKAssociationReceipts } = await import('../scripts/computer-wkwebview-soak-evidence.mjs')
+  const native = { pid: 101, birthMicros: '1000', uniqueId: '1010', path: '/own/helper' }, nonce = '12345678-1234-1234-1234-123456789abc'
+  const start = () => new WKAssociationReceipts({ native, nonce })
+  const row = () => ({ schemaVersion: 1, nonce, helper: native, sequence: 1, event: 'association', verified: true, errors: [], windowId: 42,
+    page: { nonceVerified: true, visibility: 'visible', iframes: 0, tick: 1 },
+    associated: ['WebContent', 'GPU', 'Networking'].map((role, index) => ({ role, identity: { pid: 200 + index, birthMicros: '1100', uniqueId: String(2200 + index), path: '/system/' + role, device: '10', inode: String(300 + index) } })),
+    networkFence: { verified: true, existsBefore: true, existsAfter: true, getterBeforeUnixMicros: '1200' } })
+  assert.equal(start().accept(row()).length, 3)
+  for (const change of [r => { r.helper = { ...native, uniqueId: '1011' } }, r => { r.nonce = 'other' }, r => { r.sequence = 2 }, r => { r.page.iframes = 1 }, r => { r.verified = false }, r => { r.verified = 1 }, r => { r.associated.pop() }, r => { r.associated[2].identity.birthMicros = '1201' }, r => { r.associated[0].identity.uniqueId = '0' }, r => { r.networkFence.existsBefore = false }, r => { r.associated[0].identity.pid = 201 }]) {
+    const value = row(); change(value); assert.throws(() => start().accept(value), /WK/)
+  }
+  const receiver = start(); receiver.accept(row()); assert.throws(() => receiver.accept({ ...row(), sequence: 2 }), /continuously/)
+  const next = row(); next.sequence = 2; next.page.tick = 2; assert.equal(receiver.accept(next).length, 3)
+})
+
+test('WK rejected getter evidence survives validation failure without acknowledging a resource association', async () => {
+  const { WKAssociationReceipts, consumeWKAssociationRows } = await import('../scripts/computer-wkwebview-soak-evidence.mjs')
+  const native = { pid: 101, birthMicros: '1000', uniqueId: '1010', path: '/own/helper' }, nonce = '12345678-1234-1234-1234-123456789abc'
+  const state = { rows: [], rowsRead: 0, receiver: new WKAssociationReceipts({ native, nonce }) }
+  const rejected = { schemaVersion: 1, nonce, helper: native, sequence: 1, event: 'association', verified: false, errors: ['GPU-pid-unverified'] }
+  assert.throws(() => consumeWKAssociationRows(state, JSON.stringify(rejected) + '\n'), /resource getters unverified: GPU-pid-unverified/)
+  assert.deepEqual(state.rows, [rejected]); assert.equal(state.rowsRead, 1)
+  assert.deepEqual(state.receiver.latest, []); assert.equal(state.receiver.samples.length, 0)
+  assert.throws(() => consumeWKAssociationRows(state, ''), /sequence/)
+})

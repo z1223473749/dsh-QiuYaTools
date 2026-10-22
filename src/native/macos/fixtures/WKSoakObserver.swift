@@ -28,6 +28,11 @@ private struct Identity: Codable {
     var path: String
     var role: String?
 }
+private struct ViewAssociation: Decodable {
+    let native: Identity
+    let process: Identity
+    let kind: String
+}
 private struct ProcessRow {
     var bsd: proc_bsdinfo
     var identity: Identity
@@ -197,6 +202,25 @@ private func snapshot(_ request: [String: Any]) throws -> [String: Any] {
         for native in natives where native.responsiblePid != native.identity.pid { errors.append("native-responsibility-not-disclaimed:\(native.identity.pid)") }
     }
     if responsible == nil { errors.append("responsibility-query-unavailable") }
+    // The test-only shim obtains these identities from the exact own live WK
+    // object. Never accept its PID alone: re-read OS birth, unique ID, same-user
+    // executable file identity, coalition and responsibility independently.
+    // Participation can include a shared WebKit process; it is not exclusive
+    // memory ownership. The report includes the complete participating RSS.
+    let associationBytes = try JSONSerialization.data(withJSONObject: request["viewAssociations"] ?? [])
+    let associations = try JSONDecoder().decode([ViewAssociation].self, from: associationBytes)
+    guard associations.count <= 128 else { throw failure("view-association-bound") }
+    for association in associations {
+        guard let native = natives.first(where: { matches($0, association.native) }),
+              var candidate = rows.first(where: { matches($0, association.process) }),
+              ["WebContent", "GPU", "Networking"].contains(association.kind), candidate.kind == association.kind,
+              UInt64(candidate.identity.birthMicros)! >= UInt64(native.identity.birthMicros)!,
+              native.resourceCoalitionId != nil, native.resourceCoalitionId != "0", candidate.resourceCoalitionId == native.resourceCoalitionId,
+              native.responsiblePid != nil, candidate.responsiblePid == native.responsiblePid else {
+            errors.append("view-associated-process-not-independently-verified:\(association.process.pid)"); continue
+        }
+        candidate.identity.role = "webkit-view-associated"; owned[candidate.identity.pid] = candidate
+    }
     for var candidate in rows where candidate.kind != nil && owned[candidate.identity.pid] == nil {
         let native = natives.first { $0.identity.pid == candidate.responsiblePid && UInt64(candidate.identity.birthMicros)! >= UInt64($0.identity.birthMicros)! }
         if let native {
@@ -216,7 +240,7 @@ private func snapshot(_ request: [String: Any]) throws -> [String: Any] {
     if request["requireWebKit"] as? Bool == true && natives.isEmpty { errors.append("live-native-parent-not-verified") }
     return ["processes": owned.values.sorted { $0.identity.pid < $1.identity.pid }.map { $0.json }, "webKitDiagnostics": webKitDiagnostics,
         "attribution": ["complete": errors.isEmpty, "errors": errors, "responsibilityAvailable": responsible != nil,
-            "method": "exact BSD microsecond birth + proc unique/parent descendant IDs; detached WebKit responsible native PID corroborated by resource coalition; all known exact identities retained",
+            "method": "exact BSD birth + proc unique/parent descendants; own-view getter associations independently corroborated by system executable file identity, coalition and responsibility; shared coalition alone never adopted; all known exact identities retained",
             "observedWebKitKinds": Array(Set(webKit.compactMap { $0.kind })).sorted(), "runnerCoalitionId": liveRunner.resourceCoalitionId as Any? ?? NSNull()]]
 }
 

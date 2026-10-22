@@ -10,7 +10,7 @@ import { access, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, macSelfResponsibleNative, wkPreviewInstrumentation } from './computer-wkwebview-soak-evidence.mjs'
+import { WKAssociationReceipts, consumeWKAssociationRows, WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, macSelfResponsibleNative, wkPreviewInstrumentation } from './computer-wkwebview-soak-evidence.mjs'
 
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -47,17 +47,22 @@ function observe(executable, request, timeout = 15000) {
 }
 const observerSource = join(root, 'src/native/macos/fixtures/WKSoakObserver.swift')
 const launcherSource = join(root, 'src/native/macos/fixtures/WKDisclaimLauncher.c')
+const associationSource = join(root, 'src/native/macos/fixtures/WKSoakAssociationProbe.m')
+const viewAssociation = process.argv.includes('--view-association')
+assert.ok(!(viewAssociation && process.argv.includes('--disclaim-responsibility')), 'Use one explicit resource-attribution carrier')
 
 // A small outer controller verifies the measured Node runner and every recorded
 // helper/XPC identity after Node exits. No process-name kill/cleanup is used.
 if (!process.argv.includes('--worker')) {
   const observer = join(temporary, 'wk-observer')
   const launcher = process.argv.includes('--disclaim-responsibility') ? join(temporary, 'wk-disclaim-launcher') : undefined
+  const associationLibrary = viewAssociation ? join(temporary, 'wk-soak-association.dylib') : undefined
   let child, exitCode, verdict
   try {
     await run('/usr/bin/swiftc', ['-parse-as-library', '-swift-version', '5', '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'CoreImage', '-framework', 'CoreMedia', '-module-cache-path', '/private/tmp/qiuya-wk-soak-module-cache', observerSource, '-o', observer], { timeout: 90000 })
+    if (associationLibrary) await run('/usr/bin/clang', ['-O2', '-fobjc-arc', '-fblocks', '-mmacosx-version-min=13.0', '-framework', 'AppKit', '-framework', 'WebKit', '-dynamiclib', associationSource, '-o', associationLibrary], { timeout: 30000 })
     if (launcher) await run('/usr/bin/clang', ['-O2', '-std=c11', '-Wall', '-Wextra', '-Werror', '-mmacosx-version-min=13.0', launcherSource, '-o', launcher], { timeout: 30000 })
-    child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), '--worker', '--observer', observer, ...(launcher ? ['--responsibility-launcher', launcher] : [])], { stdio: 'inherit' })
+    child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), '--worker', '--observer', observer, ...(launcher ? ['--responsibility-launcher', launcher] : []), ...(associationLibrary ? ['--association-library', associationLibrary] : [])], { stdio: 'inherit' })
     exitCode = await new Promise((done, reject) => {
       const timer = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('Owned WK runner exceeded bounded overall deadline')) }, minutes * 60000 + 240000)
       child.once('error', error => { clearTimeout(timer); reject(error) }); child.once('exit', code => { clearTimeout(timer); done(code) })
@@ -92,11 +97,16 @@ if (!process.argv.includes('--worker')) {
   const launcher = arg('--responsibility-launcher')
   assert.equal(Boolean(launcher), process.argv.includes('--disclaim-responsibility'), 'The disclaim test carrier must be explicit and compiled by the outer runner')
   const carrier = launcher ? { method: 'test-only POSIX_SPAWN_SETEXEC + responsibility_spawnattrs_setdisclaim', launcherPath: resolve(launcher), launcherSha256: await hashFile(resolve(launcher)), launcherSourceSha256: await hashFile(launcherSource), changesTCCResponsibility: true, productionHelperUnchanged: true } : { method: 'ordinary production NativeCompanionDriver spawn', changesTCCResponsibility: false }
-  const title = `QiuYaTools WK Soak ${sessionId.slice(-8)}`
+  const associationNonce = viewAssociation ? randomUUID() : undefined
+  const associationLibrary = arg('--association-library')
+  assert.equal(Boolean(associationLibrary), viewAssociation, 'The explicit getter carrier must be compiled by the controller')
+  const associationCarrier = viewAssociation ? { method: 'test-only /usr/bin/env exec with DYLD read-only own-WK getter instrumentation', librarySHA256: await hashFile(associationLibrary), sourceSHA256: await hashFile(associationSource), changesTCCResponsibility: false, productionHelperUnchanged: true } : undefined
+  const title = viewAssociation ? `QiuYaTools WK soak association ${associationNonce}` : `QiuYaTools WK Soak ${sessionId.slice(-8)}`
   const width = Number(arg('--width', '1280')), height = Number(arg('--height', '720'))
   assert.ok(Number.isSafeInteger(width) && width > 0 && width <= 1600 && Number.isSafeInteger(height) && height > 0 && height <= 1600)
   const receiver = new WKFrameReceiver({ width, height }), routes = new Map(), roots = [], known = new Map()
   const resources = [], generations = [], faults = [], trace = [], nativeArtifacts = []
+  const associationRuns = [], launchArgs = []; let activeAssociation
   let driver, host, fixture, unsubscribe, fatal, report, measurementStart = 0, generation = 0, phase = 'setup', attachmentWrites = 0
   let fixtureReady, fixtureTelemetry, fixtureTickAt, fixtureError = '', fixtureBuffer = '', productionPageSha256
   const mark = (kind, detail = {}) => { trace.push({ atMs: Date.now(), phase, kind, ...detail }); if (trace.length > 4000) trace.shift() }
@@ -118,7 +128,7 @@ if (!process.argv.includes('--worker')) {
       let content = Buffer.from(await result.arrayBuffer())
       if (path === '/api/qiuya-tools.computer.preview' && result.ok) {
         productionPageSha256 = createHash('sha256').update(content).digest('hex')
-        content = Buffer.from(wkPreviewInstrumentation(content.toString('utf8'), { generation, reportPath }))
+        content = Buffer.from(wkPreviewInstrumentation(content.toString('utf8'), { generation, reportPath, associationNonce }))
         generations.at(-1).instrumentedHtmlSha256 = createHash('sha256').update(content).digest('hex')
       }
       const headers = Object.fromEntries(result.headers); delete headers['content-length']
@@ -130,8 +140,27 @@ if (!process.argv.includes('--worker')) {
     while (Date.now() < until) { if (fatal) throw fatal; const result = await operation(); if (result) return result; await sleep(100) }
     throw new Error(message)
   }
+  async function prepareViewAssociation() {
+    if (!viewAssociation) return
+    const index = associationRuns.length + 1, directory = join(temporary, 'wk-association-' + index)
+    await mkdir(directory, { mode: 0o700 })
+    const file = join(directory, 'receipts.jsonl'), config = join(directory, 'config.json')
+    await writeFile(config, JSON.stringify({ nonce: associationNonce, title, url: `http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}`, output: file, helper: companion, parentPid: process.pid }), { flag: 'wx', mode: 0o600 })
+    activeAssociation = { generation: index, file, rowsRead: 0, rows: [], receiver: undefined }; associationRuns.push(activeAssociation)
+    // env exec retains the child PID and normal parent/responsibility. It does
+    // not request SETEXEC/disclaim or change TCC policy. Only this child receives
+    // the explicit test library; unrelated observers/compilers do not inherit it.
+    launchArgs.splice(0, launchArgs.length, `DYLD_INSERT_LIBRARIES=${associationLibrary}`, `QIUYA_WK_SOAK_ASSOC_CONFIG=${config}`, companion)
+  }
+  async function refreshViewAssociation() {
+    if (!activeAssociation?.receiver) return []
+    let bytes
+    try { bytes = await readFile(activeAssociation.file, 'utf8') } catch (error) { if (error.code === 'ENOENT') return []; throw error }
+    return consumeWKAssociationRows(activeAssociation, bytes)
+  }
   async function processSnapshot(requireWebKit = true) {
-    const value = await observe(observer, { op: 'snapshot', roots, known: [...known.values()], helperPath: companion, requireWebKit, requireSelfResponsibleNative: Boolean(launcher) })
+    const associations = await refreshViewAssociation()
+    const value = await observe(observer, { op: 'snapshot', roots, known: [...known.values()], viewAssociations: associations, helperPath: companion, requireWebKit, requireSelfResponsibleNative: Boolean(launcher) })
     for (const row of value.processes) known.set(key(row), identity(row))
     await writeFile(join(output, 'ownership-checkpoint.json'), JSON.stringify({ schemaVersion: 1, tracked: [...known.values()] }, null, 2))
     return value
@@ -171,7 +200,9 @@ if (!process.argv.includes('--worker')) {
     await driver.openPreview(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}`, title, sessionId)
     // Pin native/XPC identities even when page startup or the probe fails.
     record.native = await nativeIdentity(false)
+    if (viewAssociation) activeAssociation.receiver = new WKAssociationReceipts({ nonce: associationNonce, native: record.native })
     await waitFor(() => receiver.generations.get(current)?.frames >= 6, 'The actual WKWebView did not report six completed clock frames', 30000)
+    if (viewAssociation) await waitFor(async () => { await refreshViewAssociation(); return activeAssociation.receiver.samples.length >= 2 }, 'Own WK view did not independently associate all resource roles', 15000)
     record.native = await nativeIdentity(); record.window = await windowEvidence(record.native, `native-wk-generation-${current}`)
     record.document = receiver.generations.get(current).document
     assert.equal(record.document.visibility, 'visible')
@@ -208,11 +239,13 @@ if (!process.argv.includes('--worker')) {
       await stopEsbuild()
     }
     const runtimeSha256 = await hashFile(resolve(runtime)), { installComputerHost, NativeCompanionDriver } = await import(pathToFileURL(resolve(runtime)).href)
-    driver = new NativeCompanionDriver(launcher ? { executable: resolve(launcher), args: [companion] } : { executable: companion })
+    if (viewAssociation) await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done) })
+    if (viewAssociation) await prepareViewAssociation()
+    driver = new NativeCompanionDriver(viewAssociation ? { executable: '/usr/bin/env', args: launchArgs } : launcher ? { executable: resolve(launcher), args: [companion] } : { executable: companion })
     unsubscribe = driver.subscribe(event => mark('native-event', { event: event.event }))
     const target = (await driver.targets()).find(row => row.pid === fixture.pid)
     assert.ok(target, 'Only this disposable source window may be selected')
-    await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done) })
+    if (!server.listening) await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done) })
     const attachments = { saveImage() { attachmentWrites++; throw new Error('A live preview must not persist images') } }
     host = await installComputerHost({ get: name => name === 'sessions' ? { get: () => ({}) } : name === 'attachments' ? attachments : undefined,
       attachments, webServer: { port: server.address().port }, connection: { browserPeer: { principal: { kind: 'owner' } }, authenticatedUrl: url => url,
@@ -241,7 +274,7 @@ if (!process.argv.includes('--worker')) {
         const began = Date.now(); mark('controlled-helper-termination', { generation, pid: native.pid, birthMicros: native.birthMicros, uniqueId: native.uniqueId })
         process.kill(native.pid, 'SIGTERM')
         await waitFor(async () => (await observe(observer, { op: 'check', identities: [native] })).passed, 'The terminated owned helper did not exit', 10000)
-        await host.service.stop(sessionId); await host.service.start(sessionId, target.id, { allowOnce: true }); await host.service.pause(sessionId)
+        await host.service.stop(sessionId); if (viewAssociation) await prepareViewAssociation(); await host.service.start(sessionId, target.id, { allowOnce: true }); await host.service.pause(sessionId)
         const reopened = await openGeneration()
         assert.notEqual(key(reopened.native), key(native), 'Fault recovery must create a new exact native process identity')
         await sample()
@@ -259,15 +292,15 @@ if (!process.argv.includes('--worker')) {
     report = { status: statistics.endToEndFps >= 10 && statistics.uniqueFps >= 10 && statistics.latencyP95Ms !== null && statistics.latencyP95Ms <= 500 && statistics.invalidTimestamps === 0 && statistics.wrongDimensions === 0 && faults.length === expectedFaults && resourceBounds.passed && attachmentWrites === 0 && transportFailures === 0 ? 'passed' : 'failed',
       kind: 'real-native-macOS-WKWebView-production-canvas-endurance', renderer: 'actual production floating NSPanel WKWebView; no browser surrogate', platform: process.platform, architecture: process.arch,
       minutes, expectedFaults, measurementStartMs: measurementStart, ...statistics, width, height, helperSha256: nativeArtifacts[0].sha256, runtimeSha256, productionPageSha256,
-      generations, faults, nativeArtifacts, resources, resourceBounds, attachmentWrites, transportFailures, captureOnlyInputReleased: true, finalWindow, responsibilityCarrier: carrier,
+      generations, faults, nativeArtifacts, resources, resourceBounds, attachmentWrites, transportFailures, captureOnlyInputReleased: true, finalWindow, responsibilityCarrier: carrier, associationCarrier,
       frameDefinition: 'Independent source clock pixels decoded only after the production canvas completed draw; unique stamps during the full measurement wall clock; warm-up/retired generations excluded. This is not zero source-frame loss or physical composition latency.',
-      instrumentation: 'The loopback test carrier injects the same independent pixel probe used by native WebView2 before the production script, then batches bounded HTTP notifications. Host/capture/preview source/helper are unchanged; optional responsibility launcher changes TCC attribution and is recorded separately. This is not an official Harness owner-authentication test.',
-      limitations: ['Capture-only animation load; no scroll/drag endurance or in-flight input-stop latency.', 'Source JPEG/canvas backing resolution is asserted independently of the scaled physical NSPanel viewport.', 'Resource totals include the outer Node controller, measured Node, source fixture, metadata/window observers, native helper/guardian and verified WebKit XPC identities. RSS and physical footprint are distinct raw fields.', 'macOS coalition/responsibility SPI is test-only and version-dependent. Missing permission/ambiguous live XPC attribution fails acceptance.'], testedAt: new Date().toISOString() }
-    await writeFile(join(output, 'source-bindings.json'), JSON.stringify({ helper: { path: companion, sha256: report.helperSha256 }, runtimeSha256, productionPageSha256, responsibilityCarrier: carrier,
-      files: Object.fromEntries(await Promise.all(['scripts/soak-computer-wkwebview.mjs', 'scripts/computer-wkwebview-soak-evidence.mjs', 'scripts/computer-webview2-soak-evidence.mjs', 'src/native/macos/fixtures/WKSoakObserver.swift', 'src/native/macos/fixtures/SoakFixture.swift', 'src/native/macos/fixtures/WKDisclaimLauncher.c'].map(async path => [path, await hashFile(join(root, path))]))) }, null, 2))
+      instrumentation: 'The loopback test carrier injects the same independent pixel probe used by native WebView2 before the production script, then batches bounded HTTP notifications. Host/capture/preview source/helper are unchanged. An optional read-only WK getter library observes only the test-owned view and is recorded with its source/library hashes; the optional responsibility launcher changes TCC attribution and is recorded separately. This is not an official Harness owner-authentication test.',
+      limitations: ['Capture-only animation load; no scroll/drag endurance or in-flight input-stop latency.', 'Source JPEG/canvas backing resolution is asserted independently of the scaled physical NSPanel viewport.', 'Resource totals include the outer Node controller, measured Node, source fixture, metadata/window observers, native helper/guardian and verified participating WebKit XPC processes. Participating RSS is counted in full even if a process is shared; this is not exclusive memory ownership. RSS and physical footprint are distinct raw fields.', 'macOS coalition/responsibility SPI is test-only and version-dependent. Missing permission/ambiguous live XPC attribution fails acceptance.'], testedAt: new Date().toISOString() }
+    await writeFile(join(output, 'source-bindings.json'), JSON.stringify({ helper: { path: companion, sha256: report.helperSha256 }, runtimeSha256, productionPageSha256, responsibilityCarrier: carrier, associationCarrier,
+      files: Object.fromEntries(await Promise.all(['scripts/soak-computer-wkwebview.mjs', 'scripts/computer-wkwebview-soak-evidence.mjs', 'scripts/computer-webview2-soak-evidence.mjs', 'src/native/macos/fixtures/WKSoakObserver.swift', 'src/native/macos/fixtures/SoakFixture.swift', 'src/native/macos/fixtures/WKDisclaimLauncher.c', 'src/native/macos/fixtures/WKSoakAssociationProbe.m'].map(async path => [path, await hashFile(join(root, path))]))) }, null, 2))
   } catch (error) {
     const blocked = !fixture && /preflight|interactive-session|unlocked owned desktop/u.test(error.message)
-    report = { status: blocked ? 'blocked' : 'failed', kind: 'real-native-macOS-WKWebView-production-canvas-endurance', responsibilityCarrier: carrier, reason: error.message, statistics: receiver.stats.summary(), resources, generations, faults, fixtureReady, fixtureTelemetry, fixtureError, testedAt: new Date().toISOString() }; process.exitCode = blocked ? 2 : 1
+    report = { status: blocked ? 'blocked' : 'failed', kind: 'real-native-macOS-WKWebView-production-canvas-endurance', responsibilityCarrier: carrier, associationCarrier, reason: error.message, statistics: receiver.stats.summary(), resources, generations, faults, fixtureReady, fixtureTelemetry, fixtureError, testedAt: new Date().toISOString() }; process.exitCode = blocked ? 2 : 1
   }
   finally {
     phase = 'cleanup'; receiver.active = 0; receiver.stats.useGeneration(0)
@@ -290,6 +323,7 @@ if (!process.argv.includes('--worker')) {
     try { for (let attempt = 0; attempt < 30; attempt++) { checked = await observe(observer, { op: 'check', identities: immediate }); if (macProcessCheckPassed(checked, immediate)) break; await sleep(500) } } catch (error) { errors.push(error.message) }
     report.cleanup = { ...checked, passed: errors.length === 0 && forced.length === 0 && macProcessCheckPassed(checked, immediate), errors, forced, ownershipBeforeDispose: cleanupAttribution, runnerDeferredUntilOuterVerification: true }
     if (!report.cleanup.passed) report.status = 'failed'
+    if (viewAssociation) await writeFile(join(output, 'view-associations.json'), JSON.stringify({ carrier: associationCarrier, generations: associationRuns.map(run => ({ generation: run.generation, rows: run.rows, samples: run.receiver?.samples ?? [] })) }, null, 2))
     await writeFile(join(output, 'frame-clock.json'), JSON.stringify(receiver.stats.frames))
     await writeFile(join(output, 'trace.json'), JSON.stringify(trace, null, 2))
     await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2))
