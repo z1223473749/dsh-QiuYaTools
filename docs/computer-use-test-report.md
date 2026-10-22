@@ -20,6 +20,8 @@ Mac入口新增 `--screenshots-dir`，Windows载体通过 `QIUYA_WINDOWS_SCREENS
 
 此处仅记验收工具实现及回归通过；实际十页像素、整包和真实模型的结果须按随后运行报告判断，未将jsdom或确定性provider改称真实DeepSeek验收。用户要求的成功截图全部保存在项目外，不作为Git资产。
 
+实际Windows首次整包在隔离Host启动前失败，截图目录为空。PowerShell5.1的空pipeline不会输出JSON，旧收集器再次发生 `Unexpected end of JSON input`。现显式将空串／空白／null归一为空列表，单个文件名归一为单项；畸形JSON、对象与非法路径仍拒绝，UI及安装的原始失败判定保持。真实问题对应的红例2项失败、修复后设置验收工具 **10/10通过**，Node脚本语法与diff检查通过，日志为 `artifacts/harness-empty-files-red.log`、`artifacts/harness-empty-files-green.log`。这两项是在上述749项快照之后新增的独立回归，不将其预先计入全量通过率。
+
 ### 2026-10-22 Windows运行中应用优先发现
 
 修复注册表读取先消耗目录容量与时间预算，导致正在运行的目标应用不进入发现结果的问题。生产路径改为先按与窗口目标相同的可见窗口条件发现运行中应用，再用剩余预算读取App Paths注册；只有成功验证的注册来源能取得启动资格。保留256个窗口候选、512个应用结果及2500／3000ms协作预算，启动前仍重新Pin文件身份。同步OS读取无法被该协作预算强制抢占，不宣称RPC硬截止为3秒。

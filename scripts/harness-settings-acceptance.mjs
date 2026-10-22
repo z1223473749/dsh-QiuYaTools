@@ -150,6 +150,22 @@ export function windowsHarnessScreenshotPlan(output, requestedDirectory, guestRo
   return { external, folder, guestDirectory, hostDirectory: external ? resolve(requestedDirectory) : join(resolve(output), 'evidence'), argv: external ? ['--screenshots-dir', guestDirectory] : [] }
 }
 
+/** PowerShell 5.1 emits no JSON for an empty pipeline, and a scalar for one file. */
+export function parseWindowsHarnessFileNames(source) {
+  assert.equal(typeof source, 'string', 'The Windows file listing must be text')
+  const text = source.trim()
+  if (!text) return []
+  // Malformed JSON must remain an error; an absent/empty listing is the only
+  // non-JSON representation emitted by ConvertTo-Json for this file pipeline.
+  const value = JSON.parse(text)
+  const names = value === null ? [] : Array.isArray(value) ? value : [value]
+  for (const name of names) {
+    assert.equal(typeof name, 'string', 'The Windows file listing must contain file names')
+    assert.match(name, /^[a-zA-Z0-9_.-]+$/u)
+  }
+  return names
+}
+
 export async function verifyCollectedHarnessImages(output, directory, manifest) {
   assert.ok(manifest && Array.isArray(manifest.files) && Array.isArray(manifest.missing), 'The guest screenshot manifest is missing')
   const files = [], seen = new Set()

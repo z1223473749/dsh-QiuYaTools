@@ -8,7 +8,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join, resolve, win32, relative, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
-import { windowsHarnessScreenshotPlan, verifyCollectedHarnessImages } from './harness-settings-acceptance.mjs'
+import { windowsHarnessScreenshotPlan, parseWindowsHarnessFileNames, verifyCollectedHarnessImages } from './harness-settings-acceptance.mjs'
 import { loadWindowsTestRuntime } from './prepare-windows-test-runtime.mjs'
 const run = promisify(execFile)
 const vm = process.env.QIUYA_PD_VM, host = process.env.QIUYA_PD_HOST_IP
@@ -109,9 +109,9 @@ finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:pro
   if (!completed) throw new Error('Windows installed Harness test timed out')
   for (const folder of ['', 'evidence', ...(oldPackage ? ['install-evidence'] : []), ...(screenshotPlan.external ? ['screenshots'] : [])]) {
     const path = win32.join(guestRoot, folder)
-    const names = JSON.parse(await ps(`@((Get-ChildItem ${quote(path)} -File -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)|Where-Object {$_ -match '\\.(json|jsonl|log|err|jpg|png)$'})|ConvertTo-Json -Compress`))
+    const names = parseWindowsHarnessFileNames(await ps(`@((Get-ChildItem ${quote(path)} -File -ErrorAction SilentlyContinue|Select-Object -ExpandProperty Name)|Where-Object {$_ -match '\\.(json|jsonl|log|err|jpg|png)$'})|ConvertTo-Json -Compress`))
     const destination = screenshotPlan.external && folder === 'screenshots' ? screenshotPlan.hostDirectory : join(output, folder); await mkdir(destination, { recursive: true })
-    for (const name of (Array.isArray(names) ? names : names ? [names] : [])) {
+    for (const name of names) {
       assert.match(name, /^[a-zA-Z0-9_.-]+$/u)
       if (folder === 'screenshots') assert.match(name, /\.(?:jpg|png)$/u)
       const content = await ps(`$f=[IO.File]::Open(${quote(win32.join(path, name))},[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);$m=[IO.MemoryStream]::new();$f.CopyTo($m);$f.Dispose();[Convert]::ToBase64String($m.ToArray());$m.Dispose()`)

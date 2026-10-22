@@ -162,3 +162,21 @@ test('Windows screenshot delivery binds actual external bytes and rejects tamper
   await assert.rejects(acceptance.verifyCollectedHarnessImages(output, directory, manifest), /changed during/u)
   await assert.rejects(acceptance.verifyCollectedHarnessImages(output, directory, { files: [{ ...image, name: '../profile.png' }], missing: [] }), /match/u)
 })
+
+
+test('PowerShell empty file collections normalize to an empty list without accepting malformed JSON', () => {
+  for (const source of ['', ' \r\n\t', '\uFEFF  ', 'null', '[]']) assert.deepEqual(acceptance.parseWindowsHarnessFileNames(source), [])
+  assert.deepEqual(acceptance.parseWindowsHarnessFileNames('"report.json"'), ['report.json'])
+  assert.deepEqual(acceptance.parseWindowsHarnessFileNames('["report.json","settings-01.png"]'), ['report.json', 'settings-01.png'])
+  for (const source of ['[', '{"name":', 'undefined', '{"name":"report.json"}', '0', 'false', '[null]', '[[]]', '["../profile.json"]']) {
+    assert.throws(() => acceptance.parseWindowsHarnessFileNames(source), undefined, `Must reject ${source}`)
+  }
+})
+
+test('Windows collection uses the strict empty-array parser and retains failed report verdicts', async () => {
+  const source = await readFile(new URL('../scripts/e2e-windows-harness-pd.mjs', import.meta.url), 'utf8')
+  assert.match(source, /const names = parseWindowsHarnessFileNames\(await ps\(/u)
+  assert.match(source, /for \(const name of names\)/u)
+  assert.match(source, /report\.status === 'passed'/u)
+  assert.match(source, /install\?\.status === 'failed'/u)
+})
