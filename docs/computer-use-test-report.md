@@ -4,6 +4,12 @@
 
 **整体尚未通过完整验收。** 本批已实现聊天自动发起、按应用授权、系统权限引导及统一工具箱视觉；小预览为固定长方形，画面按 X/Y 铺满，悬停显示控件，弹出后聊天画面继续实时显示。本批代码、构建及相关测试统一提交。发现的 Mac 同应用重叠窗口输入边界另立修复，未把当前开发验证包当作最终交付。
 
+### 2026-10-22 公开模型工具错误保码
+
+实际Harness会话的原生焦点错误在SDK／PTC转发后只剩正文，诊断无法可靠识别代码。真实公开ToolRuntime与run_code桥的两项红例进一步复现：自定义ComputerError.code丢失，原driver异常正文直接进入模型错误。现在所有电脑工具在注册边界统一输出有限的 `[CODE]` 与固定说明；未知异常使用通用安全代码，不回显异常正文、路径或凭据样本。status中留存错误也走同一投影，状态、epoch、暂停及owner恢复语义不变。
+
+真实SDK native／PTC、六工具边界、留存错误和未知异常回归 **31/31通过**，红绿日志为 `artifacts/computer-tool-errors-red.log`、`artifacts/computer-tool-errors-green.log`。统一typecheck、Mac universal构建及 **769/769、零失败／跳过** 通过，292个源码／配置输入前后稳定，见 `artifacts/computer-use/macos-full-check-current/6c5c669e-de95-4109-bc38-4c54770c9466/report.json`。该全量快照也包含同时冻结的Mac路由与测试诊断修复；各自真实验收独立记录，不由此推定模型任务已完成。
+
 ### 2026-10-22 Windows实际安装启动前置修复
 
 旧版0.5.2与当前候选共用的首次Host启动都曾被安装测试固定的45秒等待截断。独立冷启动诊断在48.005秒取得公开Host地址，CLI自身导入约92ms；CPU／文件读取采样证明SDK模块加载有显著开销，但不足以归因于Defender、HMR或新原生程序。诊断使用不同wrapper、环境及缓存状态，不替代原安装验收，原失败保留。见 `artifacts/harness-e2e/windows-catalog-draft-prepared-a4a754f3-bd53-401f-ad8a-400f20bb813a/cold-start-executable2-28fd4c0e-793f-48bb-9307-5156b338940c/attempt-6a4d1483-a348-47b7-a780-2b88d0cbf766/`。
