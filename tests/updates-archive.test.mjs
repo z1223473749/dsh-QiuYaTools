@@ -82,6 +82,8 @@ function universal() {
 function fixture({ manifest = {}, helper = thin(), extra = [], helperMode = 0o755, patches = true } = {}) {
   return [
     entry('package/package.json', JSON.stringify({ name: options.packageName, version: options.version, dsh: { bundle: { patch: './cordis.patch.yml' } }, ...manifest })),
+    entry('package/lib/index.js', 'export function apply() {}'),
+    entry('package/lib/client.js', '/* public browser bundle */'),
     ...(patches ? [entry('package/cordis.patch.yml', '- insert: []\n')] : []),
     entry(helperPath, helper, { mode: helperMode }),
     ...extra,
@@ -111,8 +113,9 @@ test('computer-capable Mac packages bind both helpers to protocol, architecture 
     { file: helperPath.slice('package/lib/'.length), bytes: session.length, sha256: createHash('sha256').update(session).digest('hex') },
     { file: computerFile, bytes: computer.length, sha256: createHash('sha256').update(computer).digest('hex') },
   ] }
-  const candidate = (payload = native, binary = computer) => archive(fixture({ manifest: { qiuyaNative: { protocolVersion: 1, computerUse: true } }, helper: session, extra: [
+  const candidate = (payload = native, binary = computer, agent = 'export {}') => archive(fixture({ manifest: { qiuyaNative: { protocolVersion: 1, computerUse: true } }, helper: session, extra: [
     entry('package/lib/macos-manifest.json', JSON.stringify(payload)), entry(`package/lib/${computerFile}`, binary, { mode: 0o755 }),
+    ...(agent === null ? [] : [entry('package/lib/computer-agent.js', agent)]),
   ] }))
   validateUpdateArchive(candidate(), options)
   validateUpdateArchive(candidate(), { ...options, architecture: 'x64' })
@@ -120,6 +123,22 @@ test('computer-capable Mac packages bind both helpers to protocol, architecture 
   assert.throws(() => validateUpdateArchive(candidate({ ...native, version: '9.9.9' }), options), /identity/)
   assert.throws(() => validateUpdateArchive(candidate(native, thin()), options), /integrity/)
   assert.throws(() => validateUpdateArchive(candidate({ ...native, artifacts: native.artifacts.slice(0, 1) }), options), /identity/)
+  for (const agent of [null, '']) assert.throws(() => validateUpdateArchive(candidate(native, computer, agent), options), /missing or empty computer agent entry/)
+})
+
+test('all releases require exact nonempty public Host and client files, while legacy needs no computer agent', () => {
+  const legacy = fixture(), path = chunk => chunk.subarray(0, 100).toString('utf8').split('\0')[0]
+  const metadata = validateUpdateArchive(archive(legacy), options)
+  assert.equal(metadata.files.includes('package/lib/computer-agent.js'), false)
+  for (const required of ['package/lib/index.js', 'package/lib/client.js']) {
+    const missing = legacy.filter(chunk => path(chunk) !== required)
+    assert.throws(() => validateUpdateArchive(archive(missing), options), /missing or empty public entry/)
+    assert.throws(() => validateUpdateArchive(archive([...missing, entry(required, '')]), options), /missing or empty public entry/)
+    assert.throws(() => validateUpdateArchive(archive([...missing, entry(required, '', { type: '5' })]), options), /missing or empty public entry/)
+    assert.throws(() => validateUpdateArchive(archive([...missing, entry(required.replace('.js', '.JS'), 'export {}')]), options), /missing or empty public entry/)
+    assert.throws(() => validateUpdateArchive(archive([...legacy, entry(required, 'export {}')]), options), /duplicate tar entry/)
+    assert.throws(() => validateUpdateArchive(archive([...legacy, entry(required.replace('.js', '.JS'), 'export {}')]), options), /duplicate tar entry/)
+  }
 })
 
 test('supports npm PAX long UTF-8 paths and USTAR prefixes', () => {

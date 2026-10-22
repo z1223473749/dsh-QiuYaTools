@@ -272,6 +272,11 @@ export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidat
   try { manifest = JSON.parse(utf8(manifestFile.bytes)) as Record<string, unknown> }
   catch { return invalid('invalid package manifest') }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || manifest.name !== options.packageName || manifest.version !== options.version) invalid('package identity mismatch')
+  // Both legacy and computer-capable releases expose these public bundles.
+  // Missing or empty files cannot become an installable but unloadable plugin.
+  for (const entry of ['package/lib/index.js', 'package/lib/client.js']) {
+    if (!files.get(entry)?.bytes.length) invalid('missing or empty public entry')
+  }
   const dsh = manifest.dsh as Record<string, unknown> | undefined
   const bundle = dsh?.bundle as Record<string, unknown> | undefined
   const patches = typeof bundle?.patch === 'string' ? [bundle.patch] : bundle?.patch
@@ -290,6 +295,8 @@ export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidat
   if (manifest.qiuyaNative !== undefined) {
     const capabilities = manifest.qiuyaNative as Record<string, unknown>
     if (!capabilities || capabilities.protocolVersion !== 1 || capabilities.computerUse !== true) invalid('unsupported native protocol manifest')
+    // Historical releases without computerUse never shipped this CLI bundle.
+    if (!files.get('package/lib/computer-agent.js')?.bytes.length) invalid('missing or empty computer agent entry')
     const manifestPath = platform === 'darwin' ? 'package/lib/macos-manifest.json' : 'package/lib/native/windows-manifest.json'
     const entry = files.get(manifestPath)
     if (!entry || entry.bytes.length > MAX_METADATA_BYTES) invalid('missing native payload manifest')

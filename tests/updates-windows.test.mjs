@@ -30,6 +30,8 @@ function archive(arch, binary = pe(arch)) {
   return gzipSync(Buffer.concat([
     entry('package/package.json', JSON.stringify({ name: 'dsh-qiuya-tools', version: '0.5.3', dsh: { bundle: { patch: './cordis.patch.yml' } } })),
     entry('package/cordis.patch.yml', '- insert: []\n'),
+    entry('package/lib/index.js', 'export function apply() {}'),
+    entry('package/lib/client.js', '/* public browser bundle */'),
     entry(`package/lib/native/win32-${arch}/qiuya-windows.exe`, binary), Buffer.alloc(1024),
   ]))
 }
@@ -54,12 +56,16 @@ test('Windows PE architecture and section bounds are inspected before installati
 test('computer-capable Windows package binds the matching native runtime and protocol to a single platform asset', () => {
   const binary = pe('arm64'), version = '0.6.0-beta.1', file = 'win32-arm64/qiuya-windows.exe'
   const native = { version, artifacts: [{ file, architecture: 'arm64', protocolVersion: 1, bytes: binary.length, sha256: createHash('sha256').update(binary).digest('hex') }] }
-  const candidate = payload => gzipSync(Buffer.concat([
+  const candidate = (payload, agent = 'export {}') => gzipSync(Buffer.concat([
     entry('package/package.json', JSON.stringify({ name: 'dsh-qiuya-tools', version, dsh: { bundle: { patch: './cordis.patch.yml' } }, qiuyaNative: { protocolVersion: 1, computerUse: true } })),
-    entry('package/cordis.patch.yml', '- insert: []\n'), entry(`package/lib/native/${file}`, binary),
+    entry('package/cordis.patch.yml', '- insert: []\n'),
+    entry('package/lib/index.js', 'export function apply() {}'),
+    entry('package/lib/client.js', '/* public browser bundle */'), entry(`package/lib/native/${file}`, binary),
+    ...(agent === null ? [] : [entry('package/lib/computer-agent.js', agent)]),
     entry('package/lib/native/windows-manifest.json', JSON.stringify(payload)), Buffer.alloc(1024),
   ]))
   const options = { packageName: 'dsh-qiuya-tools', version, platform: 'win32', architecture: 'arm64' }
   validateUpdateArchive(candidate(native), options)
   for (const patch of [{ sha256: '0'.repeat(64) }, { protocolVersion: 99 }, { architecture: 'x64' }, { bytes: 2 }]) assert.throws(() => validateUpdateArchive(candidate({ ...native, artifacts: [{ ...native.artifacts[0], ...patch }] }), options), /native payload/)
+  for (const agent of [null, '']) assert.throws(() => validateUpdateArchive(candidate(native, agent), options), /missing or empty computer agent entry/)
 })
