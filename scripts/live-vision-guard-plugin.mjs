@@ -7,6 +7,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
 import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
+import { installVisionHostAutoRun } from './live-vision-host-autorun.mjs'
 
 export const name = 'qiuya-live-vision-test-only'
 export const inject = ['agents', 'tools', 'connection', 'webServer', 'agentDefaultModel', 'sessionController', 'llm']
@@ -24,7 +25,7 @@ const prompts = {
   3: '这是独立的视觉订单分拣测试。先观察图片，把蓝色订单卡拖到绿色“已核验”框内，再观察确认已完成。最后回答图上订单卡实际显示的六位核验码。不要猜码，只操作这一个专用窗口，只使用提供的四个电脑工具，最多12轮、180秒。',
 }
 export function visionOwnerClientSource() {
-  return `const VISION_DIAGNOSTIC_PHASES=${JSON.stringify(VISION_DIAGNOSTIC_PHASES)},VISION_DIAGNOSTIC_CODES=${JSON.stringify(VISION_DIAGNOSTIC_CODES)};const projectVisionFailure=${projectVisionFailure.toString()};export const run=${runInOwnerRenderer.toString()};`
+  return `const VISION_DIAGNOSTIC_PHASES=${JSON.stringify(VISION_DIAGNOSTIC_PHASES)},VISION_DIAGNOSTIC_CODES=${JSON.stringify(VISION_DIAGNOSTIC_CODES)};const projectVisionFailure=${projectVisionFailure.toString()};const runVisionAcceptanceWithFetch=${runVisionAcceptanceWithFetch.toString()};export const run=${runInOwnerRenderer.toString()};`
 }
 /** Test-only publisher. It cannot read any session outside the exact own SID. */
 export async function persistVisionAssistantDisplay(directory, session, sessionId, task) {
@@ -41,12 +42,12 @@ export function apply(ctx, config) {
   if (process.platform !== 'darwin') fail('VISION_MAC_REQUIRED')
   if (!config || config.fixtureTemplate !== undefined && typeof config.fixtureTemplate !== 'string' || config.externalCarrierConfig !== undefined && typeof config.externalCarrierConfig !== 'string' || typeof config?.native !== 'string' || typeof config?.directory !== 'string') fail('VISION_CONFIG_REQUIRED')
   const directory = resolve(config.directory), template = resolve(config.fixtureTemplate ?? fileURLToPath(new URL('./fixture-template.app', import.meta.url))), native = resolve(config.native)
-  const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure, externalConfig
+  const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure, externalConfig, carrierCancellation
   const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))
   if ([...originals.values()].some(value => !value)) fail('VISION_PRODUCTION_TOOLS_MISSING')
   const owner = () => ctx.connection.browserPeer?.principal?.kind === 'owner'
   const own = sessionId => { const value = records.get(sessionId); if (!value) fail('VISION_SESSION_NOT_OWNED'); return value }
-  async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: ownerFailure || preparationFailures.length || reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, preparationFailures, ...(ownerFailure ? { ownerFailure } : {}), delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
+  async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: ownerFailure || preparationFailures.length || reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, preparationFailures, ...(ownerFailure ? { ownerFailure } : {}), ...(carrierCancellation ? { carrierCancellation } : {}), delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
   async function checkNative(record, targetId = record.target.id) {
     if (targetId !== record.target.id || record.fixture.exitCode !== null || record.fixture.signalCode !== null) fail('VISION_FIXTURE_RETIRED')
     let current = (await record.native.targets()).find(row => row.id === targetId)
@@ -104,7 +105,8 @@ export function apply(ctx, config) {
   }
   async function prepare(task) {
     if (disposed || active || task !== reports.length + 1 || ![1, 2, 3].includes(task)) fail('VISION_TASK_SEQUENCE')
-    const sessionId = `qiuya-vision-${randomUUID()}`, bundleId = `com.qiuya.tools.vision-${randomUUID()}`
+    const sessionId = config.testOnlyAutoRun === true ? config.testOnlySessionIds?.[task - 1] : `qiuya-vision-${randomUUID()}`, bundleId = `com.qiuya.tools.vision-${randomUUID()}`
+    if (typeof sessionId !== 'string' || !/^qiuya-vision-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(sessionId)) fail('VISION_SESSION_NOT_OWNED')
     const app = join(directory, 'runtime', `${sessionId}.app`), cwd = join(directory, 'runtime', sessionId)
     const record = { sessionId, task, nonce: randomBytes(3).toString('hex').toUpperCase(), pending: new Map(), snapshotSequence: 0, events: [], completedText: '', settled: false, phase: 'prepare-start', streamAttempts: 0 }
     active = record; records.set(sessionId, record)
@@ -298,6 +300,11 @@ export function apply(ctx, config) {
         await writeFile(join(directory, 'evidence/owner-failure.json'), JSON.stringify({ status: 'failed', diagnostic: ownerFailure, networkDispatchCount: 'not-proven' }, null, 2))
         await save(); value = { recorded: true }
       }
+      else if (input.op === 'cancel-run') {
+        if (active || records.size !== 0 || !['owner-settings-read', 'owner-enable', 'owner-status'].includes(input.phase)) fail('VISION_CANCEL_NOT_IDLE')
+        carrierCancellation = { requested: false, supported: false }
+        await save(); value = carrierCancellation
+      }
       else if (input.op === 'delivery') {
         if (typeof input.restore?.localMode !== 'boolean' || typeof input.restore?.featureFlags !== 'boolean') fail('VISION_DELIVERY_STATE')
         let carrierPassed = !externalConfig
@@ -330,30 +337,66 @@ export function apply(ctx, config) {
   } }), ctx.connection.fetch.register({ path: clientEndpoint, methods: ['GET'], requestBody: 'buffered', async fetch() {
     return owner() ? new Response(visionOwnerClientSource(), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) : new Response('Forbidden', { status: 403 })
   } })]
+  const hostAutoRun = installVisionHostAutoRun(ctx, config, { run: runVisionAcceptanceWithFetch, moduleUrl: import.meta.url })
   ctx.effect(() => async () => {
     disposed = true
-    await Promise.allSettled([...records.values()].map(record => cleanup(record)))
-    unStream(); await Promise.allSettled(unregister.map(stop => stop()))
+    await hostAutoRun?.stop()
+    const drained = await Promise.allSettled([...records.values()].map(record => cleanup(record)))
+    unStream(); const removed = await Promise.allSettled(unregister.map(stop => stop()))
+    await hostAutoRun?.recordDeactivation({ ownedCleanupPassed: drained.every(row => row.status === 'fulfilled' && row.value?.passed === true), routesRemoved: removed.every(row => row.status === 'fulfilled') })
   })
 }
 
 /** Existing authenticated desktop renderer only; secrets never leave memory. */
 async function runInOwnerRenderer() {
+  return runVisionAcceptanceWithFetch((...args) => fetch(...args))
+}
+/** One unchanged task/restore loop for both the owner renderer and trusted Host. */
+export async function runVisionAcceptanceWithFetch(transportFetch, emit = value => console.log(JSON.stringify(value)), { probeOnly = false } = {}) {
   const rpc = async (method, args = {}, raw = false) => {
-    const rpcId = crypto.randomUUID(), response = await fetch('/api/' + method, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: raw ? args : { args } }) })
-    const value = await response.json(); if (!response.ok || value.rpcId !== rpcId || !value.result?.ok) throw Object.assign(Error('VISION_PUBLIC_RPC_FAILED'), { code: projectVisionFailure({ code: value.result?.error?.code }).code })
+    const rpcId = crypto.randomUUID(), response = await transportFetch('/api/' + method, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: raw ? args : { args } }), visionPhase: phase })
+    const value = await response.json(); if (!response.ok || value.rpcId !== rpcId || !value.result?.ok) throw Object.assign(Error('VISION_PUBLIC_RPC_FAILED'), { code: value.result?.error?.code ? projectVisionFailure({ code: value.result.error.code }).code : 'VISION_PUBLIC_RPC_FAILED' })
     return value.result.value
   }
-  const test = async input => { const response = await fetch('/api/qiuya-tools.vision-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const result = await response.json(); if (!result.ok) { const diagnostic = projectVisionFailure({ code: result.error }, result.diagnostic?.phase); throw Object.assign(Error(diagnostic.code), { code: diagnostic.code, diagnostic }) }; return result.value }
-  const computer = input => rpc('qiuya-tools.computer.control', input, true)
-  const keys = ['enabled', 'computerUseEnabled'], summary = [], ownedSessions = []; let original, setup, mode, failure, diagnostic, phase = 'owner-settings-read'
+  const test = async input => { const response = await transportFetch('/api/qiuya-tools.vision-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const result = await response.json(); if (!result.ok) { const diagnostic = projectVisionFailure({ code: result.error }, result.diagnostic?.phase); throw Object.assign(Error(diagnostic.code), { code: diagnostic.code, diagnostic }) }; return result.value }
+  let connectionDispatches = 0
+  const computer = input => { if (input.op === 'connect') connectionDispatches++; return rpc('qiuya-tools.computer.control', input, true) }
+  const connectionView = state => ({ nativeMode: ['local', 'remote', 'browser'].includes(state.native?.mode) ? state.native.mode : null, nativePresent: state.native !== null && state.native !== undefined, sessionsKnown: Array.isArray(state.sessions), hasActiveSession: !Array.isArray(state.sessions) || state.sessions.some(session => !['stopped', 'faulted', 'disconnected'].includes(session.state)), switching: state.switching === true })
+  const keys = ['enabled', 'computerUseEnabled'], summary = [], ownedSessions = []; let original, setup, mode, failure, diagnostic, initialConnection, carrierCancellation, enableMutation, enableProof = 'not-requested', phase = 'owner-settings-read'
   const restoration = { localMode: false, featureFlags: false }
-  const setEnabled = async () => { const described = await rpc('settings/describe'), row = described.namespaces.find(value => value.ns === 'qiuya-tools'); await rpc('settings/mutate', { ns: 'qiuya-tools', ops: keys.map(key => ({ op: 'set', path: [key], value: true })), expectedRevision: row.revision }) }
+  const restorationProof = { connection: 'unconfirmed', featureFlags: 'unconfirmed' }
+  const flagSnapshot = row => keys.map(key => ({ key, own: Object.hasOwn(row.user ?? {}, key), value: row.user?.[key], effective: row.value?.[key] }))
+  const matchesSnapshot = (row, snapshot) => snapshot?.every(item => Object.hasOwn(row.user ?? {}, item.key) === item.own && (!item.own || JSON.stringify(row.user[item.key]) === JSON.stringify(item.value)) && row.value?.[item.key] === item.effective) === true
+  const matchesOriginal = row => matchesSnapshot(row, original)
+  const ownNamespace = described => { const rows = Array.isArray(described?.namespaces) ? described.namespaces.filter(row => row?.ns === 'qiuya-tools') : []; if (rows.length !== 1 || rows[0].writable === false || !Number.isSafeInteger(rows[0].revision)) throw Object.assign(Error('VISION_SETTINGS_SNAPSHOT_INVALID'), { code: 'VISION_SETTINGS_SNAPSHOT_INVALID' }); return rows[0] }
+  const setEnabled = async () => {
+    const described = await rpc('settings/describe'), row = ownNamespace(described)
+    if (keys.some(key => typeof row.value?.[key] !== 'boolean')) throw Object.assign(Error('VISION_SETTINGS_SNAPSHOT_INVALID'), { code: 'VISION_SETTINGS_SNAPSHOT_INVALID' })
+    if (!matchesOriginal(row)) throw Object.assign(Error('settings/conflict'), { code: 'settings/conflict' })
+    const pending = keys.filter(key => row.value[key] === false)
+    if (pending.length === 0) { enableProof = 'already-enabled-readback'; return }
+    if (described.writable !== true) throw Object.assign(Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED'), { code: 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED' })
+    enableProof = 'unconfirmed'
+    enableMutation = { keys: pending, confirmed: false }
+    const written = await rpc('settings/mutate', { ns: 'qiuya-tools', ops: pending.map(key => ({ op: 'set', path: [key], value: true })), expectedRevision: row.revision })
+    // The installed settings provider increments a changed raw generation once
+    // and the public controller returns that namespace view. A different
+    // generation can include another owner's write and cannot be adopted.
+    if (written?.ns !== 'qiuya-tools' || !Number.isSafeInteger(written.revision) || written.revision !== row.revision + 1 || !keys.every(key => written.value?.[key] === true) || !pending.every(key => Object.hasOwn(written.user ?? {}, key) && written.user[key] === true)) throw Object.assign(Error('VISION_FEATURE_ENABLE_UNCONFIRMED'), { code: 'VISION_FEATURE_ENABLE_UNCONFIRMED' })
+    const confirmed = ownNamespace(await rpc('settings/describe'))
+    if (confirmed.revision !== written.revision || !matchesSnapshot(confirmed, flagSnapshot(written))) throw Object.assign(Error('VISION_FEATURE_ENABLE_UNCONFIRMED'), { code: 'VISION_FEATURE_ENABLE_UNCONFIRMED' })
+    enableMutation = { keys: pending, confirmed: true, revision: confirmed.revision, snapshot: flagSnapshot(confirmed) }
+    enableProof = 'cas-confirmed-readback'
+  }
   try {
-    const initialSettings = await rpc('settings/describe'), initial = initialSettings.namespaces.find(row => row.ns === 'qiuya-tools')
+    const initialSettings = await rpc('settings/describe'), initial = ownNamespace(initialSettings)
     if (!initial || !initialSettings.writable) throw Object.assign(Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED'), { code: 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED' })
-    original = keys.map(key => ({ key, own: Object.hasOwn(initial.user ?? {}, key), value: initial.user?.[key], effective: initial.value[key] }))
+    if (!Number.isSafeInteger(initial.revision) || keys.some(key => typeof initial.value?.[key] !== 'boolean' || Object.hasOwn(initial.user ?? {}, key) && typeof initial.user[key] !== 'boolean')) throw Object.assign(Error('VISION_SETTINGS_SNAPSHOT_INVALID'), { code: 'VISION_SETTINGS_SNAPSHOT_INVALID' })
+    original = flagSnapshot(initial)
+    phase = 'owner-status'; initialConnection = connectionView(await computer({ op: 'status' }))
+    if (!initialConnection.sessionsKnown || initialConnection.hasActiveSession || initialConnection.switching || initialConnection.nativeMode !== null && initialConnection.nativeMode !== 'local') throw Object.assign(Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION'), { code: 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION' })
+    if (!probeOnly) {
     phase = 'owner-enable'; await setEnabled()
     phase = 'owner-status'; let state = await computer({ op: 'status' }); mode = state.native?.mode
     if (mode !== 'local' || state.sessions.some(session => !['stopped', 'faulted', 'disconnected'].includes(session.state))) throw Object.assign(Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION'), { code: 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION' })
@@ -382,6 +425,7 @@ async function runInOwnerRenderer() {
       const boundedCaseEnd = ['VISION_REQUEST_LIMIT', 'VISION_STEP_LIMIT', 'VISION_DEADLINE'].includes(result.fatal)
       if (!ended || (result.fatal && !boundedCaseEnd) || !result.cleanup?.passed || result.denials?.length) break
     }
+    }
   } catch (error) {
     diagnostic = projectVisionFailure(error, error?.diagnostic?.phase !== 'unknown' && error?.diagnostic?.phase || phase); failure = diagnostic.code
     await test({ op: 'failure', phase: diagnostic.phase, code: diagnostic.code }).catch(() => {})
@@ -394,25 +438,54 @@ async function runInOwnerRenderer() {
       delete setup.token
     }
     try {
-      if (mode === 'local') {
+      phase = 'owner-restore-connection'
+      if (connectionDispatches === 0 && initialConnection) {
+        const current = connectionView(await computer({ op: 'status' }))
+        restoration.localMode = initialConnection.sessionsKnown && !initialConnection.hasActiveSession && JSON.stringify(current) === JSON.stringify(initialConnection)
+        if (restoration.localMode) restorationProof.connection = 'unchanged-no-connect-readback'
+        // Enabling the feature may expose an already-local driver that was null
+        // while disabled. No connect was dispatched and no session was created.
+        if (!probeOnly && mode === 'local' && ownedSessions.length === 0 && current.nativeMode === 'local' && !current.hasActiveSession) { restoration.localMode = true; restorationProof.connection = 'unchanged-no-connect-readback' }
+      } else if (mode === 'local') {
         restoration.localMode = true
         for (const sessionId of ownedSessions) {
           await computer({ op: 'connect', sessionId, mode: 'local' })
           const current = await computer({ op: 'status', sessionId })
           restoration.localMode &&= current.native?.mode === 'local' && current.sessions.filter(session => session.sessionId === sessionId).every(session => ['stopped', 'faulted', 'disconnected'].includes(session.state))
         }
+        if (restoration.localMode) restorationProof.connection = 'restored-local'
       }
     } catch { failure ??= 'VISION_CONNECTION_RESTORE_FAILED' }
     try { if (original) {
-      const described = await rpc('settings/describe'), row = described.namespaces.find(value => value.ns === 'qiuya-tools')
-      await rpc('settings/mutate', { ns: 'qiuya-tools', expectedRevision: row.revision, ops: original.map(item => item.own ? { op: 'set', path: [item.key], value: item.value } : { op: 'unset', path: [item.key] }) })
-      const final = (await rpc('settings/describe')).namespaces.find(value => value.ns === 'qiuya-tools')
-      restoration.featureFlags = original.every(item => Object.hasOwn(final.user ?? {}, item.key) === item.own && (!item.own || JSON.stringify(final.user[item.key]) === JSON.stringify(item.value)) && final.value[item.key] === item.effective)
+      phase = 'owner-restore-flags'
+      const described = await rpc('settings/describe'), row = ownNamespace(described)
+      const unchanged = matchesOriginal(row)
+      // A read-only run never writes back an external change. An uncertain
+      // enable also cannot authorize a compensating replay. A confirmed enable
+      // can only undo its own keys while its exact readback revision and both
+      // field snapshots remain current; a later owner update is preserved.
+      let restoredOwnMutation = false
+      const ownedStillCurrent = enableMutation?.confirmed === true && row.revision === enableMutation.revision && matchesSnapshot(row, enableMutation.snapshot)
+      if (!probeOnly && enableMutation?.confirmed === true && ownedStillCurrent && !unchanged) {
+        if (described.writable !== true) throw Object.assign(Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED'), { code: 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED' })
+        await rpc('settings/mutate', { ns: 'qiuya-tools', expectedRevision: row.revision, ops: original.filter(item => enableMutation.keys.includes(item.key)).map(item => item.own ? { op: 'set', path: [item.key], value: item.value } : { op: 'unset', path: [item.key] }) })
+        restoredOwnMutation = true
+      }
+      const final = ownNamespace(await rpc('settings/describe'))
+      restoration.featureFlags = matchesOriginal(final) && (!enableMutation || enableMutation.confirmed === true && ownedStillCurrent)
+      if (restoration.featureFlags) restorationProof.featureFlags = restoredOwnMutation ? 'restored-readback' : 'unchanged-readback'
     }
     } catch { failure ??= 'VISION_FEATURE_RESTORE_FAILED' }
-    try { const receipt = await test({ op: 'delivery', restore: restoration }); if (!receipt.passed) failure ??= 'VISION_DELIVERY_FAILED' }
+    if (!probeOnly && connectionDispatches === 0 && initialConnection && restoration.featureFlags && !restoration.localMode) try {
+      phase = 'owner-restore-connection'; const current = connectionView(await computer({ op: 'status' })); restoration.localMode = initialConnection.sessionsKnown && !initialConnection.hasActiveSession && JSON.stringify(current) === JSON.stringify(initialConnection)
+      if (restoration.localMode) restorationProof.connection = 'unchanged-no-connect-readback'
+    } catch { failure ??= 'VISION_CONNECTION_RESTORE_FAILED' }
+    if (!probeOnly && failure && ownedSessions.length === 0 && !setup && ['owner-settings-read', 'owner-enable', 'owner-status'].includes(diagnostic?.phase)) try {
+      phase = 'owner-cancel-run'; carrierCancellation = await test({ op: 'cancel-run', phase: diagnostic.phase })
+    } catch { carrierCancellation = { requested: true, confirmed: false }; failure ??= 'VISION_CARRIER_CANCEL_UNCONFIRMED' }
+    try { phase = 'owner-delivery'; if (!probeOnly) { const receipt = await test({ op: 'delivery', restore: restoration }); if (!receipt.passed) failure ??= 'VISION_DELIVERY_FAILED' } }
     catch { failure ??= 'VISION_DELIVERY_FAILED' }
   }
-  const result = { kind: 'QIUYA_REAL_VISION_TEST', passed: !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, tasks: summary, restoration, ...(failure ? { error: failure, diagnostic: diagnostic ?? projectVisionFailure({ code: failure }, phase) } : {}) }
-  console.log(JSON.stringify(result)); return result
+  const result = { kind: probeOnly ? 'QIUYA_READ_ONLY_OWNER_PROBE' : 'QIUYA_REAL_VISION_TEST', passed: !probeOnly && !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, ...(probeOnly ? { probePassed: !failure && restoration.localMode && restoration.featureFlags, modelInferenceRequested: false, settingsMutationRequested: false } : {}), ...(carrierCancellation ? { carrierCancellation } : {}), enableProof, connectionDispatches, initialConnection: initialConnection ?? null, tasks: summary, restoration, restorationProof, ...(failure ? { error: failure, diagnostic: diagnostic ?? projectVisionFailure({ code: failure }, phase) } : {}) }
+  emit(result); return result
 }

@@ -84,7 +84,7 @@ test('owner connects, starts, stops and restores only its three new session IDs 
   const file = join(directory, 'guard.mjs')
   await build({ entryPoints: [fileURLToPath(new URL('../scripts/live-vision-guard-plugin.mjs', import.meta.url))], outfile: file, bundle: true, platform: 'node', target: 'node22', format: 'esm' })
   const plugin = await import(pathToFileURL(file).href), calls = [], flags = {}, original = { enabled: true, computerUseEnabled: false }, ids = [1, 2, 3].map(task => `own-new-${task}`)
-  const modes = new Map([['unrelated-existing-chat', 'local']]); let rpcSequence = 0
+  const modes = new Map([['unrelated-existing-chat', 'local']]); let rpcSequence = 0, revision = 1
   const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
     crypto: { randomUUID: () => `synthetic-${++rpcSequence}` }, AbortSignal, Object, TypeError, SyntaxError,
     console: { log() {} }, setTimeout: done => queueMicrotask(done),
@@ -101,8 +101,8 @@ test('owner connects, starts, stops and restores only its three new session IDs 
         return Response.json({ ok: true, value })
       }
       let value
-      if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision: 1, user: { ...flags }, value: { ...original, ...flags } }] }
-      else if (input.method === 'settings/mutate') { for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; value = {} }
+      if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision, user: { ...flags }, value: { ...original, ...flags } }] }
+      else if (input.method === 'settings/mutate') { assert.equal(input.payload.args.expectedRevision, revision); for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; revision++; value = { ns: 'qiuya-tools', revision, user: { ...flags }, value: { ...original, ...flags } } }
       else if (input.method === 'qiuya-tools.computer.control') {
         const request = input.payload
         if (request.op !== 'status' || request.sessionId !== undefined) assert.ok(ids.includes(request.sessionId), 'Every mutating control and per-session status must name an owned session')

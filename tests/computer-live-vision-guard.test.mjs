@@ -321,6 +321,7 @@ test('real preparation copy failure records its exact phase, drains owned setup 
 test('served owner client preserves remote preparation phase/public code without leaking the rejected payload or prompting a model', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-owner-diagnostic-')); t.after(() => rm(directory, { recursive: true, force: true }))
   const plugin = await bundledVisionPlugin(directory), calls = [], output = [], flags = {}, originalEffective = { enabled: true, computerUseEnabled: false }
+  let revision = 1
   const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
     crypto: { randomUUID: () => 'synthetic-request' }, AbortSignal, Object, TypeError, SyntaxError,
     console: { log(value) { output.push(value) } },
@@ -333,8 +334,8 @@ test('served owner client preserves remote preparation phase/public code without
         throw Error('Unexpected test operation')
       }
       let value
-      if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision: 1, user: { ...flags }, value: { ...originalEffective, ...flags } }] }
-      else if (input.method === 'settings/mutate') { for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; value = {} }
+      if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision, user: { ...flags }, value: { ...originalEffective, ...flags } }] }
+      else if (input.method === 'settings/mutate') { assert.equal(input.payload.args.expectedRevision, revision); for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; revision++; value = { ns: 'qiuya-tools', revision, user: { ...flags }, value: { ...originalEffective, ...flags } } }
       else if (input.method === 'qiuya-tools.computer.control') value = input.payload.op === 'status' ? { native: { mode: 'local' }, sessions: [] } : {}
       else throw Error('Model request or unrelated public RPC is forbidden')
       return Response.json({ rpcId: input.rpcId, result: { ok: true, value } })
@@ -354,6 +355,7 @@ test('independent visual cases continue after a clean business mismatch but stop
   const plugin = await bundledVisionPlugin(directory)
   for (const mode of ['business-mismatch', 'VISION_REQUEST_LIMIT', 'VISION_STEP_LIMIT', 'VISION_DEADLINE', 'cleanup-failure', 'missing-cleanup', 'policy-denial', 'fatal']) {
     const prepared = [], prompted = [], finished = [], modes = new Map(), flags = {}
+    let revision = 1
     const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
       crypto: { randomUUID: () => 'synthetic-request' }, AbortSignal, Object, TypeError, SyntaxError,
       console: { log() {} }, setTimeout: callback => { queueMicrotask(callback); return 0 },
@@ -374,8 +376,8 @@ test('independent visual cases continue after a clean business mismatch but stop
           return Response.json({ ok: true, value })
         }
         let value
-        if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision: 1, user: { ...flags }, value: { enabled: true, computerUseEnabled: false, ...flags } }] }
-        else if (input.method === 'settings/mutate') { for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; value = {} }
+        if (input.method === 'settings/describe') value = { writable: true, namespaces: [{ ns: 'qiuya-tools', revision, user: { ...flags }, value: { enabled: true, computerUseEnabled: false, ...flags } }] }
+        else if (input.method === 'settings/mutate') { assert.equal(input.payload.args.expectedRevision, revision); for (const op of input.payload.args.ops) { if (op.op === 'set') flags[op.path[0]] = op.value; else delete flags[op.path[0]] }; revision++; value = { ns: 'qiuya-tools', revision, user: { ...flags }, value: { enabled: true, computerUseEnabled: false, ...flags } } }
         else if (input.method === 'qiuya-tools.computer.control') {
           const args = input.payload
           if (args.op === 'connect') modes.set(args.sessionId, args.mode)

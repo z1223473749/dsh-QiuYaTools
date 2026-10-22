@@ -23,7 +23,8 @@ export function visionBundleManifest() {
 export function visionBundlePatch(config, id = randomUUID()) {
   if (!isAbsolute(config.native) || !isAbsolute(config.directory) || config.externalCarrierConfig !== undefined && !isAbsolute(config.externalCarrierConfig) || !/^[a-f0-9-]{36}$/u.test(id)) throw Error('Explicit absolute test paths and a unique patch identity are required')
   return [{ insert: [{ id: `qiuya-live-vision-test-${id}`, name: VISION_TEST_BUNDLE, config: { native: config.native, directory: config.directory,
-    ...(config.externalCarrierConfig ? { externalCarrierConfig: config.externalCarrierConfig } : {}) } }] }]
+    ...(config.externalCarrierConfig ? { externalCarrierConfig: config.externalCarrierConfig } : {}),
+    ...(config.testOnlyAutoRun === true ? { testOnlyAutoRun: true, runId: config.runId, expiresAt: config.expiresAt, manifestSHA: config.manifestSHA, testOnlySessionIds: config.testOnlySessionIds, testOnlyPatchEntryId: config.testOnlyPatchEntryId, ...(config.testOnlyProbeOnly === true ? { testOnlyProbeOnly: true } : {}) } : {}) } }] }]
 }
 /** Each closure is a single line below 2k, for the already-authenticated owner
  * renderer. No account keys, auth URLs, raw package output or diagnostics. */
