@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { waitForHarnessHostUrl } from './harness-host-readiness.mjs'
 const arg = (name, fallback) => { const at = process.argv.indexOf(name); return at < 0 ? fallback : process.argv[at + 1] }
 const current = resolve(arg('--package', 'artifacts/candidates/dsh-qiuya-tools-darwin-universal.tgz'))
 const previous = arg('--old-package')
@@ -40,15 +41,11 @@ async function loaded() {
   const metadata = JSON.parse(await readFile(join(profile, 'node_modules/dsh-qiuya-tools/package.json'), 'utf8'))
   host = spawn(cli[0], [...cli.slice(1), '--profile', 'web', '--no-open', '--port', '0'], { env, stdio: ['pipe', 'pipe', 'pipe'] })
   let log = ''; const append = chunk => { log += chunk }; host.stdout.on('data', append); host.stderr.on('data', append)
-  const until = Date.now() + 45000
-  let url
-  while (Date.now() < until) {
-    if (host.exitCode !== null) throw new Error(redact(log).slice(-5000))
-    url = log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0]
-    if (url) break
-    await sleep(100)
-  }
-  if (!url) throw new Error('The actual installed Harness Host did not become ready')
+  const url = await waitForHarnessHostUrl(() => ({
+    exited: host.exitCode !== null || host.signalCode !== null,
+    error: redact(log).slice(-5000),
+    url: log.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0],
+  }))
   const bootstrap = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
   assert.equal(bootstrap.status, 303)
   const cookie = bootstrap.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')

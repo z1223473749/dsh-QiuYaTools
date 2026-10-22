@@ -42,7 +42,7 @@ const files = new Map([
 ])
 const oldPackage = process.env.QIUYA_WINDOWS_PREVIOUS_PACKAGE
 if (windowStateDiagnostic && oldPackage) throw new Error('Window-state diagnostics stop before acceptance and cannot run the installer lifecycle')
-if (oldPackage) { files.set('previous.tgz', await readFile(resolve(oldPackage))); files.set('test-harness-install.mjs', await readFile('scripts/test-harness-install.mjs')) }
+if (oldPackage) { files.set('previous.tgz', await readFile(resolve(oldPackage))); files.set('test-harness-install.mjs', await readFile('scripts/test-harness-install.mjs')); files.set('harness-host-readiness.mjs', await readFile('scripts/harness-host-readiness.mjs')) }
 const quote = value => `'${value.replaceAll("'", "''")}'`
 async function ps(code, timeout = 45000) {
   return (await run(prlctl, ['exec', vm, 'powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')], { timeout, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024 })).stdout.trim()
@@ -81,7 +81,7 @@ try {
   }
   const portable = win32.join(guestRoot, runtime.folder), node = win32.join(guestRoot, runtime.node.file.replace(/\.zip$/u, ''), 'node.exe')
   for (const [name, destination] of [['e2e-harness.mjs', 'scripts/e2e-harness.mjs'], ['harness-settings-acceptance.mjs', 'scripts/harness-settings-acceptance.mjs'], ['harness-e2e-provider.mjs', 'tests/fixtures/harness-e2e-provider.mjs'], ['harness-workspace-prerequisite.mjs', 'tests/fixtures/harness-workspace-prerequisite.mjs'], ['harness-preview-windows.ps1', 'tests/fixtures/harness-preview-windows.ps1'], ['harness-owned-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1'], ['harness-activate-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1'], ['harness-window-state-windows.ps1', 'tests/fixtures/harness-window-state-windows.ps1'], ['harness-window-timeline-windows.ps1', 'tests/fixtures/harness-window-timeline-windows.ps1'], ['native.ts', 'src/features/computer-use/native.ts'], ['contract.ts', 'src/features/computer-use/contract.ts']]) await download(name, win32.join(portable, destination))
-  if (oldPackage) for (const name of ['previous.tgz', 'test-harness-install.mjs']) await download(name, win32.join(guestRoot, name), 120000)
+  if (oldPackage) for (const name of ['previous.tgz', 'test-harness-install.mjs', 'harness-host-readiness.mjs']) await download(name, win32.join(guestRoot, name), 120000)
   const config = { screenshotArgs: screenshotPlan.argv, root: guestRoot, portable, node, architecture, windowStateDiagnostic, candidate: win32.join(guestRoot, 'candidate.tgz'), helper: win32.join(guestRoot, 'helper.exe'), installLifecycle: !!oldPackage, manualPreview: process.env.QIUYA_WINDOWS_MANUAL_PREVIEW === '1', dragWindow: process.env.QIUYA_WINDOWS_DRAG_WINDOW === '1', fileExchange: process.env.QIUYA_WINDOWS_FILE_EXCHANGE === '1', inputFaults: process.env.QIUYA_WINDOWS_INPUT_FAULTS_JSON }
   files.set('config.json', Buffer.from(JSON.stringify(config)))
   files.set('launch.mjs', Buffer.from(`

@@ -19,7 +19,7 @@ function checkedArchitecture(architecture) {
   return architecture
 }
 const defaultOutput = architecture => join(root, architecture === 'arm64' ? 'artifacts/windows-test-runtime' : 'artifacts/windows-test-runtime-x64')
-const overlays = ['scripts/e2e-harness.mjs', 'scripts/test-harness-install.mjs', 'tests/fixtures/harness-e2e-provider.mjs', 'tests/fixtures/harness-workspace-prerequisite.mjs', 'tests/fixtures/harness-preview-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1', 'tests/fixtures/harness-window-state-windows.ps1', 'tests/fixtures/harness-window-timeline-windows.ps1', 'src/features/computer-use/native.ts', 'src/features/computer-use/contract.ts']
+const overlays = ['scripts/e2e-harness.mjs', 'scripts/test-harness-install.mjs', 'scripts/harness-host-readiness.mjs', 'tests/fixtures/harness-e2e-provider.mjs', 'tests/fixtures/harness-workspace-prerequisite.mjs', 'tests/fixtures/harness-preview-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1', 'tests/fixtures/harness-window-state-windows.ps1', 'tests/fixtures/harness-window-timeline-windows.ps1', 'src/features/computer-use/native.ts', 'src/features/computer-use/contract.ts']
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const run = (executable, args, options = {}) => new Promise((done, reject) => {
   const child = spawn(executable, args, { stdio: 'inherit', ...options })
