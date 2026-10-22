@@ -8,6 +8,7 @@ import { NativeCompanionDriver, createComputerAgentServer } from '../src/feature
 import { exactWindowsTarget, validateWindowsIdentity, sameWindowsIdentity, projectWindowsOracle, windowsVisionAction, winVisionBinding, winVisionRequest, winVisionGuestConfig, windowsPath, winVisionFail as fail } from './live-vision-windows-carrier-core.mjs'
 import { windowsVisionPinCommand, windowsVisionDesktopCommand, windowsVisionDesktopPassed } from './live-vision-windows-audit.mjs'
 import { validateWindowsVisionCancel, windowsVisionTerminal, windowsVisionCancelDesktopPassed } from './live-vision-windows-cancel.mjs'
+import { windowsVisionChildrenCommand, windowsVisionChildrenPassed } from './live-vision-windows-children.mjs'
 const sha=b=>createHash('sha256').update(b).digest('hex'),sleep=ms=>new Promise(r=>setTimeout(r,ms)),quote=s=>`'${s.replaceAll("'","''")}'`
 const bounded=async(p,ms,code)=>{let t;try{return await Promise.race([p,new Promise((_,reject)=>{t=setTimeout(()=>reject(Object.assign(Error(code),{code})),ms)})])}finally{clearTimeout(t)}}
 const ps=code=>JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{encoding:'utf8',timeout:30000,maxBuffer:1048576}).replace(/^\uFEFF/u,''))
@@ -50,8 +51,9 @@ export async function runWindowsVisionGuest(configPath){
  async function retire(record){
   if(record.cleanup)return record.cleanup
   const errors=[]
-  let descendants=[]
-  if(record.nativeIdentity)try{descendants=ps(`$ErrorActionPreference='Stop';$p=[Diagnostics.Process]::GetProcessById(${record.nativeIdentity.pid});try{$null=$p.SafeHandle;if($p.StartTime.ToUniversalTime().Ticks.ToString()-cne '${record.nativeIdentity.createdAtTicks}'){throw 'Native birth changed'};$rows=@();foreach($c in @(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${record.nativeIdentity.pid}')){$v=$null;try{$v=[Diagnostics.Process]::GetProcessById([int]$c.ProcessId);$null=$v.SafeHandle;if($v.MainModule.FileName-ine ${quote(cfg.native)}){throw 'Unexpected own child executable'};$rows+=@{pid=$v.Id;parentPid=${record.nativeIdentity.pid};createdAtTicks=$v.StartTime.ToUniversalTime().Ticks.ToString();executablePath=$v.MainModule.FileName;sessionId=$v.SessionId}}catch [ArgumentException]{}finally{if($v){$v.Dispose()}}};@{identities=$rows}|ConvertTo-Json -Depth 5 -Compress}finally{$p.Dispose()}`).identities}catch{errors.push('VISION_WINDOWS_CHILDREN_UNCONFIRMED')}
+  let descendants=[],childAudit
+  if(record.nativeIdentity)try{childAudit=ps(windowsVisionChildrenCommand(record.nativeIdentity,cfg.native));if(!windowsVisionChildrenPassed(childAudit,record.nativeIdentity,cfg.native))errors.push('VISION_WINDOWS_CHILDREN_UNCONFIRMED');else descendants=childAudit.candidates.map(({pid,parentPid,createdAtTicks,executablePath,sessionId})=>({pid,parentPid,createdAtTicks,executablePath,sessionId}))}catch{childAudit={version:1,scope:'one-live-native-direct-child-snapshot',passed:false,failure:{stage:'receipt-unavailable',code:'CHILD_AUDIT_UNAVAILABLE'}};errors.push('VISION_WINDOWS_CHILDREN_UNCONFIRMED')}
+  if(childAudit)try{await writeFile(join(cfg.guestRoot,`children-task-${record.request.task}.json`),JSON.stringify(childAudit,null,2))}catch{errors.push('VISION_DIAGNOSTIC_WRITE_FAILED')}
   try{await record.agent?.revoke()}catch{errors.push('VISION_PAIR_REVOKE_FAILED')}
   try{await record.agent?.close()}catch{errors.push('VISION_PAIR_CLOSE_FAILED')}
   try{await bounded(record.driver?.dispose(),10000,'VISION_NATIVE_CLEANUP_FAILED')}catch{errors.push('VISION_NATIVE_CLEANUP_FAILED')}
@@ -63,7 +65,7 @@ export async function runWindowsVisionGuest(configPath){
   for(const pin of [record.nativeIdentity,record.fixtureIdentity,...descendants].filter(Boolean)){try{const deadline=performance.now()+5000;let current=identity(pin.pid);while(sameWindowsIdentity(current,pin)&&performance.now()<deadline){await sleep(50);current=identity(pin.pid)}if(sameWindowsIdentity(current,pin))errors.push('VISION_WINDOWS_REMAINS')}catch{errors.push('VISION_WINDOWS_IDENTITY_UNCONFIRMED')}}
   let desktopAudit
   try{desktopAudit={...ps(windowsVisionDesktopCommand(cfg.auditPath,cfg.auditSha256)),phase:'after-owned-native-fixture-exit',auditSourceSha256:cfg.auditSha256};if(!windowsVisionDesktopPassed(desktopAudit,{sessionId:me.sessionId,auditSha256:cfg.auditSha256}))errors.push('VISION_WINDOWS_DESKTOP_RELEASE_UNCONFIRMED')}catch{errors.push('VISION_WINDOWS_DESKTOP_AUDIT_FAILED')}
-  record.cleanup={passed:errors.length===0,errors,nativeNaturalExit,fixtureNaturalExit,forced:!!record.nativeTrack?.killCalls.length||!!record.fixtureTrack?.killCalls.length,descendants,desktopAudit:desktopAudit??null,expectedSessionId:me.sessionId,auditSha256:cfg.auditSha256}
+  record.cleanup={passed:errors.length===0,errors,nativeNaturalExit,fixtureNaturalExit,forced:!!record.nativeTrack?.killCalls.length||!!record.fixtureTrack?.killCalls.length,descendants,childAudit:childAudit??null,desktopAudit:desktopAudit??null,expectedSessionId:me.sessionId,auditSha256:cfg.auditSha256}
   await save();return record.cleanup
  }
  async function prepare(request){

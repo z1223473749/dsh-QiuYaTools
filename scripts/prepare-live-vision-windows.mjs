@@ -16,14 +16,14 @@ const replaceBetween=(s,start,end,replacement)=>{const a=s.indexOf(start),b=s.in
 export function transformWindowsVisionGuard(pluginSource,coreSource){
  const originalPluginSha256=digest(pluginSource),originalCoreSha256=digest(coreSource)
  let plugin=pluginSource,core=coreSource
- plugin=replaceOnce(plugin,"export const name = 'qiuya-live-vision-test-only'","import { createWindowsVisionAdapter } from './live-vision-windows-adapter.mjs'\n\nexport const name = 'qiuya-live-vision-test-only'")
+ plugin=replaceOnce(plugin,"export const name = 'qiuya-live-vision-test-only'","import { createWindowsVisionAdapter } from './live-vision-windows-adapter.mjs'\nimport { prepareVisionWorkingDirectory } from './live-vision-working-directory.mjs'\n\nexport const name = 'qiuya-live-vision-test-only'")
  plugin=replaceOnce(plugin,"  const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))","  if (typeof config.externalCarrierConfig !== 'string') fail('VISION_EXTERNAL_CONFIG')\n  const windowsAdapter = createWindowsVisionAdapter(resolve(config.externalCarrierConfig), directory)\n  const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))")
  plugin=replaceOnce(plugin,"    if (targetId !== record.target.id || record.fixture.exitCode !== null || record.fixture.signalCode !== null) fail('VISION_FIXTURE_RETIRED')","    if (targetId !== record.target.id || !record.windows) fail('VISION_FIXTURE_RETIRED')\n    await windowsAdapter.check(record)")
  plugin=replaceOnce(plugin,'    if (record.external && current) {','    if (record.windows && current) {')
  plugin=replaceOnce(plugin,'  async function snapshotFixture(record) {','  async function snapshotFixture(record) {\n    if (record.windows) return windowsAdapter.snapshot(record)')
  plugin=replaceOnce(plugin,'        carrierCancellation = { requested: false, supported: false }','        carrierCancellation = await windowsAdapter.cancelRun({ phase: input.phase })')
  plugin=replaceBetween(plugin,'  async function externalRead(', '  async function prepare(', '')
- plugin=replaceBetween(plugin,"      record.phase = 'fixture-directory';", "      record.phase = 'native-status'", "      record.phase = 'external-wait'; await windowsAdapter.prepare(record)\n")
+ plugin=replaceBetween(plugin,"      record.phase = 'fixture-directory';", "      record.phase = 'native-status'", "      record.phase = 'fixture-directory'; record.workingDirectory = await prepareVisionWorkingDirectory(directory, sessionId)\n      record.phase = 'external-wait'; await windowsAdapter.prepare(record)\n")
  plugin=replaceOnce(plugin,"      if (record.nativeStatus.permissions.screenRecording !== true) fail('VISION_NATIVE_SCREEN_PERMISSION')","      if (record.nativeStatus.platform !== 'win32' || record.nativeStatus.permissions.screen !== true) fail('VISION_NATIVE_SCREEN_PERMISSION')")
  plugin=replaceOnce(plugin,"      if (!record.external) record.target = (await record.native.targets()).find(row => row.id === `mac-window:${ready.windowId}` && row.pid === ready.pid && row.appId === bundleId)","      if (!record.windows) fail('VISION_FIXTURE_TARGET_MISSING')")
  plugin=replaceOnce(plugin,'      if (!record.external) {','      if (!record.windows) {')

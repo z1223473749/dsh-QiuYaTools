@@ -353,8 +353,8 @@ test('served owner client preserves remote preparation phase/public code without
 test('independent visual cases continue after a clean business mismatch but stop at policy or cleanup failure', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'qiuya-vision-independent-cases-')); t.after(() => rm(directory, { recursive: true, force: true }))
   const plugin = await bundledVisionPlugin(directory)
-  for (const mode of ['business-mismatch', 'VISION_REQUEST_LIMIT', 'VISION_STEP_LIMIT', 'VISION_DEADLINE', 'cleanup-failure', 'missing-cleanup', 'policy-denial', 'fatal']) {
-    const prepared = [], prompted = [], finished = [], modes = new Map(), flags = {}
+  for (const mode of ['business-mismatch', 'VISION_REQUEST_LIMIT', 'VISION_STEP_LIMIT', 'VISION_DEADLINE', 'cleanup-failure', 'missing-cleanup', 'policy-denial', 'fatal', 'terminal-error']) {
+    const prepared = [], prompted = [], finished = [], modes = new Map(), flags = {}; let statusReads = 0
     let revision = 1
     const run = vm.runInNewContext(plugin.visionOwnerClientSource().replace('export const run=', 'const run=') + ';run', {
       crypto: { randomUUID: () => 'synthetic-request' }, AbortSignal, Object, TypeError, SyntaxError,
@@ -365,12 +365,12 @@ test('independent visual cases continue after a clean business mismatch but stop
           let value
           if (input.op === 'prepare') { prepared.push(input.task); value = { sessionId: 'own-case-' + input.task, targetId: 'own-window-' + input.task, endpoint: 'http://127.0.0.1:1', token: 'synthetic-only', prompt: 'independent synthetic task' } }
           else if (input.op === 'arm') value = {}
-          else if (input.op === 'status') value = { state: 'idle', requests: 1 }
+          else if (input.op === 'status') { statusReads++; value = mode === 'terminal-error' && input.sessionId === 'own-case-2' ? { state: 'idle', requests: 0, fatal: 'VISION_TURN_ERROR' } : { state: 'idle', requests: 1 } }
           else if (input.op === 'finish') {
             const task = Number(input.sessionId.at(-1)); finished.push(task)
             value = { passed: task !== 2, steps: 1, requestAttempts: 1, retainedImageOccurrences: 1, businessPassed: task !== 2, visualNonceRead: true,
               ...(task === 2 && mode === 'missing-cleanup' ? {} : { cleanup: { passed: task !== 2 || mode !== 'cleanup-failure' } }), denials: task === 2 && mode === 'policy-denial' ? [{ code: 'VISION_ACTION_NOT_ALLOWED' }] : [],
-              fatal: task === 2 ? mode === 'fatal' ? 'VISION_ROUTE_CHANGED' : mode.startsWith('VISION_') ? mode : null : null }
+              fatal: task === 2 ? mode === 'fatal' ? 'VISION_ROUTE_CHANGED' : mode === 'terminal-error' ? 'VISION_TURN_ERROR' : mode.startsWith('VISION_') ? mode : null : null }
           } else if (input.op === 'delivery') value = { passed: input.restore.localMode && input.restore.featureFlags }
           else throw Error('Unexpected diagnostic operation')
           return Response.json({ ok: true, value })
@@ -393,6 +393,7 @@ test('independent visual cases continue after a clean business mismatch but stop
     assert.deepEqual(prompted, expected.map(task => 'own-case-' + task), 'No prompt or failed input is replayed')
     assert.equal(result.passed, false, 'A later passing case cannot turn the business mismatch green')
     assert.equal(result.restoration.localMode, true); assert.equal(result.restoration.featureFlags, true)
+    if (mode === 'terminal-error') { assert.equal(statusReads,2,'A zero-request terminal error is observed once then retired; it does not wait 180 polls'); assert.equal(result.tasks[1].passed,false) }
     assert.deepEqual(flags, {})
   }
 })

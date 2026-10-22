@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence, projectVisionTurnError } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 import { installVisionHostAutoRun } from './live-vision-host-autorun.mjs'
 
@@ -201,7 +201,11 @@ export function apply(ctx, config) {
             record.completedText += content.filter(block => block.type === 'text').map(block => block.text).join('')
             record.completedText = record.completedText.slice(-20000)
           }
-          if (['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type)) record.events.push({ type: event.type, seq: event.seq, time: event.time, turn: event.data.turn, step: event.data.step, ...(event.type === 'turn/end' ? { reason: event.data.reason?.kind } : {}) })
+          if (event.type === 'turn/end' && event.data.reason?.kind === 'error') {
+            record.terminalError = projectVisionTurnError(event.data.reason.error)
+            record.fatal ??= 'VISION_TURN_ERROR'; clearTimeout(record.timer)
+          }
+          if (['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type)) record.events.push({ type: event.type, seq: event.seq, time: event.time, turn: event.data.turn, step: event.data.step, ...(event.type === 'turn/end' ? { reason: event.data.reason?.kind, ...(record.terminalError ? { terminalError: record.terminalError } : {}) } : {}) })
         })
         return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
@@ -221,7 +225,7 @@ export function apply(ctx, config) {
     await selected(record, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
     record.policy.arm()
     record.timer = setTimeout(() => {
-      record.fatal = 'VISION_DEADLINE'; record.handle.agent.cancel({ kind: 'hook', reason: 'bounded-visual-test-deadline' })
+      record.fatal ??= 'VISION_DEADLINE'; record.handle.agent.cancel({ kind: 'hook', reason: 'bounded-visual-test-deadline' })
       // Retain bearer validity until the production RemoteDriver receives its
       // release ACK. Premature pair rotation would deliberately fence that
       // client's uncertain native epoch and prevent restoring local mode.
@@ -234,7 +238,7 @@ export function apply(ctx, config) {
     if (!record.handle || !record.policy) fail('VISION_NOT_PREPARED')
     const oracle = await snapshotFixture(record)
     return { sessionId: record.sessionId, state: record.handle.agent.status, steps: record.policy.steps, requests: record.policy.requests.length,
-      businessPassed: oracle.passed === true, visualNonceRead: record.completedText.includes(record.nonce), fatal: record.fatal ?? null }
+      businessPassed: oracle.passed === true, visualNonceRead: record.completedText.includes(record.nonce), fatal: record.fatal ?? null, terminalError: record.terminalError ?? null }
   }
   async function cleanup(record) {
     if (!record.cleanupPromise) record.cleanupPromise = cleanupRecord(record)
@@ -325,7 +329,7 @@ export function apply(ctx, config) {
           record.settled = true
           const oracle = await snapshotFixture(record).catch(() => ({ passed: false }))
           const result = { ...record.policy.summary({ businessPassed: oracle.passed === true, nonceRead: record.completedText.includes(record.nonce), syntheticNonce: record.nonce }),
-            oracle, events: record.events, target: { id: record.target.id, pid: record.target.pid, appId: record.target.appId }, fatal: record.fatal ?? null }
+            oracle, events: record.events, target: { id: record.target.id, pid: record.target.pid, appId: record.target.appId }, fatal: record.fatal ?? null, terminalError: record.terminalError ?? null }
           try { await checkNative(record); const image = await record.native.preview(record.target.id); await writeFile(join(directory, `evidence/task-${record.task}-final.jpg`), Buffer.from(image.imageBase64, 'base64')) } catch { result.finalImageUnavailable = true }
           result.cleanup = await cleanup(record); result.assistantDisplay = record.assistantDisplay ?? { status: 'not-collected' }; if (!result.cleanup.passed || result.fatal) result.passed = false
           reports.push(result); if (active === record) active = undefined; await save(); value = result

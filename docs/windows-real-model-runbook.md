@@ -4,7 +4,7 @@
 
 ## 已核实的官方接口
 
-核对对象是本机 DeepSeek Harness `0.2.1-rc.2` 的安装内容，而非另一份 npm CLI。只执行过 `dsh --help` 和公开安装源码读取，没有启动模型。
+接口核对对象是本机 DeepSeek Harness `0.2.1-rc.2` 的安装内容，而非另一份 npm CLI。最初接口核对阶段仅执行 `dsh --help` 和公开安装源码读取；后续第四轮实际模型结果见下文。
 
 真实可执行文件为 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`，已核验为可执行的普通文件，启动器 SHA256 为 `61647349bd61a5cfff40c338c7d5af767a22f409ddce36feabfb2f693d1e66af`。它用 `ELECTRON_RUN_AS_NODE=1` 启动同一安装的 Desktop Host CLI，并完整转发 argv，不启动新的图形程序。命令顺序固定为 `plugin --profile desktop <pnpm 子命令与参数>`；不调用普通 npm `dsh`，不启动/dump Desktop profile，不增加版本豁免。
 
@@ -72,13 +72,17 @@ node <目录>/carrier-bundle/windows-cancel-smoke.mjs \
 
 ## 实际运行顺序
 
+2026-10-22 全新第四轮 `原始截图/真实DeepSeek-Windows-正式c8-4/` 已实际通过三任务：`report.status=passed`；任务 1/2/3 分别为 35,359ms／5 requests／4 steps、107,791ms／12／11、36,465ms／5／4，business、视觉 nonce、自然 cleanup 均为 true。模型为当前账号 `deepseek-account/deepseek-flash`，正式 native SHA 为 `c8be449d…559ce`，fixture 为 `0d34a1e1…b46ce`，两份 PE 均为 ARM64。任务 2 成功 click 后继续使用旧 frame 的 type 收到公开错误 `STALE_OBSERVATION`；原报告仍保留有限投影 `unclassified`。模型 fresh observe 后进行了第二次完整 click，再 observe/type/observe/Enter 并完成业务；不能写成全程零错误或零重复动作。输入分派前拒绝的结论依据源码控制流与自有工具事件顺序，本轮未直接检查原生输入事件。
+
+本轮 Host autorun passed，两项初始 true 的设置经只读确认、未派发 settings/mutate；localMode 与 featureFlags 恢复均 true。carrier completed、三条 clean、计划任务自然 Ready/result=0、精确注销、idle 恢复；外层自然 exit=0/signal=null。官方 add/remove 各单次 exit=0，卸载后 dependency/selection 缺席，原 patch 缺席、原 Fiber DISPOSED、资源清理与路由移除均通过。完整身份、源码/证据 SHA、截图复制回执、异常和覆盖限制见 [Windows 真实模型验收记录](windows-real-model-acceptance.md)。截图保存在项目外全新 `成功截图/Windows-真实DeepSeek-三任务-c8-4/`，不进入 Git。
+
 2026-10-22 的零任务取消已在项目外 `原始截图/真实DeepSeek-Windows-正式c8-cancel-1/` 实际通过：没有Host、模型、fixture或输入请求，guest正常退出、Task Ready／结果0、精确注销、OS held／lease／journal审计及idle恢复均通过；外层另记录carrier自然exit0／signal=null。该结果只证明取消，`businessCompleted=false`。
 
 随后全新第三轮 `原始截图/真实DeepSeek-Windows-正式c8-3/` 已实际激活官方临时包、复用真实owner、以初始两项true跳过设置写入，并创建Windows隔离目标及取得session/prompt ACK。但首个turn在6ms内以error结束，模型requests=0、steps=0，最终达到原180秒上限，尚未进入真实模型／工具任务。两项设置和local连接恢复均true；原生与fixture正常退出、OS held=0／lease空闲／journal缺席，但子进程取证报 `VISION_WINDOWS_CHILDREN_UNCONFIRMED`，整轮仍failed。
 
 第三轮只单次调用官方remove：CLI实际exit0、dependency与selection缺席、原patch缺席且原Fiber DISPOSED、路由移除；由于缓存的子进程取证失败，正常卸载的整体核验仍failed，不追认为通过。另一次独立只读后验确认精确PID＋birth、UUID可执行路径／命令行范围及自有计划任务均缺席，idle恢复；它只证明现在退净，不重建此前缺失的子进程身份。错误类别和子进程取证继续独立修复，旧cap和原报告不重放、不覆盖。
 
-此文档、离线准备和上述失败尝试均不代表Windows真实模型三任务通过。后续每轮须先取得独占PD槽，再生成新的准备目录；不要使用已经审阅或过期的runId/cap，不与Windows WebView2长测或其他输入测试并发。
+上述取消与第三轮失败记录保留原结论；第四轮通过仅覆盖固定 target 的四工具 Windows ARM64 VM 真实视觉业务，聊天自动 discover/request 与授权选择流程、Mac 原生目标、物理 x64 实机均不在本轮覆盖内。后续每轮须先取得独占PD槽，再生成新的准备目录；不要使用已经审阅或过期的runId/cap，不与Windows WebView2长测或其他输入测试并发。
 
 1. 在项目外新建父目录，选择新的唯一子目录。使用当前已审核 PE；若正式 PE 更新，先换成新 SHA 并重新准备。
 

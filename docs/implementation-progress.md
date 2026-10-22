@@ -1,6 +1,42 @@
 # 双平台适配与电脑操控实施记录
 
-本文件为2026-10-21的证据快照，版本`0.6.0-beta.1`、分支`codex/cross-platform-computer-use`。提交规则已统一为完整功能的代码、构建与测试一起中文提交；本轮没有 push、Release 或 npm publish。详细SHA、实际JSON和历史失败见[测试报告](computer-use-test-report.md)，原始门槛见[开发计划](windows-and-computer-use-development-plan.md)。
+## 2026-10-22 最新索引与当前阶段
+
+**整体尚未完成完整验收。** 本节覆盖下方历史快照中“当前／最新／待验”的旧称呼。版本为 `0.6.0-beta.1`，分支 `codex/cross-platform-computer-use`；完整功能连同构建、测试一起中文提交，未 push、Release 或 npm publish。详细资产 SHA、原始失败和当前剩余项以[测试报告](computer-use-test-report.md)为准，原始门槛以[开发计划](windows-and-computer-use-development-plan.md)为准。
+
+| 本轮证据范围 | 已取得结果 | 依据与边界 |
+| --- | --- | --- |
+| Windows 当前双包 | ARM64 `8b5dca9f…5c6e3`、x64 `3542d877…90c` 各完成完整 UI **12项**、官方安装 **5项**、严格业务专项 **8项**；状态补验另各 **5项**、合计12张状态图 | [真实 Harness](windows-harness-pipeline-evidence.md)、[状态补验](windows-ui-state-acceptance.md)。对应正式 PE 为 `c8be`／`3d22`；x64 在 PD Windows 11 ARM 兼容运行，不代表物理 x64 硬件 |
+| Mac 当前候选 | 包 `9b828d9b…5e6f3`／helper `66ae37d0…6e502`：真实隔离 Host＋headless Chrome **DOM 8项**、24张状态图；文件交换 **4项**、真实8MiB上传／下载／同名拒绝；官方安装生命周期 **5项** | [DOM界面](harness-dom-acceptance.md)、[文件交换](macos-file-exchange-acceptance.md)、[安装](macos-install-acceptance.md)。DOM排除原生分窗／拖出／电脑输入，文件交换仅 status/targets-only stub，不由这些结果证明native操控 |
+| Mac 正式键盘修复 | 66ae universal构建及21项相关回归通过；同SHA真实中文正例、兄弟窗口／原进程退出负例尚未实测通过 | 旧0143红例、隔离ac88绿例分别保留；不能移记到66ae。旧0143正式指针13/13与WK30分钟／5恢复也只属于旧SHA |
+| Windows 浏览器 | Edge与官方ARM64 Chrome分别 **10/10**，真实CDP及Agent注册回调、自然浏览器退出、精确任务注销、idle恢复通过 | [浏览器与依赖](windows-browser-test-dependencies.md)。Chrome首次MSI身份验收failed仍保留，事后独立签名／PE／默认关联证明依赖可用，不倒填安装通过 |
+| Windows 当前 PE 预览性能 | ARM64 c8三十分钟／五次恢复通过；x64 3d轻量C#采样器60秒烟测通过：12.084fps、P95 42ms、全自有树1,567,047,680B低于原1.5GiB门；x64长测执行中 | [当前WebView2性能](windows-webview2-performance-evidence.md)。采样器自身计入原全树，旧资源失败及首轮FPS失败保留，不提高门槛或沿用旧SHA |
+| 独立环境 | Mac→Windows当前c8组件 **15/15**，旧token拒绝、输入归还、精确自有进程自然退场、正常任务清理通过 | [远端实际验收](windows-remote-acceptance.md)。Windows→Mac当前正式组件的严格闭环尚未完成 |
+| 真实 DeepSeek | Windows c8第四轮确认／中文备注及Enter／拖动三项全部通过；业务、图片nonce、自然清理及官方移除／owner恢复分别通过；Mac当前66ae真实模型待验 | [Windows真实模型三任务](windows-real-model-acceptance.md)。固定目标四工具不代替自然discover／request授权；备注任务一次旧帧拒绝并重新观察后完成，重复完整click及历史失败均保留 |
+| 项目外视觉索引 | 已通过基线72张，原图及SHA／独立行为回执可追溯，按平台／功能筛选 | 目录 `/Users/qiuya/QiuYaTools-验收/2026-10-22/视觉画廊-已通过基线-d00d603b-f2e7-442d-bb8f-99ca90a4f9a8/`。基线非整体完成；不收旧上传中假成功或未完成模型画面，x64计划只标保存／送达 |
+
+| 阶段 | 当前状态 | 仍需完成或明确边界 |
+| --- | --- | --- |
+| P0 基线、冻结与最终全量检查 | 当前源码快照的生产JS只读构建、typecheck及940/940完整直接测试通过，397个输入稳定 | 四个native／包元数据未改写；后续源变化需新快照检查，不重建后继承旧SHA |
+| P1 现有功能与双平台界面 | Windows双包12＋5＋8及各5状态补验通过；Mac DOM8＋文件4＋安装5通过 | Mac真实原生分窗／拖出等仍须同包实测，系统／硬件／输入法完整矩阵未全覆盖 |
+| P2 控制核心、调度与隔离 | 实现与逻辑／Host分项通过；默认manager实际多聊天闭环未完成 | 双聊天并发、FIFO及A弹出／收回时B指针需完整实际通过，不把分项绿作为全轮绿 |
+| P3 主Agent图片与真实模型 | Windows当前c8固定目标四工具真实DeepSeek三任务通过；确定性provider链路另有证据 | 自然discover／request／授权补验及Mac当前66ae真实三任务仍待验，不把其中一条链路替代另一条 |
+| P4A Mac执行器 | 当前66ae已构建／相关回归通过，同SHA原生实测未完成 | 中文配对、歧义／退出负例、指针及默认多聊天逐项绑定新SHA；锁屏期间不输入、不绕登录 |
+| P4B Windows执行器 | 当前c8／3d各原生52＋预览指针29、应用权限18项通过 | 与整包UI、真实模型、预览性能分别记证；不推导未测的系统／设备矩阵 |
+| P5 实时预览与恢复 | 当前c8 WebView2长稳通过；当前3d轻量采样器烟测通过、长稳执行中 | 原门槛保持，长测及Mac66ae新绑定仍待通过，旧0143不可继承 |
+| P6 独立环境与文件交换 | Mac→Win15及当前Mac8MiB文件交换通过 | Win→Mac严格delivery未完成；文件服务stub不当作native权限证明 |
+| P7 浏览器通道 | 当前Windows Edge10＋Chrome10通过 | 只证明隔离profile／显式CDP／站点许可与注册工具，不等同日常profile随包扩展或真实模型 |
+| P8 安装与更新 | 当前Windows双包各install5、Mac当前包install5通过 | 均为隔离测试安装生命周期；最终包本机安装及受影响视觉复验仍需收口，未签名／公证／公开发布 |
+| P9 完整交付 | **尚未通过** | Mac当前真实DeepSeek／原生／多聊天、自然会话入口补验、x64长稳、严格反向环境、最终变更回归及安装包汇总仍有未完成项 |
+| P10 Codex扩展 | 计划已收集，独立能力未全部实现 | Office专用加载项、锁屏扩展、日常profile浏览器扩展及工作台H阶段不由鼠标或独立profile结果代替 |
+
+后续按完整修复单元继续：Windows工作目录／可信子进程与真实模型三任务已完成，继续x64长稳与自然会话入口补验，再完成Mac解锁后的正式原生与反向闭环，最后冻结源码做最终检查、同字节包与安装／视觉复验。每个完整改动连构建、测试中文提交；成功截图继续保存在项目外。
+
+## 2026-10-21 至早期 10-22 历史记录（原样保留用于对照）
+
+以下保留历史计数、候选和失败；其中“当前／最新／待验”只指当时快照。上方索引和阶段表是本页当前口径，历史通过不继承给不同SHA。
+
+以下原记录为2026-10-21的证据快照，版本`0.6.0-beta.1`、分支`codex/cross-platform-computer-use`。提交规则已统一为完整功能的代码、构建与测试一起中文提交；本轮没有 push、Release 或 npm publish。详细SHA、实际JSON和历史失败见[测试报告](computer-use-test-report.md)，原始门槛见[开发计划](windows-and-computer-use-development-plan.md)。
 
 当前实施依据已统一到[开发计划](windows-and-computer-use-development-plan.md)。提交粒度为可独立使用的完整功能，代码、构建和相关测试一起中文提交；不把整套长稳及真实模型矩阵当作所有功能提交的前置条件。本批统一交互源码已冻结、生成验证包并完成相关回归，尚未宣称完整交付。
 
@@ -24,7 +60,7 @@ Mac窗口校验修复与对应universal构建、733项全量回归、测试夹�
 
 以下为本轮 UI／流程调整之前的历史快照。历史具体资产与结果保留用于对照，当前交付仍须以本轮冻结源码和包的实际报告为准。
 
-## 阶段快照
+## 历史阶段快照
 
 | 阶段 | 当前状态 | 已取得证据及剩余范围 |
 | --- | --- | --- |

@@ -4,6 +4,51 @@
 
 **整体尚未通过完整验收。** 本批已实现聊天自动发起、按应用授权、系统权限引导及统一工具箱视觉；小预览为固定长方形，画面按 X/Y 铺满，悬停显示控件，弹出后聊天画面继续实时显示。本批代码、构建及相关测试统一提交。发现的 Mac 同应用重叠窗口输入边界另立修复，未把当前开发验证包当作最终交付。
 
+### 当前验收索引（2026-10-22，本节覆盖后文历史快照的“当前”称呼）
+
+| 范围 | 本轮实际结果与绑定 | 详细记录 |
+| --- | --- | --- |
+| Windows 正式安装包 | ARM64 `8b5dca9f…5c6e3`、x64 `3542d877…90c` 各完成12项完整功能、5项官方安装与8项严格专项；49项相关回归通过；同源JS重新构建与两包六份文件字节一致 | [真实Harness证据](windows-harness-pipeline-evidence.md)，提交 `27f6ddb`。旧轮Host有显式终止策略；只证明最终退净，不泛称所有Host自然退出 |
+| Mac 当前候选界面 | 包 `9b828d9b…5e6f3`／helper `66ae37d0…6e502`：隔离官方Host＋headless Chrome的8项通过、24张状态图已视觉复核，4项准备器回归通过；原生分窗、拖出及电脑输入排除 | [Mac逐功能界面](harness-dom-acceptance.md)，提交 `52164bc` |
+| Mac 当前候选安装 | 同一9b828包：旧版安装、升级、坏包恢复、回滚、重装5项通过，6项回归通过；五次自有Host接受正常关闭后exit0，无升级强杀 | [Mac安装生命周期](macos-install-acceptance.md)，提交 `793fe54`；使用临时profile，不改变个人安装 |
+| Windows 状态补图 | 同一ARM64／x64包分别5/5，新增12张状态图已逐张复核；Host使用本轮测试专用EOF→官方正常关闭路径，真实exit0／无signal；输入与租约后验干净 | [Windows状态与关闭](windows-ui-state-acceptance.md)，提交 `51aca0a`，不倒填旧轮自然退出 |
+| Mac 当前包文件交换 | 真实包服务＋Harness Host＋浏览器上传／下载8 MiB，拒绝同名后原文件不变，三份实际字节与SHA一致；4项实际用例、6项准备器回归通过，3张状态图已复核 | [Mac文件交换](macos-file-exchange-acceptance.md)，提交 `78b7393`；仅status-only stub，不授予桌面输入能力 |
+| Windows 浏览器 | Edge与新安装的官方ARM64 Chrome分别10/10；两组真实CDP与注册Agent回调、浏览器进程自然关闭、精确计划任务注销及idle恢复；13项相关回归通过 | [浏览器与依赖](windows-browser-test-dependencies.md)，提交 `b913e35`。Chrome首次MSI身份验收failed保留，后续独立只读签名／PE／默认关联核验确认依赖可用，不倒填安装通过 |
+| Mac到Windows独立环境 | 当前正式c8be组件15/15，旧配对撤销、输入归还、全部精确自有进程退出及正常任务清理通过 | [远端实际验收](windows-remote-acceptance.md)，提交 `f8872fc` |
+| Mac正式键盘修复 | 当前66ae universal构建、21项相关回归及独立测试夹具准备通过；同SHA真实中文正例、切兄弟窗口／原进程退出负例尚待解锁。旧0143红例和ac88隔离候选绿例分别保留 | 下方Mac键盘章节；开发验证包可安装，未作为最终完整验收包 |
+| 真实DeepSeek | Windows当前c8第四轮三个真实模型任务全部通过：确认35,359ms、中文备注及Enter107,791ms、拖动36,465ms；独立业务／视觉nonce／自然清理全部通过。备注任务一次旧帧type被STALE_OBSERVATION拒绝，模型重新观察后完成 | [Windows真实模型三任务](windows-real-model-acceptance.md)。固定目标四工具不代替自然discover／request／用户授权；Mac旧0143中文失败保留，当前66ae真实模型仍待验。Windows第三轮失败不改写，第四轮官方安装／移除、owner设置／连接恢复及外层自然exit0分别通过 |
+| 稳定性与剩余原生 | Windows当前c8的WebView2三十分钟／五次恢复通过：24,656帧、13.697fps、P95 44ms；当前3d x64轻量C#采样器烟测通过：60,079ms、726帧、12.084fps、P95 42ms、自有树RSS1,567,047,680B低于原1.5GiB门，三十分钟长测正在执行 | [当前WebView2性能](windows-webview2-performance-evidence.md)。原资源失败及首次C#烟测FPS失败保留；采样器也计入全树，未放宽门槛。Mac旧0143长稳不继承到66ae；默认双聊天指针及Windows到Mac反向严格收尾未完成 |
+
+当前仍需完成：正式Mac输入／指针与双聊天闭环、Mac当前组件真实DeepSeek三任务及聊天自然发现／授权补验、当前Windows x64预览长稳、严格反向独立环境、新正式包本机安装及受影响功能视觉复验与交付汇总。当前源码快照的只读生产JS构建字节核验、typecheck及940/940完整直接测试已通过，四个native和包元数据均保持不变；后续源码变化须重新绑定检查。Mac系统锁屏期间不发送输入或绕过登录，继续独立的Windows、隔离Host与文档工作。Intel Mac及物理x64 Windows不由Apple Silicon／ARM来宾转译结果代替；Office、锁屏扩展和工作台H阶段仍按开发计划独立记录。
+
+随后通过一次显式只读owner探针确认当前namespace唯一、可写、revision为7，`enabled`和`computerUseEnabled`均为自有及有效true，本机连接且无活动会话。前后两次有限读回一致，设置mutation、模型推理及连接派发均为零；临时插件正常卸载并确认原patch退场。证据为仓库外 `原始截图/真实DeepSeek-owner只读探针-1/`。这证明当前状态与只读入口，不能追认前一轮缺失的原始快照；完整任务入口将复用已启用状态并仅在实际有差异时更改与恢复。
+
+### 2026-10-22 Windows 真实模型工作目录与自然收尾修复
+
+修复Windows准备器的文本转换误删Agent工作目录创建，改用每个自有SID独立的私有目录并校验实际路径／归属；自有turn以error结束时立即保留有限类别／SHA，不再等待180秒后掩盖成泛化deadline。固定180秒及12请求的原业务预算不变。
+
+实际生命周期红例又发现Windows系统conhost被错误拒绝。新审计在相同native父进程／交互Session／出生时间边界内，只接受固定System32路径、稳定文件身份及有效Microsoft签名的console；未知子进程仍拒绝。每个已确认进程都等待自然退出，诊断写入失败也不会跳过租约撤销及fixture清理。只覆盖一轮存活native直接子进程快照，不宣称完整递归树或退出阶段新生子进程。
+
+第二次独立无输入生命周期检查三套清理通过；随后真实DeepSeek第四轮三任务、原owner连接／功能状态恢复、官方正常移除及外层自然exit0均通过。已逐张查看三张最终业务画面，原图与复制件逐字节相同，位于仓库外 `成功截图/Windows-真实DeepSeek-三任务-c8-4/`。任务2唯一工具错误为公开STALE_OBSERVATION：旧帧type在driver.act前拒绝，模型重新观察后再次点击、再观察输入并提交；存在重复完整点击，原始unclassified投影保留。完整范围、SHA及回执见[本轮报告](windows-real-model-acceptance.md)。
+
+同一源码快照的实际生产JS内存构建与现有lib字节一致，见 `artifacts/computer-use/final-read-only-js-build/a57de528-6113-4274-b86c-445b78a778ad/report.json`；未重编译或改写正式native。typecheck及100个文件的940/940完整直接测试通过，零失败／跳过，397个源码／配置／资产及受保护二进制在各检查点保持稳定，见 `artifacts/computer-use/final-direct-test-suite/86c39dc4-4b95-4b85-9303-67e08b22419e/report.json`。这不替代仍未执行的Mac实测和最终新增变更的回归。
+
+### 2026-10-22 Mac 中文输入与真实 DeepSeek 第四轮
+
+正式 `0143cd94…17264a` 的指针／控制／原生预览实际 **13/13通过**，所有自有进程自然退出、OS输入为空、租约与journal归还，证据在仓库外 `Mac-正式指针-静默后-0143-20261022/`。隔离诊断组件另有13项通过，不移记为正式组件证据。
+
+同一正式组件在用户已有Harness账号的 `deepseek-account/deepseek-flash` 上完成真实三任务：点击确认和拖动卡片分别在6,179ms与7,103ms通过，真实点击一次／拖动24步，并从完成后图片正确读出随机码；中文备注任务失败，整轮仍failed。其首字“青”已进入真实NSTextField，但Down之后、Up之前读取AXFocusedWindow得到CannotComplete（-25204），继而停止。三任务均自然收尾，原模型、会话配置恢复，临时插件通过官方管理器移除并确认absent/inactive；没有读取或搬运账户密钥。原始证据为 `原始截图/真实DeepSeek-正式指针通过后-4/evidence/`。
+
+确定性脚本复用同一真实NSTextField，以一次click、一次完整合成中文type和条件允许的一次Enter作对照，失败即止、不重放。旧正式组件独立复现相同已Down／未正常Up的焦点错误，报告为expected-red、functionalPassed=false；隔离配对修复 `ac884999…19a1d7` 完成三步，独立业务提交及自然清理全部通过。证据分别在 `Mac-正式键盘-0143-红例/` 与 `Mac-键盘Pair候选-ac88-1/`，不能把隔离版本通过等同新的正式包已经验收。
+
+修复为每次新Down前保留完整精确窗口／epoch／人工介入校验，并记录原PID与出生身份、物理owner、epoch、唯一pair和原始Unicode Up。已Down的责任先完成对应Up，再校验下一次Down，避免同步AX查询阻塞在一对按键中间。撤销或取消后仍只清理自己的Up，不再发送新Down；原进程已明确退出且交互会话无该键按住时只消解责任、不向新PID发送事件，身份不明或输入仍按住时保留journal并阻断。CGEvent没有应用ACK，部分输入和后验失败仍明确保留，不自动重放。
+
+最新正式universal构建为 `2d3c2b6824da22021648d3e91984b5fd5232b9d225e3edeb41ff669b4a32202a`，typecheck及相关Node回归 **17/17、零跳过** 通过，内含实际Swift编译运行的14项配对／真实Task取消矩阵及12项原收件人清理策略矩阵。16个绑定输入前后稳定，见 `artifacts/computer-use/macos-keyboard-pair-formal-build/789b4037-1937-488e-8034-284c666ec82f/report.json`。纯回归不证明真实PID复用或私有release registry；该正式SHA的中文正例、兄弟窗口／退出负例及新的真实模型轮次仍在执行，未宣称整体完成。
+
+正式2d3c正例首轮在发送任何输入前发现 `screenLocked=true`、前台为系统登录窗口，未启动业务fixture或native执行器，报告为failed／`KEYBOARD_OS_NOT_IDLE`。独立观察器记录OS按键和鼠标为空，租约空闲、journal缺席，observer与probe自然退出。此轮不计为已执行中文用例，也没有尝试绕过锁屏或修改系统设置；证据保留在仓库外 `Mac-正式键盘-2d3c-正例-1/report.json`。随后将交互槽交给PD，继续正式Windows整包逐功能验收。
+
+后续只读复核发现，退休收件人未发Up时计数字段原先缺席，不能把缺席值当作零事件。现每次准备成功后显式初始化有限计数零值与`not-requested`状态，不改变输入或授权策略。新universal helper为 `66ae37d056385e3053724a07a982993c9f8356481666b2d8ee59f65d1356e502`；typecheck、19.101秒universal构建及 **21/21相关回归、零跳过** 通过，19个绑定输入前后稳定，见 `artifacts/computer-use/macos-keyboard-pair-formal-build/1c5b471e-9d6e-4d3d-9f83-bb58b1a311de/report.json`。仓库外开发验证包SHA为 `9b828d9bac4b08291bbdcef151096fcc2903b8fbbc87ae03a4f6ba26b3c5e6f3`，1062675字节、严格包校验通过，位于 `安装包/Mac-键盘修复-66ae-验证包/`；未把它标为完整验收交付包，也尚未替换用户本机安装。
+
 ### 2026-10-22 Mac 真实 WK 预览三十分钟与五次恢复通过
 
 修复耐久测试仅凭共享 coalition 无法确认参与进程、校验失败首行未保留及 Objective-C BOOL 被写成数字 1 的测量问题。测试只对自有 WKWebView 核验随机页面 nonce、递增时钟及零 iframe，通过运行时 ABI 和网络进程存在性前置读取关联 PID，再由独立观察器核对出生时间、unique ID、系统可执行文件 inode、coalition 与 responsibility。共享 coalition 本身不建立归属；参与共享 WK 进程的 RSS 完整计入，不能称为此 view 的独占内存。正式 `0143cd94…17264a` helper 与 TCC 责任均未修改。
