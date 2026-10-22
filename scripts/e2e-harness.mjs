@@ -10,7 +10,10 @@ import { chromium } from 'playwright'
 import { build } from 'esbuild'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
 import { captureSettingsTabs, createHarnessImageLayout } from './harness-settings-acceptance.mjs'
-import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
+import { waitForHarnessComputerPipeline, matchesHarnessPreviewControlState, harnessFailedComputerDrained, finalizeHarnessOwnedResources } from './harness-computer-pipeline.mjs'
+import { fixturePlanRevisionText, archiveCollectionEvidence, planRevisionEvidence, waitForInlinePaint } from './harness-feature-evidence.mjs'
+import { readOwnHarnessPastedText } from './harness-pasted-text-evidence.mjs'
+import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, waitForHarnessNewBlankSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
@@ -20,6 +23,9 @@ if (process.argv.includes('--screenshots-dir') && (!screenshotDirectoryArgument 
 const imageLayout = createHarnessImageLayout(output, screenshotDirectoryArgument)
 const imagePath = imageLayout.path, imageReference = imageLayout.reference
 const candidate = arg('--package')
+const featureEvidenceOnly = process.argv.includes('--feature-evidence-only') || process.argv.includes('--pasted-text-only')
+const pastedTextOnly = process.argv.includes('--pasted-text-only')
+const featureEvidenceCases = new Set(['account-menu-settings-and-all-feature-tabs', 'settings-persist-thresholds-and-theme', 'real-local-model-session', 'paste-browser-event-to-official-txt-upload', ...pastedTextOnly ? [] : ['native-independent-window-and-reuse', 'computer-main-agent-tools-and-image-adapter-pipeline', 'batch-archive-real-sessions', 'plan-review-comment-and-draft-preservation']])
 const windowStateDiagnostic = process.argv.includes('--preview-window-state-diagnostic')
 if (windowStateDiagnostic && process.platform !== 'win32') throw new Error('Window-state diagnostics require the actual Windows Host')
 const cli = JSON.parse(arg('--cli-json', JSON.stringify(['/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'])))
@@ -67,6 +73,7 @@ async function ownMacTarget(op, label, extra = {}) {
 }
 async function screenshot(name, target = page) { const filename = `${name}.png`, path = imagePath(filename); await target.screenshot({ path }); screenshots.push(path); return imageReference(filename) }
 async function test(name, operation) {
+  if (featureEvidenceOnly && !featureEvidenceCases.has(name)) return true
   const start = Date.now()
   try { const details = await operation(); const status = details?.diagnostic ? 'diagnostic' : 'passed'; tests.push({ name, status, elapsedMs: Date.now() - start, ...(details ? { details } : {}) }); console.log(`${status === 'passed' ? 'PASS' : 'DIAGNOSTIC'} ${name}`); return true }
   catch (error) {
@@ -109,23 +116,8 @@ async function blankSession() {
   const sequence = ++blankSessionSequence
   const before = await page.evaluate(captureHarnessWorkspaceDom)
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
-  // Observe both public DOM bindings after the asynchronous Session transition;
-  // a fixed delay can type into the previous Session while draft restoration is
-  // still running on a busy guest.
-  let signature, stableAt = Date.now()
   let sessionId
-  try { sessionId = await waitFor(async () => {
-    const state = await page.evaluate(() => {
-    const body = document.querySelector('[data-conversation-content][data-content-phase="hero"]')
-    const selected = document.querySelector('[data-row-key^="session:"][aria-selected="true"]')
-    const input = body?.querySelector('[data-composer-input][contenteditable="true"]')
-    const id = body?.getAttribute('data-conversation-session')
-    return id && selected?.getAttribute('data-row-key') === 'session:' + id && !selected.draggable && input?.getClientRects().length && getComputedStyle(input).visibility === 'visible' ? { id, text: input.textContent, phase: input.getAttribute('data-phase') } : null
-    })
-    const next = JSON.stringify(state)
-    if (next !== signature) { signature = next; stableAt = Date.now() }
-    return state?.text === '' && Date.now() - stableAt >= 750 ? state.id : undefined
-  }, 'The public blank Session and its empty composer did not settle') }
+  try { sessionId = await waitForHarnessNewBlankSession(() => page.evaluate(captureHarnessWorkspaceDom), before) }
   finally { await writeFile(join(output, 'blank-session-dom-' + String(sequence).padStart(3, '0') + '.json'), JSON.stringify({ before, after: await page.evaluate(captureHarnessWorkspaceDom), readySessionId: sessionId }, null, 2)) }
   return sessionId
 }
@@ -144,6 +136,17 @@ async function newSession(label) {
   return id
 }
 async function menu(label) { await row(label).click({ button: 'right' }); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).waitFor() }
+async function ownFeatureEvidence(kind) {
+  return page.evaluate(async kind => {
+    const response = await fetch('/api/qiuya-e2e-owned-feature', { method: 'POST', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) })
+    if (!response.ok) throw new Error('The exact own feature evidence is unavailable')
+    return response.json()
+  }, kind)
+}
+async function ownPastedTextEvidence(operation, expectedSHA256, expectedBytes, name) {
+  if (process.platform !== 'win32') return readOwnHarnessPastedText({ profileHome: await realpath(profileHome), operation, expectedSHA256, expectedBytes, name })
+  return JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-pasted-file-windows.ps1'), '-ProfileRoot', profileHome, '-Operation', operation, '-ExpectedSHA256', expectedSHA256, '-ExpectedBytes', String(expectedBytes), ...name ? ['-FileName', name] : []]))
+}
 try {
   let url = arg('--url')
   if (!url) {
@@ -151,7 +154,7 @@ try {
     await execute(['plugin', '--profile', 'web', 'add', resolve(candidate)])
     assert.equal(createHash('sha256').update(await readFile(resolve(candidate))).digest('hex'), candidateSHA256, 'The candidate changed while Harness was installing it')
     const fixture = join(temporary, 'provider'); await mkdir(fixture)
-    await copyFile(join(root, 'tests/fixtures/harness-e2e-provider.mjs'), join(fixture, 'index.mjs'))
+    await build({ entryPoints: [join(root, 'tests/fixtures/harness-e2e-provider.mjs')], outfile: join(fixture, 'index.mjs'), bundle: true, platform: 'node', format: 'esm' })
     await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'qiuya-harness-e2e-fixture', version: '1.0.0', type: 'module' }))
     const overlay = join(temporary, 'overlay.yml')
     await writeFile(overlay, JSON.stringify([
@@ -236,16 +239,40 @@ try {
   })
   await test('paste-browser-event-to-official-txt-upload', async () => {
     await editor().focus(); await editor().press('ControlOrMeta+A'); await editor().press('Backspace')
-    const payload = 'E2E attachment line 1\nline 2\nline 3\nline 4\n' + '保留原始文本。'.repeat(15)
+    const payload = `E2E attachment ${randomUUID()} line 1\nline 2\nline 3\nline 4\n` + '保留原始文本。'.repeat(15)
+    const bytes = Buffer.from(payload, 'utf8'), sha256 = createHash('sha256').update(bytes).digest('hex')
+    const before = await ownPastedTextEvidence('before', sha256, bytes.length)
+    assert.equal(before.nonceBucketAbsent, true)
+    const uploaded = context.waitForEvent('response', { timeout: 15000, predicate: response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/session/uploadFileBinary' && url.searchParams.get('sessionId') === alphaId && /^粘贴文本-.*\.txt$/u.test(url.searchParams.get('name') ?? '')
+    } })
+    void uploaded.catch(() => {}) // the awaited original rejection still fails this case
     await editor().evaluate((element, text) => { const data = new DataTransfer(); data.setData('text/plain', text); element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })) }, payload)
-    await page.getByText(/粘贴文本-.*\.txt/u).first().waitFor()
+    const response = await uploaded
+    assert.equal(response.status(), 200, 'The real official TXT upload must complete with HTTP 200')
+    // The official dedicated Worker terminates after delivering its response
+    // to the composer. CDP body access can already be retired; observe HTTP
+    // metadata, independent Host bytes and official ready UI instead.
+    const name = new URL(response.url()).searchParams.get('name')
+    assert.equal(response.request().headers()['content-type'], 'application/octet-stream')
+    const stored = await ownPastedTextEvidence('after', sha256, bytes.length, name)
+    assert.ok(Number.isSafeInteger(stored.linkCount) && stored.linkCount >= 1, 'The immutable stored object must retain a valid stable link count')
+    assert.deepEqual(stored, { operation: 'after', name, bytes: bytes.length, sha256, storedBytesVerified: true, profileBound: true, uniqueFile: true, reparseRejected: true, linkCount: stored.linkCount, handleIdentityVerified: true, readOnly: true, source: 'independent-own-file-handle' })
+    await page.getByText(name, { exact: true }).first().waitFor()
+    const card = page.locator('[data-composer-card]')
+    await waitFor(async () => {
+      if (await card.getByText('上传失败，点击重试', { exact: true }).count()) throw new Error('The actual TXT upload UI reports failure')
+      return await card.getByText('上传中…', { exact: true }).count() === 0 && await card.getByRole('button', { name: '移除文件 ' + name, exact: true }).count() === 1 && await card.getByRole('button', { name: '重试上传 ' + name, exact: true }).count() === 0
+    }, 'The actual TXT upload did not reach the ready UI')
     assert.equal((await editor().innerText()).trim(), '')
+    await writeFile(join(output, 'pasted-text-upload-evidence.json'), JSON.stringify({ source: 'Actual browser ClipboardEvent → nonce File → official binary upload HTTP metadata → independent own profile/file-handle read → official composer ready UI', sessionId: alphaId, httpSessionBound: true, httpStatus: response.status(), binaryUpload: true, before, stored, expectedBytes: bytes.length, expectedSHA256: sha256, receiptIdReadDirectly: false, responseBodyRead: false, readyUI: true, inputReplayed: false }, null, 2))
     await screenshot('pasted-txt')
-    const remove = page.getByRole('button', { name: /移除|删除附件/u }).first()
-    if (await remove.isVisible()) await remove.click(); else await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
-    return { input: 'browser ClipboardEvent', path: 'actual Harness attachment intake and upload UI' }
+    await card.getByRole('button', { name: '移除文件 ' + name, exact: true }).click()
+    return { input: 'browser ClipboardEvent', path: 'actual Harness attachment intake, binary upload and ready UI', storedBytesVerified: true, bytes: bytes.length, sha256 }
   })
-  await newSession(beta); await newSession(gamma)
+  const betaId = pastedTextOnly ? undefined : await newSession(beta), gammaId = pastedTextOnly ? undefined : await newSession(gamma)
+  const featureBinding = { workspaceId: ownedWorkspace.workspaceId, workspacePath: await realpath(workspacePath), selectedSessionIds: [betaId, gammaId], preservedSessionIds: [alphaId] }
   await test('session-menus-copy-unread-and-pin', async () => {
     await menu(alpha); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).click()
     assert.equal(await page.evaluate(() => window.__e2eClipboard), alpha)
@@ -329,11 +356,23 @@ try {
     await writeFile(join(output, 'drag-native-window-evidence.json'), JSON.stringify({ kind: 'real browser drag outside sidebar; not OS desktop HID drag', facts, rpc, target }, null, 2))
     return { targetId: target.id, trustedDrag: true, boundary: 'client outside sidebar, not physical desktop drop' }
   })
-  await test('computer-main-agent-tools-and-image-adapter-pipeline', async () => {
+  const computerPipelinePassed = await test('computer-main-agent-tools-and-image-adapter-pipeline', async () => {
+    // Bind the exact own Agent before the native prerequisite can fail. This
+    // authorizes only the finite cleanup oracle, never target input.
+    assert.ok(alphaId, 'The own Alpha session must exist before computer control')
+    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, ...independentTarget ? { targetId: independentTarget.id } : {} }), { mode: 0o600 })
     await waitForInputWindow()
     assert.ok(independentTarget && alphaId, 'The fixture session window must exist before computer control')
     await row(alpha).click(); await sleep(300)
     if (process.platform === 'win32') {
+      // Beta's preceding drag case may cover Alpha. Reuse the exact own
+      // window through the public command before the unchanged real hit test.
+      const reuseStart = windowRpc.length
+      await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
+      await waitFor(() => windowRpc.slice(reuseStart).some(row => row.request?.sessionId === alphaId && row.result?.ok && row.result?.value?.opened), 'Own Alpha public window reuse did not acknowledge')
+      const reused = (await driver.targets()).filter(target => target.id === independentTarget.id)
+      assert.equal(reused.length, 1); assert.equal(reused[0].pid, independentTarget.pid); assert.equal(reused[0].appId, independentTarget.appId)
+      await writeFile(join(output, 'fixture-public-window-reuse.json'), JSON.stringify({ sessionId: alphaId, exactTargetId: independentTarget.id, acknowledged: true, sameIdentity: true, authorizationStarted: false }, null, 2))
       await editor().fill('E2E:computer-move')
       const beforeSetup = independentTarget
       const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome, '-DiagnosticPath', join(output, 'fixture-user-activation-diagnostic.json')]))
@@ -345,7 +384,7 @@ try {
     }
     const application = (await driver.applications()).find(app => app.appId === independentTarget.appId)
     assert.ok(application, 'The own synthetic fixture must be discoverable without window contents')
-    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ query: application.name, targetId: independentTarget.id }), { mode: 0o600 })
+    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, query: application.name, targetId: independentTarget.id }), { mode: 0o600 })
     await openSettings()
     await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
     const enable = page.getByRole('switch', { name: '启用电脑操控', exact: true })
@@ -388,8 +427,31 @@ try {
     assert.equal(beforeApproval.pending.length, 1); assert.equal(beforeApproval.pending[0].sessionId, alphaId)
     await writeFile(join(output, 'chat-authorization-before-owner.json'), JSON.stringify(beforeApproval, null, 2))
     await approval.getByRole('button', { name: '允许一次', exact: true }).click()
-    try { await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).waitFor({ timeout: 25000 }) }
+    const pipelineProgress = []
+    try {
+      await waitForHarnessComputerPipeline(async remainingMs => {
+        const raw = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')
+        // The provider appends complete JSONL rows synchronously. A concurrent
+        // read may see only the unfinished tail, never treat that as a row.
+        const lines = raw.split('\n'); if (lines.at(-1) !== '') lines.pop()
+        const records = lines.filter(Boolean).map(JSON.parse).filter(record => record.sessionId === alphaId && record.marker === 'E2E:computer-move')
+        const live = await page.evaluate(async ({ sessionId, timeoutMs }) => {
+          const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', signal: AbortSignal.timeout(timeoutMs), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+          const result = (await response.json()).result
+          if (!response.ok || !result?.ok) throw new Error('The owned computer pipeline status could not be read')
+          const session = result.value.sessions.find(row => row.sessionId === sessionId)
+          return { state: session?.state, hasError: !!session?.error, nativeAvailable: result.value.native?.available }
+        }, { sessionId: alphaId, timeoutMs: Math.max(1, Math.min(10000, remainingMs)) })
+        const complete = await page.getByText(/E2E_ADAPTER_IMAGE_CONFIRMED:/u).isVisible()
+        const hasImage = records.some(record => record.imageBlocks.length > 0)
+        const hasAction = records.some(record => record.actionResults.some(result => result.performed))
+        const failed = live.hasError || records.some(record => record.toolErrors?.length || record.actionResults.some(result => result.performed === false))
+        return { complete, failed, state: live.state, nativeAvailable: live.nativeAvailable, turns: records.length, hasImage, hasAction,
+          stage: complete ? 'complete' : hasAction ? 'action-received' : hasImage ? 'image-received' : live.state ? 'model-turn' : 'awaiting-session' }
+      }, { onProgress: value => { if (pipelineProgress.length < 512) pipelineProgress.push(value) } })
+    }
     finally {
+      await writeFile(join(output, 'computer-pipeline-progress.json'), JSON.stringify({ budgetMs: 90000, deadlineResets: 0, actionsReplayed: 0, samples: pipelineProgress }, null, 2))
       const diagnostic = await page.evaluate(captureHarnessComputerDiagnostic, { sessionId: alphaId, codes: HARNESS_COMPUTER_DIAGNOSTIC_CODES }).catch(() => ({ status: 'unavailable', code: 'SNAPSHOT_UNAVAILABLE' }))
       await writeFile(join(output, 'agent-computer-session-snapshot.json'), JSON.stringify(diagnostic, null, 2))
       const records = (await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
@@ -405,7 +467,9 @@ try {
     const smallFrame = inlinePreview.locator('iframe')
     assert.equal(await smallFrame.getAttribute('src'), `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(alphaId)}&view=inline`)
     await smallFrame.contentFrame().getByRole('img', { name: '实时电脑画面', exact: true }).waitFor()
-    await smallFrame.contentFrame().locator('#screen').evaluate(async canvas => { if (!canvas.width || !canvas.height) throw new Error('The inline canvas has no frame geometry'); await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))) })
+    const inlinePaint = await smallFrame.contentFrame().locator('#screen').evaluate(waitForInlinePaint, { timeoutMs: 10000 })
+    assert.equal(inlinePaint.painted, true); assert.ok(inlinePaint.frameId && inlinePaint.width > 1 && inlinePaint.height > 1)
+    await writeFile(join(output, 'inline-preview-painted-frame.json'), JSON.stringify(inlinePaint, null, 2))
     await page.mouse.move(300, 950)
     await waitFor(() => inlinePreview.locator('.qyt-computer-inline-actions').evaluate(node => getComputedStyle(node).opacity === '0'), 'Inline controls must hide when the mouse leaves')
     assert.equal(await inlinePreview.locator('.qyt-computer-inline-title,.qyt-computer-inline-settings').count(), 0, 'The default small preview must contain the image without persistent title/settings text')
@@ -528,7 +592,7 @@ try {
       return { session: result.value.sessions.find(value => value.sessionId === sessionId), native: result.value.native }
     }, alphaId)
     const controlSteps = macPreview ? [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['继续', 'ready'], ['暂停', 'paused'], ['停止', 'stopped'], ['停止', 'stopped']] : [['暂停', 'paused'], ['继续', 'ready'], ['接管', 'humanControl'], ['停止', 'stopped']]
-    const macLifecycle = [], beforeRetirement = []
+    const macLifecycle = [], beforeRetirement = [], controlStateEvidence = []
     for (const [step, [button, state]] of controlSteps.entries()) {
       const previous = macPreview ? await computerSnapshot() : undefined
       if (macPreview) {
@@ -545,7 +609,24 @@ try {
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
       try {
-        await waitFor(async () => await page.locator(`[data-qyt-computer-session="${alphaId}"]`).getAttribute('data-state') === state, `Computer ${button} did not enter ${state}`)
+        await waitFor(async () => {
+          const backend = await computerSnapshot()
+          // A successful Stop removes this terminal task from Settings. Read
+          // the public DOM without an element auto-wait, then require both the
+          // backend transition and the intended visible list lifecycle.
+          const tasks = await page.evaluate(sessionId => [...document.querySelectorAll('[data-qyt-computer-session]')].filter(node => node.getAttribute('data-qyt-computer-session') === sessionId).map(node => node.getAttribute('data-state')), alphaId)
+          const current = { step, button, expectedState: state, settingsVisible: await page.getByRole('heading', { name: 'QiuYa 增强工具箱', exact: true }).isVisible(), backendState: backend.session?.state ?? null, taskCount: tasks.length, taskState: tasks.length === 1 ? tasks[0] : null }
+          const previous = controlStateEvidence.at(-1)
+          if (JSON.stringify(previous) !== JSON.stringify(current)) controlStateEvidence.push(current)
+          return matchesHarnessPreviewControlState(current, state)
+        }, `Computer ${button} did not enter ${state} with the expected public task lifecycle`)
+        await writeFile(join(output, 'preview-control-state-lifecycle.json'), JSON.stringify(controlStateEvidence, null, 2))
+        if (state === 'stopped') {
+          const native = windowsPreview ? JSON.parse(await windowsPreview()) : macPreview ? await macPreview('observe', { output: imagePath(`preview-control-${step}-stopped.jpg`) }) : JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', imagePath(`preview-control-${step}-stopped.jpg`)]))
+          const labels = [...(native.labels ?? []), ...(native.accessibility ?? []), ...(native.recognizedText ?? [])]
+          assert.ok(labels.join('\n').includes('已停止'), 'The owned native preview must visibly acknowledge Stop')
+          await writeFile(join(output, `preview-control-${step}-stopped-visible.json`), JSON.stringify({ labels, backendState: 'stopped', taskRemoved: true }, null, 2))
+        }
       } catch (error) {
         // Preserve the actual backend state and native error before case cleanup
         // can change focus or pause the session. A timeout alone is not a cause.
@@ -639,16 +720,70 @@ try {
     return { preview, adapterRequestsWithImages: images.length, imageBlocks: images.flatMap(request => request.imageBlocks).length,
       model: 'Local deterministic adapter verifies actual main-Agent image transport, not external vision reasoning' }
   })
+  if (!computerPipelinePassed) {
+    // Preserve the original failed result. Cancel only its own main Agent and
+    // revoke only its own computer task before another case can send input.
+    const cleanup = { sessionId: alphaId, passed: false, samples: [], inputEventsPosted: 0 }
+    try {
+      cleanup.started = await page.evaluate(async sessionId => {
+        const rpc = async (method, payload) => {
+          const rpcId = crypto.randomUUID(), response = await fetch('/api/' + method, { method: 'POST', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId, method, payload }) })
+          const envelope = await response.json()
+          if (!response.ok || envelope.rpcId !== rpcId || envelope.result?.ok !== true) throw new Error('Own failed computer cleanup RPC failed')
+          return envelope.result.value
+        }
+        await rpc('session/cancel', { args: { request: { sessionId } } })
+        const before = await rpc('qiuya-tools.computer.control', { op: 'status', sessionId })
+        const started = before.sessions.some(row => row.sessionId === sessionId)
+        for (const request of before.pendingRequests.filter(row => row.sessionId === sessionId)) await rpc('qiuya-tools.computer.control', { op: 'cancelRequest', sessionId, requestId: request.requestId, requestVersion: request.requestVersion })
+        if (started) await rpc('qiuya-tools.computer.control', { op: 'stop', sessionId })
+        return started
+      }, alphaId)
+      let stableDrained = 0
+      await waitFor(async () => {
+        const value = await page.evaluate(async sessionId => {
+          const own = await fetch('/api/qiuya-e2e-owned-agent', { method: 'POST', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) })
+          if (!own.ok) throw new Error('Owned Agent drain could not be read')
+          const agent = await own.json()
+          const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
+          const envelope = await response.json()
+          if (!response.ok || envelope.result?.ok !== true) throw new Error('Owned computer drain could not be read')
+          const value = envelope.result.value, computer = value.sessions.find(row => row.sessionId === sessionId)
+          return { agent, computer: computer ? { sessionId: computer.sessionId, state: computer.state } : null, pending: value.pendingRequests.filter(row => row.sessionId === sessionId).length,
+            input: value.native?.inputState ?? null, leaseEpoch: value.native?.leaseEpoch ?? null }
+        }, alphaId)
+        if (cleanup.samples.length < 160) cleanup.samples.push(value)
+        stableDrained = harnessFailedComputerDrained(value, alphaId, cleanup.started) ? stableDrained + 1 : 0
+        return stableDrained >= 2
+      }, 'The failed computer case did not drain its own Agent/queue and stop its own task', 15000)
+      if (process.platform === 'win32') {
+        cleanup.os = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-input-state-windows.ps1')]))
+        assert.deepEqual(cleanup.os.heldKeys, []); assert.equal(cleanup.os.leaseLockFree, true); assert.equal(cleanup.os.journalPresent, false)
+      } else {
+        const last = cleanup.samples.at(-1)
+        if (!cleanup.started) { const current = await driver.status(); last.input = current.inputState; last.leaseEpoch = current.leaseEpoch ?? null }
+        assert.equal(last.input?.mouseHeld, false); assert.equal(last.input?.keysHeld, 0); assert.equal(last.input?.leftButtonDown, false); assert.equal(last.leaseEpoch, null)
+      }
+      cleanup.passed = true
+    } finally { await writeFile(join(output, 'failed-computer-owned-cleanup.json'), JSON.stringify(cleanup, null, 2)) }
+  }
   if (windowStateDiagnostic) throw new PreviewWindowDiagnosticStop()
   await test('batch-archive-real-sessions', async () => {
+    await writeFile(join(profileHome, 'e2e-feature-target.json'), JSON.stringify(featureBinding), { mode: 0o600 })
+    const before = await ownFeatureEvidence('archive'); let after
+    try {
     await row(beta).click(); await row(gamma).click({ modifiers: ['Shift'] })
     await row(beta).click({ button: 'right' })
     await page.getByRole('menuitem', { name: /归档所选|归档.*2|批量归档/u }).first().click()
     await waitFor(async () => (await row(beta).count()) === 0 && (await row(gamma).count()) === 0, 'Selected real sessions were not archived')
+    await waitFor(async () => { after = await ownFeatureEvidence('archive'); return archiveCollectionEvidence(before, after).passed }, 'The exact Host archive set did not add only Beta/Gamma and preserve Alpha')
+    assert.equal(await row(alpha).count(), 1, 'Alpha must remain visible after the exact batch archive')
     await screenshot('archived')
+    return archiveCollectionEvidence(before, after)
+    } finally { await writeFile(join(output, 'archive-exact-collection-evidence.json'), JSON.stringify({ before, after, result: archiveCollectionEvidence(before, after) }, null, 2)) }
   })
   await test('plan-review-comment-and-draft-preservation', async () => {
-    await blankSession()
+    const planSessionId = await blankSession()
     await editor().fill('/plan on'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
     await waitFor(async () => (await page.locator('body').innerText()).includes('计划模式已开启') || (await page.getByRole('button', { name: /计划模式已开启/u }).count()) > 0, 'Plan mode did not activate')
     await editor().fill('E2E:plan'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
@@ -657,12 +792,21 @@ try {
     await page.locator('[data-plan-review-surface]').waitFor({ timeout: 15000 })
     const paragraph = page.locator('[data-rightbar-col]').getByText('检查真实会话和插件菜单。', { exact: true }).first()
     await paragraph.waitFor(); await paragraph.evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })) })
-    await page.getByPlaceholder('输入评论…').fill('E2E 请增加真实回归测试')
+    const quote = '检查真实会话和插件菜单。', note = 'E2E 请增加真实回归测试'
+    await page.getByPlaceholder('输入评论…').fill(note)
     await page.getByRole('button', { name: '保存', exact: true }).click()
+    const saved = page.locator('[data-plan-comment-item]').filter({ hasText: note })
+    await saved.waitFor(); assert.ok((await saved.innerText()).includes(quote))
+    await screenshot('plan-comment-saved')
+    await writeFile(join(profileHome, 'e2e-feature-target.json'), JSON.stringify({ ...featureBinding, plan: { sessionId: planSessionId, expectedText: fixturePlanRevisionText(quote, note), quote, note } }), { mode: 0o600 })
+    const before = await ownFeatureEvidence('plan'); let after
+    try {
     await page.getByRole('button', { name: '修正计划', exact: true }).click()
-    await waitFor(async () => (await page.locator('body').innerText()).includes('E2E 请增加真实回归测试'), 'The revision did not enter the actual session')
+    await waitFor(async () => { after = await ownFeatureEvidence('plan'); return planRevisionEvidence(before, after).passed }, 'The complete revision was not received as a new ordinary user/message in the exact plan session')
     assert.equal(await editor().innerText(), 'E2E original draft must survive')
     await screenshot('plan-comments')
+    return planRevisionEvidence(before, after)
+    } finally { await writeFile(join(output, 'plan-revision-durable-evidence.json'), JSON.stringify({ before, after, result: planRevisionEvidence(before, after) }, null, 2)) }
   })
   if (process.argv.includes('--file-exchange-e2e')) await test('packaged-file-exchange-real-host-upload-download-and-no-overwrite', async () => {
     assert.ok(candidate, 'File exchange must use the exact installed candidate bundle')
@@ -749,7 +893,11 @@ finally {
     // the ordinary frozen candidate does not create this optional file.
     await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + sanitizeHarnessDiagnostic(error.message)) })
   }
-  await driver?.dispose(); await browser?.close(); host?.stdin.end(); host?.kill('SIGTERM')
+  const ownedCleanupErrors = await finalizeHarnessOwnedResources([
+    { name: 'observer-dispose', run: () => driver?.dispose() },
+    { name: 'browser-close', run: () => browser?.close() },
+    { name: 'host-shutdown', run: () => { host?.stdin.end(); host?.kill('SIGTERM') } },
+  ])
   let forcedHostTermination = false
   if (host && macPreviewRetirement) await new Promise(resolve => {
     if (host.exitCode !== null || host.signalCode !== null) return resolve()
@@ -769,8 +917,8 @@ finally {
     if (forcedHostTermination) errors.push('The owned Mac Host required SIGKILL instead of graceful retirement')
     await writeFile(join(output, 'mac-preview-process-retirement.json'), JSON.stringify({ elapsedMs: Date.now() - start, last, failure, forcedHostTermination, source: 'read-only proc_pidinfo exact PID + birth + executable; no signal or kill by this observer', boundary: 'Host receives the runner’s existing normal SIGTERM shutdown; helper processes are not directly killed by this oracle.' }, null, 2))
   }
-  const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length
-  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
+  const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length && !ownedCleanupErrors.length
+  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length && !ownedCleanupErrors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : featureEvidenceOnly ? 'official-Harness-feature-evidence-subset' : 'official-Harness-isolated-profile-real-browser', selection: featureEvidenceOnly ? { scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence', selectedCases: [...featureEvidenceCases], fullUIAcceptance: false } : { scope: 'complete-configured-suite' }, platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, ownedCleanup: { passed: !ownedCleanupErrors.length, errors: ownedCleanupErrors }, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   if (!process.argv.includes('--keep-profile')) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ status: report.status, tests: tests.map(({ name, status }) => ({ name, status })), report: join(output, 'report.json') }, null, 2))

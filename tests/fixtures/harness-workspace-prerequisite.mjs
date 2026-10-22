@@ -68,3 +68,30 @@ export function selectedHarnessWorkspaceSession(snapshot, workspace) {
   if (!hero.composers.some(input => input.visible && input.editable === 'true' && input.textLength === 0)) return
   return hero.sessionId
 }
+
+/** Wait for one public new-session transition before any keyboard input. */
+export async function waitForHarnessNewBlankSession(read, before, { now = Date.now, sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds)) } = {}) {
+  // The new-session click is asynchronous. An existing empty hero can remain
+  // stable for longer than 750 ms while Windows is still creating its successor.
+  // Its empty composer is therefore never evidence that this click completed.
+  const oldIds = new Set([
+    ...before.conversations.map(item => item.sessionId),
+    ...before.rows.filter(item => item.key?.startsWith('session:')).map(item => item.key.slice('session:'.length)),
+  ].filter(Boolean))
+  const deadline = now() + 15000
+  let candidate, stableAt = now()
+  while (now() < deadline) {
+    const snapshot = await read()
+    const heroes = snapshot.conversations.filter(item => item.visible && item.phase === 'hero' && item.sessionId)
+    const hero = heroes.length === 1 ? heroes[0] : undefined
+    const eligible = hero && !oldIds.has(hero.sessionId)
+      && snapshot.rows.some(row => row.visible && row.key === 'session:' + hero.sessionId && row.selected === 'true' && !row.draggable)
+      && hero.composers.some(input => input.visible && input.editable === 'true' && input.textLength === 0)
+    const next = eligible ? hero.sessionId : undefined
+    if (next !== candidate) { candidate = next; stableAt = now() }
+    if (now() >= deadline) break
+    if (candidate && now() - stableAt >= 750) return candidate
+    await sleep(Math.min(100, deadline - now()))
+  }
+  throw new Error('The public new Session identity and its empty composer did not settle within 15000 ms; no input was sent')
+}

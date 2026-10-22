@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { runInNewContext } from 'node:vm'
 import { JSDOM } from 'jsdom'
 import { EventEmitter } from 'node:events'
-import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from './fixtures/harness-workspace-prerequisite.mjs'
+import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, waitForHarnessNewBlankSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from './fixtures/harness-workspace-prerequisite.mjs'
 
 const workspace = { workspaceId: 'workspace-own', path: 'C:\\test-own\\workspace-uuid', title: 'workspace-uuid', sessionIds: [] }
 function pageWith(result, observe = () => {}) {
@@ -41,6 +41,45 @@ test('blank readiness cannot accept another workspace, a stale row or a blocked 
     state => { state.conversations[0].composers[0].editable = 'false' },
     state => { state.conversations[0].composers[0].textLength = 3 },
   ]) { const state = structuredClone(ready); mutation(state); assert.equal(selectedHarnessWorkspaceSession(state, workspace), undefined) }
+})
+
+const blankSnapshot = id => ({ conversations: [{ sessionId: id, phase: 'hero', visible: true, composers: [{ editable: 'true', visible: true, textLength: 0 }] }], rows: [{ key: 'session:' + id, selected: 'true', draggable: false, visible: true }] })
+test('new-session readiness ignores a stable old empty composer until the clicked new identity arrives', async () => {
+  let clock = 0, clicks = 1, reads = 0
+  const before = blankSnapshot('session-old')
+  const id = await waitForHarnessNewBlankSession(() => { reads++; return blankSnapshot(clock < 1800 ? 'session-old' : 'session-new') }, before, { now: () => clock, sleep: async milliseconds => { clock += milliseconds } })
+  assert.equal(id, 'session-new')
+  assert.equal(clock, 2600, 'The old empty hero must not be accepted at 750 ms')
+  assert.equal(clicks, 1, 'The observation helper does not repeat the click or type a prompt')
+  assert.equal(reads, 27)
+})
+test('new-session readiness rejects known sidebar identities, mismatched selection and restored drafts', async () => {
+  let clock = 0
+  const before = blankSnapshot('session-old'); before.rows.push({ key: 'session:known-other', selected: 'false', visible: true, draggable: true })
+  const id = await waitForHarnessNewBlankSession(() => {
+    if (clock < 1000) return blankSnapshot('known-other')
+    const snapshot = blankSnapshot('session-new')
+    if (clock < 2000) snapshot.rows[0].key = 'session:session-old'
+    else if (clock < 3000) snapshot.conversations[0].composers[0].textLength = 4
+    return snapshot
+  }, before, { now: () => clock, sleep: async milliseconds => { clock += milliseconds } })
+  assert.equal(id, 'session-new')
+  assert.equal(clock, 3800)
+})
+test('a changing new identity restarts stability while keeping the original 15-second deadline', async () => {
+  let clock = 0
+  const before = blankSnapshot('session-old')
+  const id = await waitForHarnessNewBlankSession(() => blankSnapshot(clock < 500 ? 'session-new-1' : 'session-new-2'), before, { now: () => clock, sleep: async milliseconds => { clock += milliseconds } })
+  assert.equal(id, 'session-new-2')
+  assert.equal(clock, 1300)
+  clock = 0
+  await assert.rejects(waitForHarnessNewBlankSession(() => blankSnapshot('session-changing-' + clock), before, { now: () => clock, sleep: async milliseconds => { clock += milliseconds } }), /within 15000 ms; no input was sent/u)
+  assert.equal(clock, 15000)
+})
+test('a late DOM read cannot turn an over-budget new-session handoff into success', async () => {
+  let clock = 0
+  await assert.rejects(waitForHarnessNewBlankSession(() => { const snapshot = blankSnapshot('session-new'); clock += 8000; return snapshot }, blankSnapshot('session-old'), { now: () => clock, sleep: async milliseconds => { clock += milliseconds } }), /within 15000 ms/u)
+  assert.equal(clock, 16100)
 })
 test('DOM diagnostics retain public identity and readiness attributes without editor contents or credentials', () => {
   const dom = new JSDOM('<div data-conversation-content data-conversation-session="session-own" data-content-phase="hero"><div data-composer-input contenteditable="false" aria-label="选择一个工作区开始">private draft</div></div><div data-row-key="session-own" aria-selected="true"></div><button aria-haspopup="menu" aria-label="选择工作区">workspace-uuid</button><input value="credential-secret">', { runScripts: 'outside-only' })

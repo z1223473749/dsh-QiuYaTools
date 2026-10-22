@@ -1,8 +1,9 @@
 /** Local-only deterministic provider for the installed Harness UI E2E runner. */
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readOwnedHarnessFeatureEvidence } from '../../scripts/harness-feature-evidence.mjs'
 export const name = 'qiuya-harness-e2e-provider'
-export const inject = ['llm']
+export const inject = ['llm', 'agents', 'connection', 'workspaceRegistry', 'sessionQuery']
 const provider = 'qiuya-e2e'
 const model = 'fixture'
 const plan = '# E2E 测试计划\n\n检查真实会话和插件菜单。\n\n验证批注会提交为新的提示，不覆盖原有草稿。'
@@ -77,6 +78,25 @@ const delay = (milliseconds, signal) => new Promise((resolve, reject) => {
 })
 export function apply(ctx) {
   if (process.env.QIUYA_HARNESS_E2E !== '1' || !process.env.DSH_HOME?.includes('qiuya-harness-')) throw new Error('The E2E provider requires a dedicated temporary DSH_HOME')
+  // Test-only, owner-only finite readback. The exact Session is bound by the
+  // runner before its synthetic computer prompt; no other Agent is readable.
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/qiuya-e2e-owned-agent', methods: ['POST'], requestBody: 'buffered', async fetch(request) {
+    if (ctx.connection.browserPeer?.principal?.kind !== 'owner') return new Response('Forbidden', { status: 403 })
+    try {
+      const { sessionId } = await request.json(), target = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'e2e-computer-target.json'), 'utf8'))
+      if (!sessionId || sessionId !== target.sessionId) return new Response('Forbidden', { status: 403 })
+      const agent = ctx.agents.get(sessionId)
+      if (!agent) return Response.json({ sessionId, available: false })
+      return Response.json({ sessionId, available: true, state: agent.status, nextTurn: agent.inbox.nextTurn.length, nextStep: agent.inbox.nextStep.length })
+    } catch { return new Response('Invalid own fixture request', { status: 400 }) }
+  } }))
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/qiuya-e2e-owned-feature', methods: ['POST'], requestBody: 'buffered', async fetch(request) {
+    if (ctx.connection.browserPeer?.principal?.kind !== 'owner') return new Response('Forbidden', { status: 403 })
+    try {
+      const binding = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'e2e-feature-target.json'), 'utf8'))
+      return Response.json(await readOwnedHarnessFeatureEvidence(ctx, binding, await request.json()))
+    } catch { return new Response('Invalid own feature request', { status: 400 }) }
+  } }))
   const submittedPlans = new Set(), submittedComputers = new Map()
   function *call(name, args) {
     yield { type: 'tool-call-delta', index: 0, id: `fixture-call-${Date.now()}`, name, argumentsDelta: JSON.stringify(args) }
