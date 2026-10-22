@@ -8,7 +8,7 @@
 
 `windows-public-reuse-cleanup-prepared-0324ccce-2537-454c-a5b4-311ebf872908/runs/arm64/`：前六项通过，case7 在寻找独立 Alpha 窗口的原生查询阶段遇到 `NATIVE_TIMEOUT`，未取得目标身份。保存的 target 投影当时只有主窗口；后置只读系统快照才看见 Alpha。旧代码未记录 native 内部最早调用时序，故不能断定是 targets 的哪个系统调用、observe、线程池或输出管道卡住。回退截图错误被捕获，不能将它当作首个异常。
 
-该轮旧 finally 在 observer.dispose 抛出 `NATIVE_CLEANUP_FAILED` 后跳过浏览器和 Host 的清理及报告写入，后续正常退出检查失败。已分别核对本轮 runner/Host 的 PID、100ns 出生时间、路径、Session 和命令摘要，并用再次核验的进程句柄仅收尾仍存活的自有 runner；Host 在独立核验时已经退出，未对它发信号。native/esbuild/浏览器随后自然退出。`recovery-boundary.json` 明确记录 `originalRunPassed:false`、`forcedRecovery:true`；最终 `post-recovery-owned-input-assets.json` 为 remaining=[]、OS held=[]、lease 空闲、journal 缺席。失败及恢复均保留，恢复成功不改变该轮失败结论。
+该轮旧 finally 在 observer.dispose 抛出 `NATIVE_CLEANUP_FAILED` 后跳过浏览器和 Host 的清理及报告写入，后续正常退出检查失败。已分别核对本轮 runner/Host 的 PID、100ns 出生时间、路径、Session 和命令摘要，并用再次核验的进程句柄仅收尾仍存活的自有 runner；Host 在独立核验时已经退出，未对它发信号。后续独立复核 native/esbuild/浏览器均已退净，没有直接向它们发信号；缺席快照不单独证明其完整自然退役时序。`recovery-boundary.json` 明确记录 `originalRunPassed:false`、`forcedRecovery:true`；最终 `post-recovery-owned-input-assets.json` 为 remaining=[]、OS held=[]、lease 空闲、journal 缺席。失败及恢复均保留，恢复成功不改变该轮失败结论。
 
 上述目录均在仓库 `artifacts/harness-e2e/` 下。曾有只读 PowerShell 结果尚在写入时提前读取失败，读取任务自然退出后再次读取同一结果成功；它是诊断收集时序问题，未改写产品结果。
 
@@ -29,7 +29,7 @@
 
 第一次启动在任何 Windows 测试进程或输入前遇到 VM paused，原始前置失败保留为 `runs/arm64-preflight-paused/`。正常恢复同一 VM 后，使用 fresh `runs/arm64/` 运行：十页设置、阈值/主题、新会话、提示词、长文本附件、会话菜单、独立窗口复用、浏览器拖出、主 Agent 图片/动作流水线、批量归档、计划批注和真实文件上传下载，共 12/12 通过；没有前端错误。主 Agent 流水线在 4902ms 内完成 8 次模型适配器请求，包含实际 JPEG 和真实原生动作；完整 case9 含预览、接管中文输入、继续/暂停/停止等控制，为 66092ms。该 provider 是确定性传输验收，不能称为真实 DeepSeek 推理。
 
-独立 finally 已在这一实际运行中验证：`ownedCleanup.passed:true/errors:[]`，所有自有进程自然退出，remaining=[]、OS held=[]、lease lockFree=true/journal=null；wrapper 任务 Ready 后自然注销，forced=false；后置读取任务自然退出且无 signal，VM pause-idle:on 恢复。机器可供下一项验收使用。
+独立 finally 已在这一实际运行中验证：`ownedCleanup.passed:true/errors:[]`，自有进程最终 remaining=[]、OS held=[]、lease lockFree=true/journal=null；wrapper 任务 Ready 后自然注销，forced=false；后置读取任务自然退出且无 signal，VM pause-idle:on 恢复。Host 的终止方式与这些独立检查不同，见下述明确边界，不能概括为所有进程自然退出。
 
 ### 首个请求的有限时序
 
@@ -63,7 +63,7 @@
 
 ARM64 当前正式包十页设置截图已经逐张肉眼查看：电脑操控位于首位，其他设置页沿用统一卡片、间距、文字和开关样式，无裁切或布局重叠。成功截图在项目外 `/Users/qiuya/QiuYaTools-验收/2026-10-22/成功截图/Windows-arm64-public-reuse-formal-1160cfaf-a043-40cd-9376-b6f170e691e7/`。实际逐项结果及独立审计在载体的 `runs/arm64/`。
 
-两架构完整运行均结束并严格自然退净。复查后发现以下四项的成功判定仍有证据缺口，原始 pass/截图保留，不能扩大解释；下述同包 fresh 专项已补足。
+两架构完整运行均结束并严格证明自有进程、输入与租约退净。wrapper与只读审计任务自然完成；隔离Host采用测试源原有的显式关闭/终止策略，不能从最终退净推断其自然退出。复查后发现以下四项的成功判定仍有证据缺口，原始 pass/截图保留，不能扩大解释；下述同包 fresh 专项已补足。
 
 ## 四项结果证据补强
 
@@ -78,11 +78,11 @@ ARM64 当前正式包十页设置截图已经逐张肉眼查看：电脑操控�
 
 该轮归档独立集合回执 passed，计划修订 beforeSeq=27、afterSeq=36，新普通 user/message seq=33、完整文本唯一匹配，inline 收到未来真实paint事件 frameId=31ab90dd8cfb4a1bb25c256118e383b9、1000×800，三项通过。TXT已观察到HTTP响应，但读取response.json时专用上传Worker已正常退役，Playwright报Target closed；主页面仍在，随后独立窗口及其余业务正常。未得到TXT存储/readyUI证据前，本项及整轮均failed，未重放原请求。
 
-严格后置审计通过：ownedCleanup errors=[]、remaining=[]、OS held=[]、lease空闲/journal缺席，wrapper未forced且自然注销、只读任务无signal、VM idle恢复on，顶层exit1与失败一致。原始记录在b889载体runs/arm64。新的采集方式避免读取已退役Worker正文，使用HTTP会话/文件名绑定、独立实际存储字节及官方ready UI；不直接读取receiptId，也不把预先计算的hash说成服务端响应结果。生产上传实现未改。
+严格后置审计通过：ownedCleanup errors=[]、remaining=[]、OS held=[]、lease空闲/journal缺席，wrapper未forced且自然注销、只读任务无signal、VM idle恢复on，顶层exit1与失败一致。该结果不扩展为隔离Host未被显式终止。原始记录在b889载体runs/arm64。新的采集方式避免读取已退役Worker正文，使用HTTP会话/文件名绑定、独立实际存储字节及官方ready UI；不直接读取receiptId，也不把预先计算的hash说成服务端响应结果。生产上传实现未改。
 
 ### 独立TXT读取边界及原始采集失败
 
-后续3df/4dadd尝试的SDK上下文附件探针未能提供成功读回，均保留7/8 failed及自然退净报告，不能由通用400推定产品上传失败。只读自有profile元数据和失败截图已证明随机TXT实际存在、长度395B，官方UI已ready。最终移除该未提交探针，使用独立文件句柄读回，不注册新的上传实现、不拦截网络、不重复原请求。
+后续3df/4dadd尝试的SDK上下文附件探针未能提供成功读回，均保留7/8 failed及独立退净报告，不能由通用400推定产品上传失败。只读自有profile元数据和失败截图已证明随机TXT实际存在、长度395B，官方UI已ready。最终移除该未提交探针，使用独立文件句柄读回，不注册新的上传实现、不拦截网络、不重复原请求。
 
 TXT-only d80d只运行4项必要前置，独立oracle最初强制nlink=1，实际句柄证明同一395B只读对象有2条硬链接：PowerShell out和C# direct一致、GetFileInformation成功、Win32error0、struct52B，attrs33，未发输入。单硬链接不是业务要求；现允许合法nlink>=1，但前后linkCount、volume/fileIndex/size/最终路径保持，各级无reparse，当前nonce桶只含一个捕获到的文件名，实际内容hash必须一致。Node实文件负例同时证明错hash、越界名、额外叶、符号链接均拒绝，合法稳定硬链接可读。
 
@@ -109,6 +109,10 @@ ARM64 TXT实际SHA为 `640750c4e8df0e3ed566f0a17b11acee6778475104a8ad4eb10a063c3
 两个计划修订的完整文本SHA均为 `3a1a360aa31920251f59bfe2d457e4172fe191fc8028a231d4d13055df1042bb`，实际普通消息均seq33，source.kind=user，原文引用和批注完全匹配且只有一条。该判据证明批注修订送达以及原draft保留，不要求外部模型完成后续推理。ARM64 inline frameId为 `7c92683844e146b78b97280e453dfb08`，x64为 `10dec5c21ee94e2696d082c3a4d82e6f`；均来自drawImage后的未来事件，而非初始空canvas。
 
 每架构的原始独立收据在 `runs/<arch>/evidence/`：`pasted-text-upload-evidence.json`、`archive-exact-collection-evidence.json`、`plan-revision-durable-evidence.json`、`inline-preview-painted-frame.json`。严格后置分别在 `post-run-owned-input-assets.json`、`wrapper-task-cleanup.json`、`postflight-assets-task-cleanup.json`；根目录 `vm-pause-restored-<arch>.json` 证明原idle恢复。8项只是明确子集，与1160的12项和安装5项按同包证据合并覆盖，不能说成7da再次完整重跑。
+
+### 退出策略的精确边界
+
+1160、7da及a2f的Windows测试源在 `host-shutdown` 明确执行 `host.stdin.end()` 后调用 `host.kill('SIGTERM')`，另保留等待3秒后 `host.kill('SIGKILL')` 的既有fallback。Windows上的Node `kill` 不提供POSIX式SIGTERM优雅处理保证，因此这些Host退出包含显式终止策略，不能称为Host自然退出。旧报告未单独记录Host exitCode/signal或fallback是否触发；`ownedCleanup.passed` 只证明finally调用未报错，后置absence只证明最终退净，不补造缺失的退出方式证据。测试浏览器通过Playwright公开 `browser.close()` 请求关闭；wrapper/只读审计任务的Ready、未Stop/未signal和自然注销则有独立收据。三个层级必须分别报告；此修正文案不改变已经核实的业务、进程缺席、OS held空及租约回收结果。
 
 ## 本单元最终构建、纯测与截图来源
 
