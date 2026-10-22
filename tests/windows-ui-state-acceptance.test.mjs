@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdtemp, mkdir, rm, access } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { makeWindowsUIStateSource, makeWindowsUIProviderSource, assessWindowsUIStateReport, prepareWindowsUIStateAcceptance, WINDOWS_UI_STATE_CASES, WINDOWS_UI_STATE_IMAGES } from '../scripts/prepare-windows-ui-state-acceptance.mjs'
+import { makeWindowsUIStateSource, makeWindowsUIProviderSource, assessWindowsUIStateReport, makeWindowsUIStateEntry, makeWindowsUIStateRunner, WINDOWS_UI_STATE_CASES, WINDOWS_UI_STATE_IMAGES } from '../scripts/prepare-windows-ui-state-acceptance.mjs'
 
 function report() {
   return { status: 'passed', platform: 'win32', kind: 'official-Harness-Windows-UI-state-supplement', tests: WINDOWS_UI_STATE_CASES.map(name => ({ name, status: 'passed' })), selection: { scope: 'headless-windows-ui-states', fullUIAcceptance: false, nativeUIAcceptance: false }, uiStateOnlyEvidence: { browserHeadless: true, domProtocolOnly: true, nativeCommandCalls: 0, nativeDriverStarted: false, nativeFixtureCompiled: false, hostRetired: true, hostExitCode: 0, hostSignal: null, hostCloseReceipt: { source: 'own-stdin-eof-to-official-sigterm-handler', noProcessKill: true, signalListenerCount: 1 }, browserCloseSucceeded: true }, screenshotEvidence: { missing: [], files: WINDOWS_UI_STATE_IMAGES.map(name => ({ name, bytes: 150, sha256: 'a'.repeat(64) })) }, ownedCleanup: { passed: true }, frontendErrors: [] }
@@ -62,16 +65,31 @@ test('test-only EOF adapter calls existing official lifecycle event, records fin
   cleanup(); assert.equal(processFixture.stdin.listenerCount('end'), 0)
 })
 
-test('fresh carrier prepares and plans both packages without PD, browser, account or native execution', async () => {
-  const made = await prepareWindowsUIStateAcceptance()
-  assert.equal(made.executed, false); assert.equal(made.windowsCommandsExecuted, false); assert.equal(made.guiStarted, false)
-  assert.equal(made.snapshotImportSmoke.passed, true)
-  const execute = promisify(execFile)
-  for (const arch of ['arm64', 'x64']) {
-    const plan = JSON.parse((await execute(process.execPath, [made.runner, '--plan', '--arch', arch], { maxBuffer: 2 * 1024 * 1024, timeout: 30000 })).stdout)
-    assert.equal(plan.windowsCommandsExecuted, false); assert.equal(plan.guiStarted, false); assert.equal(plan.installLifecycle, false)
-  }
-  const denied = await execute(process.execPath, [made.runner, '--run', '--arch', 'arm64'], { maxBuffer: 100000, timeout: 30000 }).catch(error => error)
-  assert.notEqual(denied.code, 0)
-  assert.match(denied.stderr, /Root must schedule/)
+test('shared UI carrier renderers plan self-contained receipts for both architectures and reject source/approval drift before PD', async () => {
+  const directory=await mkdtemp(join(tmpdir(),'qyt-ui-carrier-unit-')),execute=promisify(execFile),hash=b=>createHash('sha256').update(b).digest('hex')
+  try {
+    const snapshot=join(directory,'snapshot');await mkdir(snapshot)
+    const ownInput=Buffer.from('unit-only reviewed source bytes');await writeFile(join(directory,'source.txt'),ownInput);await writeFile(join(snapshot,'source.txt'),ownInput)
+    const entry=makeWindowsUIStateEntry(await readFile(new URL('./fixtures/windows-ui-entry-unit-seed.mjs',import.meta.url),'utf8'))
+    const runner=makeWindowsUIStateRunner();await writeFile(join(directory,'entry.mjs'),entry);await writeFile(join(directory,'run.mjs'),runner)
+    await writeFile(join(directory,'postflight-assets.mjs'),"export async function harnessPostflight(){throw Error('Unit plan must not execute a Host or postflight')}\n")
+    await writeFile(join(directory,'windows-ui-state-policy.mjs'),"export function assessWindowsUIStateReport(){throw Error('Unit plan must not execute Windows acceptance')}\n")
+    const candidates={}
+    for(const architecture of ['arm64','x64']){const path=join(directory,architecture+'-unit.tgz'),bytes=Buffer.from('UNIT RECEIPT ONLY '+architecture);await writeFile(path,bytes);candidates[architecture]={path,sha256:hash(bytes)}}
+    const data={id:'unit-only',root:directory,snapshot,sourceHashes:{'source.txt':hash(ownInput)},snapshotHashes:{'source.txt':hash(ownInput)},candidates,entrySHA256:hash(entry),runnerSHA256:hash(runner)}
+    await writeFile(join(directory,'prepare-data.json'),JSON.stringify(data))
+    for(const architecture of ['arm64','x64']){
+      const plan=JSON.parse((await execute(process.execPath,[join(directory,'run.mjs'),'--plan','--arch',architecture],{maxBuffer:2*1024*1024,timeout:30000})).stdout)
+      assert.equal(plan.status,'prepared-not-run');assert.equal(plan.windowsCommandsExecuted,false);assert.equal(plan.guiStarted,false);assert.equal(plan.installLifecycle,false);assert.equal(plan.candidateSHA256,candidates[architecture].sha256)
+      assert.deepEqual(plan.mode,{QIUYA_WINDOWS_MANUAL_PREVIEW:'0',QIUYA_WINDOWS_DRAG_WINDOW:'0',QIUYA_WINDOWS_FILE_EXCHANGE:'0'})
+    }
+    const denied=await execute(process.execPath,[join(directory,'run.mjs'),'--run','--arch','arm64'],{maxBuffer:100000,timeout:30000}).catch(error=>error)
+    assert.notEqual(denied.code,0);assert.match(denied.stderr,/Root must schedule/)
+    const entryDenied=await execute(process.execPath,[join(directory,'entry.mjs'),'--run','--root-approved','--arch','arm64'],{maxBuffer:100000,timeout:30000}).catch(error=>error)
+    assert.notEqual(entryDenied.code,0);assert.match(entryDenied.stderr,/installer is excluded/)
+    await writeFile(join(directory,'source.txt'),'changed')
+    const tampered=await execute(process.execPath,[join(directory,'run.mjs'),'--plan','--arch','x64'],{maxBuffer:100000,timeout:30000}).catch(error=>error)
+    assert.notEqual(tampered.code,0);assert.match(tampered.stderr,/Reviewed source changed/)
+    assert.throws(()=>makeWindowsUIStateEntry('unknown seed'),/anchor/)
+  } finally {await rm(directory,{recursive:true,force:true})}
 })

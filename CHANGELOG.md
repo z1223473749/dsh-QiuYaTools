@@ -6,6 +6,8 @@
 
 - 修复缺少 Host／客户端公共入口的不完整更新包仍可通过预检的问题；电脑操控包同时检查代理入口，保留真实 0.5.2 的升级和回滚兼容。相关回归和真实归档正反例通过，详见[更新包入口校验](docs/update-package-entry-check.md)。
 
+- Windows 验收脚本与单元测试共用入口生成逻辑，普通回归不再依赖 Git 忽略的历史验收目录；保留真实准备的组件绑定和清理门槛。相关 13 项及当前源码 1027 项完整回归通过，三平台候选构建另按实际输入冻结，详见[载体回归说明](docs/windows-carrier-test-isolation.md)。
+
 - 明确模型画面规则：成功操作消耗frameId，下一步先重新观察，不为刷新画面重复成功动作。增加真实SDK＋session行为回归与自然发现／申请／独立测试驱动模拟一次授权模式，修复测试配置漏字段及未授权收尾截图。生产JS／三平台新包和该快照976项完整直接回归通过。用户授权重开后，新指导的Windows真实DeepSeek三任务通过，无工具错误或重复action；新Windows两包各UI12／安装5，Mac新包安装5／headless DOM8通过。自然授权由独立driver模拟，真人UI未计为已验；Mac原生及双会话仍待完成，旧失败保留。详见[候选验收](docs/current-candidate-visual-and-model-acceptance.md)与[构建记录](docs/computer-frame-guidance-acceptance.md)。
 
 - 修复 Windows 截图在共享线程池忙碌时错误超时：阻塞事务使用专用线程和有界等待，保留原超时、重试及退役限制；ARM64/x64 均完成真实输入、批准指针与捕获故障回归。

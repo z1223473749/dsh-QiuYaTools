@@ -8,7 +8,8 @@ import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 import {collectWindowsProcesses,validateCollectorRows,collectorCompileCommand,finiteSoakGateEvidence,invokeReadOnlyCollector} from '../scripts/windows-soak-process-collector.mjs'
 import {createWebViewOwnershipTracker} from '../scripts/computer-webview2-soak-evidence.mjs'
-import {prepareWindowsWebViewSoak} from '../scripts/prepare-windows-webview2-soak.mjs'
+import {makeWindowsWebViewSoakOuter,makeWindowsWebViewSoakEntry,validateWindowsSoakBuildReceipt,validateWindowsSoakHelperReceipt,WINDOWS_WEBVIEW_SOAK_MEASUREMENT} from '../scripts/prepare-windows-webview2-soak.mjs'
+import {build} from 'esbuild'
 const execute=promisify(execFile),file='C:\\own-uuid\\windows-soak-process-collector.exe',bytes=Buffer.from('own executable bytes'),sha256=createHash('sha256').update(bytes).digest('hex')
 const row=(pid,parentPid,name,path=file)=>({pid,parentPid,name,createdAtTicks:'639281324193729179',cimCreatedAtTicks:'639281324193729170',identityPrecision:'native-100ns-verified-against-CIM-microseconds',executablePath:path,workingSetBytes:123,privateBytes:80,cpuSeconds:1.25,ownedFixture:false,ownedWebView:false})
 const rows=()=>[row(10,1,'node.exe','C:\\own-node\\node.exe'),row(11,10,'windows-soak-process-collector.exe')]
@@ -69,14 +70,40 @@ test('C# core actually compiles/runs thirteen pure cases including missing live 
  }finally{await rm(directory,{recursive:true,force:true})}
 })
 
-test('fresh x64 freeze closes collector imports/source, retains formal PE and 1.5GiB gates, rejects tampering before PD',async()=>{
- const parent=await mkdtemp(join(tmpdir(),'qyt-collector-prepare-')),output=join(parent,'fresh')
+test('shared soak preparation checks explicit helper/source receipts, never historical ignored PE or build assets',()=>{
+ const helper=Buffer.from('UNIT RECEIPT ONLY not a Windows executable'),source=Buffer.from('class UnitSource {}'),expectedSHA256=createHash('sha256').update(helper).digest('hex'),sourceReceipt={'Unit.cs':createHash('sha256').update(source).digest('hex')},sourceBytes={'Unit.cs':source}
+ assert.equal(validateWindowsSoakHelperReceipt(helper,expectedSHA256),expectedSHA256)
+ assert.deepEqual(validateWindowsSoakBuildReceipt({helper,expectedSHA256,sourceReceipt,sourceBytes}),{helperSHA256:expectedSHA256,sourceInputs:1})
+ assert.throws(()=>validateWindowsSoakBuildReceipt({helper,expectedSHA256:'0'.repeat(64),sourceReceipt,sourceBytes}),/Formal PE changed/)
+ assert.throws(()=>validateWindowsSoakBuildReceipt({helper,expectedSHA256,sourceReceipt,sourceBytes:{'Unit.cs':Buffer.from('changed')}}),/Native source no longer matches/)
+ assert.throws(()=>validateWindowsSoakBuildReceipt({helper,expectedSHA256,sourceReceipt,sourceBytes:{}}),/Native source no longer matches/)
+ assert.throws(()=>validateWindowsSoakBuildReceipt({helper,expectedSHA256,sourceReceipt:{},sourceBytes:{}}),/no C# inputs/)
+ assert.throws(()=>validateWindowsSoakBuildReceipt({helper,expectedSHA256,sourceReceipt:{'../Unit.cs':sourceReceipt['Unit.cs']},sourceBytes:{'../Unit.cs':source}}),/Native source no longer matches/)
+ assert.throws(()=>makeWindowsWebViewSoakEntry({directory:'/unit',manifestSHA256:'bad',runtimeRoot:'C:\\unit'}),/Manifest SHA receipt/)
+ assert.throws(()=>makeWindowsWebViewSoakOuter('unknown source'),/transform does not match/)
+ assert.equal(WINDOWS_WEBVIEW_SOAK_MEASUREMENT.ownedTreeRssMaximumBytes,1610612736)
+ assert.equal(WINDOWS_WEBVIEW_SOAK_MEASUREMENT.uniqueFpsMinimum,10);assert.equal(WINDOWS_WEBVIEW_SOAK_MEASUREMENT.wallFpsMinimum,10);assert.equal(WINDOWS_WEBVIEW_SOAK_MEASUREMENT.latencyP95MaximumMs,500);assert.equal(WINDOWS_WEBVIEW_SOAK_MEASUREMENT.naturalCleanupRequired,true)
+})
+
+test('shared soak renderers close real collector imports and reject manifest/source tampering before a canary PD boundary',async()=>{
+ const parent=await mkdtemp(join(tmpdir(),'qyt-collector-carrier-unit-')),output=join(parent,'fresh'),frozen=join(output,'frozen'),digest=bytes=>createHash('sha256').update(bytes).digest('hex')
  try{
-  const made=await prepareWindowsWebViewSoak({output,architecture:'x64'}),manifest=JSON.parse(await readFile(join(output,'prepared.json'),'utf8'))
-  assert.equal(made.preparedOnly,true);assert.equal(manifest.actualWindowsExecution,false);assert.equal(manifest.helperSha256,'3d2206f3b12e3e26406e60c9b11b7400e89d7cd3373e3b569e3331e4f5f7ce58');assert.equal(manifest.measurement.ownedTreeRssMaximumBytes,1610612736)
-  for(const path of ['scripts/windows-soak-process-collector.mjs','tests/fixtures/windows-soak-process-collector.cs'])assert(manifest.files.some(f=>f.path===path))
-  const entryResult=await execute(process.execPath,[made.run,'smoke'],{timeout:30000});assert.equal(JSON.parse(entryResult.stdout).status,'prepared-not-run')
-  const path=join(output,'frozen/scripts/windows-soak-process-collector.mjs');await writeFile(path,(await readFile(path,'utf8'))+'\n// tamper\n')
-  const rejected=await execute(process.execPath,[made.run,'smoke','--run','--root-approved'],{timeout:10000}).catch(error=>error);assert.notEqual(rejected.code,0);assert.match(rejected.stderr,/Frozen source changed/)
+  await mkdir(frozen,{recursive:true});const files=[]
+  const add=async(path,bytes)=>{const target=join(frozen,path);await mkdir(join(target,'..'),{recursive:true});await writeFile(target,bytes);files.push({path,bytes:bytes.length,sha256:digest(bytes)})}
+  const outer=makeWindowsWebViewSoakOuter(await readFile(new URL('../scripts/soak-webview2-windows-pd.mjs',import.meta.url),'utf8'))
+  assert(outer.includes('taskNaturalExit'));assert(outer.includes('actionMatched=$true'));assert(outer.includes('principalSid=$got'));assert(!outer.includes('Stop-ScheduledTask -TaskName'))
+  await add('scripts/soak-webview2-windows-pd.mjs',Buffer.from(outer))
+  for(const path of ['scripts/soak-computer-webview2.mjs','scripts/computer-webview2-soak-evidence.mjs','scripts/computer-soak-evidence.mjs','scripts/windows-soak-process-collector.mjs','tests/fixtures/windows-soak-process-collector.cs','tests/fixtures/windows-webview2-soak-fixture.ps1'])await add(path,await readFile(new URL('../'+path,import.meta.url)))
+  const closure=await build({entryPoints:[join(frozen,'scripts/soak-webview2-windows-pd.mjs'),join(frozen,'scripts/soak-computer-webview2.mjs')],absWorkingDir:frozen,bundle:true,write:false,platform:'node',format:'esm',outdir:join(output,'closure-check'),packages:'external',metafile:true})
+  for(const path of ['scripts/computer-soak-evidence.mjs','scripts/computer-webview2-soak-evidence.mjs','scripts/windows-soak-process-collector.mjs'])assert(Object.keys(closure.metafile.inputs).includes(path))
+  const manifest={version:1,status:'unit-receipt-not-native-acceptance',architecture:'x64',actualWindowsExecution:false,helperSha256:digest(Buffer.from('unit helper receipt')),files,measurement:WINDOWS_WEBVIEW_SOAK_MEASUREMENT}
+  const raw=JSON.stringify(manifest);await writeFile(join(output,'prepared.json'),raw)
+  const run=join(output,'run.mjs'),entry=makeWindowsWebViewSoakEntry({directory:output,manifestSHA256:digest(raw),runtimeRoot:'C:\\unit-readonly-runtime',evidenceRoot:join(parent,'own-unit-evidence'),prlctl:join(parent,'NEVER-REAL-PD')});await writeFile(run,entry)
+  const planned=await execute(process.execPath,[run,'smoke'],{timeout:30000});assert.equal(JSON.parse(planned.stdout).status,'prepared-not-run');assert.equal(JSON.parse(planned.stdout).helperSha256,manifest.helperSha256)
+  for(const path of ['scripts/windows-soak-process-collector.mjs','tests/fixtures/windows-soak-process-collector.cs'])assert(manifest.files.some(file=>file.path===path))
+  const path=join(frozen,'scripts/windows-soak-process-collector.mjs');await writeFile(path,(await readFile(path,'utf8'))+'\n// tamper\n')
+  const rejected=await execute(process.execPath,[run,'smoke','--run','--root-approved'],{timeout:10000}).catch(error=>error);assert.notEqual(rejected.code,0);assert.match(rejected.stderr,/Frozen source changed/)
+  await writeFile(join(output,'prepared.json'),raw+' ')
+  const manifestRejected=await execute(process.execPath,[run,'smoke','--run','--root-approved'],{timeout:10000}).catch(error=>error);assert.notEqual(manifestRejected.code,0);assert.match(manifestRejected.stderr,/Manifest changed/)
  }finally{await rm(parent,{recursive:true,force:true})}
 })
