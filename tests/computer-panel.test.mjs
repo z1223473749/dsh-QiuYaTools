@@ -8,16 +8,17 @@ import { createRoot } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 
 const require = createRequire(import.meta.url)
+const { Simulate } = require('react-dom/test-utils')
 const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/panel.tsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external' })).outputFiles[0].text
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(id => id === '@deepseek-ai/dsh-client-ui-primitives' ? { Switch: ({ checked, disabled, label, onChange }) => React.createElement('button', { role: 'switch', 'aria-label': label, 'aria-checked': checked, disabled, onClick: () => onChange(!checked) }) } : require(id), module, module.exports)
 const tick = () => new Promise(done => setImmediate(done))
 const request = (sessionId, extra = {}) => ({ requestId: `request-${sessionId}`, requestVersion: 1, sessionId, appId: 'fixture.app', appName: '自有应用', reason: '填写任务表格', createdAt: Date.now(), expiresAt: Date.now() + 60000, state: 'pending', ...extra })
-async function fixture(t, { native = { platform: 'win32', available: true }, enabled = true, activeSessionId } = {}) {
+async function fixture(t, { native = { platform: 'win32', available: true }, enabled = true, activeSessionId, delayedEnabled = false } = {}) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://127.0.0.1/' })
   const saved = new Map(['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
-  const calls = [], changes = [], plans = [], listeners = new Set(), status = { sessions: [], allowedApps: [], native, pendingRequests: [], environments: [] }
+  const calls = [], changes = [], plans = [], listeners = new Set(), settingsWrites = [], status = { sessions: [], allowedApps: [], native, pendingRequests: [], environments: [] }
   const current = { value: activeSessionId }, applications = [{ appId: 'fixture.app', name: '自有应用', running: true }]
   const ctx = { get(name) {
     if (name === 'uiSession') return { adapter: { current: { subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) }, getSnapshot: () => ({ key: current.value }) } } }
@@ -27,6 +28,8 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
       const planned = plans.findIndex(row => row.op === input.op); if (planned >= 0) return plans.splice(planned, 1)[0].promise
       if (input.op === 'status') return { ok: true, value: structuredClone(status) }
       if (input.op === 'applications') return { ok: true, value: structuredClone(applications) }
+      if (input.op === 'exchange') return { ok: true, value: { enabled: true, files: [], maxBytes: 8388608, chunkBytes: 131072 } }
+      if (input.op === 'connect') status.environments = [...status.environments.filter(row => row.sessionId !== input.sessionId), { sessionId: input.sessionId, mode: input.mode }]
       if (input.op === 'allow') { status.allowedApps = input.allowed ? [...status.allowedApps, input.appId] : status.allowedApps.filter(id => id !== input.appId); return { ok: true, value: {} } }
       if (input.op === 'decide') status.pendingRequests = status.pendingRequests.filter(row => row.requestId !== input.requestId)
       assert.ok(['openSettings', 'decide', 'pause', 'resume', 'preview', 'redock', 'stop', 'connect'].includes(input.op), `Unexpected mutation ${input.op}`)
@@ -34,13 +37,23 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
     } } }
   } }
   const root = createRoot(dom.window.document.querySelector('#root'))
-  const render = async () => act(async () => { root.render(React.createElement(module.exports.ComputerPanel, { ctx, enabled, disabled: false, onEnabled: value => changes.push(value) })); await tick() })
+  function SettingsHost() {
+    const [persisted, setPersisted] = React.useState(enabled)
+    return React.createElement(module.exports.ComputerPanel, { ctx, enabled: persisted, disabled: false, onEnabled(value) {
+      changes.push(value)
+      if (delayedEnabled) { let resolve; const saved = new Promise(done => { resolve = done }); settingsWrites.push(resolve); void saved.then(() => setPersisted(value)) }
+    } })
+  }
+  const render = async () => act(async () => { root.render(React.createElement(SettingsHost)); await tick() })
   const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label)
   const click = async label => { const node = button(label); assert.ok(node, `${label} must exist`); await act(async () => { node.click(); await tick() }) }
   t.after(async () => { await act(async () => root.unmount()); dom.window.close(); for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key] })
   return { dom, status, applications, calls, changes, render, button, click,
     plan(op) { let resolve; const promise = new Promise(done => { resolve = done }); plans.push({ op, promise }); return resolve },
     async switchSession(value) { await act(async () => { current.value = value; for (const listener of listeners) listener(); await tick() }) },
+    async persistEnabled() { assert.ok(settingsWrites.length); await act(async () => { settingsWrites.shift()(); await tick() }) },
+    async environment(value) { const select = [...dom.window.document.querySelectorAll('select')].find(node => [...node.options].some(option => option.value === 'remote')); await act(async () => { Simulate.change(select, { target: { value } }); await tick() }) },
+    async edit(label, value) { const field = [...dom.window.document.querySelectorAll('label')].find(node => node.firstChild?.textContent === label)?.querySelector('input,textarea'); assert.ok(field, `${label} must exist`); await act(async () => { Simulate.change(field, { target: { value } }); await tick() }) },
     mutations: () => calls.filter(row => !['status', 'applications'].includes(row.op)) }
 }
 
@@ -136,4 +149,79 @@ test('disabled owner overview follows the real Host contract and explains the pr
   assert.equal(permissions.textContent.includes('正在检查'), false)
   assert.equal(permissions.querySelector('[aria-label="系统权限引导"]'), null)
   assert.deepEqual(f.mutations(), []); assert.equal(f.calls.some(row => row.op === 'applications'), false)
+})
+
+test('delayed enabled persistence preserves the selected remote draft and never dispatches an unintended local connection', async t => {
+  const f = await fixture(t, { enabled: false, activeSessionId: 'A', delayedEnabled: true }); await f.render()
+  await f.click('启用电脑操控')
+  await f.environment('remote'); await f.edit('配对地址', 'https://fixture-a.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-pair-a')
+  assert.equal(f.button('连接当前聊天的环境').disabled, true, 'the feature must wait for actual persisted enablement')
+  await f.persistEnabled(); await f.click('连接当前聊天的环境')
+  const connections = f.calls.filter(row => row.op === 'connect')
+  assert.equal(connections.length, 1)
+  assert.equal(connections[0].mode, 'remote', 'a settings readback must not turn a prepared remote request into a local connection')
+  assert.equal(connections[0].sessionId, 'A'); assert.equal(connections[0].endpoint, 'https://fixture-a.invalid/v1/computer'); assert.equal(connections[0].token, 'fixture-pair-a')
+  assert.ok(f.button('检查并刷新交换目录'))
+  await f.click('检查并刷新交换目录')
+  assert.deepEqual(f.calls.filter(row => row.op === 'exchange').map(row => [row.sessionId, row.request.action]), [['A', 'status'], ['A', 'list']])
+})
+
+test('a real current-chat change invalidates remote credentials without replacing the chosen environment by local', async t => {
+  const f = await fixture(t, { activeSessionId: 'A' }); await f.render()
+  await f.environment('remote'); await f.edit('配对地址', 'https://fixture-a.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-pair-a')
+  await f.switchSession('B'); await f.click('连接当前聊天的环境')
+  assert.deepEqual(f.calls.filter(row => row.op === 'connect'), [], 'switching chats must not make the old Connect button issue a default local request')
+  const selected = [...f.dom.window.document.querySelectorAll('select')].find(node => [...node.options].some(option => option.value === 'remote'))
+  assert.equal(selected.value, 'remote'); assert.equal(f.dom.window.document.querySelector('input[type=password]').value, '')
+  assert.equal(f.button('连接当前聊天的环境').disabled, true)
+  await f.edit('配对地址', 'https://fixture-b.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-pair-b'); await f.click('连接当前聊天的环境')
+  const connected = f.calls.filter(row => row.op === 'connect'); assert.equal(connected.length, 1)
+  assert.equal(connected[0].sessionId, 'B'); assert.equal(connected[0].mode, 'remote'); assert.equal(connected[0].endpoint, 'https://fixture-b.invalid/v1/computer'); assert.equal(connected[0].token, 'fixture-pair-b')
+})
+
+test('a same-chat seat notification and late status response preserve the remote draft without dispatching a connection', async t => {
+  const f = await fixture(t, { activeSessionId: 'A' }); await f.render()
+  await f.environment('remote'); await f.edit('配对地址', 'https://fixture-a.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-pair-a')
+  const response = f.plan('status'); await f.click('重新检查'); await f.switchSession('A')
+  await act(async () => { response({ ok: true, value: structuredClone(f.status) }); await tick() })
+  assert.equal(f.calls.filter(row => row.op === 'connect').length, 0)
+  await f.click('连接当前聊天的环境')
+  assert.equal(f.calls.filter(row => row.op === 'connect').at(-1).mode, 'remote')
+  assert.equal(f.calls.filter(row => row.op === 'connect').at(-1).token, 'fixture-pair-a')
+})
+
+test('a scoped file exchange never falls back to another chat or the legacy remote connection', async t => {
+  const f = await fixture(t, { activeSessionId: 'B', native: { platform: 'win32', available: true, mode: 'remote' } })
+  f.status.environments = [{ sessionId: 'A', mode: 'remote' }]; await f.render(); await f.environment('remote')
+  assert.equal(!!f.button('检查并刷新交换目录'), false, 'global remote metadata does not authorize the selected chat file area')
+  assert.deepEqual(f.calls.filter(row => row.op === 'exchange'), [])
+  await f.edit('配对地址', 'https://fixture-b.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-pair-b'); await f.click('连接当前聊天的环境')
+  await f.click('检查并刷新交换目录')
+  assert.deepEqual(f.calls.filter(row => row.op === 'exchange').map(row => row.sessionId), ['B', 'B'])
+})
+
+test('the disabled panel hides exchange even when historical selected-chat remote metadata remains', async t => {
+  const f = await fixture(t, { activeSessionId: 'A', enabled: false, native: { platform: 'win32', mode: 'remote' } })
+  f.status.environments = [{ sessionId: 'A', mode: 'remote' }]; await f.render(); await f.environment('remote')
+  assert.equal(!!f.button('检查并刷新交换目录'), false)
+  assert.deepEqual(f.calls.filter(row => row.op === 'exchange'), [])
+})
+
+test('changing chats clears browser origin and CDP drafts before a new environment can be connected', async t => {
+  const f = await fixture(t, { activeSessionId: 'A' }); await f.render(); await f.environment('browser')
+  await f.edit('允许的网站来源（每行一个）', 'https://fixture-a.invalid'); await f.edit('起始页面', 'https://fixture-a.invalid/page'); await f.edit('本机调试地址（可选）', 'http://127.0.0.1:9222')
+  await f.switchSession('B'); await f.environment('browser'); await f.click('连接当前聊天的环境')
+  assert.deepEqual(f.calls.filter(row => row.op === 'connect'), [], 'old browser origins/CDP cannot be silently inherited by a different chat')
+  assert.equal(f.dom.window.document.querySelector('textarea').value, '')
+})
+
+for (const order of ['enabled-first', 'seat-first']) test(`late initial current-chat notification and enabled persistence cannot connect a draft to the wrong mode (${order})`, async t => {
+  const f = await fixture(t, { enabled: false, delayedEnabled: true }); await f.render(); await f.click('启用电脑操控')
+  await f.environment('remote'); await f.edit('配对地址', 'https://unbound-fixture.invalid/v1/computer'); await f.edit('配对密钥', 'fixture-unbound-pair')
+  if (order === 'enabled-first') { await f.persistEnabled(); await f.switchSession('A') } else { await f.switchSession('A'); await f.persistEnabled() }
+  await f.click('连接当前聊天的环境')
+  assert.deepEqual(f.calls.filter(row => row.op === 'connect'), [], 'unbound credentials are invalidated instead of becoming a default Local request')
+  const select = [...f.dom.window.document.querySelectorAll('select')].find(node => [...node.options].some(option => option.value === 'remote'))
+  assert.equal(select.value, 'remote'); assert.equal(f.dom.window.document.querySelector('input[type=password]').value, '')
+  assert.equal(f.button('连接当前聊天的环境').disabled, true)
 })

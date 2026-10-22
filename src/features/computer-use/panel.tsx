@@ -106,7 +106,15 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     setStatus(result)
   }
   useEffect(() => {
-    revision.current++; performing.current = false; setMessage(''); setToken(''); setEndpointUrl(''); setMode('local'); setBusy(false); setFileGeneration(value => value + 1)
+    // Credentials and browser targets belong to this chat. Retain the chosen
+    // mode so invalidating a draft cannot turn Remote Connect into Local.
+    setToken(''); setEndpointUrl(''); setAllowPrivate(false)
+    setOrigins(''); setInitialUrl(''); setCdpEndpoint('')
+  }, [activeSessionId])
+  useEffect(() => {
+    // An asynchronous settings readback invalidates old replies but must not
+    // erase the environment the owner has been preparing in the meantime.
+    revision.current++; performing.current = false; setMessage(''); setBusy(false); setFileGeneration(value => value + 1)
     let disposed = false
     const run = async () => { try { if (!disposed) await refresh() } catch (error) { if (!disposed) setMessage((error as Error).message) } }
     void run(); const timer = window.setInterval(() => { void run() }, 1500)
@@ -167,7 +175,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
       {mode === 'remote' && <><label>配对地址<input type="url" value={endpointUrl} placeholder="https://computer.example/v1/computer" onChange={event => setEndpointUrl(event.target.value)}/></label><label>配对密钥<input type="password" autoComplete="off" value={token} onChange={event => setToken(event.target.value)}/></label><label className="qyt-computer-check"><input type="checkbox" checked={allowPrivate} onChange={event => setAllowPrivate(event.target.checked)}/>允许连接受信任的私有网络</label></>}
       {mode === 'browser' && <><label>浏览器<select value={browser} onChange={event => setBrowser(event.target.value as typeof browser)}><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option></select></label><label>允许的网站来源（每行一个）<textarea rows={3} value={origins} placeholder="https://example.com" onChange={event => setOrigins(event.target.value)}/></label><label>起始页面<input type="url" value={initialUrl} placeholder="https://example.com/" onChange={event => setInitialUrl(event.target.value)}/></label><details><summary>连接现有浏览器</summary><label>本机调试地址（可选）<input type="url" value={cdpEndpoint} placeholder="http://127.0.0.1:9222" onChange={event => setCdpEndpoint(event.target.value)}/></label></details><p className="qyt-muted">默认打开独立浏览器配置，只访问你列出的网站。</p></>}
       <div className="qyt-computer-actions"><button type="button" className="qyt-button" disabled={busy || !enabled || !activeSessionId || mode === 'remote' && (!endpointUrl || !token) || mode === 'browser' && !origins.trim()} onClick={() => { void action('connect', { sessionId: activeSessionId, mode, endpoint: endpointUrl, token, allowPrivateNetwork: allowPrivate, browser, allowedOrigins: origins.split(/[\n,]+/u).map(value => value.trim()).filter(Boolean), initialUrl: initialUrl || undefined, cdpEndpoint: cdpEndpoint || undefined }) }}>连接当前聊天的环境</button>{connected && <span className="qyt-computer-caption">已连接：{environmentName[connected.mode]}</span>}</div>
-      {mode === 'remote' && (connected?.mode ?? native?.mode) === 'remote' && !busy && <FileExchangePanel key={`${activeSessionId ?? ''}:${fileGeneration}`} call={(op, extra) => call(op, { ...(activeSessionId ? { sessionId: activeSessionId } : {}), ...extra })}/>}
+      {enabled && mode === 'remote' && (activeSessionId ? connected?.mode === 'remote' : native?.mode === 'remote') && !busy && <FileExchangePanel key={`${activeSessionId ?? ''}:${fileGeneration}`} call={(op, extra) => call(op, { ...(activeSessionId ? { sessionId: activeSessionId } : {}), ...extra })}/>}
     </div></details>
     {message && <p className="qyt-computer-error" role="alert">{message}</p>}
   </div>
