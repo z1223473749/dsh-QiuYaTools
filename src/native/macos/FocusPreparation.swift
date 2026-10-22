@@ -67,7 +67,7 @@ struct FocusPreparationSample {
 
 /// CG metadata only: no AX text, title or content is needed to identify the
 /// selected normal-level window and its position in WindowServer's front order.
-struct FocusWindowState {
+struct FocusWindowState: Equatable {
     let windowId: CGWindowID
     let pid: pid_t
     let frame: CGRect
@@ -77,56 +77,95 @@ struct FocusWindowState {
     var normalVisible: Bool { layer == CGWindowLevelForKey(.normalWindow) && onscreen && alpha.isFinite && alpha > 0 }
 }
 
-/// A normal-layer CG surface can be an AppKit child component. Treat it as
-/// part of the selected window only with public AX hit/window association;
-/// its size, name, PID or location alone is never sufficient.
-struct FocusWindowComponentProof {
-    let windowId: CGWindowID
-    let pid: pid_t
-    let componentFrame: CGRect
-    let focusedPid: pid_t
-    let focusedFrame: CGRect
-    let hitPid: pid_t
-    let hitWindowPid: pid_t
-    let hitFrame: CGRect
-    let hitWindowIsFocused: Bool
-    let hitIsTopLevel: Bool
+/// Every action uses its actual input destination. CG stacking alone does
+/// not identify keyboard focus, and unrelated surfaces do not own a pointer point.
+enum FocusInputRoute {
+    case pointer(CGPoint)
+    case keyboard
+    var kind: String { if case .pointer = self { return "pointer" }; return "keyboard" }
 }
 
 enum ExactWindowFocus {
     static func sameGeometry(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+        abs(a.minX-b.minX) < 1 && abs(a.minY-b.minY) < 1 && abs(a.width-b.width) < 1 && abs(a.height-b.height) < 1
     }
-    static func provesComponent(_ component: FocusWindowState, selected: FocusWindowState, proof: FocusWindowComponentProof) -> Bool {
-        let outer = selected.frame, inner = component.frame
-        return component.pid == selected.pid && proof.windowId == component.windowId && proof.pid == component.pid && proof.componentFrame == inner &&
-            inner.minX > outer.minX && inner.minY > outer.minY && inner.maxX < outer.maxX && inner.maxY < outer.maxY &&
-            proof.focusedPid == selected.pid && proof.hitPid == selected.pid && proof.hitWindowPid == selected.pid &&
-            sameGeometry(proof.focusedFrame, outer) && proof.hitWindowIsFocused && !proof.hitIsTopLevel &&
-            [proof.hitFrame.minX, proof.hitFrame.minY, proof.hitFrame.width, proof.hitFrame.height].allSatisfy(\.isFinite) &&
-            proof.hitFrame.width > 0 && proof.hitFrame.height > 0 && inner.contains(proof.hitFrame) &&
-            proof.hitFrame.contains(CGPoint(x: inner.midX, y: inner.midY))
-    }
-    static func sample(target: NativeTarget, geometry: FrameGeometry, frontmostPid: pid_t?, windows: [FocusWindowState], components: [FocusWindowComponentProof] = [], requireFrontmost: Bool = false) throws -> FocusPreparationSample {
+    static func validate(target: NativeTarget, geometry: FrameGeometry, windows: [FocusWindowState]) throws {
         let normal = windows.filter(\.normalVisible)
         guard let selected = normal.first(where: { $0.windowId == target.windowId }), selected.pid == target.pid,
               sameGeometry(selected.frame, geometry.frame) else {
             throw ComputerError("GEOMETRY_CHANGED", "The selected window moved, changed owner, or became unavailable. Observe it again before acting.")
         }
-        let matching = normal.filter { $0.pid == target.pid && sameGeometry($0.frame, geometry.frame) }
-        guard matching.count == 1 else {
+        guard normal.filter({ $0.pid == target.pid && sameGeometry($0.frame, geometry.frame) }).count == 1 else {
             throw ComputerError("FOCUS_CHANGED", "Overlapping app windows have the same geometry; input stopped. Separate the selected window before continuing.")
         }
-        var frontWindowId = normal.first?.windowId
-        if frontmostPid == target.pid, let index = normal.firstIndex(where: { $0.windowId == target.windowId }), index > 0 && index <= 3 {
-            let blockers = normal.prefix(index)
-            if blockers.allSatisfy({ component in components.contains { provesComponent(component, selected: selected, proof: $0) } }) { frontWindowId = target.windowId }
+    }
+    static func sameOrderedPrefix(_ before: [FocusWindowState], _ after: [FocusWindowState], selected: CGWindowID) -> Bool {
+        let a = before.filter(\.normalVisible), b = after.filter(\.normalVisible)
+        guard let ai = a.firstIndex(where: { $0.windowId == selected }), let bi = b.firstIndex(where: { $0.windowId == selected }), ai == bi else { return false }
+        return Array(a.prefix(ai+1)) == Array(b.prefix(bi+1))
+    }
+}
+
+/// Shared selected-window identity checks surround both public routing reads.
+/// The complete ordered CG prefix must remain exact, including subpixel bounds.
+enum ExactInputIdentity {
+    static func check(target: NativeTarget, geometry: FrameGeometry, before: [FocusWindowState], after: [FocusWindowState],
+                      beforePid: pid_t?, afterPid: pid_t?, processIdentityCurrent: Bool) throws {
+        guard processIdentityCurrent else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+        try ExactWindowFocus.validate(target: target, geometry: geometry, windows: before)
+        try ExactWindowFocus.validate(target: target, geometry: geometry, windows: after)
+        guard beforePid == target.pid, afterPid == target.pid, ExactWindowFocus.sameOrderedPrefix(before, after, selected: target.windowId) else {
+            throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.")
         }
-        let sample = FocusPreparationSample(frontmostPid: frontmostPid, frontmostWindowId: frontWindowId)
-        if requireFrontmost && (sample.frontmostPid != target.pid || sample.frontmostWindowId != target.windowId) {
+    }
+}
+
+@MainActor struct PointerRoutingBackend {
+    var primaryMaxY: () -> Double?
+    var windowAt: (CGPoint) -> CGWindowID?
+}
+@MainActor enum ExactPointerRouting {
+    static func appKitPoint(_ point: CGPoint, primaryMaxY: Double) -> CGPoint? {
+        guard point.x.isFinite, point.y.isFinite, primaryMaxY.isFinite else { return nil }
+        let result = CGPoint(x: point.x, y: primaryMaxY-point.y)
+        return result.y.isFinite ? result : nil
+    }
+    static func check(point: CGPoint, selected: CGWindowID, frame: CGRect, backend: PointerRoutingBackend) throws {
+        guard selected > 0, frame.contains(point), let top = backend.primaryMaxY(), let appKit = appKitPoint(point, primaryMaxY: top),
+              backend.windowAt(appKit) == selected else {
             throw ComputerError("FOCUS_CHANGED", "The selected window lost foreground input; input stopped.")
         }
-        return sample
+    }
+    static var native: PointerRoutingBackend {
+        // Public global mouseDown routing requires an initialized AppKit connection.
+        // Unknown or different CG surfaces are refused, including AX-invisible ones.
+        _ = NSApplication.shared
+        return PointerRoutingBackend(primaryMaxY: { NSScreen.screens.first.map { Double($0.frame.maxY) } }, windowAt: { point -> CGWindowID? in
+            let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+            guard number > 0, number <= Int(UInt32.max) else { return nil }; return CGWindowID(number)
+        })
+    }
+}
+
+struct KeyboardFocusSnapshot {
+    let pid: pid_t
+    let frame: CGRect
+    let isWindow: Bool
+    let identityStable: Bool
+}
+
+/// A non-key window can be ordered in front of another key window in the same
+/// process. Each normal key down/up requires a readable, stable focused AX root.
+enum ExactKeyboardFocus {
+    static func check(target: NativeTarget, geometry: FrameGeometry, before: [FocusWindowState], after: [FocusWindowState],
+                      beforePid: pid_t?, afterPid: pid_t?, focused: KeyboardFocusSnapshot?, processIdentityCurrent: Bool) throws {
+        try ExactInputIdentity.check(target: target, geometry: geometry, before: before, after: after,
+            beforePid: beforePid, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
+        guard let focused, focused.pid == target.pid, focused.isWindow, focused.identityStable,
+              [focused.frame.minX, focused.frame.minY, focused.frame.width, focused.frame.height].allSatisfy(\.isFinite),
+              focused.frame.width > 0, focused.frame.height > 0, ExactWindowFocus.sameGeometry(focused.frame, geometry.frame) else {
+            throw ComputerError("FOCUS_CHANGED", "The selected window does not own keyboard focus; input stopped.")
+        }
     }
 }
 
@@ -144,14 +183,16 @@ private struct FocusProcessBirth: Equatable {
 /// Bounded, metadata-only action diagnostics. No AX values, titles, paths or
 /// UI text are retained; these counters never participate in authorization.
 @MainActor private final class FocusIdentityDiagnostics {
-    var metadataSamples = 0, proofCalls = 0, acceptedProofs = 0
-    var proofSeconds: TimeInterval = 0
-    var lastStage = "not-requested", lastAXError: Int32?
+    var metadataSamples = 0, routeChecks = 0
+    var route = "metadata", routeStage = "not-requested", routeAccepted = false
+    var routeSeconds: TimeInterval = 0
+    var keyboardSamples = 0, keyboardAccepted = false, keyboardStage = "not-requested", keyboardAXError: Int32?
     var snapshot: [String: Any] {
-        ["metadataSamples": metadataSamples, "componentProofCalls": proofCalls,
-         "componentProofMs": max(0, Int((proofSeconds * 1000).rounded())),
-         "acceptedComponentProofs": acceptedProofs, "componentProofStage": lastStage,
-         "componentAXError": lastAXError as Any? ?? NSNull()]
+        ["metadataSamples": metadataSamples, "inputRoute": route, "inputRouteChecks": routeChecks,
+         "inputRouteAccepted": routeAccepted, "inputRouteStage": routeStage,
+         "inputRouteMs": max(0, Int((routeSeconds * 1000).rounded())),
+         "keyboardFocusSamples": keyboardSamples, "keyboardFocusAccepted": keyboardAccepted,
+         "keyboardFocusStage": keyboardStage, "keyboardAXError": keyboardAXError as Any? ?? NSNull()]
     }
 }
 
@@ -170,28 +211,88 @@ private struct FocusProcessBirth: Equatable {
         }
         self.target = target; self.geometry = geometry; self.birth = birth; application = app
     }
-    func sample(requireFrontmost: Bool = false, includeComponentProofs: Bool = true) throws -> FocusPreparationSample {
+    private var processIdentityCurrent: Bool { FocusProcessBirth(target.pid) == birth && !application.isTerminated }
+    func validateMetadata() throws {
         diagnostics.metadataSamples += 1
-        guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
-        var windows = try currentWindows()
-        let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let initial = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: foreground, windows: windows)
-        var proofs = [FocusWindowComponentProof]()
-        let normal = windows.filter(\.normalVisible)
-        if foreground == target.pid, initial.frontmostWindowId != target.windowId,
-           let index = normal.firstIndex(where: { $0.windowId == target.windowId }), index > 0 && index <= 3 {
-            let selected = normal[index], blockers = Array(normal.prefix(index))
-            if blockers.allSatisfy({ $0.pid == target.pid && selected.frame.contains($0.frame) }) {
-                if includeComponentProofs { proofs = componentProofs(blockers, selected: selected) }
-                if includeComponentProofs { diagnostics.acceptedProofs = blockers.filter { component in proofs.contains { ExactWindowFocus.provesComponent(component, selected: selected, proof: $0) } }.count }
-                // Public AX calls are synchronous. Never reuse a proof after
-                // its CG surface or the front order changed during those reads.
-                windows = try currentWindows()
+        guard processIdentityCurrent else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+        try ExactWindowFocus.validate(target: target, geometry: geometry, windows: currentWindows())
+        guard processIdentityCurrent else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+    }
+    func sample(route: FocusInputRoute, requireReady: Bool = false, proofDeadline: TimeInterval? = nil) throws -> FocusPreparationSample {
+        let begin = ProcessInfo.processInfo.systemUptime, deadline = min(begin + 0.06, proofDeadline ?? .infinity)
+        diagnostics.metadataSamples += 1; diagnostics.routeChecks += 1
+        diagnostics.route = route.kind; diagnostics.routeAccepted = false; diagnostics.routeStage = "metadata"
+        diagnostics.keyboardAccepted = false
+        defer { diagnostics.routeSeconds += max(0, ProcessInfo.processInfo.systemUptime-begin) }
+        guard processIdentityCurrent else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
+        let windows = try currentWindows(), foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        try ExactWindowFocus.validate(target: target, geometry: geometry, windows: windows)
+        do {
+            guard foreground == target.pid else { throw ComputerError("FOCUS_CHANGED", "The selected window lost foreground input; input stopped.") }
+            var focused: KeyboardFocusSnapshot?
+            switch route {
+            case .pointer(let point):
+                diagnostics.routeStage = "pointer-route"
+                try ExactPointerRouting.check(point: point, selected: target.windowId, frame: geometry.frame, backend: ExactPointerRouting.native)
+            case .keyboard:
+                diagnostics.routeStage = "keyboard-root"
+                focused = keyboardFocus(deadline: deadline)
             }
+            diagnostics.routeStage = "metadata-recheck"
+            let after = try currentWindows(), afterPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            switch route {
+            case .pointer:
+                try ExactInputIdentity.check(target: target, geometry: geometry, before: windows, after: after,
+                    beforePid: foreground, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
+            case .keyboard:
+                try ExactKeyboardFocus.check(target: target, geometry: geometry, before: windows, after: after,
+                    beforePid: foreground, afterPid: afterPid, focused: focused, processIdentityCurrent: processIdentityCurrent)
+            }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                diagnostics.routeStage = "deadline"
+                throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.")
+            }
+            diagnostics.routeStage = "checked"; diagnostics.routeAccepted = true
+            if case .keyboard = route { diagnostics.keyboardAccepted = true }
+            return FocusPreparationSample(frontmostPid: afterPid, frontmostWindowId: target.windowId)
+        } catch let error as ComputerError where error.code == "FOCUS_CHANGED" && !requireReady {
+            // Readiness can wait for a pending route/focus change within 500 ms.
+            // Every normal post requires readiness immediately and fails closed.
+            return FocusPreparationSample(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostWindowId: nil)
         }
-        let result = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, windows: windows, components: proofs, requireFrontmost: requireFrontmost)
-        guard FocusProcessBirth(target.pid) == birth, !application.isTerminated else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
-        return result
+    }
+    private func keyboardFocus(deadline: TimeInterval) -> KeyboardFocusSnapshot? {
+        diagnostics.keyboardSamples += 1; diagnostics.keyboardAccepted = false; diagnostics.keyboardAXError = nil
+        func read(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { diagnostics.keyboardStage = "deadline"; return nil }
+            AXUIElementSetMessagingTimeout(element, Float(min(0.01, remaining)))
+            var result: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &result)
+            diagnostics.keyboardAXError = error.rawValue
+            guard ProcessInfo.processInfo.systemUptime < deadline else { diagnostics.keyboardStage = "deadline"; return nil }
+            guard error == .success else { return nil }
+            return result
+        }
+        func element(_ value: CFTypeRef?) -> AXUIElement? {
+            guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }; return (value as! AXUIElement)
+        }
+        let app = AXUIElementCreateApplication(target.pid)
+        diagnostics.keyboardStage = "focused-window"
+        guard let focused = element(read(app, kAXFocusedWindowAttribute)) else { return nil }
+        var owner: pid_t = 0
+        guard AXUIElementGetPid(focused, &owner) == .success, owner == target.pid else { diagnostics.keyboardStage = "owner"; return nil }
+        diagnostics.keyboardStage = "geometry"
+        guard let position = read(focused, kAXPositionAttribute), let size = read(focused, kAXSizeAttribute),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, dimensions = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions) else { return nil }
+        diagnostics.keyboardStage = "role"
+        guard let role = read(focused, kAXRoleAttribute) as? String else { return nil }
+        diagnostics.keyboardStage = "root-recheck"
+        guard let current = element(read(app, kAXFocusedWindowAttribute)), ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        diagnostics.keyboardStage = "checked"
+        return KeyboardFocusSnapshot(pid: owner, frame: CGRect(origin: point, size: dimensions), isWindow: role == kAXWindowRole as String, identityStable: CFEqual(focused, current))
     }
     private func currentWindows() throws -> [FocusWindowState] {
         guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
@@ -214,78 +315,22 @@ private struct FocusProcessBirth: Equatable {
         }
         return windows
     }
-    private func componentProofs(_ components: [FocusWindowState], selected: FocusWindowState) -> [FocusWindowComponentProof] {
-        let begin = ProcessInfo.processInfo.systemUptime, deadline = begin + 0.06
-        diagnostics.proofCalls += 1; diagnostics.acceptedProofs = 0; diagnostics.lastAXError = nil
-        defer { diagnostics.proofSeconds += max(0, ProcessInfo.processInfo.systemUptime - begin) }
-        func read(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
-            AXUIElementSetMessagingTimeout(element, 0.01)
-            var value: CFTypeRef?
-            let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-            diagnostics.lastAXError = result.rawValue
-            guard result == .success,
-                  ProcessInfo.processInfo.systemUptime < deadline else { return nil }
-            return value
-        }
-        func element(_ value: CFTypeRef?) -> AXUIElement? {
-            guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }; return (value as! AXUIElement)
-        }
-        func rect(_ value: AXUIElement) -> CGRect? {
-            guard let position = read(value, kAXPositionAttribute), let size = read(value, kAXSizeAttribute),
-                  CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
-            var point = CGPoint.zero, dimensions = CGSize.zero
-            guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions),
-                  [point.x, point.y, dimensions.width, dimensions.height].allSatisfy(\.isFinite), dimensions.width > 0, dimensions.height > 0 else { return nil }
-            return CGRect(origin: point, size: dimensions)
-        }
-        func pid(_ value: AXUIElement) -> pid_t? {
-            var result: pid_t = 0; return AXUIElementGetPid(value, &result) == .success ? result : nil
-        }
-        let app = AXUIElementCreateApplication(target.pid)
-        diagnostics.lastStage = "focused-window"
-        guard let focused = element(read(app, kAXFocusedWindowAttribute)) else { return [] }
-        diagnostics.lastStage = "focused-window-geometry"
-        guard let focusedFrame = rect(focused),
-              let focusedPid = pid(focused), focusedPid == target.pid, ExactWindowFocus.sameGeometry(focusedFrame, selected.frame) else { return [] }
-        let system = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(system, 0.01)
-        var proofs = [FocusWindowComponentProof]()
-        for component in components {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return [] }
-            var hit: AXUIElement?
-            diagnostics.lastStage = "component-hit"
-            let hitResult = AXUIElementCopyElementAtPosition(system, Float(component.frame.midX), Float(component.frame.midY), &hit)
-            diagnostics.lastAXError = hitResult.rawValue
-            guard hitResult == .success, let hit else { return [] }
-            diagnostics.lastStage = "component-window"
-            guard let hitWindow = element(read(hit, kAXWindowAttribute)) else { return [] }
-            diagnostics.lastStage = "component-geometry"
-            guard let hitFrame = rect(hit),
-                  let hitPid = pid(hit), let hitWindowPid = pid(hitWindow),
-                  let currentFocus = element(read(app, kAXFocusedWindowAttribute)), CFEqual(currentFocus, focused),
-                  ProcessInfo.processInfo.systemUptime < deadline else { return [] }
-            proofs.append(FocusWindowComponentProof(windowId: component.windowId, pid: component.pid, componentFrame: component.frame,
-                focusedPid: focusedPid, focusedFrame: focusedFrame, hitPid: hitPid, hitWindowPid: hitWindowPid, hitFrame: hitFrame,
-                hitWindowIsFocused: CFEqual(hitWindow, focused), hitIsTopLevel: CFEqual(hit, hitWindow)))
-        }
-        diagnostics.lastStage = "complete"
-        return proofs
-    }
+
 }
 
 @MainActor extension FocusPreparationBackend {
-    static func native(identity: NativeFocusIdentity, checkpoint: @escaping () throws -> Void) throws -> FocusPreparationBackend {
+    static func native(identity: NativeFocusIdentity, route: FocusInputRoute, checkpoint: @escaping () throws -> Void) throws -> FocusPreparationBackend {
         let target = identity.target, geometry = identity.geometry, application = identity.application
+        var readinessDeadline: TimeInterval?
         func validate() throws {
             try checkpoint()
-            // Activation preparation checks identity, geometry and ambiguity;
-            // it does not consume the returned foreground-window decision.
-            // Avoid repeated AX proofs here so the bounded request leaves time
-            // for the two strict readiness samples and per-input checks below.
-            _ = try identity.sample(includeComponentProofs: false)
+            // Activation may change the foreground window. Validate only the
+            // pinned identity here; route-specific readiness follows the request.
+            try identity.validateMetadata()
         }
         return FocusPreparationBackend(now: { ProcessInfo.processInfo.systemUptime },
             frontmost: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, request: { deadline, result in
+                readinessDeadline = deadline
                 @MainActor func ready() throws {
                     try validate()
                     guard ProcessInfo.processInfo.systemUptime < deadline else { throw ComputerError("FOCUS_CHANGED", "The target application did not become ready for input; input stopped.") }
@@ -341,7 +386,7 @@ private struct FocusProcessBirth: Equatable {
                         try await turn()
                     }
                 }
-            }, sample: { try checkpoint(); return try identity.sample() },
+            }, sample: { try checkpoint(); return try identity.sample(route: route, proofDeadline: readinessDeadline) },
             sleep: { try await Task.sleep(nanoseconds: $0) }, diagnostics: { identity.diagnosticSnapshot })
     }
 }

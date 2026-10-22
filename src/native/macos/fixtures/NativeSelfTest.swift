@@ -15,6 +15,9 @@ import Foundation
         try approvedSmallGlyph()
         try cursorSuppressionStateMachine()
         try exactWindowReadiness()
+        try exactPointerRouting()
+        try exactKeyboardFocus()
+        try actionHumanInterruption()
         try await boundedFocusPreparation()
         for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
             let (returned, url) = try NativeApplicationCatalog.settingsURL(kind)
@@ -89,80 +92,170 @@ import Foundation
             do { _ = try FloatingPreview.validatedURL(url); preconditionFailure("Non-loopback/authenticated URL accepted") } catch {}
         }
         precondition(integer(true) == nil && integer(1.5) == nil && integer(-1) == nil && integer(4) == 4)
-        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), exact-window CG metadata/ambiguity/front-order zero-post matrices, associated AppKit CG component matrices, bounded focus readiness/human/cancel/epoch/deadline matrices (no real activation/AX/input), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
+        print("Native self-test passed: geometry, approved small AI glyph/opacity/halo, cursor clipping/scale/occlusion, owned cursor suppression fake state/cleanup matrices (no native cursor calls), exact-window CG metadata/ambiguity/front-order zero-post matrices, exact ordered-prefix/destination-specific identity matrices, exact pointer route/negative-screen/zero-post matrices, strict AX keyboard-root/non-key-sibling/error/drift matrices, per-post human-generation/partial-input/independent-UP matrices, bounded focus readiness/human/cancel/epoch/deadline matrices (no real activation/AX/input), lease actor, epochs, key parsing, preview origin/preserve identity, wire numbers")
     }
 
     private static func exactWindowReadiness() throws {
-        let frame = CGRect(x: 100, y: 200, width: 800, height: 600)
-        let target = NativeTarget(id: "mac-window:11", appId: "fixture.own", title: "", pid: 99, windowId: 11, frame: frame, scale: 2)
-        let geometry = FrameGeometry(frame: frame, pixelWidth: 1600, pixelHeight: 1200)
-        let a = FocusWindowState(windowId: 11, pid: 99, frame: frame)
-        let overlapping = FocusWindowState(windowId: 22, pid: 99, frame: frame)
-        let b = FocusWindowState(windowId: 22, pid: 99, frame: frame.offsetBy(dx: 30, dy: 0))
-        func rejected(_ windows: [FocusWindowState], pid: pid_t? = 99, code: String) throws {
-            var posts = 0
-            do { _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: pid, windows: windows, requireFrontmost: true); posts += 1 }
-            catch let error as ComputerError { precondition(error.code == code) }
-            precondition(posts == 0, "An invalid exact-window identity must not reach the posting boundary")
+        let frame=CGRect(x:100,y:200,width:800,height:600)
+        let target=NativeTarget(id:"mac-window:11",appId:"fixture.own",title:"",pid:99,windowId:11,frame:frame,scale:2)
+        let geometry=FrameGeometry(frame:frame,pixelWidth:1600,pixelHeight:1200)
+        let a=FocusWindowState(windowId:11,pid:99,frame:frame)
+        let overlapping=FocusWindowState(windowId:22,pid:99,frame:frame)
+        let b=FocusWindowState(windowId:22,pid:99,frame:frame.offsetBy(dx:30,dy:0))
+        func check(_ before:[FocusWindowState],_ after:[FocusWindowState]?=nil,beforePid:pid_t?=99,afterPid:pid_t?=99,birth:Bool=true) throws {
+            try ExactInputIdentity.check(target:target,geometry:geometry,before:before,after:after ?? before,
+                beforePid:beforePid,afterPid:afterPid,processIdentityCurrent:birth)
         }
-        let valid = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [a, b], requireFrontmost: true)
-        precondition(valid.frontmostPid == 99 && valid.frontmostWindowId == 11, "CG metadata alone permits a unique foreground target without AX content")
-        try rejected([overlapping, a], code: "FOCUS_CHANGED")
-        try rejected([a, overlapping], code: "FOCUS_CHANGED")
-        try rejected([b, a], code: "FOCUS_CHANGED")
-        try rejected([a, b], pid: 88, code: "FOCUS_CHANGED")
-        try rejected([FocusWindowState(windowId: 33, pid: 88, frame: frame.offsetBy(dx: 60, dy: 0)), a], code: "FOCUS_CHANGED")
-        try rejected([FocusWindowState(windowId: 11, pid: 88, frame: frame)], code: "GEOMETRY_CHANGED")
-        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame.offsetBy(dx: 1, dy: 0))], code: "GEOMETRY_CHANGED")
-        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, onscreen: false)], code: "GEOMETRY_CHANGED")
-        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, alpha: 0)], code: "GEOMETRY_CHANGED")
-        try rejected([FocusWindowState(windowId: 11, pid: 99, frame: frame, layer: CGWindowLevelForKey(.floatingWindow))], code: "GEOMETRY_CHANGED")
-        try rejected([overlapping], code: "GEOMETRY_CHANGED")
-        let hidden = FocusWindowState(windowId: 22, pid: 99, frame: frame, onscreen: false)
-        let transparent = FocusWindowState(windowId: 23, pid: 99, frame: frame, alpha: 0)
-        let overlay = FocusWindowState(windowId: 24, pid: 88, frame: frame, layer: CGWindowLevelForKey(.floatingWindow))
-        _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [overlay, hidden, transparent, a], requireFrontmost: true)
-        // A once-valid preparation cannot authorize a later post after the same
-        // process switches to another window, even if its PID never changes.
-        _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [a, b], requireFrontmost: true)
-        try rejected([b, a], code: "FOCUS_CHANGED")
-        // Actual regression: AppKit exposes a 66x20 traffic-light component as
-        // a separate normal-layer CG surface in front of its main window.
-        let component = FocusWindowState(windowId: 44, pid: 99, frame: CGRect(x: 106, y: 206, width: 66, height: 20))
-        let hit = CGRect(x: 133, y: 210, width: 14, height: 14)
-        func proof(windowId: CGWindowID = 44, pid: pid_t = 99, componentFrame: CGRect? = nil, focusedPid: pid_t = 99,
-                   focusedFrame: CGRect? = nil, hitPid: pid_t = 99, hitWindowPid: pid_t = 99, hitFrame: CGRect? = nil,
-                   associated: Bool = true, topLevel: Bool = false) -> FocusWindowComponentProof {
-            FocusWindowComponentProof(windowId: windowId, pid: pid, componentFrame: componentFrame ?? component.frame,
-                focusedPid: focusedPid, focusedFrame: focusedFrame ?? frame, hitPid: hitPid, hitWindowPid: hitWindowPid,
-                hitFrame: hitFrame ?? hit, hitWindowIsFocused: associated, hitIsTopLevel: topLevel)
+        func rejected(_ before:[FocusWindowState],_ after:[FocusWindowState]?=nil,beforePid:pid_t?=99,afterPid:pid_t?=99,birth:Bool=true,code:String="FOCUS_CHANGED") {
+            var posts=0
+            do{try check(before,after,beforePid:beforePid,afterPid:afterPid,birth:birth);posts+=1}
+            catch let error as ComputerError{precondition(error.code==code)}catch{preconditionFailure("Unexpected identity error")}
+            precondition(posts==0,"Invalid identity must remain zero-post before either input route")
         }
-        let accepted = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: [component, a], components: [proof()], requireFrontmost: true)
-        precondition(accepted.frontmostWindowId == a.windowId, "Only a geometrically contained AX child associated with the selected focused window may represent its CG surface")
-        func rejectsComponent(_ windows: [FocusWindowState], _ proofs: [FocusWindowComponentProof]) throws {
-            var posts = 0
-            do { _ = try ExactWindowFocus.sample(target: target, geometry: geometry, frontmostPid: 99, windows: windows, components: proofs, requireFrontmost: true); posts += 1 }
-            catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
-            precondition(posts == 0, "Small siblings, foreign windows, stale or unavailable AX associations must remain zero-post")
+        try check([a,b])
+        rejected([overlapping,a]);rejected([a,overlapping])
+        rejected([a,b],beforePid:88);rejected([a,b],afterPid:88);rejected([a],beforePid:nil);rejected([a],afterPid:nil)
+        rejected([a],birth:false,code:"TARGET_GONE")
+        rejected([FocusWindowState(windowId:11,pid:88,frame:frame)],code:"GEOMETRY_CHANGED")
+        rejected([FocusWindowState(windowId:11,pid:99,frame:frame.offsetBy(dx:1,dy:0))],code:"GEOMETRY_CHANGED")
+        rejected([FocusWindowState(windowId:11,pid:99,frame:frame,onscreen:false)],code:"GEOMETRY_CHANGED")
+        rejected([FocusWindowState(windowId:11,pid:99,frame:frame,alpha:0)],code:"GEOMETRY_CHANGED")
+        rejected([FocusWindowState(windowId:11,pid:99,frame:frame,layer:CGWindowLevelForKey(.floatingWindow))],code:"GEOMETRY_CHANGED")
+        rejected([overlapping],code:"GEOMETRY_CHANGED")
+        let component=FocusWindowState(windowId:44,pid:99,frame:CGRect(x:106,y:206,width:66,height:20))
+        let second=FocusWindowState(windowId:45,pid:99,frame:component.frame.offsetBy(dx:70,dy:0))
+        // Shared metadata cannot infer the destination from CG's first surface.
+        // An explicit point-route or keyboard-root proof is still required.
+        try check([component,second,a,b]);try check([b,a])
+        rejected([component,second,a],[second,component,a])
+        rejected([component,a],[FocusWindowState(windowId:44,pid:99,frame:component.frame.offsetBy(dx:0.1,dy:0)),a])
+        rejected([component,a],[a]);rejected([component,a],[component,b,a])
+        rejected([component,a],[component],code:"GEOMETRY_CHANGED")
+        rejected([a,b],[FocusWindowState(windowId:11,pid:99,frame:frame.offsetBy(dx:0.1,dy:0)),b])
+        try check([component,a,b],[component,a]) // Behind-selected order does not own its input.
+        precondition(FocusInputRoute.pointer(CGPoint(x:200,y:300)).kind=="pointer" && FocusInputRoute.keyboard.kind=="keyboard")
+    }
+
+    @MainActor private static func exactPointerRouting() throws {
+        let frame=CGRect(x:-1280,y:-900,width:800,height:600),point=CGPoint(x:-1100,y:-700)
+        var queries=[CGPoint](),route:CGWindowID?=11,posts=0
+        let backend=PointerRoutingBackend(primaryMaxY:{1080},windowAt:{queries.append($0);return route})
+        try ExactPointerRouting.check(point:point,selected:11,frame:frame,backend:backend);posts+=1
+        precondition(queries==[CGPoint(x:-1100,y:1780)] && posts==1,"Negative display coordinates use primary maxY rather than the target display height")
+        for wrong:CGWindowID? in [nil,0,44,88] {
+            route=wrong;let before=posts
+            do {try ExactPointerRouting.check(point:point,selected:11,frame:frame,backend:backend);posts+=1}
+            catch let error as ComputerError {precondition(error.code=="FOCUS_CHANGED")}
+            precondition(posts==before,"Unknown, sibling and foreign mouse routes are all zero-post")
         }
-        try rejectsComponent([component, a], [])
-        try rejectsComponent([component, a], [proof(associated: false)]) // Real sibling B owns the AX hit.
-        try rejectsComponent([component, a], [proof(topLevel: true)])
-        try rejectsComponent([component, a], [proof(hitWindowPid: 88)])
-        try rejectsComponent([component, a], [proof(hitPid: 88)])
-        try rejectsComponent([component, a], [proof(focusedPid: 88)])
-        try rejectsComponent([component, a], [proof(focusedFrame: component.frame)])
-        try rejectsComponent([component, a], [proof(hitFrame: frame)]) // Underlying whole canvas is not a component hit.
-        try rejectsComponent([component, a], [proof(hitFrame: hit.offsetBy(dx: 80, dy: 0))])
-        let movedComponent = FocusWindowState(windowId: 44, pid: 99, frame: component.frame.offsetBy(dx: 0.5, dy: 0))
-        try rejectsComponent([movedComponent, a], [proof()])
-        let foreign = FocusWindowState(windowId: 44, pid: 88, frame: component.frame)
-        try rejectsComponent([foreign, a], [proof(pid: 88)])
-        try rejectsComponent([overlapping, component, a], [proof()])
-        let edge = FocusWindowState(windowId: 44, pid: 99, frame: CGRect(x: frame.minX, y: 206, width: 66, height: 20))
-        try rejectsComponent([edge, a], [proof(componentFrame: edge.frame)])
-        let tooMany = (44...47).map { FocusWindowState(windowId: CGWindowID($0), pid: 99, frame: component.frame) }
-        try rejectsComponent(tooMany + [a], tooMany.map { proof(windowId: $0.windowId) })
+        route=11
+        for step in 0...24 {
+            let p=CGPoint(x:frame.minX+10+Double(step)*10,y:frame.minY+20)
+            try ExactPointerRouting.check(point:p,selected:11,frame:frame,backend:backend)
+        }
+        let beforeQueries=queries.count
+        for invalid in [CGPoint(x:frame.maxX,y:frame.midY),CGPoint(x:.nan,y:frame.midY),CGPoint(x:frame.midX,y:.infinity)] {
+            do {try ExactPointerRouting.check(point:invalid,selected:11,frame:frame,backend:backend);preconditionFailure("Invalid route coordinate accepted")}
+            catch let error as ComputerError {precondition(error.code=="FOCUS_CHANGED")}
+        }
+        precondition(queries.count==beforeQueries,"Invalid points must not reach the AppKit route query")
+        precondition(ExactPointerRouting.appKitPoint(point,primaryMaxY:.nan)==nil)
+        let unavailable=PointerRoutingBackend(primaryMaxY:{nil},windowAt:{_ in preconditionFailure("No route without a primary coordinate system")})
+        do {try ExactPointerRouting.check(point:point,selected:11,frame:frame,backend:unavailable);preconditionFailure("Missing primary screen accepted")} catch {}
+        let a=FocusWindowState(windowId:11,pid:99,frame:frame)
+        let target=NativeTarget(id:"pointer-A",appId:"fixture.own",title:"",pid:99,windowId:11,frame:frame,scale:2)
+        let geometry=FrameGeometry(frame:frame,pixelWidth:1600,pixelHeight:1200)
+        let component=FocusWindowState(windowId:44,pid:99,frame:CGRect(x:frame.minX+6,y:frame.minY+6,width:66,height:20))
+        let unrelated=FocusWindowState(windowId:88,pid:77,frame:frame.offsetBy(dx:1600,dy:0))
+        // Exactly the production pointer sequence: route the actual point and
+        // surround it with the shared CG/birth/front checks; no AX is required.
+        func pointerPost(_ windows:[FocusWindowState],_ after:[FocusWindowState]?=nil) throws {
+            try ExactWindowFocus.validate(target:target,geometry:geometry,windows:windows)
+            try ExactPointerRouting.check(point:point,selected:target.windowId,frame:frame,backend:backend)
+            try ExactInputIdentity.check(target:target,geometry:geometry,before:windows,after:after ?? windows,
+                beforePid:99,afterPid:99,processIdentityCurrent:true)
+            posts+=1
+        }
+        route=11
+        try pointerPost([component,a]);try pointerPost([unrelated,component,a])
+        let baseline=posts
+        for wrong:CGWindowID? in [nil,44,88] {
+            route=wrong
+            do{try pointerPost([unrelated,component,a]);preconditionFailure("Wrong actual point route accepted")}
+            catch let error as ComputerError{precondition(error.code=="FOCUS_CHANGED")}
+        }
+        route=11
+        do{try pointerPost([component,a],[a]);preconditionFailure("Route proof survived CG prefix drift")}
+        catch let error as ComputerError{precondition(error.code=="FOCUS_CHANGED")}
+        do{try pointerPost([a,FocusWindowState(windowId:22,pid:99,frame:frame)]);preconditionFailure("Ambiguous point target accepted")}
+        catch let error as ComputerError{precondition(error.code=="FOCUS_CHANGED")}
+        precondition(posts==baseline,"A different actual route, changed CG prefix, or ambiguous geometry never posts")
+
+    }
+
+    private static func exactKeyboardFocus() throws {
+        let frame=CGRect(x:100,y:200,width:800,height:600),a=FocusWindowState(windowId:11,pid:99,frame:frame)
+        let b=FocusWindowState(windowId:22,pid:99,frame:frame.insetBy(dx:80,dy:80))
+        let target=NativeTarget(id:"keyboard-A",appId:"fixture.own",title:"",pid:99,windowId:11,frame:frame,scale:2)
+        let geometry=FrameGeometry(frame:frame,pixelWidth:1600,pixelHeight:1200)
+        let focused=KeyboardFocusSnapshot(pid:99,frame:frame,isWindow:true,identityStable:true)
+        func check(_ root:KeyboardFocusSnapshot?,before:[FocusWindowState]?=nil,after:[FocusWindowState]?=nil,
+                   beforePid:pid_t?=99,afterPid:pid_t?=99,birth:Bool=true) throws {
+            try ExactKeyboardFocus.check(target:target,geometry:geometry,before:before ?? [a,b],after:after ?? [a,b],
+                beforePid:beforePid,afterPid:afterPid,focused:root,processIdentityCurrent:birth)
+        }
+        func rejected(_ root:KeyboardFocusSnapshot?,before:[FocusWindowState]?=nil,after:[FocusWindowState]?=nil,
+                      beforePid:pid_t?=99,afterPid:pid_t?=99,birth:Bool=true,code:String="FOCUS_CHANGED") {
+            var posts=0
+            do{try check(root,before:before,after:after,beforePid:beforePid,afterPid:afterPid,birth:birth);posts+=1}
+            catch let error as ComputerError{precondition(error.code==code)}catch{preconditionFailure("Unexpected keyboard focus error")}
+            precondition(posts==0,"No keyboard post may follow an unavailable, ambiguous or different focused root")
+        }
+        try check(focused)
+        // The independently reproduced AppKit counterexample: selected A is
+        // topmost and non-key; same-PID, different-geometry B remains key/AX focus.
+        rejected(KeyboardFocusSnapshot(pid:99,frame:b.frame,isWindow:true,identityStable:true))
+        rejected(nil) // AX unsupported, no value, error, or read deadline.
+        rejected(KeyboardFocusSnapshot(pid:88,frame:frame,isWindow:true,identityStable:true))
+        rejected(KeyboardFocusSnapshot(pid:99,frame:frame,isWindow:false,identityStable:true))
+        rejected(KeyboardFocusSnapshot(pid:99,frame:frame,isWindow:true,identityStable:false))
+        rejected(KeyboardFocusSnapshot(pid:99,frame:CGRect(x:0,y:0,width:0,height:0),isWindow:true,identityStable:true))
+        rejected(KeyboardFocusSnapshot(pid:99,frame:CGRect(x:CGFloat.nan,y:200,width:800,height:600),isWindow:true,identityStable:true))
+        rejected(focused,beforePid:88);rejected(focused,afterPid:88);rejected(focused,beforePid:nil);rejected(focused,afterPid:nil)
+        rejected(focused,birth:false,code:"TARGET_GONE")
+        let sibling=FocusWindowState(windowId:33,pid:99,frame:frame)
+        rejected(focused,before:[a,sibling]);rejected(focused,after:[a,sibling])
+        rejected(focused,after:[FocusWindowState(windowId:11,pid:88,frame:frame)],code:"GEOMETRY_CHANGED")
+        rejected(focused,after:[FocusWindowState(windowId:11,pid:99,frame:frame.offsetBy(dx:0.1,dy:0)),b])
+        let component=FocusWindowState(windowId:44,pid:99,frame:CGRect(x:106,y:206,width:66,height:20))
+        try check(focused,before:[component,a,b],after:[component,a,b])
+        rejected(focused,before:[component,a,b],after:[a,b])
+    }
+
+    @MainActor private static func actionHumanInterruption() throws {
+        let fence=ActionInputGenerationFence(expected:7)
+        try fence.check(current:7,inputPosted:false)
+        do{try fence.check(current:8,inputPosted:false);preconditionFailure("Pre-input human intervention accepted")}
+        catch let error as ComputerError{precondition(error.code=="HUMAN_INPUT_INTERRUPTED" && error.message=="Human input interrupted focus preparation; no input was posted.")}
+        for steps in [4,24] {
+            var generation:UInt64=7,posts=0,cleanupUps=0,desktopReleases=0
+            for step in 0..<steps {
+                if step==2{generation+=1}
+                do{try fence.check(current:generation,inputPosted:posts>0);posts+=1}
+                catch let error as ComputerError{
+                    precondition(error.code=="HUMAN_INPUT_INTERRUPTED" && error.message=="Human input interrupted the action; remaining input stopped.")
+                    break
+                }
+            }
+            precondition(posts==2,"Same-window human intervention stops remaining characters and drag steps without requiring a focus change")
+            try completeOwnedInputCleanup(restoreCursor:{true},releaseHeld:{cleanupUps+=1},releaseDesktop:{desktopReleases+=1})
+            precondition(cleanupUps==1 && desktopReleases==1,"The human-generation fence never blocks independent owned UP cleanup")
+        }
+        var posts=0
+        try fence.check(current:7,inputPosted:false)
+        // A human event may be observed during a synchronous AX boundary.
+        do{try fence.check(current:8,inputPosted:false);posts+=1}catch let error as ComputerError{precondition(error.code=="HUMAN_INPUT_INTERRUPTED")}
+        precondition(posts==0,"Rechecking generation after the focus/AX boundary prevents the following post")
     }
 
     @MainActor private static func boundedFocusPreparation() async throws {

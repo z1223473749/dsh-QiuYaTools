@@ -19,6 +19,15 @@ final class EpochFence {
     }
 }
 
+struct ActionInputGenerationFence {
+    let expected: UInt64
+    func check(current: UInt64, inputPosted: Bool) throws {
+        guard current == expected else {
+            throw ComputerError("HUMAN_INPUT_INTERRUPTED", inputPosted ? "Human input interrupted the action; remaining input stopped." : "Human input interrupted focus preparation; no input was posted.")
+        }
+    }
+}
+
 /// Never let cursor restoration failure bypass owned key/button cleanup, or
 /// unlock the desktop before both independent cleanup boundaries succeed.
 @MainActor func completeOwnedInputCleanup(restoreCursor: () -> Bool, releaseHeld: () throws -> Void, releaseDesktop: () throws -> Void) throws {
@@ -38,6 +47,7 @@ final class EpochFence {
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
     private var actionFocus: NativeFocusIdentity?
+    private var actionInputFence: ActionInputGenerationFence?
     private var desktopLease: DesktopLeaseGuard?
     private(set) var leaseActor = NativeLeaseActor.ai
     private lazy var aiPointer: AICursorOverlay = {
@@ -165,24 +175,25 @@ final class EpochFence {
         guard abs(dx) <= 20_000, abs(dy) <= 20_000 else { throw ComputerError("INVALID_ACTION", "Scroll delta is too large.") }
         busy = true
         started()
-        defer { busy = false; actionFocus = nil }
+        defer { busy = false; actionFocus = nil; actionInputFence = nil }
         let focusIdentity = try NativeFocusIdentity(target: target, geometry: geometry)
         actionFocus = focusIdentity
         let expectedHumanInputGeneration = humanInputGeneration
+        let generationFence = ActionInputGenerationFence(expected: expectedHumanInputGeneration)
+        actionInputFence = generationFence
         let preparationCheckpoint = { [unowned self] in
             try self.fence.check(epoch)
-            guard self.humanInputGeneration == expectedHumanInputGeneration else {
-                throw ComputerError("HUMAN_INPUT_INTERRUPTED", "Human input interrupted focus preparation; no input was posted.")
-            }
+            try generationFence.check(current: self.humanInputGeneration, inputPosted: false)
             guard !self.aiPointer.restorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
         }
         prepareFocus?()
         if let point = start { try preparePointerRegion?(destination.map { [point, $0] } ?? [point]) }
-        let focusBackend = try FocusPreparationBackend.native(identity: focusIdentity, checkpoint: preparationCheckpoint)
+        let route: FocusInputRoute = kind == "type" || kind == "key" ? .keyboard : .pointer(start!)
+        let focusBackend = try FocusPreparationBackend.native(identity: focusIdentity, route: route, checkpoint: preparationCheckpoint)
         try await BoundedFocusPreparation.run(targetPid: target.pid, targetWindowId: target.windowId, backend: focusBackend, checkpoint: preparationCheckpoint,
             record: { [unowned self] in self.focusAttempt = $0 })
         try preparationCheckpoint()
-        try check(epoch, target, geometry)
+        try check(epoch, target, geometry, route: route)
         lastPid = target.pid
         // Record the entire action's possible downs before the first injected down.
         // Keeping this superset until completion avoids an fsync for every typed character.
@@ -211,9 +222,10 @@ final class EpochFence {
             heldMouse = nil
         case "scroll":
             try mouse(.mouseMoved, start!, .left, epoch, target, geometry)
-            try check(epoch, target, geometry)
             // Protocol follows browser wheel semantics: positive is right/down.
             guard let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .pixel, wheelCount: 2, wheel1: Int32(-dy), wheel2: Int32(-dx), wheel3: 0) else { throw ComputerError("EVENT_FAILED", "Could not create a scroll event.") }
+            event.location = start!
+            try check(epoch, target, geometry, route: .pointer(event.location))
             postPointer(event)
             focusAttempt?["inputPosted"] = true
         case "type":
@@ -221,26 +233,26 @@ final class EpochFence {
             // surrogate pairs and composed graphemes are not broken between events.
             for character in text! {
                 let units = Array(String(character).utf16)
-                try check(epoch, target, geometry)
                 guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true),
                       let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false) else { throw ComputerError("EVENT_FAILED", "Could not create a text event.") }
                 down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 down.flags = []; up.flags = []
+                try check(epoch, target, geometry, route: .keyboard)
                 down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(0); operationBadge.posted(epoch: epoch, target: target)
-                try check(epoch, target, geometry)
+                try check(epoch, target, geometry, route: .keyboard)
                 up.postToPid(target.pid); heldKeys.remove(0)
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
         case "key":
             let combination = key!
-            try check(epoch, target, geometry)
             guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: false) else { throw ComputerError("EVENT_FAILED", "Could not create a key event.") }
             down.flags = combination.1; up.flags = []
+            try check(epoch, target, geometry, route: .keyboard)
             down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(combination.0); operationBadge.posted(epoch: epoch, target: target)
             try await Task.sleep(nanoseconds: 25_000_000)
-            try check(epoch, target, geometry)
+            try check(epoch, target, geometry, route: .keyboard)
             up.postToPid(target.pid); heldKeys.remove(combination.0)
         default: break
         }
@@ -249,10 +261,10 @@ final class EpochFence {
     }
 
     private func mouse(_ type: CGEventType, _ point: CGPoint, _ button: CGMouseButton, _ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry) throws {
-        try check(epoch, target, geometry)
         guard let event = CGEvent(mouseEventSource: eventSource, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { throw ComputerError("EVENT_FAILED", "Could not create a mouse event.") }
-        lastPoint = point
         event.setIntegerValueField(.mouseEventClickState, value: 1)
+        try check(epoch, target, geometry, route: .pointer(event.location))
+        lastPoint = point
         postPointer(event)
         focusAttempt?["inputPosted"] = true
         operationBadge.posted(epoch: epoch, target: target)
@@ -266,13 +278,19 @@ final class EpochFence {
         event.post(tap: .cghidEventTap)
     }
 
-    private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry) throws {
+    private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry, route: FocusInputRoute) throws {
         try fence.check(epoch)
         guard !aiPointer.restorationBlocked else { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
-        guard let identity = actionFocus, identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
+        guard let identity = actionFocus, let generationFence = actionInputFence, identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
             aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The action's selected window identity is unavailable; input stopped.")
         }
-        do { _ = try identity.sample(requireFrontmost: true) } catch { aiPointer.hide(); throw error }
+        defer { focusAttempt?.merge(identity.diagnosticSnapshot) { _, latest in latest } }
+        do {
+            try generationFence.check(current: humanInputGeneration, inputPosted: focusAttempt?["inputPosted"] as? Bool == true)
+            _ = try identity.sample(route: route, requireReady: true)
+            try fence.check(epoch)
+            try generationFence.check(current: humanInputGeneration, inputPosted: focusAttempt?["inputPosted"] as? Bool == true)
+        } catch { aiPointer.hide(); throw error }
     }
 }
 

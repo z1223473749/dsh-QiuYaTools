@@ -46,6 +46,16 @@ Mac入口新增 `--screenshots-dir`，Windows载体通过 `QIUYA_WINDOWS_SCREENS
 
 新ARM64 helper为 `7c6bb4b668300731828f12ad2417953b990af5e7bfb0ce237342dd1d34864975`（68,261,140B），x64为 `abdc1612e13818cc98e90a937ec1b2d68309533f5bc67d3b5f58eebde06349d4`（72,084,878B）。新包的真实Harness整体验收另有隔离Host启动失败，未由上述原生分项通过替代，也未把旧52＋29项指针／输入结果移记到这两个新SHA。
 
+## 2026-10-22 当前精确输入路由修复与实机闭环
+
+Mac 已按实际输入目的地分别验证：鼠标每个动作点必须由公共 AppKit 命中所选 CG 窗口；键盘每次正常 down/up 前必须由 AXFocusedWindow 证明目的窗口。保留进程出生身份、CG 前后顺序、同几何兄弟窗口拒绝、500ms 准备预算、人工介入与 epoch 校验；清理用的自有释放事件独立执行。
+
+当前 universal helper SHA256 为 `0143cd944934872fc567dd420da2d44d269ac0150b7d243cacf321537f17264a`。完整 typecheck、构建与 **776/776、0失败/跳过** 已通过，294个源/配置输入前后稳定，回执 `artifacts/computer-use/macos-full-check-current/c47adecf-2a80-4803-8586-e5cf2e89c58b/report.json`。
+
+实际第23轮 **4/4通过**：同几何 A/B 的 click/type 均拒绝且业务计数为0；关闭 B 后 A 收到恰好1次点击，及恰好1组 Unicode keyDown/keyUp，B 始终0。第24轮 **1/1通过**：CG前台 A 与实际键盘焦点 B 不同时，即使同应用也拒绝 type，inputPosted=false、A/B事件均0；AX读取成功，未以权限缺失冒充负例。两轮均未重放输入，自有进程自然退出，OS按键/鼠标为空、lease释放、journal为空。原报告分别为 `artifacts/computer-use/macos-exact-window-focus-actual-23/report.json` 和 `-24/report.json`。
+
+该完成单元不等于全部视觉/真实模型验收已完成。当前新包的整套 Harness UI、批准指针13项、真实 DeepSeek 三任务与 WK 长稳仍继续执行，先前失败和 not-run 原样保留。
+
 ## 0. 本批交互功能与当前验证（覆盖下面历史快照的“最新”称呼）
 
 | 项目 | 当前实际结果 | 证据与边界 |
