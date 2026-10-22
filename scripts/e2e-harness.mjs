@@ -9,11 +9,16 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
+import { captureSettingsTabs, createHarnessImageLayout } from './harness-settings-acceptance.mjs'
 import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const output = resolve(arg('--output', 'artifacts/harness-e2e'))
+const screenshotDirectoryArgument = arg('--screenshots-dir')
+if (process.argv.includes('--screenshots-dir') && (!screenshotDirectoryArgument || screenshotDirectoryArgument.startsWith('--'))) throw new Error('--screenshots-dir requires an explicit directory')
+const imageLayout = createHarnessImageLayout(output, screenshotDirectoryArgument)
+const imagePath = imageLayout.path, imageReference = imageLayout.reference
 const candidate = arg('--package')
 const windowStateDiagnostic = process.argv.includes('--preview-window-state-diagnostic')
 if (windowStateDiagnostic && process.platform !== 'win32') throw new Error('Window-state diagnostics require the actual Windows Host')
@@ -21,6 +26,7 @@ const cli = JSON.parse(arg('--cli-json', JSON.stringify(['/Applications/DeepSeek
 if (!Array.isArray(cli) || !cli.length || !cli.every(value => typeof value === 'string')) throw new Error('--cli-json must be a nonempty JSON array')
 if (!candidate && !arg('--url')) throw new Error('Pass --package <candidate.tgz> or --url <isolated-fixture-URL>')
 await mkdir(output, { recursive: true })
+await mkdir(imageLayout.directory, { recursive: true })
 const candidateSHA256 = candidate ? createHash('sha256').update(await readFile(resolve(candidate))).digest('hex') : null
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
@@ -59,7 +65,7 @@ async function ownMacTarget(op, label, extra = {}) {
   if (op === 'bind') macTargetBinding = result.result.binding
   return result.result
 }
-async function screenshot(name) { const path = join(output, `${name}.png`); await page.screenshot({ path }); screenshots.push(path) }
+async function screenshot(name, target = page) { const filename = `${name}.png`, path = imagePath(filename); await target.screenshot({ path }); screenshots.push(path); return imageReference(filename) }
 async function test(name, operation) {
   const start = Date.now()
   try { const details = await operation(); const status = details?.diagnostic ? 'diagnostic' : 'passed'; tests.push({ name, status, elapsedMs: Date.now() - start, ...(details ? { details } : {}) }); console.log(`${status === 'passed' ? 'PASS' : 'DIAGNOSTIC'} ${name}`); return true }
@@ -199,8 +205,9 @@ try {
   const suffix = Date.now().toString(36), alpha = `E2E:Alpha-${suffix}`, beta = `E2E:Beta-${suffix}`, gamma = `E2E:Gamma-${suffix}`
   await test('account-menu-settings-and-all-feature-tabs', async () => {
     await openSettings()
-    for (const label of ['长文本', '独立窗口', '批量归档', '计划批注', '会话菜单', '提示词', 'Q 主题', '关于我们', '版本更新', '电脑操控']) await page.getByRole('tab', { name: label, exact: true }).waitFor()
+    const details = await captureSettingsTabs(page, { screenshot })
     await screenshot('settings')
+    return details
   })
   await test('settings-persist-thresholds-and-theme', async () => {
     await page.getByRole('tab', { name: '长文本', exact: true }).click()
@@ -274,14 +281,14 @@ try {
       if (!target) for (const [index, item] of ownedTargets.entries()) {
         const observation = await driver.observe(item.id).catch(() => undefined)
         if (!observation) continue
-        await writeFile(join(output, `independent-window-debug-${index}.jpg`), Buffer.from(observation.imageBase64, 'base64'))
+        await writeFile(imagePath(`independent-window-debug-${index}.jpg`), Buffer.from(observation.imageBase64, 'base64'))
         await writeFile(join(output, `independent-window-debug-${index}.json`), JSON.stringify({ target: item, elements: observation.elements }, null, 2))
       }
     }
     independentTarget = target
     if (process.platform === 'darwin' && candidate) await ownMacTarget('bind', alpha, { targetPid: target.pid, targetWindowId: Number(target.id.replace('mac-window:', '')) })
     const observation = await driver.observe(target.id)
-    await writeFile(join(output, 'independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
+    await writeFile(imagePath('independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
     assert.ok(observation.elements.includes(alpha), 'The independent WebKit/Windows window should expose the exact target session')
     await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
     if (process.platform === 'darwin' && macTargetBinding) await ownMacTarget('wait', alpha)
@@ -318,7 +325,7 @@ try {
     assert.ok(rpc.some(request => request.request.action === 'prepare' && request.result?.ok))
     assert.ok(rpc.some(request => request.request.action !== 'prepare' && request.result?.value?.opened))
     const observation = await driver.observe(target.id)
-    await writeFile(join(output, 'drag-native-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
+    await writeFile(imagePath('drag-native-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
     await writeFile(join(output, 'drag-native-window-evidence.json'), JSON.stringify({ kind: 'real browser drag outside sidebar; not OS desktop HID drag', facts, rpc, target }, null, 2))
     return { targetId: target.id, trustedDrag: true, boundary: 'client outside sidebar, not physical desktop drop' }
   })
@@ -432,7 +439,7 @@ try {
       return (await response.json()).result.value.native
     }, alphaId)
     await writeFile(join(output, 'preview-native-status.json'), JSON.stringify(nativeStatus, null, 2))
-    const previewPath = join(output, 'floating-computer-preview.jpg')
+    const previewPath = imagePath('floating-computer-preview.jpg')
     let preview, observer, windowsPreview, observeWindowState, macPreview
     if (process.platform === 'darwin') {
       if (process.argv.includes('--manual-preview-e2e')) {
@@ -529,7 +536,7 @@ try {
         assert.equal(receipt.pressed, true)
         await writeFile(join(output, `preview-control-${step}-${state}.json`), JSON.stringify(receipt, null, 2))
       } else if (observer) {
-        const receipt = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', join(output, `preview-control-${state}.jpg`), button]))
+        const receipt = JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', imagePath(`preview-control-${state}.jpg`), button]))
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
       else {
@@ -546,11 +553,11 @@ try {
           const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
           return { httpStatus: response.status, body: await response.json() }
         }, alphaId).catch(failure => ({ error: failure.message }))
-        const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : macPreview ? await macPreview('observe', { output: join(output, `preview-control-${state}-failed.jpg`) }).catch(failure => ({ error: failure.message })) : undefined
+        const native = windowsPreview ? await windowsPreview().then(JSON.parse).catch(failure => ({ error: failure.message })) : macPreview ? await macPreview('observe', { output: imagePath(`preview-control-${state}-failed.jpg`) }).catch(failure => ({ error: failure.message })) : undefined
         const panelText = await page.locator(`[data-qyt-computer-session="${alphaId}"]`).innerText().catch(failure => failure.message)
         await writeFile(join(output, `preview-control-${state}-failure.json`), JSON.stringify({ button, expectedState: state, error: sanitizeHarnessDiagnostic(error.message), backend, native, panelText }, null, 2))
         const pixels = windowsPreview ? await driver.observe(preview.id).catch(() => undefined) : undefined
-        if (pixels) await writeFile(join(output, `preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
+        if (pixels) await writeFile(imagePath(`preview-control-${state}-failed.jpg`), Buffer.from(pixels.imageBase64, 'base64'))
         throw error
       }
       if (macPreview) {
@@ -604,15 +611,15 @@ try {
           }
           evidence.actualTargetSubmission = true
           const after = await driver.observe(independentTarget.id)
-          await writeFile(join(output, 'manual-preview-target-result.jpg'), Buffer.from(after.imageBase64, 'base64'))
-          if (macPreview) await macPreview('observe', { output: join(output, 'manual-preview-window.jpg') })
-          else { const floatingAfter = await driver.observe(preview.id); await writeFile(join(output, 'manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64')) }
+          await writeFile(imagePath('manual-preview-target-result.jpg'), Buffer.from(after.imageBase64, 'base64'))
+          if (macPreview) await macPreview('observe', { output: imagePath('manual-preview-window.jpg') })
+          else { const floatingAfter = await driver.observe(preview.id); await writeFile(imagePath('manual-preview-window.jpg'), Buffer.from(floatingAfter.imageBase64, 'base64')) }
         } finally {
           if (!evidence.actualTargetSubmission) {
-            evidence.failurePreview = macPreview ? await macPreview('observe', { output: join(output, 'manual-preview-failed-floating.jpg') }).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) })) : await windowsPreview().then(JSON.parse).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) }))
+            evidence.failurePreview = macPreview ? await macPreview('observe', { output: imagePath('manual-preview-failed-floating.jpg') }).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) })) : await windowsPreview().then(JSON.parse).catch(error => ({ error: sanitizeHarnessDiagnostic(error.message) }))
             for (const [name, targetId] of [['target', independentTarget.id], ...macPreview ? [] : [['floating', preview.id]]]) {
               const failed = await driver.observe(targetId).catch(() => undefined)
-              if (failed) await writeFile(join(output, `manual-preview-failed-${name}.jpg`), Buffer.from(failed.imageBase64, 'base64'))
+              if (failed) await writeFile(imagePath(`manual-preview-failed-${name}.jpg`), Buffer.from(failed.imageBase64, 'base64'))
             }
           }
           await writeFile(join(output, 'manual-preview-input-evidence.json'), JSON.stringify(evidence, null, 2))
@@ -763,7 +770,7 @@ finally {
     await writeFile(join(output, 'mac-preview-process-retirement.json'), JSON.stringify({ elapsedMs: Date.now() - start, last, failure, forcedHostTermination, source: 'read-only proc_pidinfo exact PID + birth + executable; no signal or kill by this observer', boundary: 'Host receives the runner’s existing normal SIGTERM shutdown; helper processes are not directly killed by this oracle.' }, null, 2))
   }
   const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length
-  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
+  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : 'official-Harness-isolated-profile-real-browser', platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   if (!process.argv.includes('--keep-profile')) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ status: report.status, tests: tests.map(({ name, status }) => ({ name, status })), report: join(output, 'report.json') }, null, 2))

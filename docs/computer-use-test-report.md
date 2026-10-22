@@ -1,6 +1,6 @@
 # 电脑操控与双平台适配测试报告
 
-报告日期：2026-10-21；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告按资产 SHA 和实际 JSON 回执记录，不把单元测试、确定性 provider、真实模型、原生输入及性能测试相互替代。范围与门槛见[开发计划](windows-and-computer-use-development-plan.md)，操作方式见[使用指南](computer-use-guide.md)。
+报告日期：2026-10-22；版本 `0.6.0-beta.1`；分支 `codex/cross-platform-computer-use`。本报告按资产 SHA 和实际 JSON 回执记录，不把单元测试、确定性 provider、真实模型、原生输入及性能测试相互替代。范围与门槛见[开发计划](windows-and-computer-use-development-plan.md)，操作方式见[使用指南](computer-use-guide.md)。
 
 **整体尚未通过完整验收。** 本批已实现聊天自动发起、按应用授权、系统权限引导及统一工具箱视觉；小预览为固定长方形，画面按 X/Y 铺满，悬停显示控件，弹出后聊天画面继续实时显示。本批代码、构建及相关测试统一提交。发现的 Mac 同应用重叠窗口输入边界另立修复，未把当前开发验证包当作最终交付。
 
@@ -11,6 +11,14 @@
 修复后17项面板回归及2项既有真实文件／异步digest测试 **19/19通过、零跳过**，证据为 `artifacts/computer-use/panel-environment-draft-repro/report.json`。集成源码快照的typecheck、Mac universal构建和 **741/741全量测试**通过，287个源码／配置输入前后稳定，见 `artifacts/computer-use/macos-full-check-current/e10b674b-1d1e-45ce-84b4-21c10a560ec9/report.json`。首次沙箱运行因回环端口、Swift缓存及只读窗口查询受限失败，原始报告保留于 `d46f4f64-0ca3-497a-82f4-7b309f538d27/`；标准权限重跑通过，没有改断言。
 
 这证明状态污染修复与构建回归，不等于Windows真实Host的文件交换已重新验收，也不将其认定为此前Windows失败的唯一原因。新整包视觉／安装及原生输入另行记录。
+
+### 2026-10-22 逐页视觉验收与仓库外图片收集
+
+原先“全部设置标签”用例只确认十个tab存在，不能证明十页视觉通过。现在逐个打开设置页，核验页面专属标题、开关状态、说明、阈值范围、权限和授权入口、实际安装版本等语义，并在字体和图片就绪后截取设置区域；长页有界滚动。该巡视不改设置、不自动检查远端更新，后续各功能动作断言仍单独执行。
+
+Mac入口新增 `--screenshots-dir`，Windows载体通过 `QIUYA_WINDOWS_SCREENSHOTS_DIR` 接收宿主的仓库外目录；来宾只接收自己的UUID目录。收集时逐图片核验字节数和SHA，报告使用相对引用并保留原始来宾报告。新增8项及相邻纯Node回归14/14通过，证据为 `artifacts/computer-use/settings-tab-visual-report.json`；随后完整typecheck、universal构建和 **749/749、零失败／跳过** 通过，289个执行源码／配置输入前后稳定，见 `artifacts/computer-use/macos-full-check-current/1e380d00-f354-4f02-a281-e532d9183834/report.json`。
+
+此处仅记验收工具实现及回归通过；实际十页像素、整包和真实模型的结果须按随后运行报告判断，未将jsdom或确定性provider改称真实DeepSeek验收。用户要求的成功截图全部保存在项目外，不作为Git资产。
 
 ## 0. 本批交互功能与当前验证（覆盖下面历史快照的“最新”称呼）
 
