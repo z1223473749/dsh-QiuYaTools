@@ -10,10 +10,10 @@
 | Mac 当前候选 | 包 `9b828d9b…5e6f3`／helper `66ae37d0…6e502`：真实隔离 Host＋headless Chrome **DOM 8项**、24张状态图；文件交换 **4项**、真实8MiB上传／下载／同名拒绝；官方安装生命周期 **5项** | [DOM界面](harness-dom-acceptance.md)、[文件交换](macos-file-exchange-acceptance.md)、[安装](macos-install-acceptance.md)。DOM排除原生分窗／拖出／电脑输入，文件交换仅 status/targets-only stub，不由这些结果证明native操控 |
 | Mac 正式键盘修复 | 66ae universal构建及21项相关回归通过；同SHA真实中文正例、兄弟窗口／原进程退出负例尚未实测通过 | 旧0143红例、隔离ac88绿例分别保留；不能移记到66ae。旧0143正式指针13/13与WK30分钟／5恢复也只属于旧SHA |
 | Windows 浏览器 | Edge与官方ARM64 Chrome分别 **10/10**，真实CDP及Agent注册回调、自然浏览器退出、精确任务注销、idle恢复通过 | [浏览器与依赖](windows-browser-test-dependencies.md)。Chrome首次MSI身份验收failed仍保留，事后独立签名／PE／默认关联证明依赖可用，不倒填安装通过 |
-| Windows 当前 PE 预览性能 | ARM64 c8三十分钟／五次恢复通过；x64 3d轻量C#采样器60秒烟测通过：12.084fps、P95 42ms、全自有树1,567,047,680B低于原1.5GiB门；x64长测执行中 | [当前WebView2性能](windows-webview2-performance-evidence.md)。采样器自身计入原全树，旧资源失败及首轮FPS失败保留，不提高门槛或沿用旧SHA |
+| Windows 当前 PE 预览性能 | ARM64 c8及x64 3d各三十分钟／五次恢复通过；x6424,490帧、13.605fps、P95 45ms、全树峰值1,567,682,560B低于原1.5GiB门 | [当前WebView2性能](windows-webview2-performance-evidence.md)。采样器自身计入，原资源失败与首轮FPS失败保留；实际x64为PD ARM兼容，性能轮不做输入，不代表物理x64 |
 | 独立环境 | Mac→Windows当前c8组件 **15/15**，旧token拒绝、输入归还、精确自有进程自然退场、正常任务清理通过 | [远端实际验收](windows-remote-acceptance.md)。Windows→Mac当前正式组件的严格闭环尚未完成 |
 | 真实 DeepSeek | Windows c8第四轮确认／中文备注及Enter／拖动三项全部通过；业务、图片nonce、自然清理及官方移除／owner恢复分别通过；Mac当前66ae真实模型待验 | [Windows真实模型三任务](windows-real-model-acceptance.md)。固定目标四工具不代替自然discover／request授权；备注任务一次旧帧拒绝并重新观察后完成，重复完整click及历史失败均保留 |
-| 项目外视觉索引 | 已通过基线72张，原图及SHA／独立行为回执可追溯，按平台／功能筛选 | 目录 `/Users/qiuya/QiuYaTools-验收/2026-10-22/视觉画廊-已通过基线-d00d603b-f2e7-442d-bb8f-99ca90a4f9a8/`。基线非整体完成；不收旧上传中假成功或未完成模型画面，x64计划只标保存／送达 |
+| 项目外视觉索引 | 已通过75张：保留原72张并追加真实DeepSeek三个最终画面；117份来源SHA／字节及200本地链接自检通过 | 新目录 `/Users/qiuya/QiuYaTools-验收/2026-10-22/视觉画廊-75图-真实DeepSeek追加-7ea2ea32-11a0-44a2-8182-d46ca7441d0c/`，原72图目录不变。新增3图仅标Windows ARM64固定四工具真实模型；不扩张自然入口或x64范围 |
 
 | 阶段 | 当前状态 | 仍需完成或明确边界 |
 | --- | --- | --- |
@@ -23,14 +23,14 @@
 | P3 主Agent图片与真实模型 | Windows当前c8固定目标四工具真实DeepSeek三任务通过；确定性provider链路另有证据 | 自然discover／request／授权补验及Mac当前66ae真实三任务仍待验，不把其中一条链路替代另一条 |
 | P4A Mac执行器 | 当前66ae已构建／相关回归通过，同SHA原生实测未完成 | 中文配对、歧义／退出负例、指针及默认多聊天逐项绑定新SHA；锁屏期间不输入、不绕登录 |
 | P4B Windows执行器 | 当前c8／3d各原生52＋预览指针29、应用权限18项通过 | 与整包UI、真实模型、预览性能分别记证；不推导未测的系统／设备矩阵 |
-| P5 实时预览与恢复 | 当前c8 WebView2长稳通过；当前3d轻量采样器烟测通过、长稳执行中 | 原门槛保持，长测及Mac66ae新绑定仍待通过，旧0143不可继承 |
+| P5 实时预览与恢复 | 当前c8与3d WebView2各三十分钟／五次恢复通过，完整壁钟、资源与自然清退过原门槛 | Mac66ae新绑定仍待通过，旧0143不可继承；性能轮不代替held-input或停止延迟 |
 | P6 独立环境与文件交换 | Mac→Win15及当前Mac8MiB文件交换通过 | Win→Mac严格delivery未完成；文件服务stub不当作native权限证明 |
 | P7 浏览器通道 | 当前Windows Edge10＋Chrome10通过 | 只证明隔离profile／显式CDP／站点许可与注册工具，不等同日常profile随包扩展或真实模型 |
 | P8 安装与更新 | 当前Windows双包各install5、Mac当前包install5通过 | 均为隔离测试安装生命周期；最终包本机安装及受影响视觉复验仍需收口，未签名／公证／公开发布 |
-| P9 完整交付 | **尚未通过** | Mac当前真实DeepSeek／原生／多聊天、自然会话入口补验、x64长稳、严格反向环境、最终变更回归及安装包汇总仍有未完成项 |
+| P9 完整交付 | **尚未通过** | Mac当前真实DeepSeek／原生／多聊天、自然会话入口补验、Windows默认manager双聊天、严格反向环境、最终变更回归及安装包汇总仍有未完成项 |
 | P10 Codex扩展 | 计划已收集，独立能力未全部实现 | Office专用加载项、锁屏扩展、日常profile浏览器扩展及工作台H阶段不由鼠标或独立profile结果代替 |
 
-后续按完整修复单元继续：Windows工作目录／可信子进程与真实模型三任务已完成，继续x64长稳与自然会话入口补验，再完成Mac解锁后的正式原生与反向闭环，最后冻结源码做最终检查、同字节包与安装／视觉复验。每个完整改动连构建、测试中文提交；成功截图继续保存在项目外。
+后续按完整修复单元继续：Windows工作目录／可信子进程与真实模型三任务已完成，当前双Windows长稳已通过，继续自然会话入口与Windows双聊天补验，再完成Mac解锁后的正式原生与反向闭环，最后冻结源码做最终检查、同字节包与安装／视觉复验。每个完整改动连构建、测试中文提交；成功截图继续保存在项目外。
 
 ## 2026-10-21 至早期 10-22 历史记录（原样保留用于对照）
 

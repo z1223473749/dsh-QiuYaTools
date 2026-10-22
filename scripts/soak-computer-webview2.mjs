@@ -9,7 +9,8 @@ import { mkdir, mkdtemp, readFile, writeFile, rm, rename } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsProcessSnapshotCommand, windowsPinnedProcessCommand, partitionWindowsCleanupIdentities } from './computer-webview2-soak-evidence.mjs'
+import { WebViewClockAccumulator, createWebViewOwnershipTracker, installWebViewClockProbe, sameWindowsProcessIdentity, windowsPinnedProcessCommand, partitionWindowsCleanupIdentities } from './computer-webview2-soak-evidence.mjs'
+import {collectWindowsProcesses, finiteSoakGateEvidence} from './windows-soak-process-collector.mjs'
 
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (key, fallback) => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1] }
@@ -21,6 +22,8 @@ const output = resolve(arg('--output', 'artifacts/computer-use/windows-webview2-
 const companion = resolve(arg('--native', join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`)))
 const runtime = resolve(arg('--runtime'))
 const fixturePath = resolve(arg('--fixture', join(root, 'tests/fixtures/windows-webview2-soak-fixture.ps1')))
+const collectorPath = resolve(arg('--collector')), collectorSha256 = arg('--collector-sha256'), collectorAudit = []
+assert.match(collectorSha256 ?? '', /^[a-f0-9]{64}$/u)
 await mkdir(output, { recursive: true })
 const temporary = await mkdtemp(join(tmpdir(), `qiuya-webview2-soak-${randomUUID()}-`))
 const nativeData = join(temporary, 'native-webview2'), sessionId = `soak-${randomUUID()}`
@@ -54,7 +57,7 @@ async function powershell(code) {
 async function snapshotRows() {
   // Command lines are inspected only to match this UUID's WebView2 directory;
   // they and unrelated executable paths are never included in evidence.
-  return JSON.parse(await powershell(windowsProcessSnapshotCommand(nativeData, { fixturePath })))
+  return collectWindowsProcesses({file:collectorPath,sha256:collectorSha256,nativeData,fixturePath,audit:collectorAudit})
 }
 async function ownedProcesses() {
   const rows = await snapshotRows(), owned = track(rows, process.pid, companion)
@@ -314,7 +317,7 @@ try {
   report = { status: measured.uniqueFps >= 10 && measured.endToEndFps >= 10 && measured.latencyP95Ms !== null && measured.latencyP95Ms <= 500 && measured.invalidTimestamps === 0 && measured.wrongDimensions === 0 && faults.length === expectedFaults && generations.length === expectedFaults + 1 && generations.every(item => item.frames > 0) && attachmentWrites === 0 && resourcesBounded ? 'passed' : 'failed', kind: 'real-native-WebView2-production-preview-720p-endurance', renderer: 'Actual WinForms WebView2 in the production qiuya-windows.exe; CDP observes this native window, no Edge browser surrogate', platform: process.platform, architecture: process.arch, minutes, ...measured, fixtureReady, sourcePixels: { width: 1280, height: 720 }, resourcesBounded, resourceBounds, resources, faults, generations, nativeArtifacts, attachmentWrites, captureOnlyInputReleased: true,
     attachmentEvidence: 'Host attachment service spy, not an actual SDK database write counter',
     frameDefinition: 'Unique 32-bit source epoch-ms clock decoded independently from production canvas pixels after completed draw. Repeated stamps are excluded. Invalid means >10s old/future; zero invalid does not mean zero dropped source frames. Recovery gaps remain in wall-clock FPS.',
-    resourceAttribution: 'Same-snapshot PID+birth and descendant birth ordering; exact UUID helper path, UUID WebView2 data-directory membership and retained PID+birth identities keep orphan workers in scope. Sampling PowerShell/conhost remain included; snapshots do not observe every instantaneous peak.',
+    resourceAttribution: 'Same-snapshot PID+birth and descendant birth ordering; exact UUID helper path, UUID WebView2 data-directory membership and retained PID+birth identities keep orphan workers in scope. The short-lived C# sampler itself and all owned PowerShell/conhost remain included; snapshots do not observe every instantaneous peak.',
     limitations: ['720p is the source/captured JPEG/canvas backing size. The actual 600x420 native floating Form may display it scaled; this does not claim a 1280x720 physical viewport.', 'Source animation/capture/display endurance only; no scroll/drag input workload or held-input stop-latency claim.', 'The production Host and preview are bundled from the recorded source with a test-only owner carrier. Actual Harness SDK authentication/package integration has separate E2E evidence.', 'The debugger is enabled only for this disposable test process/data directory; no production flags, registry, user profile or firewall are changed.'], testedAt: new Date().toISOString() }
 } catch (error) {
   stats.finish(Date.now())
@@ -391,6 +394,10 @@ try {
   if (retirementVerified && !remaining.length) await rm(temporary, { recursive: true, force: true }).catch(error => errors.push(error.code ?? 'temporary-cleanup-failed'))
   if (errors.length) { report.status = 'failed'; report.cleanupFailures = errors; process.exitCode = 1 }
   report.cleanup = { passed: !errors.length, trackedIdentities: tracked.length, retirementVerified, deferredUntilRunnerExit, naturallyRemaining, remaining }
+  report.gateEvidence = finiteSoakGateEvidence(report, expectedFaults)
+  report.collector = {kind:'short-lived-read-only-CIM-and-pinned-native-identity',sha256:collectorSha256,selfIncluded:collectorAudit.length>0&&collectorAudit.every(row=>row.selfIncluded),allCompletedNaturally:collectorAudit.length>0&&collectorAudit.every(row=>row.naturalExit),calls:collectorAudit.length}
+  if(!report.collector.allCompletedNaturally){report.status='failed';process.exitCode=1}
+  await writeFile(join(output, 'collector-audit.json'), JSON.stringify(collectorAudit, null, 2))
   await writeFile(join(output, 'cleanup-verification.json'), JSON.stringify({ tracked, deferredUntilRunnerExit, naturallyRemaining, remaining, retirementVerified, passed: !errors.length }, null, 2))
   await writeFile(join(output, 'frame-clock.json'), JSON.stringify({ columns: ['generation', 'sourceStamp32', 'renderCompletedEpochMs', 'latencyMs'], measurementStartMs: measurementStart, measurementEndMs: stats.end, frames: stats.frames }))
   await writeFile(join(output, 'fault-trace.json'), JSON.stringify({ events: trace }, null, 2))

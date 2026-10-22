@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { join, resolve, win32 } from 'node:path'
 import { build } from 'esbuild'
 import { windowsProcessSnapshotCommand, windowsEmergencyCleanupIdentities, windowsPinnedProcessCommand } from './computer-webview2-soak-evidence.mjs'
+import {collectorCompileCommand} from './windows-soak-process-collector.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url)), run = promisify(execFile)
 const arg = (key, fallback) => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1] }
@@ -78,6 +79,8 @@ const files = new Map([
   ['soak-computer-webview2.mjs', await readFile(join(root, 'scripts/soak-computer-webview2.mjs'))],
   ['computer-webview2-soak-evidence.mjs', await readFile(join(root, 'scripts/computer-webview2-soak-evidence.mjs'))],
   ['computer-soak-evidence.mjs', await readFile(join(root, 'scripts/computer-soak-evidence.mjs'))],
+  ['windows-soak-process-collector.mjs', await readFile(join(root, 'scripts/windows-soak-process-collector.mjs'))],
+  ['windows-soak-process-collector.cs', await readFile(join(root, 'tests/fixtures/windows-soak-process-collector.cs'))],
   ['windows-webview2-soak-fixture.ps1', await readFile(join(root, 'tests/fixtures/windows-webview2-soak-fixture.ps1'))],
   ['qiuya-windows.exe', await readFile(helperPath)],
 ])
@@ -109,7 +112,10 @@ try {
     await ps(`$ErrorActionPreference='Stop';$c=[Net.WebClient]::new();$c.Proxy=$null;try{$c.DownloadFile(${quote(url)},${quote(win32.join(guestRoot, name))})}finally{$c.Dispose()};if((Get-FileHash ${quote(win32.join(guestRoot, name))} -Algorithm SHA256).Hash.ToLowerInvariant()-ne ${quote(hash)}){throw 'Transferred test input SHA mismatch'}`, 120000)
   }
   for (const name of files.keys()) await transfer(name)
-  files.set('launch.mjs', Buffer.from(`import{writeFile}from'node:fs/promises';import{dirname,join}from'node:path';import{fileURLToPath,pathToFileURL}from'node:url';const base=dirname(fileURLToPath(import.meta.url));try{process.argv=[process.execPath,join(base,'soak-computer-webview2.mjs'),'--runtime',join(base,'runtime.mjs'),'--native',join(base,'qiuya-windows.exe'),'--fixture',join(base,'windows-webview2-soak-fixture.ps1'),'--minutes',${JSON.stringify(String(minutes))},'--faults',${JSON.stringify(String(faults))},'--output',join(base,'evidence')];await import(pathToFileURL(process.argv[1]).href)}catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:error.message,code:error.code}));process.exitCode=1}finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:process.exitCode||0}))}`))
+  const collectorBuild=JSON.parse(await ps(collectorCompileCommand({source:win32.join(guestRoot,'windows-soak-process-collector.cs'),output:win32.join(guestRoot,'windows-soak-process-collector.exe'),sourceSha256:createHash('sha256').update(files.get('windows-soak-process-collector.cs')).digest('hex')})))
+  assert.match(collectorBuild.sha256??'',/^[a-f0-9]{64}$/u);assert.equal(collectorBuild.compiledBeforeMeasurement,true)
+  await writeFile(join(output,'collector-build.json'),JSON.stringify(collectorBuild,null,2))
+  files.set('launch.mjs', Buffer.from(`import{writeFile}from'node:fs/promises';import{dirname,join}from'node:path';import{fileURLToPath,pathToFileURL}from'node:url';const base=dirname(fileURLToPath(import.meta.url));try{process.argv=[process.execPath,join(base,'soak-computer-webview2.mjs'),'--runtime',join(base,'runtime.mjs'),'--native',join(base,'qiuya-windows.exe'),'--fixture',join(base,'windows-webview2-soak-fixture.ps1'),'--collector',join(base,'windows-soak-process-collector.exe'),'--collector-sha256',${JSON.stringify(collectorBuild.sha256)},'--minutes',${JSON.stringify(String(minutes))},'--faults',${JSON.stringify(String(faults))},'--output',join(base,'evidence')];await import(pathToFileURL(process.argv[1]).href)}catch(error){await writeFile(join(base,'startup-error.json'),JSON.stringify({error:error.message,code:error.code}));process.exitCode=1}finally{await writeFile(join(base,'completed.json'),JSON.stringify({exitCode:process.exitCode||0}))}`))
   await transfer('launch.mjs')
   files.set('start.ps1', Buffer.from(`$ErrorActionPreference='Stop'
 $p=$null;$out=$null;$err=$null
@@ -137,7 +143,7 @@ try {
   task = `QiuYaTools-webview2-soak-${key}`
   const args = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${win32.join(guestRoot, 'start.ps1')}"`
   await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${quote(args)};$p=New-ScheduledTaskPrincipal -UserId ${quote(identity.user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ${Math.ceil(minutes) + 8}) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
-  environment = { kind: 'real-native-WebView2-720p-endurance', vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', runnerLaunch: '.NET ProcessStartInfo UseShellExecute=false/CreateNoWindow=true/redirected streams with awaited BaseStream.CopyToAsync', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 2000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
+  environment = { kind: 'real-native-WebView2-720p-endurance', collectorBuild, vm, host, guestRoot, task, runtimeRoot: prepared, runtimeInput, node: actualNode, renderer: 'actual production WinForms WebView2 observed by test-only loopback CDP; no Edge launch', runnerLaunch: '.NET ProcessStartInfo UseShellExecute=false/CreateNoWindow=true/redirected streams with awaited BaseStream.CopyToAsync', sourcePixels: { width: 1280, height: 720 }, minutes, faults, helperPath, helperSha256, runtimeBundle: frozenRuntime ? resolve(frozenRuntime) : 'bundled-from-current-production-source', inputHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])), dependencies: 'Windows runner uses Node built-ins only; esbuild runs on the Mac orchestrator', powershellTransport: 'Inline EncodedCommand below 2000 characters; larger commands use this run UUID HTTP files with SHA-verified UTF-8 BOM PS1 and short -File, removed after return', startedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment, null, 2))
   console.error(JSON.stringify({ stage: 'interactive-native-WebView2-started', minutes, faults, guestRoot, output }))
   const deadline = Date.now() + minutes * 60000 + 360000

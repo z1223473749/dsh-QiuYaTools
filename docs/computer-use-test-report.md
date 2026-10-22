@@ -17,9 +17,10 @@
 | Mac到Windows独立环境 | 当前正式c8be组件15/15，旧配对撤销、输入归还、全部精确自有进程退出及正常任务清理通过 | [远端实际验收](windows-remote-acceptance.md)，提交 `f8872fc` |
 | Mac正式键盘修复 | 当前66ae universal构建、21项相关回归及独立测试夹具准备通过；同SHA真实中文正例、切兄弟窗口／原进程退出负例尚待解锁。旧0143红例和ac88隔离候选绿例分别保留 | 下方Mac键盘章节；开发验证包可安装，未作为最终完整验收包 |
 | 真实DeepSeek | Windows当前c8第四轮三个真实模型任务全部通过：确认35,359ms、中文备注及Enter107,791ms、拖动36,465ms；独立业务／视觉nonce／自然清理全部通过。备注任务一次旧帧type被STALE_OBSERVATION拒绝，模型重新观察后完成 | [Windows真实模型三任务](windows-real-model-acceptance.md)。固定目标四工具不代替自然discover／request／用户授权；Mac旧0143中文失败保留，当前66ae真实模型仍待验。Windows第三轮失败不改写，第四轮官方安装／移除、owner设置／连接恢复及外层自然exit0分别通过 |
-| 稳定性与剩余原生 | Windows当前c8的WebView2三十分钟／五次恢复通过：24,656帧、13.697fps、P95 44ms；当前3d x64轻量C#采样器烟测通过：60,079ms、726帧、12.084fps、P95 42ms、自有树RSS1,567,047,680B低于原1.5GiB门，三十分钟长测正在执行 | [当前WebView2性能](windows-webview2-performance-evidence.md)。原资源失败及首次C#烟测FPS失败保留；采样器也计入全树，未放宽门槛。Mac旧0143长稳不继承到66ae；默认双聊天指针及Windows到Mac反向严格收尾未完成 |
+| 稳定性与剩余原生 | Windows当前c8与3d各30分钟／5次恢复通过。ARM64：24,656帧、13.697fps、P95 44ms；x64：24,490帧、13.605fps、P95 45ms，全自有树峰值1,567,682,560B低于原1.5GiB门，采样器自身计入；两轮最终清退与环境恢复分别通过 | [当前WebView2性能](windows-webview2-performance-evidence.md)。原资源失败及首次C#烟测FPS失败保留。x64仅PD ARM兼容，最大帧间隔14,155ms含故障恢复；性能轮不做实际输入。Mac旧0143长稳不继承到66ae；默认双聊天指针及反向严格闭环未完成 |
+| 项目外视觉画廊 | 已通过截图75张：原72张基线加本轮真实DeepSeek最终画面3张，原文件及旧索引保持；117份来源SHA／字节、75图／报告及200个本地链接自检通过 | 本地目录 `/Users/qiuya/QiuYaTools-验收/2026-10-22/视觉画廊-75图-真实DeepSeek追加-7ea2ea32-11a0-44a2-8182-d46ca7441d0c/`。`index.html`可离线筛选／放大，`self-check.json`与`ui-dom-self-check.json`均passed；截图不进入Git |
 
-当前仍需完成：正式Mac输入／指针与双聊天闭环、Mac当前组件真实DeepSeek三任务及聊天自然发现／授权补验、当前Windows x64预览长稳、严格反向独立环境、新正式包本机安装及受影响功能视觉复验与交付汇总。当前源码快照的只读生产JS构建字节核验、typecheck及940/940完整直接测试已通过，四个native和包元数据均保持不变；后续源码变化须重新绑定检查。Mac系统锁屏期间不发送输入或绕过登录，继续独立的Windows、隔离Host与文档工作。Intel Mac及物理x64 Windows不由Apple Silicon／ARM来宾转译结果代替；Office、锁屏扩展和工作台H阶段仍按开发计划独立记录。
+当前仍需完成：正式Mac输入／指针与双聊天闭环、Mac当前组件真实DeepSeek三任务及聊天自然发现／授权补验、Windows默认管理器双聊天实测、严格反向独立环境、新正式包本机安装及受影响功能视觉复验与交付汇总。当前源码快照的只读生产JS构建字节核验、typecheck及940/940完整直接测试已通过，四个native和包元数据均保持不变；后续源码变化须重新绑定检查。Mac系统锁屏期间不发送输入或绕过登录，继续独立的Windows、隔离Host与文档工作。Intel Mac及物理x64 Windows不由Apple Silicon／ARM来宾转译结果代替；Office、锁屏扩展和工作台H阶段仍按开发计划独立记录。
 
 随后通过一次显式只读owner探针确认当前namespace唯一、可写、revision为7，`enabled`和`computerUseEnabled`均为自有及有效true，本机连接且无活动会话。前后两次有限读回一致，设置mutation、模型推理及连接派发均为零；临时插件正常卸载并确认原patch退场。证据为仓库外 `原始截图/真实DeepSeek-owner只读探针-1/`。这证明当前状态与只读入口，不能追认前一轮缺失的原始快照；完整任务入口将复用已启用状态并仅在实际有差异时更改与恢复。
 
