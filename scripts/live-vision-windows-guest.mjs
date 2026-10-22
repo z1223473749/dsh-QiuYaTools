@@ -46,7 +46,12 @@ export async function runWindowsVisionGuest(configPath){
   const response=await fetch(record.ready.stateEndpoint,{signal:AbortSignal.timeout(5000),redirect:'error'});if(!response.ok)fail('VISION_WINDOWS_ORACLE')
   const raw=await response.json(),oracle=projectWindowsOracle(raw,record.fixtureIdentity,record.ready.windowId,record.request.task)
   if(raw.foregroundWindowId!==record.ready.windowId)fail('VISION_WINDOWS_FOREGROUND_CHANGED')
-  return {...binding(record.request),fixtureAlive:true,fixtureIdentity:record.fixtureIdentity,windowId:record.ready.windowId,oracle}
+  let preauthorization
+  if(record.request.testOnlyNaturalEntry===true&&Object.values(record.nativeCalls).every(value=>value===0)){
+   const desktopAudit={...ps(windowsVisionDesktopCommand(cfg.auditPath,cfg.auditSha256)),auditSourceSha256:cfg.auditSha256}
+   preauthorization={phase:'before-owner-once',nativeCalls:{...record.nativeCalls},desktopAudit}
+  }
+  return {...binding(record.request),fixtureAlive:true,fixtureIdentity:record.fixtureIdentity,windowId:record.ready.windowId,oracle,...(preauthorization?{preauthorization}:{})}
  }
  async function retire(record){
   if(record.cleanup)return record.cleanup
@@ -71,7 +76,8 @@ export async function runWindowsVisionGuest(configPath){
  async function prepare(request){
   winVisionRequest(request,cfg,records.length+1)
   if(active||request.task!==records.length+1||request.runId!==cfg.runId||request.rendezvousNonce!==cfg.rendezvousNonce)fail('VISION_WINDOWS_BINDING')
-  const record={request};active=record;records.push(record)
+  if(request.testOnlyNaturalEntry!==undefined&&(request.testOnlyNaturalEntry!==true||request.task!==1))fail('VISION_WINDOWS_BINDING')
+  const record={request,nativeCalls:{observe:0,preview:0,lease:0,act:0}};active=record;records.push(record)
   record.fixture=spawn(cfg.fixture,[],{stdio:['pipe','pipe','pipe'],windowsHide:false});record.fixtureTrack=track(record.fixture);record.fixture.stderr.resume();record.fixture.stdin.on('error',()=>{})
   let readyResolve,readyReject;const ready=new Promise((r,j)=>{readyResolve=r;readyReject=j}),lines=createInterface({input:record.fixture.stdout})
   lines.on('line',line=>{try{if(line.length>65536)throw Error();const value=JSON.parse(line);if(value.event==='ready')readyResolve(value)}catch{readyReject(Error('VISION_WINDOWS_FIXTURE_PROTOCOL'))}})
@@ -85,7 +91,7 @@ export async function runWindowsVisionGuest(configPath){
   record.nativeIdentity=await initialize('native',record.nativeChild.pid,cfg.native,process.pid,me.createdAtTicks)
   if(nativeStatus.available!==true||nativeStatus.platform!=='win32'||nativeStatus.permissions?.screen!==true||nativeStatus.permissions?.accessibility!==true)fail('VISION_WINDOWS_NATIVE_PERMISSION')
   record.target=exactWindowsTarget((await record.driver.targets()).find(t=>t.pid===record.fixture.pid&&t.id.split(':')[1]&&BigInt('0x'+t.id.split(':')[1])===BigInt(record.ready.windowId)),record.fixtureIdentity,record.ready.windowId)
-  const fixed={status:async s=>{await check(record);return record.driver.status(s)},targets:async()=>[await check(record)],observe:async(t,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');await check(record);const value=await record.driver.observe(t,s);await check(record);return value},preview:async(t,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');await check(record);const value=await record.driver.preview(t,s);await check(record);return value},lease:async(e,s,o)=>{await check(record);return record.driver.lease(e,s,o)},release:(e,s)=>record.driver.release(e,s),act:async(e,t,a,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');windowsVisionAction(record.request.task,a);await check(record);return record.driver.act(e,t,a,s)},openPreview:async()=>fail('VISION_PREVIEW_NOT_EXPOSED'),closePreview:async()=>{},subscribe:l=>record.driver.subscribe(l)}
+  const fixed={status:async s=>{await check(record);return record.driver.status(s)},targets:async()=>[await check(record)],observe:async(t,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');await check(record);record.nativeCalls.observe++;const value=await record.driver.observe(t,s);await check(record);return value},preview:async(t,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');await check(record);record.nativeCalls.preview++;const value=await record.driver.preview(t,s);await check(record);return value},lease:async(e,s,o)=>{await check(record);record.nativeCalls.lease++;return record.driver.lease(e,s,o)},release:(e,s)=>record.driver.release(e,s),act:async(e,t,a,s)=>{if(t!==record.target.id)fail('VISION_TARGET_CHANGED');windowsVisionAction(record.request.task,a);await check(record);record.nativeCalls.act++;return record.driver.act(e,t,a,s)},openPreview:async()=>fail('VISION_PREVIEW_NOT_EXPOSED'),closePreview:async()=>{},subscribe:l=>record.driver.subscribe(l)}
   record.token=randomBytes(32).toString('hex');record.agent=await createComputerAgentServer(fixed,{token:record.token,host:'127.0.0.1',port:0})
   await snapshot(record);await save()
   return {...binding(request),target:record.target,windowId:record.ready.windowId,guestRoot:cfg.guestRoot,fixtureIdentity:record.fixtureIdentity,nativeIdentity:record.nativeIdentity,nativeSha256:cfg.nativeSha256,fixtureSha256:cfg.fixtureSha256,auditSha256:cfg.auditSha256,token:record.token,nativeStatus}

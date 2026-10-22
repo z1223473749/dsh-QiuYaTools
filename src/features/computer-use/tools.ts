@@ -43,7 +43,7 @@ const toolErrors: Record<string, string> = {
   FOCUS_CHANGED: '目标窗口焦点已变化。请停止输入，等待用户确认目标窗口后重新观察；不要自动重放操作。',
   HUMAN_INPUT_INTERRUPTED: '检测到人工介入，本次输入已停止。请等待用户恢复电脑操控，不要自行重新开始或重放操作。',
   CURSOR_CLEANUP_FAILED: '指针或输入清理尚未确认，请等待用户检查，不要自动重试或继续输入。',
-  STALE_OBSERVATION: '画面已失效，请先重新观察当前授权窗口。',
+  STALE_OBSERVATION: '画面已失效。每次成功操作（含 click/type/key/move）都会消耗 frameId；请先 observe 取得新 frameId，再执行下一步。不要为刷新画面重复已成功的操作，也不要自动重放结果未确认的输入。',
   APP_NOT_ALLOWED: '应用尚未授权或授权已撤销，请等待用户授权。',
   SESSION_NOT_STARTED: '当前聊天尚未开始电脑操控，请先发现应用并申请授权。',
   DEVICE_BUSY: '此电脑当前由另一个会话控制，请等待用户处理。',
@@ -114,9 +114,9 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       },
     }),
     register({
-      name: 'qiuya_computer_observe', description: 'Capture the authorized target application and read its accessibility text. Use the returned frameId for the next action; coordinates refer to original screenshot pixels.', parameters: noParameters,
+      name: 'qiuya_computer_observe', description: 'Capture the authorized target application and read its accessibility text. The returned frameId is single-use: every successful act, including click/type/key/move, consumes it. Observe again before the next act, even when the window looks unchanged. Do not repeat a completed action to refresh its frame. Coordinates refer to original screenshot pixels.', parameters: noParameters,
       output: {
-        schema: { type: 'object', additionalProperties: true, required: ['targetId', 'frameId', 'width', 'height', 'elements', 'image'], properties: { targetId: { type: 'string' }, frameId: { type: 'string' }, width: { type: 'integer' }, height: { type: 'integer' }, elements: { type: 'string' }, image: { type: 'object', additionalProperties: true } } },
+        schema: { type: 'object', additionalProperties: true, required: ['targetId', 'frameId', 'width', 'height', 'elements', 'image'], properties: { targetId: { type: 'string' }, frameId: { type: 'string', description: 'Single-use observation frame for the next act. Every successful act consumes it; observe again before another act.' }, width: { type: 'integer' }, height: { type: 'integer' }, elements: { type: 'string' }, image: { type: 'object', additionalProperties: true } } },
         render(_args, value) {
           const result = value as unknown as { image: ImageAttachmentRef; frameId: string; width: number; height: number; elements: string; targetId: string }
           return [{ type: 'text', text: JSON.stringify({ targetId: result.targetId, frameId: result.frameId, width: result.width, height: result.height, elements: result.elements }) }, { type: 'image', attachment: result.image }]
@@ -132,9 +132,9 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       },
     }),
     register({
-      name: 'qiuya_computer_act', description: 'Perform one action in this chat’s authorized application using the latest frameId, then observe to verify. Browser mode also supports navigate/openTab(url), selectorClick/selectorType(selector,text), and closeTab within owner-approved origins. These browser actions do not work in native desktop mode. Paused and human-controlled sessions reject Agent input.',
+      name: 'qiuya_computer_act', description: 'Perform one action in this chat’s authorized application using a fresh frameId from observe. Every successful act, including click/type/key/move, consumes that frameId. Before the next act, observe again and use its new frameId: observe → click → observe → type → observe → key. Do not repeat a completed action to refresh a frame or automatically replay unconfirmed input. Browser mode also supports navigate/openTab(url), selectorClick/selectorType(selector,text), and closeTab within owner-approved origins. These browser actions do not work in native desktop mode. Paused and human-controlled sessions reject Agent input.',
       parameters: { type: 'object', additionalProperties: false, required: ['frameId', 'action'], properties: {
-        actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string' },
+        actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string', description: 'Fresh frameId from the latest observe, valid for one successful act only. After success, observe again before any next act; never repeat the completed action just to refresh its frame.' },
         action: { type: 'object', required: ['kind'], additionalProperties: false, properties: {
           kind: { type: 'string', enum: ['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'] },
           x: { type: 'number' }, y: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, text: { type: 'string' }, key: { type: 'string' }, deltaX: { type: 'number' }, deltaY: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] },

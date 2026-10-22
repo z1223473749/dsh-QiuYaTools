@@ -7,6 +7,7 @@ import { RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/compu
 import { readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest } from './live-vision-external-core.mjs'
 import { windowsVisionDesktopPassed } from './live-vision-windows-audit.mjs'
 import { createWindowsVisionCancel, validateWindowsVisionCancelAck } from './live-vision-windows-cancel.mjs'
+import { visionPreauthorizationPassed } from './live-vision-guard-core.mjs'
 
 const fail = code => { throw Object.assign(new Error(code), { code }) }
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value)
@@ -75,6 +76,12 @@ export function createWindowsVisionAdapter(configPath, directory) {
     finally { reader.releaseLock() }
     let value; try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { fail('VISION_FIXTURE_PROTOCOL') }
     validateWindowsVisionBinding(value, record.windows.request, record.windows.config)
+    if (record.testOnlyNaturalEntry) record.preauthorization = undefined
+    if (record.testOnlyNaturalEntry && value.preauthorization) {
+      const passed = visionPreauthorizationPassed(value.preauthorization, { sessionId: ready.nativeIdentity.sessionId, auditSha256: record.windows.config.auditSha256 })
+      record.preauthorization = { ...value.preauthorization, passed }
+      if (!passed) fail('VISION_NATURAL_PREAUTH_AUDIT')
+    }
     return projectWindowsVisionOracle(value, record)
   }
   return {
@@ -97,6 +104,7 @@ export function createWindowsVisionAdapter(configPath, directory) {
       if (!sid(record.sessionId) || ![1, 2, 3].includes(record.task) || !/^[0-9A-F]{6}$/u.test(record.nonce)) fail('VISION_EXTERNAL_BINDING')
       const request = { version: 1, runId: cfg.runId, rendezvousNonce: cfg.rendezvousNonce, requestId: randomUUID(), task: record.task, sessionId: record.sessionId, nonce: record.nonce,
         note: `青山路18号，请轻放，核验码${record.nonce}`, seed: randomBytes(2).readUInt16BE() }
+      if (record.testOnlyNaturalEntry) request.testOnlyNaturalEntry = true
       record.windows = { config: cfg, request }
       await writePrivateJSON(externalFile(cfg, record.task, 'request'), request)
       const ready = validateWindowsVisionReady(await readSoon(externalFile(cfg, record.task, 'ready'), 20000), request, cfg)

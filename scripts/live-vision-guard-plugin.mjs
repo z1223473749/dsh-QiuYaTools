@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { createComputerAgentServer, NativeCompanionDriver, RemoteComputerDriver, COMPUTER_AGENT_PATH } from '../src/features/computer-use/remote.ts'
-import { VISION_TOOLS, VisionPolicy, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence, projectVisionTurnError } from './live-vision-guard-core.mjs'
+import { VISION_TOOLS, NATURAL_VISION_TOOLS, VisionPolicy, naturalVisionPrompt, visionApprovalReadback, sameVisionTarget, projectVisionTool, visionActionUsage, visionAssistantDisplayEvidence, VISION_DIAGNOSTIC_PHASES, VISION_DIAGNOSTIC_CODES, projectVisionFailure, projectVisionNativeStatus, withVisionFailureEvidence, projectVisionTurnError, persistVisionFinalImage } from './live-vision-guard-core.mjs'
 import { validateExternalConfig, validateExternalBinding, sameExternalIdentity, sameExternalExecutable, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile, visionDigest, externalCleanupPassed } from './live-vision-external-core.mjs'
 import { installVisionHostAutoRun } from './live-vision-host-autorun.mjs'
 
@@ -44,9 +44,17 @@ export function apply(ctx, config) {
   const directory = resolve(config.directory), template = resolve(config.fixtureTemplate ?? fileURLToPath(new URL('./fixture-template.app', import.meta.url))), native = resolve(config.native)
   const records = new Map(), reports = [], preparationFailures = []; let active, disposed = false, delivery, ownerFailure, externalConfig, carrierCancellation
   const originals = new Map(VISION_TOOLS.map(name => [name, ctx.tools.get(name)]))
+  const naturalEntryEnabled = config.testOnlyNaturalEntry === true
+  if (naturalEntryEnabled && (config.testOnlyAutoRun !== true || config.testOnlyOwnerOnce !== true || config.testOnlyProbeOnly === true)) fail('VISION_NATURAL_CONFIGURATION')
+  if (naturalEntryEnabled) for (const name of NATURAL_VISION_TOOLS) originals.set(name, ctx.tools.get(name))
   if ([...originals.values()].some(value => !value)) fail('VISION_PRODUCTION_TOOLS_MISSING')
   const owner = () => ctx.connection.browserPeer?.principal?.kind === 'owner'
   const own = sessionId => { const value = records.get(sessionId); if (!value) fail('VISION_SESSION_NOT_OWNED'); return value }
+  function readNaturalApproval(record) {
+    record.approvalReadback = visionApprovalReadback(ctx.get?.('approval'), record.handle.agent.session)
+    if (record.approvalReadback.allowedNewRequests !== true) fail('VISION_NATURAL_APPROVAL_POLICY')
+    return record.approvalReadback
+  }
   async function save() { await mkdir(join(directory, 'evidence'), { recursive: true }); await writeFile(join(directory, 'evidence/report.json'), JSON.stringify({ kind: 'real-existing-account-scoped-Agent-visual-business-tasks', status: ownerFailure || preparationFailures.length || reports.some(row => !row.passed || !row.cleanup?.passed) || delivery?.passed === false ? 'failed' : reports.length === 3 && delivery?.passed ? 'passed' : 'not-complete', tasks: reports, preparationFailures, ...(ownerFailure ? { ownerFailure } : {}), ...(carrierCancellation ? { carrierCancellation } : {}), delivery: delivery ?? { status: 'pending' }, modelDefaultsChanged: false }, null, 2)) }
   async function checkNative(record, targetId = record.target.id) {
     if (targetId !== record.target.id || record.fixture.exitCode !== null || record.fixture.signalCode !== null) fail('VISION_FIXTURE_RETIRED')
@@ -109,6 +117,9 @@ export function apply(ctx, config) {
     if (typeof sessionId !== 'string' || !/^qiuya-vision-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(sessionId)) fail('VISION_SESSION_NOT_OWNED')
     const app = join(directory, 'runtime', `${sessionId}.app`), cwd = join(directory, 'runtime', sessionId)
     const record = { sessionId, task, nonce: randomBytes(3).toString('hex').toUpperCase(), pending: new Map(), snapshotSequence: 0, events: [], completedText: '', settled: false, phase: 'prepare-start', streamAttempts: 0 }
+    record.testOnlyNaturalEntry = naturalEntryEnabled && task === 1
+    record.toolNames = record.testOnlyNaturalEntry ? NATURAL_VISION_TOOLS : VISION_TOOLS
+    if (record.testOnlyNaturalEntry) record.ownerOnceConfirmed = new Promise(resolve => { record.confirmOwnerOnce = resolve })
     active = record; records.set(sessionId, record)
     try {
       await mkdir(join(directory, 'evidence'), { recursive: true })
@@ -163,21 +174,38 @@ export function apply(ctx, config) {
       record.phase = 'pair-identity'
       const identityDriver = new RemoteComputerDriver({ endpoint: record.pairEndpoint, token: record.pairToken })
       record.authorizedAppId = `${identityDriver.deviceId}:${bundleId}`; await identityDriver.dispose()
+      if (record.testOnlyNaturalEntry) {
+        const applications = await record.native.applications()
+        if (applications.length !== 1 || applications[0].appId !== record.authorizedAppId) fail('VISION_NATURAL_APPLICATION')
+        record.applicationName = applications[0].name.split(/[\\/]/u).at(-1).replace(/\.exe$/iu, '')
+        record.naturalPrompt = naturalVisionPrompt(record.applicationName)
+      }
       record.phase = 'model-selection'; const selection = ctx.agentDefaultModel.currentSelection()
-      record.policy = new VisionPolicy({ sessionId, task, target: record.target, selection })
+      record.policy = new VisionPolicy({ sessionId, task, target: record.target, selection, testOnlyNaturalEntry: record.testOnlyNaturalEntry })
       record.phase = 'agent-create'
       record.handle = await ctx.agents.create({ sessionId, meta: { cwd }, agentOptions: { ...selection, maxTokens: 4096 }, setup(agentCtx, agent) {
         record.phase = 'agent-setup'
-        agentCtx.tools.presentAs('native'); agentCtx.tools.restrict({ allow: VISION_TOOLS })
+        agentCtx.tools.presentAs('native'); agentCtx.tools.restrict({ allow: record.toolNames })
         agentCtx.tools.guard(exec => record.policy.toolGuard(exec))
-        for (const name of VISION_TOOLS) {
+        for (const name of record.toolNames) {
           const definition = originals.get(name)
           agentCtx.tools.register({ ...definition, async execute(args, exec) {
-            if (exec.agent?.id !== sessionId) fail('VISION_CALLER_CHANGED')
+            if (exec.agent?.id !== sessionId || record.testOnlyNaturalEntry && exec.agent !== record.handle?.agent) fail('VISION_CALLER_CHANGED')
             return withVisionFailureEvidence(async () => {
-            record.policy.assertActive(); await selected(record, exec)
+            record.policy.assertActive()
+            if (record.testOnlyNaturalEntry) {
+              if (ctx.agents.get(sessionId) !== exec.agent || !ctx.agents.roots().includes(exec.agent)) fail('VISION_CALLER_CHANGED')
+              if (name === 'qiuya_computer_request_control') record.policy.requestEntry(args)
+              if (['qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause'].includes(name)) await selected(record, exec)
+            } else await selected(record, exec)
             const result = await definition.execute(args, exec)
+            if (record.testOnlyNaturalEntry && name === 'qiuya_computer_request_control') record.controlStarted = true
             await checkNative(record)
+            if (record.testOnlyNaturalEntry && name === 'qiuya_computer_discover') record.policy.recordDiscovery(result)
+            if (record.testOnlyNaturalEntry && name === 'qiuya_computer_request_control') {
+              await bounded(record.ownerOnceConfirmed, Math.min(10000, 180000 - (Date.now() - record.policy.startedAt)), 'VISION_NATURAL_APPROVAL')
+              record.policy.recordEntryReady(result, record.authorizedAppId); await selected(record, exec)
+            }
             if (name === 'qiuya_computer_observe') {
               if (result.targetId !== record.target.id) fail('VISION_OBSERVATION_CHANGED')
               // This check runs before the first tool result reaches the model.
@@ -207,10 +235,12 @@ export function apply(ctx, config) {
           }
           if (['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type)) record.events.push({ type: event.type, seq: event.seq, time: event.time, turn: event.data.turn, step: event.data.step, ...(event.type === 'turn/end' ? { reason: event.data.reason?.kind, ...(record.terminalError ? { terminalError: record.terminalError } : {}) } : {}) })
         })
-        return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== VISION_TOOLS.length || tools.some(tool => !VISION_TOOLS.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
+        return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== record.toolNames.length || tools.some(tool => !record.toolNames.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
       record.phase = 'prepare-complete'
-      return { sessionId, task, targetId: record.target.id, endpoint: record.pairEndpoint, token: record.pairToken, prompt: prompts[task] + '\n' + visionActionUsage(task), model: record.policy.selection }
+      if (record.testOnlyNaturalEntry && (ctx.agents.get(sessionId) !== record.handle.agent || !ctx.agents.roots().includes(record.handle.agent))) fail('VISION_CALLER_CHANGED')
+      if (record.testOnlyNaturalEntry) readNaturalApproval(record)
+      return { sessionId, task, targetId: record.target.id, authorizedAppId: record.authorizedAppId, testOnlyNaturalEntry: record.testOnlyNaturalEntry, endpoint: record.pairEndpoint, token: record.pairToken, prompt: record.naturalPrompt ?? prompts[task] + '\n' + visionActionUsage(task), model: record.policy.selection }
     } catch (error) {
       const diagnostic = projectVisionFailure(error, record.phase); record.fatal = diagnostic.code
       const cleanupResult = await cleanup(record).catch(() => ({ passed: false, errors: ['VISION_CLEANUP_FAILED'] }))
@@ -222,14 +252,19 @@ export function apply(ctx, config) {
     }
   }
   async function arm(record) {
-    await selected(record, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
+    if (record.testOnlyNaturalEntry) {
+      readNaturalApproval(record)
+      await checkNative(record)
+      const state = await originals.get('qiuya_computer_status').execute({}, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
+      if (state?.state !== 'idle' || ctx.agents.get(record.sessionId) !== record.handle.agent || !ctx.agents.roots().includes(record.handle.agent)) fail('VISION_NATURAL_NOT_IDLE')
+    } else await selected(record, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
     record.policy.arm()
     record.timer = setTimeout(() => {
       record.fatal ??= 'VISION_DEADLINE'; record.handle.agent.cancel({ kind: 'hook', reason: 'bounded-visual-test-deadline' })
       // Retain bearer validity until the production RemoteDriver receives its
       // release ACK. Premature pair rotation would deliberately fence that
       // client's uncertain native epoch and prevent restoring local mode.
-      record.deadlineRelease = originals.get('qiuya_computer_pause').execute({}, { agent: record.handle.agent, callId: 'test-deadline-release', signal: AbortSignal.timeout(15000) })
+      record.deadlineRelease = record.testOnlyNaturalEntry && !record.controlStarted ? Promise.resolve() : originals.get('qiuya_computer_pause').execute({}, { agent: record.handle.agent, callId: 'test-deadline-release', signal: AbortSignal.timeout(15000) })
       void record.deadlineRelease.catch(() => { record.fatal = 'VISION_CLEANUP_FAILED' })
     }, 180000); record.timer.unref()
     return { armed: true, maxRequests: 12, deadlineMs: 180000 }
@@ -238,6 +273,7 @@ export function apply(ctx, config) {
     if (!record.handle || !record.policy) fail('VISION_NOT_PREPARED')
     const oracle = await snapshotFixture(record)
     return { sessionId: record.sessionId, state: record.handle.agent.status, steps: record.policy.steps, requests: record.policy.requests.length,
+      ...(record.testOnlyNaturalEntry ? { testOnlyNaturalEntry: true, approvalReadback: record.approvalReadback, entryRequested: record.policy.entry.requested, entryApproved: record.policy.entry.approved, preauthorization: record.preauthorization ?? null } : {}),
       businessPassed: oracle.passed === true, visualNonceRead: record.completedText.includes(record.nonce), fatal: record.fatal ?? null, terminalError: record.terminalError ?? null }
   }
   async function cleanup(record) {
@@ -253,7 +289,7 @@ export function apply(ctx, config) {
       try { await bounded(record.handle.agent.whenIdle(), 15000, 'VISION_AGENT_DRAIN_TIMEOUT'); idleConfirmed = true } catch (error) { errors.push(safeError(error)) }
       try { record.assistantDisplay = { ...await persistVisionAssistantDisplay(join(directory, 'evidence'), record.handle.agent.session, record.sessionId, record.task), idleConfirmed } }
       catch { errors.push('VISION_DIAGNOSTIC_WRITE_FAILED') }
-      if (record.policy?.startedAt) try {
+      if (record.policy?.startedAt && (!record.testOnlyNaturalEntry || record.controlStarted)) try {
         await record.deadlineRelease
         await originals.get('qiuya_computer_pause').execute({}, { agent: record.handle.agent, callId: 'test-final-release', signal: AbortSignal.timeout(15000) })
       } catch { errors.push('VISION_REMOTE_RELEASE_UNCONFIRMED') }
@@ -322,15 +358,22 @@ export function apply(ctx, config) {
       }
       else {
         const record = own(input.sessionId)
-        if (input.op === 'arm') value = await arm(record)
+        if (input.op === 'natural-once') {
+          if (!record.testOnlyNaturalEntry || config.testOnlyOwnerOnce !== true || input.proof?.sessionId !== record.sessionId || input.proof?.appId !== record.authorizedAppId) fail('VISION_NATURAL_APPROVAL')
+          if (input.proof.state === 'pending') record.policy.recordOwnerOnce(input.proof)
+          else { record.policy.confirmOwnerOnce(input.proof); record.confirmOwnerOnce() }
+          value = { recorded: true }
+        }
+        else if (input.op === 'arm') value = await arm(record)
         else if (input.op === 'status') value = await status(record)
         else if (input.op === 'finish') {
           if (record.settled) fail('VISION_TASK_ALREADY_SETTLED')
           record.settled = true
           const oracle = await snapshotFixture(record).catch(() => ({ passed: false }))
           const result = { ...record.policy.summary({ businessPassed: oracle.passed === true, nonceRead: record.completedText.includes(record.nonce), syntheticNonce: record.nonce }),
+            ...(record.testOnlyNaturalEntry ? { approvalReadback: record.approvalReadback } : {}),
             oracle, events: record.events, target: { id: record.target.id, pid: record.target.pid, appId: record.target.appId }, fatal: record.fatal ?? null, terminalError: record.terminalError ?? null }
-          try { await checkNative(record); const image = await record.native.preview(record.target.id); await writeFile(join(directory, `evidence/task-${record.task}-final.jpg`), Buffer.from(image.imageBase64, 'base64')) } catch { result.finalImageUnavailable = true }
+          Object.assign(result, await persistVisionFinalImage({ testOnlyNaturalEntry: record.testOnlyNaturalEntry, approved: record.policy?.entry?.approved }, async () => { await checkNative(record); return record.native.preview(record.target.id) }, image => writeFile(join(directory, `evidence/task-${record.task}-final.jpg`), Buffer.from(image.imageBase64, 'base64'))))
           result.cleanup = await cleanup(record); result.assistantDisplay = record.assistantDisplay ?? { status: 'not-collected' }; if (!result.cleanup.passed || result.fatal) result.passed = false
           reports.push(result); if (active === record) active = undefined; await save(); value = result
         } else if (input.op === 'cancel') { record.handle?.agent.cancel({ kind: 'user' }); value = { accepted: true } }
@@ -356,7 +399,8 @@ async function runInOwnerRenderer() {
   return runVisionAcceptanceWithFetch((...args) => fetch(...args))
 }
 /** One unchanged task/restore loop for both the owner renderer and trusted Host. */
-export async function runVisionAcceptanceWithFetch(transportFetch, emit = value => console.log(JSON.stringify(value)), { probeOnly = false } = {}) {
+export async function runVisionAcceptanceWithFetch(transportFetch, emit = value => console.log(JSON.stringify(value)), { probeOnly = false, testOnlyNaturalEntry = false, testOnlyOwnerOnce = false } = {}) {
+  if (testOnlyNaturalEntry !== testOnlyOwnerOnce || testOnlyNaturalEntry && probeOnly) throw Object.assign(Error('VISION_NATURAL_CONFIGURATION'), { code: 'VISION_NATURAL_CONFIGURATION' })
   const rpc = async (method, args = {}, raw = false) => {
     const rpcId = crypto.randomUUID(), response = await transportFetch('/api/' + method, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: raw ? args : { args } }), visionPhase: phase })
@@ -370,6 +414,14 @@ export async function runVisionAcceptanceWithFetch(transportFetch, emit = value 
   const keys = ['enabled', 'computerUseEnabled'], summary = [], ownedSessions = []; let original, setup, mode, failure, diagnostic, initialConnection, carrierCancellation, enableMutation, enableProof = 'not-requested', phase = 'owner-settings-read'
   const restoration = { localMode: false, featureFlags: false }
   const restorationProof = { connection: 'unconfirmed', featureFlags: 'unconfirmed' }
+  let originalAllowedApps
+  const checkAllowedApps = state => {
+    if (!testOnlyNaturalEntry) return
+    if (!Array.isArray(state?.allowedApps) || state.allowedApps.some(app => typeof app !== 'string')) throw Object.assign(Error('VISION_NATURAL_ALLOWLIST'), { code: 'VISION_NATURAL_ALLOWLIST' })
+    const current = JSON.stringify([...state.allowedApps].sort())
+    if (originalAllowedApps === undefined) originalAllowedApps = current
+    else if (originalAllowedApps !== current) throw Object.assign(Error('VISION_NATURAL_ALLOWLIST'), { code: 'VISION_NATURAL_ALLOWLIST' })
+  }
   const flagSnapshot = row => keys.map(key => ({ key, own: Object.hasOwn(row.user ?? {}, key), value: row.user?.[key], effective: row.value?.[key] }))
   const matchesSnapshot = (row, snapshot) => snapshot?.every(item => Object.hasOwn(row.user ?? {}, item.key) === item.own && (!item.own || JSON.stringify(row.user[item.key]) === JSON.stringify(item.value)) && row.value?.[item.key] === item.effective) === true
   const matchesOriginal = row => matchesSnapshot(row, original)
@@ -398,7 +450,7 @@ export async function runVisionAcceptanceWithFetch(transportFetch, emit = value 
     if (!initial || !initialSettings.writable) throw Object.assign(Error('VISION_WRITABLE_FEATURE_SETTING_REQUIRED'), { code: 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED' })
     if (!Number.isSafeInteger(initial.revision) || keys.some(key => typeof initial.value?.[key] !== 'boolean' || Object.hasOwn(initial.user ?? {}, key) && typeof initial.user[key] !== 'boolean')) throw Object.assign(Error('VISION_SETTINGS_SNAPSHOT_INVALID'), { code: 'VISION_SETTINGS_SNAPSHOT_INVALID' })
     original = flagSnapshot(initial)
-    phase = 'owner-status'; initialConnection = connectionView(await computer({ op: 'status' }))
+    phase = 'owner-status'; const initialComputerState = await computer({ op: 'status' }); checkAllowedApps(initialComputerState); initialConnection = connectionView(initialComputerState)
     if (!initialConnection.sessionsKnown || initialConnection.hasActiveSession || initialConnection.switching || initialConnection.nativeMode !== null && initialConnection.nativeMode !== 'local') throw Object.assign(Error('VISION_REQUIRES_IDLE_LOCAL_CONNECTION'), { code: 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION' })
     if (!probeOnly) {
     phase = 'owner-enable'; await setEnabled()
@@ -407,21 +459,41 @@ export async function runVisionAcceptanceWithFetch(transportFetch, emit = value 
     for (let task = 1; task <= 3; task++) {
       phase = 'owner-prepare'; setup = await test({ op: 'prepare', task })
       ownedSessions.push(setup.sessionId)
+      const naturalTask = testOnlyNaturalEntry && task === 1
+      if (naturalTask !== (setup.testOnlyNaturalEntry === true)) throw Object.assign(Error('VISION_NATURAL_CONFIGURATION'), { code: 'VISION_NATURAL_CONFIGURATION' })
       phase = 'owner-connect'; await computer({ op: 'connect', sessionId: setup.sessionId, mode: 'remote', endpoint: setup.endpoint, token: setup.token }); delete setup.token
-      phase = 'owner-start'; await computer({ op: 'start', sessionId: setup.sessionId, targetId: setup.targetId })
+      if (naturalTask) {
+        const idle = await computer({ op: 'status', sessionId: setup.sessionId }); checkAllowedApps(idle)
+        if (idle.allowedApps.includes(setup.authorizedAppId) || idle.sessions.some(row => row.sessionId === setup.sessionId && !['stopped', 'faulted', 'disconnected'].includes(row.state))) throw Object.assign(Error('VISION_NATURAL_NOT_IDLE'), { code: 'VISION_NATURAL_NOT_IDLE' })
+      } else { phase = 'owner-start'; await computer({ op: 'start', sessionId: setup.sessionId, targetId: setup.targetId }) }
       phase = 'owner-arm'; await test({ op: 'arm', sessionId: setup.sessionId })
       phase = 'owner-prompt'
       await rpc('session/prompt', { request: { requestId: crypto.randomUUID(), sessionId: setup.sessionId, mode: 'queue', content: [{ type: 'text', text: setup.prompt }] } })
-      phase = 'owner-wait'; let ended = false
+      phase = 'owner-wait'; let ended = false, ownerOnceAttempted = false
       for (let i = 0; i < 180; i++) {
         await new Promise(done => setTimeout(done, 1000))
         state = await test({ op: 'status', sessionId: setup.sessionId })
+        if (naturalTask && state.entryRequested && !ownerOnceAttempted) {
+          const pending = await computer({ op: 'pending', sessionId: setup.sessionId }), card = pending.pendingRequests?.[0]
+          if (card) {
+            ownerOnceAttempted = true
+            if (pending.pendingRequests.length !== 1 || card.sessionId !== setup.sessionId || card.appId !== setup.authorizedAppId || card.requestVersion !== 1 || card.state !== 'pending' || state.preauthorization?.passed !== true) throw Object.assign(Error('VISION_NATURAL_APPROVAL'), { code: 'VISION_NATURAL_APPROVAL' })
+            checkAllowedApps(await computer({ op: 'status', sessionId: setup.sessionId }))
+            const proof = { sessionId: setup.sessionId, appId: setup.authorizedAppId, requestId: card.requestId, requestVersion: 1, decision: 'once', state: 'pending', allowedAppsUnchanged: true, preauthorization: state.preauthorization }
+            await test({ op: 'natural-once', sessionId: setup.sessionId, proof })
+            const decision = await computer({ op: 'decide', sessionId: setup.sessionId, requestId: card.requestId, requestVersion: 1, decision: 'once' })
+            checkAllowedApps(await computer({ op: 'status', sessionId: setup.sessionId }))
+            if (decision.requestId !== card.requestId || decision.state !== 'approved' || decision.decision !== 'once') throw Object.assign(Error('VISION_NATURAL_APPROVAL'), { code: 'VISION_NATURAL_APPROVAL' })
+            await test({ op: 'natural-once', sessionId: setup.sessionId, proof: { ...proof, state: 'approved' } })
+          }
+        }
         if (state.fatal || (state.state === 'idle' && state.requests > 0)) { ended = true; break }
       }
       phase = 'owner-finish'; await rpc('session/cancel', { request: { sessionId: setup.sessionId } })
       await computer({ op: 'stop', sessionId: setup.sessionId })
       const result = await test({ op: 'finish', sessionId: setup.sessionId })
-      summary.push({ task, passed: result.passed, steps: result.steps, requestAttempts: result.requestAttempts, retainedImageOccurrences: result.retainedImageOccurrences, businessPassed: result.businessPassed, visualNonceRead: result.visualNonceRead })
+      summary.push({ task, passed: result.passed, steps: result.steps, requestAttempts: result.requestAttempts, retainedImageOccurrences: result.retainedImageOccurrences, businessPassed: result.businessPassed, visualNonceRead: result.visualNonceRead, ...(result.naturalEntry ? { naturalEntry: result.naturalEntry } : {}) })
+      if (naturalTask) checkAllowedApps(await computer({ op: 'status', sessionId: setup.sessionId }))
       const finishedSession = setup.sessionId; setup = undefined; phase = 'owner-reset-local'; await computer({ op: 'connect', sessionId: finishedSession, mode: 'local' })
       // A cleanly retired mismatch or exhausted per-case budget remains failed
       // without concealing the next independent fixture. Every new case keeps
@@ -487,9 +559,9 @@ export async function runVisionAcceptanceWithFetch(transportFetch, emit = value 
     if (!probeOnly && failure && ownedSessions.length === 0 && !setup && ['owner-settings-read', 'owner-enable', 'owner-status'].includes(diagnostic?.phase)) try {
       phase = 'owner-cancel-run'; carrierCancellation = await test({ op: 'cancel-run', phase: diagnostic.phase })
     } catch { carrierCancellation = { requested: true, confirmed: false }; failure ??= 'VISION_CARRIER_CANCEL_UNCONFIRMED' }
-    try { phase = 'owner-delivery'; if (!probeOnly) { const receipt = await test({ op: 'delivery', restore: restoration }); if (!receipt.passed) failure ??= 'VISION_DELIVERY_FAILED' } }
+    try { phase = 'owner-delivery'; if (testOnlyNaturalEntry && originalAllowedApps !== undefined) checkAllowedApps(await computer({ op: 'status' })); if (!probeOnly) { const receipt = await test({ op: 'delivery', restore: restoration }); if (!receipt.passed) failure ??= 'VISION_DELIVERY_FAILED' } }
     catch { failure ??= 'VISION_DELIVERY_FAILED' }
   }
-  const result = { kind: probeOnly ? 'QIUYA_READ_ONLY_OWNER_PROBE' : 'QIUYA_REAL_VISION_TEST', passed: !probeOnly && !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, ...(probeOnly ? { probePassed: !failure && restoration.localMode && restoration.featureFlags, modelInferenceRequested: false, settingsMutationRequested: false } : {}), ...(carrierCancellation ? { carrierCancellation } : {}), enableProof, connectionDispatches, initialConnection: initialConnection ?? null, tasks: summary, restoration, restorationProof, ...(failure ? { error: failure, diagnostic: diagnostic ?? projectVisionFailure({ code: failure }, phase) } : {}) }
+  const result = { kind: probeOnly ? 'QIUYA_READ_ONLY_OWNER_PROBE' : testOnlyNaturalEntry ? 'QIUYA_REAL_NATURAL_ENTRY_TEST' : 'QIUYA_REAL_VISION_TEST', passed: !probeOnly && !failure && summary.length === 3 && summary.every(task => task.passed) && restoration.localMode && restoration.featureFlags, ...(testOnlyNaturalEntry ? { ownerOnceDriver: '独立测试驱动模拟owner允许一次', humanClickProven: false, naturalEntryTaskIds: [1] } : {}), ...(probeOnly ? { probePassed: !failure && restoration.localMode && restoration.featureFlags, modelInferenceRequested: false, settingsMutationRequested: false } : {}), ...(carrierCancellation ? { carrierCancellation } : {}), enableProof, connectionDispatches, initialConnection: initialConnection ?? null, tasks: summary, restoration, restorationProof, ...(failure ? { error: failure, diagnostic: diagnostic ?? projectVisionFailure({ code: failure }, phase) } : {}) }
   emit(result); return result
 }

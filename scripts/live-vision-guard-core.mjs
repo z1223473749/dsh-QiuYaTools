@@ -1,8 +1,32 @@
 /** Test-only policy. No credentials, profile access, model calls or GUI. */
 import { createHash } from 'node:crypto'
+/** Final evidence obeys the same authorization boundary as model screenshots.
+ * Capture/write callbacks must never run for a natural task without approval. */
+export async function persistVisionFinalImage({ testOnlyNaturalEntry, approved }, capture, write) {
+  if (testOnlyNaturalEntry === true && approved !== true) return { finalImageUnavailable: true, finalImageSkipped: 'natural-entry-not-approved' }
+  try { await write(await capture()); return {} } catch { return { finalImageUnavailable: true } }
+}
 export const VISION_TOOLS = Object.freeze(['qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_status', 'qiuya_computer_pause'])
+export const NATURAL_VISION_TOOLS = Object.freeze(['qiuya_computer_discover', 'qiuya_computer_request_control', ...VISION_TOOLS])
+export function naturalVisionPrompt(appName) {
+  if (typeof appName !== 'string' || !appName || appName.length > 160 || /[\x00-\x1f\x7f"<>\\/]/u.test(appName)) throw Error('VISION_NATURAL_APPLICATION')
+  return `请在本次验收应用“${appName}”中找到绿色“确认本单”并点击一次，核对结果后告诉我画面上的核验码，完成后暂停。需要操控权限时请向我申请。`
+}
+export function visionPreauthorizationPassed(proof, { sessionId, auditSha256 } = {}) {
+  const audit = proof?.desktopAudit, calls = proof?.nativeCalls
+  return proof?.phase === 'before-owner-once' && ['observe', 'preview', 'lease', 'act'].every(key => calls?.[key] === 0) &&
+    audit?.sessionId === sessionId && audit?.auditSourceSha256 === auditSha256 && /^[a-f0-9]{64}$/u.test(auditSha256 ?? '') && audit?.userInteractive === true &&
+    audit?.activeDesktopAccessible === true && audit?.activeDesktopMatches === true && audit?.heldKeyCount === 0 && audit?.leaseScopeExists === true && audit?.leaseFree === true && audit?.journalPresent === false
+}
+export function visionApprovalReadback(approval, session) {
+  const override = session && typeof approval?.overrideOf === 'function' ? approval.overrideOf(session) : undefined
+  const effective = override ?? approval?.config?.policy
+  // Match the production canRequest predicate exactly. Missing policy is its
+  // default, not a new approval policy invented by this test-only runner.
+  return { explicitNever: effective === 'never', effectivePresent: effective !== undefined, allowedNewRequests: effective !== 'never', source: override !== undefined ? 'session-override' : effective !== undefined ? 'configured-default' : 'absent-default' }
+}
 export const VISION_DIAGNOSTIC_PHASES = Object.freeze(['unknown', 'prepare-start', 'fixture-directory', 'fixture-copy', 'fixture-metadata', 'fixture-launch', 'fixture-ready', 'external-wait', 'native-status', 'fixture-target', 'pair-server', 'pair-identity', 'model-selection', 'agent-create', 'agent-setup', 'tool-publication', 'prepare-complete', 'owner-settings-read', 'owner-enable', 'owner-status', 'owner-prepare', 'owner-connect', 'owner-start', 'owner-arm', 'owner-prompt', 'owner-wait', 'owner-finish', 'owner-reset-local', 'owner-restore-connection', 'owner-restore-flags', 'owner-delivery', 'owner-cancel-run'])
-export const VISION_DIAGNOSTIC_CODES = Object.freeze(['VISION_ACCESSIBILITY_ANSWER_LEAK', 'VISION_ACTION_NOT_ALLOWED', 'VISION_AGENT_DISPOSE_FAILED', 'VISION_AGENT_DRAIN_TIMEOUT', 'VISION_ALREADY_ARMED', 'VISION_BODY_BOUND', 'VISION_CALLER_CHANGED', 'VISION_CLEANUP_FAILED', 'VISION_CONFIG_REQUIRED', 'VISION_CONNECTION_RESTORE_FAILED', 'VISION_DEADLINE', 'VISION_DELIVERY_FAILED', 'VISION_DELIVERY_STATE', 'VISION_EXTRA_TOOL_SCHEMA', 'VISION_FEATURE_RESTORE_FAILED', 'VISION_FEATURE_ENABLE_UNCONFIRMED', 'VISION_CANCEL_NOT_IDLE', 'VISION_CARRIER_CANCEL_UNCONFIRMED', 'VISION_FIXTURE_EXIT_UNCONFIRMED', 'VISION_FIXTURE_IDENTITY', 'VISION_FIXTURE_NATURAL_EXIT_FAILED', 'VISION_FIXTURE_PROTOCOL', 'VISION_FIXTURE_RETIRED', 'VISION_FIXTURE_STARTUP', 'VISION_FIXTURE_TARGET_MISSING', 'VISION_KEY_NOT_ALLOWED', 'VISION_MAC_REQUIRED', 'VISION_NATIVE_CLEANUP_FAILED', 'VISION_NATIVE_UNAVAILABLE', 'VISION_NATIVE_SCREEN_PERMISSION', 'VISION_NATIVE_ACCESSIBILITY_PERMISSION', 'VISION_NOT_ACTIVE', 'VISION_NOT_PREPARED', 'VISION_OBSERVATION_CHANGED', 'VISION_OPERATION_NOT_ALLOWED', 'VISION_ORACLE_TIMEOUT', 'VISION_PAIR_CLOSE_FAILED', 'VISION_PAIR_REVOKE_FAILED', 'VISION_POLICY_CONFIGURATION', 'VISION_PREVIEW_NOT_EXPOSED', 'VISION_PRODUCTION_TOOLS_MISSING', 'VISION_PUBLIC_RPC_FAILED', 'VISION_AUTORUN_SCOPE', 'VISION_AUTORUN_OWNER_CHANGED', 'VISION_AUTORUN_CANCELLED', 'VISION_SETTINGS_SNAPSHOT_INVALID', 'settings/rejected', 'settings/conflict', 'gateway/arguments-invalid', 'gateway/bad-request', 'gateway/permission-denied', 'gateway/forbidden', 'gateway/service-unavailable', 'gateway/cancelled', 'gateway/internal', 'gateway/method-not-found', 'VISION_REMOTE_RELEASE_UNCONFIRMED', 'VISION_REQUEST_LIMIT', 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION', 'VISION_ROUTE_CHANGED', 'VISION_SCREENSHOT_ATTACHMENT_MISSING', 'VISION_SELECTED_TARGET_CHANGED', 'VISION_SESSION_NOT_OWNED', 'VISION_STEP_LIMIT', 'VISION_TARGET_CHANGED', 'VISION_TASK_ALREADY_SETTLED', 'VISION_TASK_SEQUENCE', 'VISION_TEST_FAILED', 'VISION_TURN_ERROR', 'VISION_WORKING_DIRECTORY_BOUNDARY', 'VISION_TEXT_BOUND', 'VISION_TOOL_NOT_ALLOWED', 'VISION_TOOL_PUBLICATION_BOUNDARY', 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED', 'VISION_DIAGNOSTIC_WRITE_FAILED', 'EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EIO', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ABORT_ERR', 'NATIVE_START_FAILED', 'NATIVE_DISCONNECTED', 'NATIVE_PROTOCOL', 'NATIVE_PROTOCOL_VERSION', 'NATIVE_PIPE_FAILED', 'NATIVE_TIMEOUT', 'PAIR_UNAUTHORIZED', 'FORBIDDEN', 'UNAVAILABLE', 'VISION_EXTERNAL_BINDING', 'VISION_EXTERNAL_CONFIG', 'VISION_EXTERNAL_FILE_BOUNDARY', 'VISION_EXTERNAL_REPLAY', 'VISION_EXTERNAL_FIXTURE_CHANGED', 'VISION_EXTERNAL_SOURCE_CHANGED', 'VISION_EXTERNAL_IDENTITY', 'VISION_EXTERNAL_ORACLE', 'VISION_EXTERNAL_ORACLE_TIMEOUT', 'VISION_EXTERNAL_NATIVE_PERMISSION', 'VISION_EXTERNAL_REMAINS', 'VISION_EXTERNAL_DEADLINE', 'VISION_EXTERNAL_FAILED', 'VISION_EXTERNAL_CLEANUP_FAILED'])
+export const VISION_DIAGNOSTIC_CODES = Object.freeze(['VISION_NATURAL_APPROVAL_POLICY', 'VISION_NATURAL_CONFIGURATION', 'VISION_NATURAL_APPLICATION', 'VISION_NATURAL_PREAUTH_IMAGE', 'VISION_NATURAL_PREAUTH_AUDIT', 'VISION_NATURAL_NOT_APPROVED', 'VISION_NATURAL_NOT_IDLE', 'VISION_NATURAL_DISCOVERY', 'VISION_NATURAL_REQUEST', 'VISION_NATURAL_APPROVAL', 'VISION_NATURAL_OWNER_RPC', 'VISION_NATURAL_ALLOWLIST', 'VISION_ACCESSIBILITY_ANSWER_LEAK', 'VISION_ACTION_NOT_ALLOWED', 'VISION_AGENT_DISPOSE_FAILED', 'VISION_AGENT_DRAIN_TIMEOUT', 'VISION_ALREADY_ARMED', 'VISION_BODY_BOUND', 'VISION_CALLER_CHANGED', 'VISION_CLEANUP_FAILED', 'VISION_CONFIG_REQUIRED', 'VISION_CONNECTION_RESTORE_FAILED', 'VISION_DEADLINE', 'VISION_DELIVERY_FAILED', 'VISION_DELIVERY_STATE', 'VISION_EXTRA_TOOL_SCHEMA', 'VISION_FEATURE_RESTORE_FAILED', 'VISION_FEATURE_ENABLE_UNCONFIRMED', 'VISION_CANCEL_NOT_IDLE', 'VISION_CARRIER_CANCEL_UNCONFIRMED', 'VISION_FIXTURE_EXIT_UNCONFIRMED', 'VISION_FIXTURE_IDENTITY', 'VISION_FIXTURE_NATURAL_EXIT_FAILED', 'VISION_FIXTURE_PROTOCOL', 'VISION_FIXTURE_RETIRED', 'VISION_FIXTURE_STARTUP', 'VISION_FIXTURE_TARGET_MISSING', 'VISION_KEY_NOT_ALLOWED', 'VISION_MAC_REQUIRED', 'VISION_NATIVE_CLEANUP_FAILED', 'VISION_NATIVE_UNAVAILABLE', 'VISION_NATIVE_SCREEN_PERMISSION', 'VISION_NATIVE_ACCESSIBILITY_PERMISSION', 'VISION_NOT_ACTIVE', 'VISION_NOT_PREPARED', 'VISION_OBSERVATION_CHANGED', 'VISION_OPERATION_NOT_ALLOWED', 'VISION_ORACLE_TIMEOUT', 'VISION_PAIR_CLOSE_FAILED', 'VISION_PAIR_REVOKE_FAILED', 'VISION_POLICY_CONFIGURATION', 'VISION_PREVIEW_NOT_EXPOSED', 'VISION_PRODUCTION_TOOLS_MISSING', 'VISION_PUBLIC_RPC_FAILED', 'VISION_AUTORUN_SCOPE', 'VISION_AUTORUN_OWNER_CHANGED', 'VISION_AUTORUN_CANCELLED', 'VISION_SETTINGS_SNAPSHOT_INVALID', 'settings/rejected', 'settings/conflict', 'gateway/arguments-invalid', 'gateway/bad-request', 'gateway/permission-denied', 'gateway/forbidden', 'gateway/service-unavailable', 'gateway/cancelled', 'gateway/internal', 'gateway/method-not-found', 'VISION_REMOTE_RELEASE_UNCONFIRMED', 'VISION_REQUEST_LIMIT', 'VISION_REQUIRES_IDLE_LOCAL_CONNECTION', 'VISION_ROUTE_CHANGED', 'VISION_SCREENSHOT_ATTACHMENT_MISSING', 'VISION_SELECTED_TARGET_CHANGED', 'VISION_SESSION_NOT_OWNED', 'VISION_STEP_LIMIT', 'VISION_TARGET_CHANGED', 'VISION_TASK_ALREADY_SETTLED', 'VISION_TASK_SEQUENCE', 'VISION_TEST_FAILED', 'VISION_TURN_ERROR', 'VISION_WORKING_DIRECTORY_BOUNDARY', 'VISION_TEXT_BOUND', 'VISION_TOOL_NOT_ALLOWED', 'VISION_TOOL_PUBLICATION_BOUNDARY', 'VISION_WRITABLE_FEATURE_SETTING_REQUIRED', 'VISION_DIAGNOSTIC_WRITE_FAILED', 'EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EIO', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ABORT_ERR', 'NATIVE_START_FAILED', 'NATIVE_DISCONNECTED', 'NATIVE_PROTOCOL', 'NATIVE_PROTOCOL_VERSION', 'NATIVE_PIPE_FAILED', 'NATIVE_TIMEOUT', 'PAIR_UNAUTHORIZED', 'FORBIDDEN', 'UNAVAILABLE', 'VISION_EXTERNAL_BINDING', 'VISION_EXTERNAL_CONFIG', 'VISION_EXTERNAL_FILE_BOUNDARY', 'VISION_EXTERNAL_REPLAY', 'VISION_EXTERNAL_FIXTURE_CHANGED', 'VISION_EXTERNAL_SOURCE_CHANGED', 'VISION_EXTERNAL_IDENTITY', 'VISION_EXTERNAL_ORACLE', 'VISION_EXTERNAL_ORACLE_TIMEOUT', 'VISION_EXTERNAL_NATIVE_PERMISSION', 'VISION_EXTERNAL_REMAINS', 'VISION_EXTERNAL_DEADLINE', 'VISION_EXTERNAL_FAILED', 'VISION_EXTERNAL_CLEANUP_FAILED'])
 /** Finite identifiers only: exception messages/stacks/causes may contain paths,
  * credentials or business data and are never diagnostic evidence. */
 export function projectVisionFailure(error, phase = 'unknown') {
@@ -17,7 +41,7 @@ export function projectVisionNativeStatus(value) {
   const permissions = Object.fromEntries(['screenRecording', 'accessibility', 'postEvents', 'inputMonitoring'].map(key => [key, typeof value?.permissions?.[key] === 'boolean' ? value.permissions[key] : null]))
   return { available: typeof value?.available === 'boolean' ? value.available : null, platform: ['darwin', 'win32'].includes(value?.platform) ? value.platform : 'unknown', protocolVersion: value?.protocolVersion === 1 ? 1 : null, permissions }
 }
-const runtimeFailureCodes = new Set(['FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'HUMAN_INPUT_INTERRUPTED', 'CONTROL_CHANGED', 'STALE_FRAME', 'FRAME_EXPIRED', 'TARGET_GONE', 'TARGET_CHANGED', 'SESSION_PAUSED', 'OWNER_RESUME_REQUIRED', 'INPUT_CLEANUP_FAILED', 'CURSOR_CLEANUP_FAILED', 'ABORTED', 'INVALID_ACTION', 'NO_FRAME'])
+const runtimeFailureCodes = new Set(['FOCUS_CHANGED', 'GEOMETRY_CHANGED', 'HUMAN_INPUT_INTERRUPTED', 'CONTROL_CHANGED', 'STALE_OBSERVATION', 'STALE_FRAME', 'FRAME_EXPIRED', 'TARGET_GONE', 'TARGET_CHANGED', 'SESSION_PAUSED', 'OWNER_RESUME_REQUIRED', 'INPUT_CLEANUP_FAILED', 'CURSOR_CLEANUP_FAILED', 'ABORTED', 'INVALID_ACTION', 'NO_FRAME'])
 const focusStages = new Set(['not-requested', 'focused-window', 'focused-window-geometry', 'component-hit', 'component-window', 'component-role', 'component-parent', 'component-geometry', 'logical-root-hit', 'logical-root-geometry', 'complete'])
 /** Failed tool calls must remain failures. Retain bounded native metadata,
  * never the exception message/stack, target identity or accessibility text. */
@@ -73,7 +97,7 @@ export function projectVisionTurnError(error) {
 export function projectVisionToolSchema(tool) {
   const description = tool?.description; let serialized
   try { serialized = tool?.parameters === undefined ? undefined : JSON.stringify(tool.parameters) } catch {}
-  return { name: VISION_TOOLS.includes(tool?.name) ? tool.name : 'other',
+  return { name: NATURAL_VISION_TOOLS.includes(tool?.name) ? tool.name : 'other',
     descriptionPresent: typeof description === 'string', ...(typeof description === 'string' ? { descriptionLength: description.length, descriptionSha256: syntheticHash(description) } : {}),
     parametersPresent: tool?.parameters !== undefined, parametersSerializable: typeof serialized === 'string',
     ...(typeof serialized === 'string' ? { parametersBytes: Buffer.byteLength(serialized), parametersSha256: syntheticHash(serialized) } : {}) }
@@ -153,9 +177,12 @@ export function projectVisionTool(name, args, result) {
   } } : {}), ...(result ? { isError: result.isError === true, ...(result.image?.attachmentId ? { imageAttachmentId: result.image.attachmentId } : {}) } : {}) }
 }
 export class VisionPolicy {
-  constructor({ sessionId, target, task, selection, now = Date.now, maxRequests = 12, deadlineMs = 180000 }) {
+  constructor({ sessionId, target, task, selection, now = Date.now, maxRequests = 12, deadlineMs = 180000, testOnlyNaturalEntry = false }) {
     if (!/^qiuya-vision-[a-f0-9-]{36}$/u.test(sessionId) || ![1, 2, 3].includes(task) || maxRequests !== 12 || deadlineMs !== 180000) fail('VISION_POLICY_CONFIGURATION')
     this.sessionId = sessionId; this.target = { ...target }; this.task = task; this.selection = { provider: selection.provider, model: selection.model }
+    if (typeof testOnlyNaturalEntry !== 'boolean' || testOnlyNaturalEntry && task !== 1) fail('VISION_POLICY_CONFIGURATION')
+    this.testOnlyNaturalEntry = testOnlyNaturalEntry; this.toolNames = testOnlyNaturalEntry ? NATURAL_VISION_TOOLS : VISION_TOOLS
+    this.entry = testOnlyNaturalEntry ? { candidateId: null, requested: false, approved: false, ownerOnce: null } : null
     this.now = now; this.maxRequests = maxRequests; this.deadlineMs = deadlineMs; this.startedAt = 0; this.steps = 0; this.requests = []; this.tools = []; this.denials = []; this.observedImageIds = new Set(); this.ended = false
   }
   arm() { if (this.startedAt || this.ended) fail('VISION_ALREADY_ARMED'); this.startedAt = this.now() || 1 }
@@ -174,14 +201,16 @@ export class VisionPolicy {
     if (this.requests.length >= 12) fail('VISION_REQUEST_LIMIT')
     if (options.sessionId !== this.sessionId || options.provider !== this.selection.provider || options.model !== this.selection.model) fail('VISION_ROUTE_CHANGED')
     const projected = projectVisionRequest(options)
-    if (projected.tools.some(name => !VISION_TOOLS.includes(name))) fail('VISION_EXTRA_TOOL_SCHEMA')
+    if (projected.tools.some(name => !this.toolNames.includes(name))) fail('VISION_EXTRA_TOOL_SCHEMA')
+    if (this.entry && !this.entry.approved && projected.images.length) fail('VISION_NATURAL_PREAUTH_IMAGE')
     this.requests.push({ attempt: this.requests.length + 1, at: this.now(), ...projected }); return projected
   }
   toolGuard(exec) {
     if (exec.agent?.id !== this.sessionId) return undefined
     try {
       this.assertActive()
-      if (!VISION_TOOLS.includes(exec.name)) fail('VISION_TOOL_NOT_ALLOWED')
+      if (!this.toolNames.includes(exec.name)) fail('VISION_TOOL_NOT_ALLOWED')
+      if (this.entry && !this.entry.approved && ['qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause'].includes(exec.name)) fail('VISION_NATURAL_NOT_APPROVED')
       if (exec.name === 'qiuya_computer_act') {
         const action = exec.arguments?.action
         const allowed = this.task === 1 ? ['click', 'move'] : this.task === 2 ? ['click', 'move', 'type', 'key'] : ['drag', 'move']
@@ -192,16 +221,45 @@ export class VisionPolicy {
       return undefined
     } catch (error) {
       const code = projectVisionFailure(error).code
-      this.denials.push({ at: this.now(), name: VISION_TOOLS.includes(exec.name) ? exec.name : 'other', code,
+      this.denials.push({ at: this.now(), name: this.toolNames.includes(exec.name) ? exec.name : 'other', code,
         ...(exec.name === 'qiuya_computer_act' ? { parameters: projectVisionActionDenial(exec.arguments) } : {}) })
       return code
     }
+  }
+  recordDiscovery(result) {
+    this.assertActive()
+    if (!this.entry || this.entry.candidateId || result?.applications?.length !== 1) fail('VISION_NATURAL_DISCOVERY')
+    const candidate = result.applications[0]
+    if (candidate.granted !== false || typeof candidate.candidateId !== 'string' || !candidate.candidateId || !Number.isSafeInteger(candidate.expiresAt) || candidate.expiresAt <= this.now()) fail('VISION_NATURAL_DISCOVERY')
+    this.entry.candidateId = candidate.candidateId; this.entry.discoveredAt = this.now(); this.entry.grantedBefore = false
+  }
+  requestEntry(args) {
+    this.assertActive()
+    if (!this.entry || this.entry.requested || !this.entry.candidateId || args?.candidateId !== this.entry.candidateId) fail('VISION_NATURAL_REQUEST')
+    this.entry.requested = true; this.entry.requestedAt = this.now()
+  }
+  recordOwnerOnce(proof) {
+    this.assertActive()
+    if (!this.entry?.requested || this.entry.ownerOnce || proof?.decision !== 'once' || proof?.state !== 'pending' || proof?.requestVersion !== 1 || typeof proof.requestId !== 'string' || !proof.requestId || proof?.allowedAppsUnchanged !== true || proof?.preauthorization?.passed !== true) fail('VISION_NATURAL_APPROVAL')
+    this.entry.ownerOnce = { ...proof, driver: 'independent-trusted-test-driver-public-owner-rpc', simulatedOwnerDecision: true, humanClickProven: false, at: this.now() }
+  }
+  confirmOwnerOnce(proof) {
+    this.assertActive()
+    if (!this.entry?.ownerOnce || this.entry.ownerOnce.state !== 'pending' || proof?.requestId !== this.entry.ownerOnce.requestId || proof?.requestVersion !== 1 || proof?.decision !== 'once' || proof?.state !== 'approved' || proof?.allowedAppsUnchanged !== true) fail('VISION_NATURAL_APPROVAL')
+    this.entry.ownerOnce.state = 'approved'; this.entry.ownerOnce.confirmedAt = this.now()
+  }
+  recordEntryReady(result, authorizedAppId) {
+    this.assertActive()
+    if (this.entry?.ownerOnce?.state !== 'approved' || result?.sessionId !== this.sessionId || !['ready', 'running'].includes(result?.state) || result.target?.id !== this.target.id || result.target?.pid !== this.target.pid || result.target?.appId !== authorizedAppId) fail('VISION_NATURAL_APPROVAL')
+    this.entry.approved = true; this.entry.approvedAt = this.now()
   }
   finish() { this.ended = true }
   summary({ businessPassed, nonceRead, syntheticNonce }) {
     const images = this.requests.flatMap(request => request.images).filter(image => !image.offloaded)
     const ownImages = images.filter(image => this.observedImageIds.has(image.attachmentId))
-    return { passed: businessPassed && nonceRead && this.initialAccessibilityAnswerHidden === true && ownImages.length > 0 && this.requests.length > 0 && this.requests.length <= 12 && this.steps <= 12 && this.now() - this.startedAt < 180000 && this.denials.length === 0,
+    const naturalPassed = !this.entry || this.entry.grantedBefore === false && this.entry.requested && this.entry.approved && this.entry.ownerOnce?.state === 'approved' && this.entry.ownerOnce?.allowedAppsUnchanged === true && this.entry.ownerOnce?.preauthorization?.passed === true
+    return { passed: naturalPassed && businessPassed && nonceRead && this.initialAccessibilityAnswerHidden === true && ownImages.length > 0 && this.requests.length > 0 && this.requests.length <= 12 && this.steps <= 12 && this.now() - this.startedAt < 180000 && this.denials.length === 0,
+      ...(this.entry ? { naturalEntry: { ...this.entry, candidateId: this.entry.candidateId ? syntheticHash(this.entry.candidateId) : null, passed: naturalPassed } } : {}),
       sessionId: this.sessionId, task: this.task, steps: this.steps, requestAttempts: this.requests.length,
       durationMs: this.startedAt ? this.now() - this.startedAt : 0, businessPassed, visualNonceRead: nonceRead, initialAccessibilityAnswerHidden: this.initialAccessibilityAnswerHidden === true,
       syntheticNonceSha256: syntheticHash(syntheticNonce), retainedImageOccurrences: images.length, retainedFixtureImageOccurrences: ownImages.length, observedImageAttachmentIds: [...this.observedImageIds],

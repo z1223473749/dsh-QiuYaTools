@@ -21,10 +21,16 @@ export function visionBundleManifest() {
     description: 'Temporary scoped visual acceptance fixture; uninstall after testing.', files: ['guard-plugin.mjs', 'fixture-template.app/', 'cordis.patch.yml'], engines: { node: '>=22' }, dsh: { bundle: { patch: 'cordis.patch.yml' } } }
 }
 export function visionBundlePatch(config, id = randomUUID()) {
+  const keys = ['native', 'directory', 'externalCarrierConfig', 'testOnlyAutoRun', 'runId', 'expiresAt', 'manifestSHA', 'testOnlySessionIds', 'testOnlyPatchEntryId', 'testOnlyProbeOnly', 'testOnlyNaturalEntry', 'testOnlyOwnerOnce']
+  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some(key => !keys.includes(key))) throw Error('Unknown test bundle configuration field')
+  for (const flag of ['testOnlyAutoRun', 'testOnlyProbeOnly', 'testOnlyNaturalEntry', 'testOnlyOwnerOnce']) if (Object.hasOwn(config, flag) && config[flag] !== true) throw Error('Test bundle flags must be explicitly true or absent')
+  const autoFields = ['runId', 'expiresAt', 'manifestSHA', 'testOnlySessionIds', 'testOnlyPatchEntryId']
+  if (config.testOnlyAutoRun === true ? autoFields.some(key => !Object.hasOwn(config, key) || config[key] === undefined) : [...autoFields, 'testOnlyProbeOnly', 'testOnlyNaturalEntry', 'testOnlyOwnerOnce'].some(key => Object.hasOwn(config, key))) throw Error('Partial trusted test autorun configuration')
+  if ((config.testOnlyNaturalEntry === true) !== (config.testOnlyOwnerOnce === true) || config.testOnlyNaturalEntry === true && config.testOnlyProbeOnly === true) throw Error('Natural entry requires both test-only natural and once flags without probe')
   if (!isAbsolute(config.native) || !isAbsolute(config.directory) || config.externalCarrierConfig !== undefined && !isAbsolute(config.externalCarrierConfig) || !/^[a-f0-9-]{36}$/u.test(id)) throw Error('Explicit absolute test paths and a unique patch identity are required')
   return [{ insert: [{ id: `qiuya-live-vision-test-${id}`, name: VISION_TEST_BUNDLE, config: { native: config.native, directory: config.directory,
     ...(config.externalCarrierConfig ? { externalCarrierConfig: config.externalCarrierConfig } : {}),
-    ...(config.testOnlyAutoRun === true ? { testOnlyAutoRun: true, runId: config.runId, expiresAt: config.expiresAt, manifestSHA: config.manifestSHA, testOnlySessionIds: config.testOnlySessionIds, testOnlyPatchEntryId: config.testOnlyPatchEntryId, ...(config.testOnlyProbeOnly === true ? { testOnlyProbeOnly: true } : {}) } : {}) } }] }]
+    ...(config.testOnlyAutoRun === true ? { testOnlyAutoRun: true, runId: config.runId, expiresAt: config.expiresAt, manifestSHA: config.manifestSHA, testOnlySessionIds: config.testOnlySessionIds, testOnlyPatchEntryId: config.testOnlyPatchEntryId, ...(config.testOnlyProbeOnly === true ? { testOnlyProbeOnly: true } : {}), ...(config.testOnlyNaturalEntry === true ? { testOnlyNaturalEntry: true, testOnlyOwnerOnce: true } : {}) } : {}) } }] }]
 }
 /** Each closure is a single line below 2k, for the already-authenticated owner
  * renderer. No account keys, auth URLs, raw package output or diagnostics. */

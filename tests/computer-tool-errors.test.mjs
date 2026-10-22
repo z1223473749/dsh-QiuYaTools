@@ -68,6 +68,24 @@ test('actual public run_code/PTC dispatch preserves the human-interruption code 
   } finally { await f.close() }
 })
 
+test('actual native and PTC tools expose finite stale-frame recovery without replay advice or private exception text', async () => {
+  for (const mode of ['native', 'ptc']) {
+    const f = await actualRuntime({ async act() { throw failure('STALE_OBSERVATION') } }, mode)
+    try {
+      const request = mode === 'native'
+        ? { name: 'qiuya_computer_act', arguments: actArgs }
+        : { name: 'run_code', arguments: { code: `return await tools.qiuya_computer_act(${JSON.stringify(actArgs)})`, description: 'Only own stale-frame fixture failure transport' } }
+      const result = await f.runtime.execute({ callId: 'owned-stale-' + mode, ...request, agent: f.agent, signal: new AbortController().signal })
+      assert.equal(result.isError, true)
+      assert.match(result.error.message, /\[STALE_OBSERVATION\].*每次成功操作.*click\/type\/key\/move.*消耗 frameId/u)
+      assert.match(result.error.message, /先 observe.*新 frameId/u)
+      assert.match(result.error.message, /不要为刷新画面重复已成功的操作/u)
+      assert.match(result.error.message, /不要自动重放结果未确认的输入/u)
+      assert.doesNotMatch(JSON.stringify(result), /private|owned-profile|do-not-forward/u)
+    } finally { await f.close() }
+  }
+})
+
 test('all six operational tools use the safe boundary through the actual public ToolRuntime', async t => {
   for (const [name, method, args, code] of [
     ['targets', 'permittedTargets', {}, 'TARGET_GONE'],
