@@ -50,6 +50,8 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 点击 **弹出** 可同时保留聊天小框和独立大预览，点击 **收回** 关闭大预览并继续任务。隐藏预览控件、收回大窗口或切换聊天都会继续后台任务；**直接关闭大窗口会暂停对应聊天**。暂停撤销 AI 输入权，接管允许你通过预览操作目标，继续重新获取画面与输入权，停止结束本次任务。
 
+人工操作期间会暂时禁用文字和Enter，完成并取得新画面后恢复，避免重复输入。操作失败会保留原因，正常刷新画面不会将其清掉；未确认的输入不会自动重放。
+
 每个聊天分别保存环境、目标、任务授权和暂停状态，默认浏览器配置也按聊天隔离。不同远端电脑或独立浏览器环境可以并行；同一 Harness 连接内共享真实桌面的鼠标、键盘和焦点由各动作按顺序使用。需要浏览器或配对远端时，在当前聊天的 **高级操作环境** 中连接，无需为普通本机任务配置这些选项。
 
 实际 AI 指针动作使用小号半透明灰色填充、细白描边和柔和灰色光晕的箭头；动作结束、暂停、停止或人工接管后隐藏。Mac 只有在系统能力确认可用时才临时隐藏原系统指针，并在让出控制时恢复；无法确认时保留系统指针。该标识不会永久更改系统鼠标主题，也不表示模型思考时一直占用桌面输入。完整说明见[电脑操控指南](docs/computer-use-guide.md)。
@@ -62,7 +64,7 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 各系统、架构、旧系统、现有功能、模型、耐久和安装结果按包与组件哈希分别记录。ARM Windows 中运行 x64 程序的结果不等于原生 x64 硬件验收，universal 编译也不等于 Intel Mac 或最低系统已实机通过。参见[测试与交付证据](docs/computer-use-test-report.md)。
 
-当前开发候选明确要求模型在每次成功操作后重新观察。最新源码完成TypeScript检查与1027项完整回归，三平台新开发包已构建并严格校验；新Windows ARM64／x64两包各完成12项功能、5项安装及原生52项／指针29项。Mac新包安装5项与headless界面8项通过，8f组件完成真实中文提交、兄弟窗口／即时退出负例、指针13项及默认双聊天10项。新指导的Windows真实DeepSeek三任务仍只属于原C8组件，一次授权由独立测试驱动模拟；新组件真实模型、完整Mac原生界面、耐久及后续工作台仍有未完成项，不移用旧结果。[Mac输入边界](docs/macos-keyboard-completion-evidence.md)、[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)、[完整回归范围](docs/windows-carrier-test-isolation.md)与[实施进度](docs/implementation-progress.md)分别记录实际范围。
+当前开发候选明确要求模型在每次成功操作后重新观察。最新源码完成TypeScript检查与1030项完整回归；预览接管旧帧修复另完成三入口JS构建和25项真实浏览器回归，尚未代替最终安装包验收。此前三平台开发包已构建并严格校验；新Windows ARM64／x64两包各完成12项功能、5项安装及原生52项／指针29项。Mac新包安装5项与headless界面8项通过，8f组件完成真实中文提交、兄弟窗口／即时退出负例、指针13项及默认双聊天10项。新指导的Windows真实DeepSeek三任务仍只属于原C8组件，一次授权由独立测试驱动模拟；新组件真实模型、完整Mac原生界面、耐久及后续工作台仍有未完成项，不移用旧结果。[预览输入完成态](docs/computer-preview-action-freshness.md)、[Mac输入边界](docs/macos-keyboard-completion-evidence.md)、[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)与[实施进度](docs/implementation-progress.md)分别记录实际范围。
 
 电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。确定性测试 provider 证明的工具与图片运输，与真实 DeepSeek 模型理解画面并完成任务分别记录。Excel 专用加载项与 macOS 锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻 Codex。
 
