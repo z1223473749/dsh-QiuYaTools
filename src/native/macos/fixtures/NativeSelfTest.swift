@@ -19,6 +19,10 @@ import Foundation
         try exactKeyboardFocus()
         try actionHumanInterruption()
         try await boundedFocusPreparation()
+        try await ownedKeyboardPairs()
+        try await completedKeyboardActions()
+        try await keyboardReadinessRetries()
+        ownedKeyboardRecipientRelease()
         for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
             let (returned, url) = try NativeApplicationCatalog.settingsURL(kind)
             precondition(returned == kind && url.scheme == "x-apple.systempreferences" && url.absoluteString.hasPrefix("x-apple.systempreferences:com.apple.preference.security?Privacy_"))
@@ -57,6 +61,32 @@ import Foundation
         precondition(!AICursorOverlay.isSystemCursorWindow(layer: CGWindowLevelForKey(.floatingWindow), ownerPID: 415, verifyOwner: { _ in true }), "Other system and application layers still occlude")
         precondition(!AICursorOverlay.isSystemCursorWindow(layer: nil, ownerPID: 415, verifyOwner: { _ in true }) &&
             !AICursorOverlay.isSystemCursorWindow(layer: cursorLayer, ownerPID: nil, verifyOwner: { _ in true }), "Incomplete cursor-window identity never bypasses occlusion")
+        do {
+            let dockLayer = CGWindowLevelForKey(.dockWindow)
+            var verifies = 0, routes = 0, verified = true
+            func check(_ layer: CGWindowLevel?, _ pid: pid_t?, route: Bool = true) -> Bool {
+                AICursorOverlay.isNonBlockingDockWindow(layer: layer, ownerPID: pid,
+                    routedToTarget: { routes += 1; return route }, verifyOwner: { _ in verifies += 1; return verified })
+            }
+            precondition(check(dockLayer, 415) && verifies == 1 && routes == 1)
+            for layer: CGWindowLevel? in [nil, CGWindowLevelForKey(.normalWindow)] {
+                let before = (verifies, routes)
+                precondition(!check(layer, 415) && verifies == before.0 && routes == before.1, "Other layers must not query a route")
+            }
+            for pid: pid_t? in [nil, 0, -1] {
+                let before = (verifies, routes)
+                precondition(!check(dockLayer, pid) && verifies == before.0 && routes == before.1, "Unknown owner cannot query a route")
+            }
+            verified = false; let before = routes
+            precondition(!check(dockLayer, 415) && routes == before, "Unverified Dock owner cannot query a route")
+            verified = true
+            precondition(!check(dockLayer, 415, route: false), "A verified Dock still blocks when the actual point routes elsewhere")
+            let beforeVerify = verifies, beforeRoute = routes
+            precondition(check(dockLayer, 415)); verified = false
+            precondition(!check(dockLayer, 415) && verifies == beforeVerify + 2 && routes == beforeRoute + 1,
+                "An exact repeated PID must be verified again; no cached owner or prior route authorizes another skip")
+            print("Dock window pure policy matrix: 9 cases; fake verified owner and point route only; no real Dock lookup, GUI or input")
+        }
         let defaultActor = try NativeLeaseActor.parse(nil), humanActor = try NativeLeaseActor.parse("human")
         precondition(defaultActor == .ai && humanActor == .human)
         for invalid: Any in [true, 0, "Human", "", NSNull()] {
@@ -256,6 +286,527 @@ import Foundation
         // A human event may be observed during a synchronous AX boundary.
         do{try fence.check(current:8,inputPosted:false);posts+=1}catch let error as ComputerError{precondition(error.code=="HUMAN_INPUT_INTERRUPTED")}
         precondition(posts==0,"Rechecking generation after the focus/AX boundary prevents the following post")
+    }
+
+    /// Executes the production pair-ordering helper with fake callbacks only.
+    /// It does not instantiate NativeInput/NativeFocusIdentity or send CGEvents.
+    private static func ownedKeyboardRecipientRelease() {
+        var cases = 0
+        for recipient: OwnedKeyboardRecipient in [.original, .retired, .unverified] {
+            for sessionVerified in [false, true] {
+                for keyHeld in [false, true] {
+                    let result = OwnedKeyboardReleasePolicy.disposition(recipient: recipient, sessionVerified: sessionVerified, keyHeld: keyHeld)
+                    if recipient == .original {
+                        precondition(result == .postOriginal, "An exact original recipient still requires its owned up")
+                    } else if recipient == .retired && sessionVerified && !keyHeld {
+                        precondition(result == .retireWithoutPost, "An exited recipient with no held OS key must not receive a new event")
+                    } else {
+                        precondition(result == .block, "Missing identity, unavailable session or held input must retain the release responsibility")
+                    }
+                    cases += 1
+                }
+            }
+        }
+        precondition(cases == 12)
+        print("OwnedKeyboardRecipientPolicy pure matrix: {\"passed\":true,\"cases\":12,\"nativeInputEvents\":0,\"livePIDReuseTested\":false}")
+    }
+
+    @MainActor private static func ownedKeyboardPairs() async throws {
+        final class Fake {
+            let fence = EpochFence()
+            let generationFence = ActionInputGenerationFence(expected: 7)
+            var generation: UInt64 = 7
+            var focusAccepted = true, recipientIdentityAccepted = true, physicalOwnerAccepted = true
+            var failUp = false, cancelBeforePair = false, cancelDuringVerification = false, cancelAfterDown = false
+            var downs = 0, ups = 0, releaseAttempts = 0, beforeChecks = 0, afterChecks = 0
+            var held = false
+            var trace = [String]()
+            var onHold: (() throws -> Void)?, onUp: (() -> Void)?
+            init() { try! fence.lease(10) }
+            func pair() async throws {
+                if cancelBeforePair { withUnsafeCurrentTask { $0?.cancel() } }
+                try await OwnedKeyboardPairDelivery.run(verifyBeforeDown: {
+                    self.trace.append("AX-before-down"); self.beforeChecks += 1
+                    try self.fence.check(10)
+                    try self.generationFence.check(current: self.generation, inputPosted: self.downs > 0)
+                    guard self.focusAccepted else { throw ComputerError("FOCUS_CHANGED", "fake full focus rejection") }
+                    if self.cancelDuringVerification { withUnsafeCurrentTask { $0?.cancel() } }
+                }, postDown: {
+                    precondition(!self.held, "No second down before the original held pair retires")
+                    self.trace.append("down"); self.downs += 1; self.held = true
+                    if self.cancelAfterDown { withUnsafeCurrentTask { $0?.cancel() } }
+                }, hold: {
+                    self.trace.append("hold")
+                    try self.onHold?()
+                    try Task.checkCancellation()
+                }, releaseUp: {
+                    self.trace.append("release-attempt"); self.releaseAttempts += 1
+                    // These booleans are deliberately fake release predicates.
+                    // They prove ordering on failure, not the live PID/birth or
+                    // private registry guard's real OS implementation.
+                    guard self.recipientIdentityAccepted, self.physicalOwnerAccepted, !self.failUp else {
+                        throw ComputerError("INPUT_CLEANUP_FAILED", "fake owned release rejection")
+                    }
+                    precondition(self.held, "This fake up must discharge one actual fake down")
+                    self.trace.append("up"); self.ups += 1; self.held = false; self.onUp?()
+                }, verifyAfterUp: {
+                    self.trace.append("post-up-fence"); self.afterChecks += 1
+                    try self.fence.check(10)
+                    try self.generationFence.check(current: self.generation, inputPosted: true)
+                })
+            }
+        }
+        var cases = [String]()
+        do {
+            let f = Fake(); try await f.pair()
+            precondition(f.downs == 1 && f.ups == 1 && f.releaseAttempts == 1 && !f.held)
+            precondition(f.trace == ["AX-before-down", "down", "hold", "release-attempt", "up", "post-up-fence"], "No AX callback may run between the original down/up")
+            cases.append("normal-exact-order-one-down-one-up")
+        }
+        do {
+            let f = Fake(); f.focusAccepted = false
+            do { try await f.pair(); preconditionFailure("Rejected full check posted a down") }
+            catch let e as ComputerError { precondition(e.code == "FOCUS_CHANGED") }
+            precondition(f.downs == 0 && f.ups == 0 && f.releaseAttempts == 0 && f.trace == ["AX-before-down"])
+            cases.append("before-down-full-check-rejects-zero-posts")
+        }
+        do {
+            let f = Fake(); f.onHold = { throw CancellationError() }
+            do { try await f.pair(); preconditionFailure("Cancelled hold was swallowed") } catch is CancellationError {}
+            precondition(f.downs == 1 && f.ups == 1 && f.releaseAttempts == 1 && f.afterChecks == 0 && !f.held)
+            cases.append("hold-cancellation-discharges-up-once")
+        }
+        for kind in ["human-generation", "epoch"] {
+            let f = Fake(); f.onHold = { if kind == "epoch" { f.fence.release(10) } else { f.generation = 8 } }
+            do { for _ in 0..<2 { try await f.pair() }; preconditionFailure("A changed authorization allowed the following down") }
+            catch let e as ComputerError { precondition(e.code == (kind == "epoch" ? "STALE_EPOCH" : "HUMAN_INPUT_INTERRUPTED")) }
+            precondition(f.downs == 1 && f.ups == 1 && f.releaseAttempts == 1 && f.beforeChecks == 1 && f.afterChecks == 1 && !f.held)
+            cases.append(kind + "-changes-after-down-still-up-one-next-down-zero")
+        }
+        do {
+            let f = Fake(); f.failUp = true
+            do { for _ in 0..<2 { try await f.pair() }; preconditionFailure("Failed release allowed a following down") }
+            catch let e as ComputerError { precondition(e.code == "INPUT_CLEANUP_FAILED") }
+            precondition(f.downs == 1 && f.ups == 0 && f.releaseAttempts == 1 && f.afterChecks == 0 && f.held)
+            cases.append("up-failure-retains-held-and-prevents-next-down")
+        }
+        do {
+            let f = Fake(); f.failUp = true; f.onHold = { throw CancellationError() }
+            do { try await f.pair(); preconditionFailure("Cancelled hold plus failed release passed") }
+            catch let e as ComputerError { precondition(e.code == "INPUT_CLEANUP_FAILED") }
+            precondition(f.downs == 1 && f.ups == 0 && f.releaseAttempts == 1 && f.afterChecks == 0 && f.held)
+            cases.append("release-failure-on-cancellation-remains-blocking")
+        }
+        for kind in ["recipient-identity", "physical-owner"] {
+            let f = Fake(); f.onHold = { if kind == "recipient-identity" { f.recipientIdentityAccepted = false } else { f.physicalOwnerAccepted = false } }
+            do { for _ in 0..<2 { try await f.pair() }; preconditionFailure("Fake release identity rejection was ignored") }
+            catch let e as ComputerError { precondition(e.code == "INPUT_CLEANUP_FAILED") }
+            precondition(f.downs == 1 && f.ups == 0 && f.releaseAttempts == 1 && f.held)
+            cases.append("fake-" + kind + "-release-rejection-not-live-identity-proof")
+        }
+        do {
+            let f = Fake(); f.onUp = { f.focusAccepted = false }
+            do { for _ in 0..<2 { try await f.pair() }; preconditionFailure("A new target received the following down") }
+            catch let e as ComputerError { precondition(e.code == "FOCUS_CHANGED") }
+            precondition(f.downs == 1 && f.ups == 1 && f.releaseAttempts == 1 && f.beforeChecks == 2 && f.afterChecks == 1 && !f.held)
+            cases.append("focus-switch-requires-fresh-full-check-before-next-down")
+        }
+        do {
+            let f = Fake(); for _ in 0..<2 { try await f.pair() }
+            precondition(f.downs == 2 && f.ups == 2 && f.beforeChecks == 2 && f.afterChecks == 2)
+            precondition(f.trace == Array(repeating: ["AX-before-down", "down", "hold", "release-attempt", "up", "post-up-fence"], count: 2).flatMap { $0 })
+            cases.append("every-successor-down-has-its-own-full-check")
+        }
+        for kind in ["before-pair", "during-verification", "after-down"] {
+            let f = Fake()
+            f.cancelBeforePair = kind == "before-pair"
+            f.cancelDuringVerification = kind == "during-verification"
+            f.cancelAfterDown = kind == "after-down"
+            let child = Task { @MainActor in
+                for _ in 0..<2 { try await f.pair() }
+            }
+            do { try await child.value; preconditionFailure("Actual Swift Task cancellation was ignored") } catch is CancellationError {}
+            if kind == "after-down" {
+                precondition(f.downs == 1 && f.ups == 1 && f.releaseAttempts == 1 && f.afterChecks == 0 && !f.held)
+            } else {
+                precondition(f.downs == 0 && f.ups == 0 && f.releaseAttempts == 0 && !f.held)
+                precondition(f.beforeChecks == (kind == "before-pair" ? 0 : 1))
+            }
+            precondition(!Task.isCancelled, "A cancelled child must not contaminate the remaining pure matrix")
+            cases.append("actual-swift-task-cancel-" + kind)
+        }
+        precondition(cases.count == 14)
+        let receipt: [String: Any] = ["passed": true, "cases": cases, "caseCount": cases.count, "fakeCallbacksOnly": true,
+            "realSwiftTaskCancellation": true, "guiStarted": 0, "realAXReads": 0, "nativeInputEvents": 0,
+            "livePIDReuseTested": false, "privateNativeReleaseRegistryTested": false]
+        let data = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+        print("OwnedKeyboardPairDelivery pure matrix: " + String(data: data, encoding: .utf8)!)
+    }
+
+    @MainActor private static func completedKeyboardActions() async throws {
+        @MainActor final class Fake {
+            let frame = CGRect(x: 100, y: 200, width: 800, height: 600)
+            let fence = EpochFence(), generationFence = ActionInputGenerationFence(expected: 7)
+            var generation: UInt64 = 7
+            var owner: String? = "original-owner", expectedOwner = "original-owner"
+            var heldKeys = 0, releases = 0, mouseHeld = false, osHeld = false, permission = true, cursorBlocked = false
+            var beforePid: pid_t? = 99, afterPid: pid_t? = 99, birthBefore = true, birthAfter = true
+            var windowsBefore: [FocusWindowState]?, windowsAfter: [FocusWindowState]?
+            var reads = 0, checkpoints = 0, birthChecks = 0, axReads = 0, newDowns = 0
+            var focused: KeyboardFocusSnapshot?
+            var onCheckpoint: ((Int) -> Void)?
+            var target: NativeTarget { NativeTarget(id: "completed-A", appId: "fixture.own", title: "", pid: 99, windowId: 11, frame: frame, scale: 2) }
+            var geometry: FrameGeometry { FrameGeometry(frame: frame, pixelWidth: 1600, pixelHeight: 1200) }
+            var a: FocusWindowState { FocusWindowState(windowId: 11, pid: 99, frame: frame) }
+            var b: FocusWindowState { FocusWindowState(windowId: 22, pid: 99, frame: frame.insetBy(dx: 80, dy: 80)) }
+            init() { try! fence.lease(10) }
+            func checkpoint() throws {
+                checkpoints += 1; onCheckpoint?(checkpoints)
+                try Task.checkCancellation(); try fence.check(10)
+                try generationFence.check(current: generation, inputPosted: true)
+                try CompletedKeyboardInputPolicy.check(CompletedKeyboardInputState(ownerId: owner, heldKeys: heldKeys,
+                    ownedKeyReleases: releases, mouseHeld: mouseHeld, osInputHeld: osHeld,
+                    permissionsCurrent: permission, cursorRestorationBlocked: cursorBlocked), expectedOwnerId: expectedOwner)
+            }
+            func complete() throws {
+                try ExactKeyboardCompletion.check(target: target, geometry: geometry, backend: KeyboardCompletionBackend(
+                    windows: { self.reads += 1; return (self.reads == 1 ? self.windowsBefore : self.windowsAfter) ?? [self.a, self.b] },
+                    frontmost: { self.reads == 1 ? self.beforePid : self.afterPid },
+                    processIdentityCurrent: { self.birthChecks += 1; return self.birthChecks == 1 ? self.birthBefore : self.birthAfter }),
+                    checkpoint: { try self.checkpoint() })
+            }
+            func nextDown() throws {
+                axReads += 1
+                try ExactKeyboardFocus.check(target: target, geometry: geometry, before: [a, b], after: [a, b],
+                    beforePid: 99, afterPid: 99, focused: focused, processIdentityCurrent: true)
+                newDowns += 1
+            }
+        }
+        var cases = [String]()
+        do {
+            let f = Fake() // nil models the failed AXFocusedWindow read after the owned pair.
+            try f.complete()
+            precondition(f.reads == 2 && f.birthChecks == 2 && f.checkpoints == 3 && f.axReads == 0)
+            do { try f.nextDown(); preconditionFailure("Completion authorized a new down without fresh AX readiness") }
+            catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.newDowns == 0 && f.axReads == 1)
+            cases.append("completed-pair-accepts-AX-unavailable-but-next-down-refuses-zero-posts")
+        }
+        do {
+            let f = Fake(); try f.complete()
+            f.focused = KeyboardFocusSnapshot(pid: 99, frame: f.frame, isWindow: true, identityStable: true)
+            try f.nextDown()
+            precondition(f.newDowns == 1 && f.axReads == 1, "A successor down still consumes its own full keyboard proof")
+            cases.append("next-down-requires-new-complete-AX-proof")
+        }
+        for kind in ["different-window", "owner-drift", "geometry-drift", "subpixel-drift", "same-geometry-sibling", "prefix-drift", "foreground-before", "foreground-after", "foreground-unknown", "birth-before", "birth-after"] {
+            let f = Fake(); var code = "FOCUS_CHANGED"
+            switch kind {
+            case "different-window": f.windowsAfter = [f.b]; code = "GEOMETRY_CHANGED"
+            case "owner-drift": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 88, frame: f.frame)]; code = "GEOMETRY_CHANGED"
+            case "geometry-drift": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 99, frame: f.frame.offsetBy(dx: 8, dy: 0))]; code = "GEOMETRY_CHANGED"
+            case "subpixel-drift": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 99, frame: f.frame.offsetBy(dx: 0.1, dy: 0)), f.b]
+            case "same-geometry-sibling": f.windowsAfter = [f.a, FocusWindowState(windowId: 33, pid: 99, frame: f.frame)]
+            case "prefix-drift": f.windowsBefore = [f.b, f.a]; f.windowsAfter = [f.a, f.b]
+            case "foreground-before": f.beforePid = 88
+            case "foreground-after": f.afterPid = 88
+            case "foreground-unknown": f.afterPid = nil
+            case "birth-before": f.birthBefore = false; code = "TARGET_GONE"
+            case "birth-after": f.birthAfter = false; code = "TARGET_GONE"
+            default: preconditionFailure("Unknown completion case")
+            }
+            do { try f.complete(); preconditionFailure("Changed completed-action identity accepted") }
+            catch let error as ComputerError { precondition(error.code == code) }
+            precondition(f.axReads == 0 && f.newDowns == 0)
+            cases.append("completion-refuses-" + kind)
+        }
+        do {
+            let f = Fake(); f.windowsAfter = [f.a]; try f.complete()
+            precondition(f.axReads == 0, "Behind-selected windows do not own completed input")
+            cases.append("behind-selected-change-does-not-own-completion")
+        }
+        for kind in ["owner-missing", "owner-changed", "expected-owner-empty", "held-key", "owned-release", "held-mouse", "OS-held", "permission", "cursor-restoration"] {
+            let f = Fake(); var code = "INPUT_CLEANUP_FAILED"
+            switch kind {
+            case "owner-missing": f.owner = nil
+            case "owner-changed": f.owner = "successor-owner"
+            case "expected-owner-empty": f.expectedOwner = ""
+            case "held-key": f.heldKeys = 1
+            case "owned-release": f.releases = 1
+            case "held-mouse": f.mouseHeld = true
+            case "OS-held": f.osHeld = true
+            case "permission": f.permission = false; code = "ACCESSIBILITY_REQUIRED"
+            case "cursor-restoration": f.cursorBlocked = true; code = "CURSOR_CLEANUP_FAILED"
+            default: preconditionFailure("Unknown completed responsibility case")
+            }
+            do { try f.complete(); preconditionFailure("Incomplete keyboard responsibility accepted") }
+            catch let error as ComputerError { precondition(error.code == code) }
+            precondition(f.reads == 0 && f.axReads == 0 && f.newDowns == 0)
+            cases.append("completion-refuses-" + kind)
+        }
+        for boundary in [1, 2, 3] {
+            for kind in ["epoch", "human", "owner", "permission", "owned-release"] {
+                let f = Fake()
+                f.onCheckpoint = { step in
+                    if step == boundary {
+                        switch kind {
+                        case "epoch": f.fence.release(10)
+                        case "human": f.generation = 8
+                        case "owner": f.owner = "successor-owner"
+                        case "permission": f.permission = false
+                        case "owned-release": f.releases = 1
+                        default: preconditionFailure("Unknown completion checkpoint case")
+                        }
+                    }
+                }
+                do { try f.complete(); preconditionFailure("Checkpoint drift was ignored") }
+                catch let error as ComputerError {
+                    precondition(error.code == (kind == "epoch" ? "STALE_EPOCH" : kind == "human" ? "HUMAN_INPUT_INTERRUPTED" : kind == "permission" ? "ACCESSIBILITY_REQUIRED" : "INPUT_CLEANUP_FAILED"))
+                }
+                precondition(f.checkpoints == boundary && f.axReads == 0 && f.newDowns == 0)
+                cases.append("completion-checkpoint-\(boundary)-refuses-" + kind)
+            }
+            let f = Fake(); f.onCheckpoint = { if $0 == boundary { withUnsafeCurrentTask { $0?.cancel() } } }
+            let child = Task { @MainActor in try f.complete() }
+            do { try await child.value; preconditionFailure("Actual Swift completion Task cancellation was ignored") }
+            catch is CancellationError {}
+            precondition(f.checkpoints == boundary && f.axReads == 0 && f.newDowns == 0 && !Task.isCancelled)
+            cases.append("completion-actual-swift-task-cancel-\(boundary)")
+        }
+        precondition(cases.count == 41)
+        let receipt: [String: Any] = ["passed": true, "cases": cases, "caseCount": cases.count, "fakeCallbacksOnly": true,
+            "realSwiftTaskCancellation": true, "guiStarted": 0, "realAXReads": 0, "nativeInputEvents": 0,
+            "livePIDReuseTested": false, "privateNativeReleaseRegistryTested": false, "eventDeliveryAcknowledged": false]
+        let data = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+        print("CompletedKeyboardAction pure matrix: " + String(data: data, encoding: .utf8)!)
+    }
+
+    @MainActor private static func keyboardReadinessRetries() async throws {
+        @MainActor final class Fake {
+            let frame = CGRect(x: 100, y: 200, width: 800, height: 600)
+            let fence = EpochFence(), generationFence = ActionInputGenerationFence(expected: 7), budget = KeyboardReadinessRetryBudget()
+            var time = 0.0, proofCost = 0.005, metadataCost = 0.0
+            var generation: UInt64 = 7
+            var owner: String? = "original-owner", held = 0, releases = 0, permission = true, cursorBlocked = false
+            var proofs = 0, sleeps = 0, metadataChecks = 0, posts = 0, ups = 0
+            var transient = 0, permanent = false, birth = true
+            var beforePid: pid_t? = 99, afterPid: pid_t? = 99
+            var windowsBefore: [FocusWindowState]?, windowsAfter: [FocusWindowState]?
+            var root: KeyboardFocusSnapshot?
+            var axError: Int32? = AXError.cannotComplete.rawValue
+            var onSleep: (() -> Void)?, duringAX: (() -> Void)?
+            var a: FocusWindowState { FocusWindowState(windowId: 11, pid: 99, frame: frame) }
+            var b: FocusWindowState { FocusWindowState(windowId: 22, pid: 99, frame: frame.insetBy(dx: 80, dy: 80)) }
+            var target: NativeTarget { NativeTarget(id: "readiness-A", appId: "fixture.own", title: "", pid: 99, windowId: 11, frame: frame, scale: 2) }
+            var geometry: FrameGeometry { FrameGeometry(frame: frame, pixelWidth: 1600, pixelHeight: 1200) }
+            init() { try! fence.lease(10); root = KeyboardFocusSnapshot(pid: 99, frame: frame, isWindow: true, identityStable: true) }
+            func checkpoint() throws {
+                try Task.checkCancellation(); try fence.check(10)
+                try generationFence.check(current: generation, inputPosted: posts > 0)
+                try CompletedKeyboardInputPolicy.check(CompletedKeyboardInputState(ownerId: owner, heldKeys: held,
+                    ownedKeyReleases: releases, mouseHeld: false, osInputHeld: false, permissionsCurrent: permission,
+                    cursorRestorationBlocked: cursorBlocked), expectedOwnerId: "original-owner")
+            }
+            func identity() throws {
+                try ExactInputIdentity.check(target: target, geometry: geometry, before: windowsBefore ?? [a, b], after: windowsAfter ?? [a, b],
+                    beforePid: beforePid, afterPid: afterPid, processIdentityCurrent: birth)
+            }
+            func nextDown() async throws {
+                try await BoundedKeyboardDownReadiness.run(backend: KeyboardDownReadinessBackend(now: { self.time }, proof: { deadline in
+                    self.proofs += 1; self.time += self.proofCost; self.duringAX?()
+                    try self.identity() // The real sample must pass this before it may return a transient result.
+                    if self.permanent || self.transient > 0 {
+                        self.transient = max(0, self.transient - 1)
+                        guard TransientKeyboardAXRead.mayWait(focused: nil, error: self.axError, stage: "focused-window", now: self.time, deadline: deadline) else {
+                            throw ComputerError("FOCUS_CHANGED", "fake non-transient AX refusal")
+                        }
+                        return .temporarilyUnavailable
+                    }
+                    // Every ready result reads a fresh complete root and exact CG proof.
+                    try ExactKeyboardFocus.check(target: self.target, geometry: self.geometry, before: self.windowsBefore ?? [self.a, self.b], after: self.windowsAfter ?? [self.a, self.b],
+                        beforePid: self.beforePid, afterPid: self.afterPid, focused: self.root, processIdentityCurrent: self.birth)
+                    return .ready
+                }, metadata: { deadline, checkpoint in
+                    self.metadataChecks += 1; try checkpoint(); try self.identity(); self.time += self.metadataCost; try checkpoint()
+                    guard self.time < deadline else { throw ComputerError("FOCUS_CHANGED", "fake independent metadata deadline") }
+                }, sleep: { ns in self.sleeps += 1; self.time += Double(ns) / 1_000_000_000; self.onSleep?(); await Task.yield() }), budget: budget,
+                    checkpoint: { try self.checkpoint() })
+                posts += 1; ups += 1 // Fake immediate pair only; no CGEvent is created or posted.
+            }
+        }
+        var cases = [String]()
+        do {
+            let f = Fake(); f.transient = 1; try await f.nextDown()
+            precondition(f.proofs == 2 && f.sleeps == 1 && f.metadataChecks == 2 && f.posts == 1 && f.ups == 1)
+            cases.append("cannotComplete-yields-with-independent-identity-and-fresh-full-AX-before-one-down")
+        }
+        do {
+            let f = Fake(); for _ in 0..<3 { try await f.nextDown() }
+            precondition(f.proofs == 3 && f.posts == 3 && f.ups == 3 && f.sleeps == 0 && f.budget.remaining == 0.5)
+            cases.append("every-new-down-needs-new-full-proof-without-cached-AX")
+        }
+        do {
+            let f = Fake(); f.permanent = true
+            do { try await f.nextDown(); preconditionFailure("Permanent AX unavailability posted input") }
+            catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.posts == 0 && f.ups == 0 && f.sleeps > 0 && f.time <= 0.501, "The single shared recovery budget cannot renew")
+            cases.append("permanent-cannotComplete-exhausts-shared-500ms-zero-new-downs")
+        }
+        do {
+            let f = Fake(); f.transient = 20; try await f.nextDown()
+            let firstRemaining = f.budget.remaining, firstProofs = f.proofs
+            precondition(firstRemaining > 0 && firstRemaining < 0.21 && f.posts == 1)
+            f.permanent = true
+            do { try await f.nextDown(); preconditionFailure("A new character renewed the action retry budget") }
+            catch let error as ComputerError { precondition(error.code == "FOCUS_CHANGED") }
+            precondition(f.posts == 1 && f.ups == 1 && f.proofs > firstProofs && f.time <= 0.501,
+                "Already completed characters are never replayed and later downs share the original remainder")
+            cases.append("retry-budget-is-shared-across-characters-no-renewal-no-replay")
+        }
+        for error in [AXError.failure.rawValue, AXError.noValue.rawValue, AXError.attributeUnsupported.rawValue, AXError.success.rawValue] {
+            let f = Fake(); f.permanent = true; f.axError = error
+            do { try await f.nextDown(); preconditionFailure("A non-cannotComplete error was retried") }
+            catch let e as ComputerError { precondition(e.code == "FOCUS_CHANGED") }
+            precondition(f.proofs == 1 && f.sleeps == 0 && f.posts == 0)
+            cases.append("other-AX-error-\(error)-refuses-immediately")
+        }
+        do {
+            let f = Fake(); f.transient = 1; f.onSleep = { f.root = KeyboardFocusSnapshot(pid: 99, frame: f.b.frame, isWindow: true, identityStable: true) }
+            do { try await f.nextDown(); preconditionFailure("A sibling focused root was swallowed by retry") }
+            catch let e as ComputerError { precondition(e.code == "FOCUS_CHANGED") }
+            precondition(f.proofs == 2 && f.sleeps == 1 && f.posts == 0)
+            cases.append("fresh-AX-reveals-sibling-focus-immediate-zero-down-refusal")
+        }
+        for kind in ["geometry", "prefix", "same-geometry-sibling", "foreground", "process-birth"] {
+            let f = Fake(); f.permanent = true
+            f.duringAX = {
+                switch kind {
+                case "geometry": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 99, frame: f.frame.offsetBy(dx: 8, dy: 0))]
+                case "prefix": f.windowsAfter = [f.b, f.a]
+                case "same-geometry-sibling": f.windowsAfter = [f.a, FocusWindowState(windowId: 33, pid: 99, frame: f.frame)]
+                case "foreground": f.afterPid = 88
+                case "process-birth": f.birth = false
+                default: preconditionFailure("Unknown retry identity case")
+                }
+            }
+            do { try await f.nextDown(); preconditionFailure("Identity drift was treated as transient AX") }
+            catch let e as ComputerError { precondition(["FOCUS_CHANGED", "GEOMETRY_CHANGED", "TARGET_GONE"].contains(e.code)) }
+            precondition(f.proofs == 1 && f.sleeps == 0 && f.posts == 0)
+            cases.append("cannotComplete-with-" + kind + "-drift-never-retries")
+        }
+        for kind in ["epoch", "human", "owner", "permission", "held-key", "owned-release", "cursor", "foreground", "geometry", "same-geometry-sibling", "process-birth"] {
+            let f = Fake(); f.permanent = true
+            f.onSleep = {
+                switch kind {
+                case "epoch": f.fence.release(10)
+                case "human": f.generation = 8
+                case "owner": f.owner = "next-owner"
+                case "permission": f.permission = false
+                case "held-key": f.held = 1
+                case "owned-release": f.releases = 1
+                case "cursor": f.cursorBlocked = true
+                case "foreground": f.afterPid = 88
+                case "geometry": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 99, frame: f.frame.offsetBy(dx: 8, dy: 0))]
+                case "same-geometry-sibling": f.windowsAfter = [f.a, FocusWindowState(windowId: 33, pid: 99, frame: f.frame)]
+                case "process-birth": f.birth = false
+                default: preconditionFailure("Unknown retry await case")
+                }
+            }
+            do { try await f.nextDown(); preconditionFailure("Await invalidation was ignored") }
+            catch is ComputerError {}
+            precondition(f.proofs == 1 && f.sleeps == 1 && f.posts == 0)
+            cases.append("await-" + kind + "-change-stops-before-new-AX-or-down")
+        }
+        for duringWait in [false, true] {
+            let f = Fake(); f.permanent = true
+            if duringWait { f.onSleep = { withUnsafeCurrentTask { $0?.cancel() } } }
+            let child = Task { @MainActor in
+                if !duringWait { withUnsafeCurrentTask { $0?.cancel() } }
+                try await f.nextDown()
+            }
+            do { try await child.value; preconditionFailure("Actual Swift retry cancellation was ignored") } catch is CancellationError {}
+            precondition(f.posts == 0 && f.proofs == (duringWait ? 1 : 0) && f.sleeps == (duringWait ? 1 : 0) && !Task.isCancelled)
+            cases.append("actual-swift-task-cancel-" + (duringWait ? "during-wait" : "before-proof"))
+        }
+        do {
+            let f = Fake(); f.proofCost = 0.061
+            do { try await f.nextDown(); preconditionFailure("A proof exceeded its original 60 ms deadline") }
+            catch let e as ComputerError { precondition(e.code == "FOCUS_CHANGED") }
+            precondition(f.posts == 0 && f.sleeps == 0)
+            cases.append("full-proof-original-60ms-cap-still-blocks-new-down")
+        }
+        do {
+            let f = Fake(); f.permanent = true; f.metadataCost = 0.025
+            do { try await f.nextDown(); preconditionFailure("Metadata proofs renewed the wait budget") }
+            catch is ComputerError {}
+            precondition(f.posts == 0 && f.sleeps < 10 && f.time <= 0.526,
+                "Independent metadata proof time is charged and deadline overrun fails without input")
+            cases.append("independent-metadata-time-charges-same-budget-no-extra-down")
+        }
+        do {
+            let root = KeyboardFocusSnapshot(pid: 99, frame: CGRect(x: 1, y: 2, width: 3, height: 4), isWindow: true, identityStable: true)
+            precondition(!TransientKeyboardAXRead.mayWait(focused: root, error: AXError.cannotComplete.rawValue, stage: "focused-window", now: 0, deadline: 1))
+            precondition(!TransientKeyboardAXRead.mayWait(focused: nil, error: AXError.cannotComplete.rawValue, stage: "deadline", now: 0, deadline: 1))
+            precondition(!TransientKeyboardAXRead.mayWait(focused: nil, error: AXError.cannotComplete.rawValue, stage: "focused-window", now: 1, deadline: 1))
+            cases.append("retry-eligibility-never-accepts-existing-root-or-expired-read")
+        }
+        var terminalCases = [String]()
+        for kind in ["unchanged", "epoch", "human", "owner", "permission", "held-key", "owned-release", "geometry", "foreground", "process-birth", "cancel"] {
+            let f = Fake(); var postCalls = 0, releaseCalls = 0, trace = [String]()
+            let child = Task { @MainActor in
+                try await OwnedKeyboardPairDelivery.run(verifyBeforeDown: {
+                    try ExactKeyboardFocus.check(target: f.target, geometry: f.geometry, before: [f.a, f.b], after: [f.a, f.b],
+                        beforePid: 99, afterPid: 99, focused: f.root, processIdentityCurrent: true)
+                    trace.append("full-AX-proof-ready")
+                    await Task.yield()
+                    trace.append("async-proof-returned")
+                }, verifyImmediatelyBeforePost: {
+                    // Inject at the exact post-await/pre-post seam. A fresh AX
+                    // proof cannot exempt this later synchronous safety check.
+                    trace.append("terminal-check")
+                    switch kind {
+                    case "epoch": f.fence.release(10)
+                    case "human": f.generation = 8
+                    case "owner": f.owner = "successor-owner"
+                    case "permission": f.permission = false
+                    case "held-key": f.held = 1
+                    case "owned-release": f.releases = 1
+                    case "geometry": f.windowsAfter = [FocusWindowState(windowId: 11, pid: 99, frame: f.frame.offsetBy(dx: 8, dy: 0))]
+                    case "foreground": f.afterPid = 88
+                    case "process-birth": f.birth = false
+                    case "cancel": withUnsafeCurrentTask { $0?.cancel() }
+                    default: break
+                    }
+                    var reads = 0
+                    try ExactKeyboardCompletion.check(target: f.target, geometry: f.geometry, backend: KeyboardCompletionBackend(
+                        windows: { reads += 1; return (reads == 1 ? f.windowsBefore : f.windowsAfter) ?? [f.a, f.b] },
+                        frontmost: { reads == 1 ? f.beforePid : f.afterPid }, processIdentityCurrent: { f.birth }),
+                        checkpoint: { try f.checkpoint() })
+                }, postDown: { trace.append("down"); postCalls += 1 }, hold: {}, releaseUp: {
+                    trace.append("up"); releaseCalls += 1
+                }, verifyAfterUp: { try f.checkpoint() })
+            }
+            if kind == "unchanged" {
+                try await child.value
+                precondition(postCalls == 1 && releaseCalls == 1 && trace == ["full-AX-proof-ready", "async-proof-returned", "terminal-check", "down", "up"])
+            } else {
+                do { try await child.value; preconditionFailure("Post-await invalidation reached a new down") }
+                catch is ComputerError { precondition(kind != "cancel") }
+                catch is CancellationError { precondition(kind == "cancel") }
+                precondition(postCalls == 0 && releaseCalls == 0 && trace == ["full-AX-proof-ready", "async-proof-returned", "terminal-check"])
+            }
+            precondition(!Task.isCancelled)
+            terminalCases.append("post-await-terminal-" + kind)
+        }
+        precondition(terminalCases.count == 11)
+        print("KeyboardPostAwait pure matrix: " + String(data: try JSONSerialization.data(withJSONObject: ["passed": true,
+            "caseCount": terminalCases.count, "cases": terminalCases, "realSwiftTaskCancellation": true,
+            "nativeInputEvents": 0, "realAXReads": 0], options: [.sortedKeys]), encoding: .utf8)!)
+        precondition(cases.count == 30)
+        let receipt: [String: Any] = ["passed": true, "cases": cases, "caseCount": cases.count, "fakeCallbacksOnly": true,
+            "realSwiftTaskCancellation": true, "guiStarted": 0, "realAXReads": 0, "nativeInputEvents": 0,
+            "sharedActionRetryBudgetMs": 500, "fullProofLimitMs": 60, "maximumYieldMs": 10, "eventDeliveryAcknowledged": false]
+        print("KeyboardDownReadiness pure matrix: " + String(data: try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), encoding: .utf8)!)
     }
 
     @MainActor private static func boundedFocusPreparation() async throws {

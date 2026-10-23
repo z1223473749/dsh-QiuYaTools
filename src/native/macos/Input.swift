@@ -39,15 +39,70 @@ struct ActionInputGenerationFence {
     try releaseDesktop()
 }
 
+/// A key-up discharges an already posted down. It never authorizes another
+/// down and must not wait on the target UI's accessibility response to that down.
+enum OwnedKeyboardRecipient { case original, retired, unverified }
+enum OwnedKeyboardReleaseDisposition { case postOriginal, retireWithoutPost, block }
+enum OwnedKeyboardReleasePolicy {
+    static func disposition(recipient: OwnedKeyboardRecipient, sessionVerified: Bool, keyHeld: Bool) -> OwnedKeyboardReleaseDisposition {
+        switch recipient {
+        case .original: return .postOriginal
+        case .retired: return sessionVerified && !keyHeld ? .retireWithoutPost : .block
+        case .unverified: return .block
+        }
+    }
+}
+
+@MainActor enum OwnedKeyboardPairDelivery {
+    static func run(verifyBeforeDown: () async throws -> Void, verifyImmediatelyBeforePost: () throws -> Void = {}, postDown: () -> Void,
+                    hold: () async throws -> Void, releaseUp: () throws -> Void,
+                    verifyAfterUp: () throws -> Void) async throws {
+        try Task.checkCancellation()
+        try await verifyBeforeDown()
+        try Task.checkCancellation()
+        try verifyImmediatelyBeforePost()
+        try Task.checkCancellation()
+        postDown()
+        do { try await hold() }
+        catch { try releaseUp(); throw error }
+        try releaseUp()
+        try verifyAfterUp()
+    }
+}
+
+/// Independent completion predicates only; none grants permission to post a
+/// new event, substitutes for AX readiness, or claims an event-delivery ACK.
+struct CompletedKeyboardInputState {
+    let ownerId: String?
+    let heldKeys: Int, ownedKeyReleases: Int
+    let mouseHeld: Bool, osInputHeld: Bool, permissionsCurrent: Bool, cursorRestorationBlocked: Bool
+}
+enum CompletedKeyboardInputPolicy {
+    static func check(_ state: CompletedKeyboardInputState, expectedOwnerId: String) throws {
+        guard state.permissionsCurrent else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Input permission was revoked before keyboard completion could be verified.") }
+        guard !state.cursorRestorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; keyboard completion is not confirmed.") }
+        guard !expectedOwnerId.isEmpty, state.ownerId == expectedOwnerId,
+              state.heldKeys == 0, state.ownedKeyReleases == 0, !state.mouseHeld, !state.osInputHeld else {
+            throw ComputerError("INPUT_CLEANUP_FAILED", "The completed keyboard action's ownership or released input cannot be confirmed.")
+        }
+    }
+}
+
 @MainActor final class NativeInput {
     let fence = EpochFence()
     private let eventSource = CGEventSource(stateID: .hidSystemState)
     private var heldMouse: CGMouseButton?
     private var heldKeys = Set<CGKeyCode>()
+    private struct OwnedKeyRelease {
+        let id: UUID, code: CGKeyCode, epoch: Int, ownerId: String
+        let pid: pid_t, identity: NativeFocusIdentity, event: CGEvent
+    }
+    private var ownedKeyReleases: [CGKeyCode: OwnedKeyRelease] = [:]
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
     private var actionFocus: NativeFocusIdentity?
     private var actionInputFence: ActionInputGenerationFence?
+    private var keyboardReadinessBudget: KeyboardReadinessRetryBudget?
     private var desktopLease: DesktopLeaseGuard?
     private(set) var leaseActor = NativeLeaseActor.ai
     private lazy var aiPointer: AICursorOverlay = {
@@ -91,13 +146,85 @@ struct ActionInputGenerationFence {
             guard !CGEventSource.buttonState(.combinedSessionState, button: button) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned mouse release is not confirmed. Control remains blocked.") }
             heldMouse = nil
         }
-        for code in heldKeys {
-            guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: false) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release could not be created.") }
-            event.flags = []
-            if let pid = lastPid { event.postToPid(pid) }
+        for code in Array(heldKeys) {
+            guard let owned = ownedKeyReleases[code] else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release identity is unavailable.") }
+            try releaseOwnedKey(code, expectedId: owned.id, expectedEpoch: owned.epoch, expectedOwnerId: owned.ownerId)
         }
-        heldKeys.removeAll()
         if desktopLease?.ownerId != nil { try desktopLease?.record(keys: [], mouse: nil, targetPid: nil) }
+    }
+
+    private func releaseOwnedKey(_ code: CGKeyCode, expectedId: UUID, expectedEpoch: Int, expectedOwnerId: String) throws {
+        // A concurrent revocation may already have discharged this exact pair.
+        guard let owned = ownedKeyReleases[code] else {
+            guard !heldKeys.contains(code) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release identity is unavailable.") }
+            return
+        }
+        guard owned.id == expectedId, owned.code == code, owned.epoch == expectedEpoch,
+              !expectedOwnerId.isEmpty, owned.ownerId == expectedOwnerId, desktopLease?.ownerId == expectedOwnerId else {
+            throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release responsibility cannot be confirmed.")
+        }
+        guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("INPUT_CLEANUP_FAILED", "Input permission was revoked before owned input could be released.") }
+        let recipient = owned.identity.ownedKeyRecipient(to: owned.pid)
+        let sessionVerified: Bool, keyHeld: Bool
+        if recipient == .retired {
+            if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+               session[kCGSessionOnConsoleKey as String] as? Bool == true,
+               (session[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == getuid(),
+               session["CGSSessionScreenIsLocked"] as? Bool != true { sessionVerified = true }
+            else { sessionVerified = false }
+            keyHeld = CGEventSource.keyState(.combinedSessionState, key: code)
+        } else { sessionVerified = false; keyHeld = false }
+        switch OwnedKeyboardReleasePolicy.disposition(recipient: recipient, sessionVerified: sessionVerified, keyHeld: keyHeld) {
+        case .block:
+            focusAttempt?["ownedKeyReleaseStage"] = recipient == .unverified ? "recipient-unverified" : !sessionVerified ? "retired-session-unverified" : "retired-os-held"
+            throw ComputerError("INPUT_CLEANUP_FAILED", "The original key recipient or owned release cannot be confirmed; release remains blocked.")
+        case .retireWithoutPost:
+            // The original application's event queue is gone. Never address a
+            // reused PID, and never release a key still held in this session.
+            let retiredCount = focusAttempt?["retiredOwnedKeyReleases"] as? Int ?? 0
+            focusAttempt?["retiredOwnedKeyReleases"] = retiredCount + 1
+            focusAttempt?["ownedKeyReleaseStage"] = "retired-no-held-input"
+        case .postOriginal:
+            // Retain the original Unicode/virtual-key/flags event. Never send
+            // a generic replacement or retry a posted up.
+            owned.event.postToPid(owned.pid)
+            let postedCount = focusAttempt?["ownedKeyUpPosts"] as? Int ?? 0
+            focusAttempt?["ownedKeyUpPosts"] = postedCount + 1
+            focusAttempt?["ownedKeyReleaseStage"] = "posted-original"
+        }
+        ownedKeyReleases.removeValue(forKey: code); heldKeys.remove(code)
+    }
+
+    private func keyboardPair(down: CGEvent, up: CGEvent, code: CGKeyCode, holdNanoseconds: UInt64 = 0,
+                              epoch: Int, target: NativeTarget, geometry: FrameGeometry, ownerId: String) async throws {
+        guard let identity = actionFocus, let generation = actionInputFence,
+              !ownerId.isEmpty, desktopLease?.ownerId == ownerId,
+              heldKeys.isEmpty, ownedKeyReleases.isEmpty else {
+            throw ComputerError("INPUT_CLEANUP_FAILED", "An earlier owned key pair is not released.")
+        }
+        let id = UUID()
+        try await OwnedKeyboardPairDelivery.run(verifyBeforeDown: {
+            try await self.checkKeyboardBeforeDown(epoch, target, geometry, ownerId: ownerId, keys: [code])
+        }, verifyImmediatelyBeforePost: {
+            // The async readiness call may have yielded before returning. This
+            // terminal exact metadata/fence check and the following post are
+            // synchronous on MainActor; no delayed proof grants a new down.
+            try identity.checkKeyboardPostAwaitIdentity {
+                try self.keyboardCheckpoint(epoch, generation: generation, ownerId: ownerId, keys: [code])
+            }
+        }, postDown: {
+            self.ownedKeyReleases[code] = OwnedKeyRelease(id: id, code: code, epoch: epoch, ownerId: ownerId, pid: target.pid, identity: identity, event: up)
+            self.heldKeys.insert(code)
+            down.postToPid(target.pid); self.focusAttempt?["inputPosted"] = true
+            self.operationBadge.posted(epoch: epoch, target: target)
+        }, hold: {
+            if holdNanoseconds > 0 { try await Task.sleep(nanoseconds: holdNanoseconds) }
+        }, releaseUp: {
+            try self.releaseOwnedKey(code, expectedId: id, expectedEpoch: epoch, expectedOwnerId: ownerId)
+        }, verifyAfterUp: {
+            try self.fence.check(epoch)
+            try generation.check(current: self.humanInputGeneration, inputPosted: true)
+        })
     }
 
     func lease(_ epoch: Int, actor: NativeLeaseActor = .ai) throws {
@@ -173,14 +300,16 @@ struct ActionInputGenerationFence {
         let key = kind == "key" ? try parseKey(action["key"] as? String) : nil
         let dx = finiteNumber(action["deltaX"]) ?? 0; let dy = finiteNumber(action["deltaY"]) ?? 0
         guard abs(dx) <= 20_000, abs(dy) <= 20_000 else { throw ComputerError("INVALID_ACTION", "Scroll delta is too large.") }
+        guard let actionOwnerId = desktopLease?.ownerId, !actionOwnerId.isEmpty else { throw ComputerError("DESKTOP_LEASE_REQUIRED", "A desktop input lease is required.") }
         busy = true
         started()
-        defer { busy = false; actionFocus = nil; actionInputFence = nil }
+        defer { busy = false; actionFocus = nil; actionInputFence = nil; keyboardReadinessBudget = nil }
         let focusIdentity = try NativeFocusIdentity(target: target, geometry: geometry)
         actionFocus = focusIdentity
         let expectedHumanInputGeneration = humanInputGeneration
         let generationFence = ActionInputGenerationFence(expected: expectedHumanInputGeneration)
         actionInputFence = generationFence
+        keyboardReadinessBudget = KeyboardReadinessRetryBudget()
         let preparationCheckpoint = { [unowned self] in
             try self.fence.check(epoch)
             try generationFence.check(current: self.humanInputGeneration, inputPosted: false)
@@ -192,12 +321,18 @@ struct ActionInputGenerationFence {
         let focusBackend = try FocusPreparationBackend.native(identity: focusIdentity, route: route, checkpoint: preparationCheckpoint)
         try await BoundedFocusPreparation.run(targetPid: target.pid, targetWindowId: target.windowId, backend: focusBackend, checkpoint: preparationCheckpoint,
             record: { [unowned self] in self.focusAttempt = $0 })
+        // Zero is evidence distinct from an absent counter, including when the
+        // original recipient exits before any owned up can be posted.
+        focusAttempt?["ownedKeyUpPosts"] = 0
+        focusAttempt?["retiredOwnedKeyReleases"] = 0
+        focusAttempt?["ownedKeyReleaseStage"] = "not-requested"
         try preparationCheckpoint()
-        try check(epoch, target, geometry, route: route)
+        let keys: Set<CGKeyCode> = kind == "type" ? [0] : key.map { [$0.0] } ?? []
+        if kind == "type" || kind == "key" { try await checkKeyboardBeforeDown(epoch, target, geometry, ownerId: actionOwnerId, keys: keys) }
+        else { try check(epoch, target, geometry, route: route) }
         lastPid = target.pid
         // Record the entire action's possible downs before the first injected down.
         // Keeping this superset until completion avoids an fsync for every typed character.
-        let keys: Set<CGKeyCode> = kind == "type" ? [0] : key.map { [$0.0] } ?? []
         try desktopLease?.record(keys: keys, mouse: ["click", "drag"].contains(kind) ? button : nil, targetPid: target.pid)
         switch kind {
         case "click":
@@ -238,10 +373,7 @@ struct ActionInputGenerationFence {
                 down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
                 down.flags = []; up.flags = []
-                try check(epoch, target, geometry, route: .keyboard)
-                down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(0); operationBadge.posted(epoch: epoch, target: target)
-                try check(epoch, target, geometry, route: .keyboard)
-                up.postToPid(target.pid); heldKeys.remove(0)
+                try await keyboardPair(down: down, up: up, code: 0, epoch: epoch, target: target, geometry: geometry, ownerId: actionOwnerId)
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
         case "key":
@@ -249,14 +381,13 @@ struct ActionInputGenerationFence {
             guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: false) else { throw ComputerError("EVENT_FAILED", "Could not create a key event.") }
             down.flags = combination.1; up.flags = []
-            try check(epoch, target, geometry, route: .keyboard)
-            down.postToPid(target.pid); focusAttempt?["inputPosted"] = true; heldKeys.insert(combination.0); operationBadge.posted(epoch: epoch, target: target)
-            try await Task.sleep(nanoseconds: 25_000_000)
-            try check(epoch, target, geometry, route: .keyboard)
-            up.postToPid(target.pid); heldKeys.remove(combination.0)
+            try await keyboardPair(down: down, up: up, code: combination.0, holdNanoseconds: 25_000_000, epoch: epoch, target: target, geometry: geometry, ownerId: actionOwnerId)
         default: break
         }
         try await Task.sleep(nanoseconds: 50_000_000)
+        if kind == "type" || kind == "key" {
+            try checkKeyboardCompletion(epoch, target, geometry, ownerId: actionOwnerId, keys: keys)
+        }
         return ["performed": true, "kind": kind, "epoch": epoch, "targetId": target.id]
     }
 
@@ -276,6 +407,45 @@ struct ActionInputGenerationFence {
 
     private func postPointer(_ event: CGEvent) {
         event.post(tap: .cghidEventTap)
+    }
+
+    private func checkKeyboardCompletion(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry,
+                                         ownerId: String, keys: Set<CGKeyCode>) throws {
+        guard let identity = actionFocus, let generation = actionInputFence,
+              identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
+            throw ComputerError("FOCUS_CHANGED", "The completed action's selected window identity is unavailable.")
+        }
+        defer { focusAttempt?.merge(identity.diagnosticSnapshot) { _, latest in latest } }
+        try identity.checkKeyboardCompletion {
+            try self.keyboardCheckpoint(epoch, generation: generation, ownerId: ownerId, keys: keys)
+        }
+    }
+
+    private func checkKeyboardBeforeDown(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry,
+                                         ownerId: String, keys: Set<CGKeyCode>) async throws {
+        guard let identity = actionFocus, let generation = actionInputFence, let budget = keyboardReadinessBudget,
+              identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
+            throw ComputerError("FOCUS_CHANGED", "The keyboard action's selected window identity is unavailable; input stopped.")
+        }
+        defer { focusAttempt?.merge(identity.diagnosticSnapshot) { _, latest in latest } }
+        let checkpoint = {
+            try self.keyboardCheckpoint(epoch, generation: generation, ownerId: ownerId, keys: keys)
+        }
+        try await BoundedKeyboardDownReadiness.run(backend: KeyboardDownReadinessBackend(
+            now: { ProcessInfo.processInfo.systemUptime }, proof: { try identity.keyboardDownProof(deadline: $0) },
+            metadata: { try identity.checkKeyboardRetryIdentity(deadline: $0, checkpoint: $1) }, sleep: { try await Task.sleep(nanoseconds: $0) }),
+            budget: budget, checkpoint: checkpoint)
+    }
+
+    private func keyboardCheckpoint(_ epoch: Int, generation: ActionInputGenerationFence, ownerId: String, keys: Set<CGKeyCode>) throws {
+        try Task.checkCancellation(); try fence.check(epoch)
+        try generation.check(current: humanInputGeneration, inputPosted: focusAttempt?["inputPosted"] as? Bool == true)
+        let osHeld = keys.contains { CGEventSource.keyState(.combinedSessionState, key: $0) } ||
+            [CGMouseButton.left, .right, .center].contains { CGEventSource.buttonState(.combinedSessionState, button: $0) }
+        try CompletedKeyboardInputPolicy.check(CompletedKeyboardInputState(ownerId: desktopLease?.ownerId,
+            heldKeys: heldKeys.count, ownedKeyReleases: ownedKeyReleases.count, mouseHeld: heldMouse != nil,
+            osInputHeld: osHeld, permissionsCurrent: AXIsProcessTrusted() && CGPreflightPostEventAccess(),
+            cursorRestorationBlocked: aiPointer.restorationBlocked), expectedOwnerId: ownerId)
     }
 
     private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry, route: FocusInputRoute) throws {

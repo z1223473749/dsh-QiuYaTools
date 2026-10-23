@@ -327,10 +327,29 @@ enum NativeLeaseActor: String {
         return verifyOwner(ownerPID)
     }
 
+    static func isNonBlockingDockWindow(layer: CGWindowLevel?, ownerPID: pid_t?, routedToTarget: () -> Bool,
+        verifyOwner: (pid_t) -> Bool = verifiedDock) -> Bool {
+        guard layer == CGWindowLevelForKey(.dockWindow), let ownerPID, ownerPID > 0,
+              verifyOwner(ownerPID) else { return false }
+        // A Dock window's rectangular bounds can cover transparent, non-input
+        // pixels. The public mouse-down hit test must independently identify
+        // this exact target at the actual cursor point before excluding it.
+        return routedToTarget()
+    }
+
+    nonisolated private static func verifiedDock(_ pid: pid_t) -> Bool {
+        verifiedSystemExecutable(pid, paths: ["/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"])
+    }
+
     nonisolated private static func verifiedWindowServer(_ pid: pid_t) -> Bool {
         // WindowServer's real cursor is also a CG window, above the target. Only
         // this exact system executable at the exact cursor layer is excluded;
         // another application's floating or cursor-level window still occludes.
+        verifiedSystemExecutable(pid, paths: ["/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+            "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"])
+    }
+
+    nonisolated private static func verifiedSystemExecutable(_ pid: pid_t, paths: [String]) -> Bool {
         func processPath() -> String? {
             var buffer = [CChar](repeating: 0, count: 4096)
             guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
@@ -340,9 +359,7 @@ enum NativeLeaseActor: String {
         var executable = stat()
         guard stat(path, &executable) == 0, executable.st_uid == 0,
               (executable.st_mode & S_IFMT) == S_IFREG else { return false }
-        let systemPaths = ["/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
-            "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer"]
-        let trusted = systemPaths.contains { path in
+        let trusted = paths.contains { path in
             var system = stat()
             return stat(path, &system) == 0 && system.st_uid == 0 && (system.st_mode & S_IFMT) == S_IFREG &&
                 executable.st_dev == system.st_dev && executable.st_ino == system.st_ino
@@ -446,6 +463,16 @@ enum NativeLeaseActor: String {
             }
             if Self.isSystemCursorWindow(layer: (item[kCGWindowLayer as String] as? NSNumber)?.int32Value,
                 ownerPID: (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value) { continue }
+            if rect.contains(point), Self.isNonBlockingDockWindow(
+                layer: (item[kCGWindowLayer as String] as? NSNumber)?.int32Value,
+                ownerPID: (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                routedToTarget: {
+                    // https://developer.apple.com/documentation/appkit/nswindow/windownumber(at:belowwindowwithwindownumber:)
+                    // Transparent pixels and windows that ignore mouse events
+                    // do not win this test. Other foreign covers still block.
+                    (try? ExactPointerRouting.check(point: point, selected: target.windowId,
+                        frame: target.frame, backend: ExactPointerRouting.native)) != nil
+                }) { continue }
             if firstCovering == nil, rect.contains(point), (item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0 { firstCovering = id }
         }
         return targetValid && firstCovering == target.windowId

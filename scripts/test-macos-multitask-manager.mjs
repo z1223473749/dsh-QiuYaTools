@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { build, stop as stopEsbuild } from 'esbuild'
+import { finiteCursorDiagnostic } from './macos-cursor-diagnostic-core.mjs'
 
 assert.equal(process.platform, 'darwin')
 const root = fileURLToPath(new URL('../', import.meta.url)), arg = (name, fallback) => { const i = process.argv.indexOf(name); return i < 0 ? fallback : process.argv[i + 1] }
@@ -20,7 +21,7 @@ await mkdir(output, { recursive: true }); for (const name of ['report.json', 'ru
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-multitask-')), execute = promisify(execFile), hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const observerBinary = join(temporary, 'observer'), leaseBinary = join(temporary, 'lease-oracle'), runtime = join(temporary, 'runtime.mjs')
 const fixtureSource = join(root, 'src/native/macos/fixtures/AICursorFixture.swift'), observerSource = join(root, 'src/native/macos/fixtures/AICursorObserver.swift'), leaseSource = join(root, 'src/native/macos/fixtures/LeaseOracle.swift')
-const fixtures = new Map(), bindings = new Map(), known = new Map(), controllers = [], checks = [], trace = [], observations = [], geometrySettles = [], frames = [], events = [], routes = new Map(), pageFrames = new Map()
+const fixtures = new Map(), bindings = new Map(), known = new Map(), controllers = [], checks = [], trace = [], observations = [], geometrySettles = [], heldSamples = [], frames = [], events = [], routes = new Map(), pageFrames = new Map()
 const cleanup = { passed: false, errors: [], forced: [], exits: [], processes: [] }
 let observer, host, manager, server, report, environment, helperSha256, runnerIdentity, fatal, phase = 'setup'
 const key = value => `${value.pid}:${value.startSeconds}:${value.startMicroseconds}`
@@ -143,6 +144,7 @@ async function settledCapture(sessionId, stage) {
     sample.agreeingSamples = count; sample.stableMs = performance.now() - stableAt
     if (count >= evidence.minimumSamples && sample.stableMs >= evidence.minimumStableMs) {
       fixture.settledPoint = state.point
+      fixture.settledGeometry = { ...frame.geometry }
       const freshPoint = point(fixture, frame)
       assert.ok(freshPoint.x >= 0 && freshPoint.y >= 0 && freshPoint.x < frame.width && freshPoint.y < frame.height, 'Fresh fixture point must lie within the settled raster')
       evidence.passed = true; evidence.elapsedMs = performance.now() - start; evidence.stableMs = sample.stableMs; evidence.agreeingSamples = count; evidence.point = freshPoint
@@ -176,11 +178,58 @@ async function rpc(op, sessionId) {
   const response = await routes.get('/api/qiuya-tools.computer.control').fetch(new Request(`http://127.0.0.1:${server.address().port}/api/qiuya-tools.computer.control`, { method: 'POST', body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: 'qiuya-tools.computer.control', payload: { op, sessionId } }) }))
   const result = (await response.json()).result; assert.equal(result.ok, true, `${op}/${sessionId}: ${JSON.stringify(result.error)}`); return result.value
 }
-async function held(sessionId) {
-  const binding = bindings.get(sessionId)
+async function held(sessionId, stage = phase) {
+  const binding = bindings.get(sessionId), fixture = fixtures.get(sessionId), started = performance.now()
+  let expectedEpoch
+  const ownedHeld = state => Number.isSafeInteger(state?.leaseEpoch) && state.leaseEpoch > 0 && state.inputState?.leftButtonDown === true && state.inputState?.mouseHeld === true && typeof state.inputState?.ownerId === 'string' && state.inputState.ownerId.length > 0 && state.aiCursor?.visible === true && state.aiCursor.epoch === state.leaseEpoch && state.aiCursor.targetId === fixture.target.id
   return until(async () => {
     const state = await binding.native.status()
-    if (state.inputState?.leftButtonDown && state.aiCursor?.visible) { const actual = await os(`${sessionId}-held`); if (!actual.leftButtonDown) return false; assert.equal(actual.foregroundPid, fixtures.get(sessionId).identity.pid); assert.ok(actual.windows.some(row => row.pid === binding.identity.pid && row.title === 'QiuYaTools AI pointer' && row.onScreen)); return { state, actual } }
+    const cursor = state.aiCursor, suppression = cursor?.systemCursorSuppression
+    const sample = { sessionId, stage, elapsedMs: performance.now() - started, nativeHeld: state.inputState?.leftButtonDown === true, nativeMouseHeld: state.inputState?.mouseHeld === true, ownerPresent: typeof state.inputState?.ownerId === 'string' && state.inputState.ownerId.length > 0, nativeVisible: cursor?.visible === true, leaseEpoch: state.leaseEpoch ?? null, nativeOwns: ownedHeld(state), independentOsObserved: false, osHeld: false, exactOverlayPublished: false, confirmedOwnedHeld: false,
+      leaseActor: ['ai', 'human'].includes(state.leaseActor) ? state.leaseActor : 'unknown', cursorPhase: ['hidden', 'idle', 'moving', 'pressed'].includes(cursor?.phase) ? cursor.phase : 'unknown',
+      cursorEpochMatchesLease: Number.isSafeInteger(state.leaseEpoch) && cursor?.epoch === state.leaseEpoch, cursorTargetMatches: cursor?.targetId === fixture.target.id,
+      suppressionPhase: ['idle', 'arming', 'hidden', 'restoring', 'blocked', 'unsupported'].includes(suppression?.phase) ? suppression.phase : 'unknown',
+      suppressionSupported: typeof suppression?.supported === 'boolean' ? suppression.supported : null, suppressionOwnsHide: suppression?.ownedHideCount === 1,
+      suppressionInterruptedForLease: Number.isSafeInteger(state.leaseEpoch) && suppression?.interruptedEpoch === state.leaseEpoch,
+      suppressionOwnerMatchesLeaseAndTarget: Number.isSafeInteger(state.leaseEpoch) && suppression?.epoch === state.leaseEpoch && suppression?.targetId === fixture.target.id,
+      suppressionReason: typeof suppression?.reason === 'string' && (/^[A-Z_]{1,80}$/u.test(suppression.reason) || ['human-input', 'session-inactive', 'pointer-readback-mismatch', 'overlay-hidden', 'owner-transition', 'authorization-changed-before-hide', 'authorization-changed-after-hide', 'pending-restoration', 'connection-changed'].includes(suppression.reason)) ? suppression.reason : null,
+      inputPosted: state.focusAttempt?.inputPosted === true }
+    const diagnostic = finiteCursorDiagnostic(cursor?.finiteDiagnostic)
+    if (diagnostic) sample.cursorDiagnostic = diagnostic
+    heldSamples.push(sample)
+    // A hidden native cursor is precisely the failure being diagnosed. Observe
+    // the OS during the same existing held action even when nativeOwns is false;
+    // these diagnostic samples never satisfy the visible-cursor acceptance gate.
+    if (sample.nativeHeld) {
+      const actual = await os(`${sessionId}-${stage}-held`), geometry = fixture.settledGeometry
+      sample.independentOsObserved = true
+      sample.osHeld = actual.leftButtonDown === true
+      sample.foregroundMatchesTarget = actual.foregroundPid === fixture.identity.pid
+      const inside = point => geometry && Number.isFinite(point?.x) && Number.isFinite(point?.y) ? point.x >= geometry.x && point.y >= geometry.y && point.x < geometry.x + geometry.width && point.y < geometry.y + geometry.height : null
+      sample.osCursorInsideTarget = inside(actual.cursor); sample.nativeCursorInsideTarget = inside(cursor)
+      sample.osCursorMatchesNativePoint = Number.isFinite(actual.cursor?.x) && Number.isFinite(actual.cursor?.y) && Number.isFinite(cursor?.x) && Number.isFinite(cursor?.y) ? Math.hypot(actual.cursor.x - cursor.x, actual.cursor.y - cursor.y) <= 1.5 : null
+      const windowId = Number(fixture.target.id.match(/^mac-window:(\d+)$/u)?.[1]), selected = actual.windows.find(row => row.id === windowId && row.pid === fixture.identity.pid)
+      sample.exactTargetPublished = selected?.onScreen === true && selected?.alpha > 0
+      const covering = actual.windows.filter(row => Number.isFinite(actual.cursor?.x) && Number.isFinite(actual.cursor?.y) && row.onScreen === true && row.alpha > 0 && actual.cursor.x >= row.x && actual.cursor.y >= row.y && actual.cursor.x < row.x + row.width && actual.cursor.y < row.y + row.height)[0]
+      sample.topCoverMatchesTarget = covering ? covering.id === windowId && covering.pid === fixture.identity.pid : null
+      sample.topCoverMatchesOwnNative = covering ? covering.pid === binding.identity.pid : null
+      sample.exactOverlayPublished = actual.windows.some(row => row.pid === binding.identity.pid && row.title === 'QiuYaTools AI pointer' && row.onScreen === true && row.alpha > 0 && row.width > 0 && row.height > 0)
+      if (!sample.nativeOwns) return false
+      expectedEpoch ??= state.leaseEpoch
+      assert.equal(state.leaseEpoch, expectedEpoch, 'The single observed drag lease changed; no other action can satisfy this gate')
+      if (!sample.osHeld) return false
+      assert.equal(actual.foregroundPid, fixture.identity.pid, 'The held drag foreground must remain the exact own fixture')
+      // AppKit isVisible can become true before WindowServer publishes this
+      // panel. Observe again within this same original drag and deadline; an
+      // unpublished sample cannot pass, and no action is resent or extended.
+      if (!sample.exactOverlayPublished) return false
+      const confirmed = await binding.native.status()
+      assert.equal(confirmed.leaseEpoch, expectedEpoch, 'The drag lease changed during independent WindowServer observation')
+      sample.confirmedOwnedHeld = ownedHeld(confirmed) && confirmed.leaseEpoch === state.leaseEpoch
+      if (!sample.confirmedOwnedHeld) return false
+      sample.passed = true
+      return { state: confirmed, actual, sampling: { elapsedMs: performance.now() - started, samples: heldSamples.filter(value => value.sessionId === sessionId).length, jointSamples: 1 } }
+    }
     return false
   }, 'The single actual drag did not expose an OS-held/live-overlay interval', 1800)
 }
@@ -240,11 +289,20 @@ try {
   const gateA = await held('chat-A')
   const second = act('chat-B', frameB, { kind: 'drag', ...b, toX: b.x + 45 * frameB.width / frameB.geometry.width, toY: b.y })
   const [bNativeWhileQueued, bPreviewWhileQueued, realWhileQueued] = await Promise.all([bindings.get('chat-B').native.status(), capture('chat-B', true), os('B-preview-while-A-held')])
+  // Only begin B's unchanged 1800ms observation after A has released its
+  // physical lease. Global OS button state while A owns input is not B-held.
+  // Observe the same original queued B action as it becomes runnable. A visibility
+  // timeout is retained and fails this run after the already-planned redock
+  // diagnostic; no action is repeated or made longer to obtain a green sample.
+  const firstBVisibility = first.then(() => held('chat-B', 'fifo-B')).then(value => ({ passed: true, value }), error => {
+    if (error.message !== 'The single actual drag did not expose an OS-held/live-overlay interval') throw error
+    return { passed: false, reason: error.message }
+  })
   assert.equal(bNativeWhileQueued.leaseEpoch, null, 'Queued B must not acquire native ownership over A')
   assert.ok(!firstDone && realWhileQueued.leftButtonDown, 'Actual A-held interval expired before concurrent-preview evidence; no input retry is permitted')
   assert.equal(realWhileQueued.foregroundPid, fixtures.get('chat-A').identity.pid)
   pass('FIFO-B-PREVIEW-CONTINUES-WHILE-A-OWNS-DESKTOP', { gateA, bFrameId: bPreviewWhileQueued.frameId, bNativeWhileQueued })
-  await Promise.all([first, second]); await guardians()
+  const [, , bFirstVisibility] = await Promise.all([first, second, firstBVisibility]); await guardians()
   const afterA = await fixtureState('chat-A'), afterB = await fixtureState('chat-B')
   for (const [before, after] of [[beforeA, afterA], [beforeB, afterB]]) { assert.equal(after.counts.downs - before.counts.downs, 1); assert.equal(after.counts.ups - before.counts.ups, 1); assert.ok(after.counts.drags - before.counts.drags >= 2) }
   const aUp = afterA.events.filter(value => value.kind === 'ups').at(-1), bDown = afterB.events.filter(value => value.kind === 'downs').at(-1)
@@ -261,12 +319,14 @@ try {
   pass('A-REAL-NATIVE-POPOUT-DOES-NOT-CHANGE-B', { previewWindow, bEpoch })
   frameB = await settledCapture('chat-B', 'before-redock-drag'); const repeat = point(fixtures.get('chat-B'), frameB)
   const bBeforeRedock = await fixtureState('chat-B'), ongoing = act('chat-B', frameB, { kind: 'drag', ...repeat, toX: repeat.x - 40 * frameB.width / frameB.geometry.width, toY: repeat.y })
-  const gateB = await held('chat-B'), closesBefore = events.filter(value => value.event === 'previewClosed').length
+  const gateB = await held('chat-B', 'redock-B'), closesBefore = events.filter(value => value.event === 'previewClosed').length
   await rpc('redock', 'chat-A')
   assert.equal(manager.get('chat-B').epoch, bEpoch); assert.ok(['running', 'ready'].includes(manager.get('chat-B').state)); assert.equal(manager.get('chat-A').epoch, aEpoch); assert.equal(manager.get('chat-A').state, 'ready')
   assert.equal(manager.environments().find(value => value.sessionId === 'chat-A').previewDetached, false); assert.equal(events.filter(value => value.event === 'previewClosed').length, closesBefore)
   await ongoing; const bAfterRedock = await fixtureState('chat-B'); assert.equal(bAfterRedock.counts.downs - bBeforeRedock.counts.downs, 1); assert.equal(bAfterRedock.counts.ups - bBeforeRedock.counts.ups, 1); assert.ok(bAfterRedock.counts.drags - bBeforeRedock.counts.drags >= 2)
   pass('A-REDOCK-DURING-B-ACTUAL-HELD-DRAG-PRESERVES-B-EPOCH-AND-EVENTS', { gateB, bEpoch, aEpoch, before: bBeforeRedock, after: bAfterRedock })
+  assert.equal(bFirstVisibility.passed, true, 'The first original B FIFO drag also requires actual visible-cursor evidence; its failed samples cannot be ignored')
+  pass('B-FIRST-FIFO-DRAG-ALSO-HAS-OS-HELD-AND-PUBLISHED-AI-CURSOR', { gate: bFirstVisibility.value })
   pageFrames.set('chat-A', 0); await rpc('preview', 'chat-A'); await until(() => (pageFrames.get('chat-A') ?? 0) >= 2, 'Reopened A native preview did not load', 20000)
   await bindings.get('chat-A').native.closePreview(); await until(() => manager.get('chat-A').state === 'paused', 'Ordinary close did not pause A')
   assert.equal(manager.get('chat-B').state, 'ready'); assert.equal(manager.get('chat-B').epoch, bEpoch)
@@ -305,6 +365,7 @@ finally {
   const passed = report?.status === 'passed' && cleanup.passed && helperUnchanged
   await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2)); await writeFile(join(output, 'transcripts.json'), JSON.stringify(controllers.map(value => ({ label: value.label, transcript: value.transcript, stderr: value.stderr() })), null, 2))
   await writeFile(join(output, 'geometry-settles.json'), JSON.stringify(geometrySettles, null, 2))
+  await writeFile(join(output, 'held-samples.json'), JSON.stringify(heldSamples, null, 2))
   await writeFile(join(output, 'report.json'), JSON.stringify({ ...report, status: passed ? 'passed' : 'failed', cleanup, testedAt: new Date().toISOString() }, null, 2)); await writeFile(join(output, 'delivery-verdict.json'), JSON.stringify({ passed, runnerPassed: report?.status === 'passed', naturalCleanupPassed: cleanup.passed, helperUnchanged }, null, 2))
   if (cleanup.passed) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ output, passed, checks: checks.length, cleanup }, null, 2)); if (!passed) process.exitCode = 1
