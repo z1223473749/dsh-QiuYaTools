@@ -35,6 +35,7 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 | Q主题「鲸与海」 | 手绘鲸鱼与白发少年背景，搭配柔和的半透明界面，支持浅色、深色外观。 |
 | 电脑操控 | 在聊天中直接说明任务，模型发现应用后向你申请授权；实时预览与控制留在当前聊天，随时暂停、接管、继续或停止。支持本机以及已配对的独立电脑/虚拟机。 |
 | 浏览器通道 | Chrome/Edge 独立登录配置或用户提供的调试连接，按网站来源授权；支持截图坐标、选择器、导航与标签页操作。 |
+| 电脑任务记录 | 在会话中建立检查步骤，查看进度、画面证据和历史结果；证据不足或操作结果未确认时保持待确认。当前候选仍在进行实际界面验收。 |
 
 六项原有增强默认开启，可单独开关，也可一键全选。Q主题和新增电脑操控默认关闭，分别设置。新功能不会因原有“全部启用”自动取得桌面权限。
 
@@ -64,9 +65,9 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 各系统、架构、旧系统、现有功能、模型、耐久和安装结果按包与组件哈希分别记录。ARM Windows 中运行 x64 程序的结果不等于原生 x64 硬件验收，universal 编译也不等于 Intel Mac 或最低系统已实机通过。参见[测试与交付证据](docs/computer-use-test-report.md)。
 
-当前开发候选明确要求模型在每次成功操作后重新观察。最新源码完成TypeScript检查与1030项完整回归；预览接管旧帧修复另完成三入口JS构建和25项真实浏览器回归，尚未代替最终安装包验收。此前三平台开发包已构建并严格校验；新Windows ARM64／x64两包各完成12项功能、5项安装及原生52项／指针29项。Mac新包安装5项与headless界面8项通过，8f组件完成真实中文提交、兄弟窗口／即时退出负例、指针13项及默认双聊天10项。新指导的Windows真实DeepSeek三任务仍只属于原C8组件，一次授权由独立测试驱动模拟；新组件真实模型、完整Mac原生界面、耐久及后续工作台仍有未完成项，不移用旧结果。[预览输入完成态](docs/computer-preview-action-freshness.md)、[Mac输入边界](docs/macos-keyboard-completion-evidence.md)、[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)与[实施进度](docs/implementation-progress.md)分别记录实际范围。
+当前开发候选明确要求模型在每次成功操作后重新观察。最新源码完成TypeScript检查与1165项完整回归；自动验收记录已接入当前会话工具、画面证据和只读历史，包含135项专项回归，三入口JS及三平台候选均已构建并校验，实际Host、界面与Windows文件系统专项继续验收。JS只压缩空白，保留原有功能及64 MiB安装包限制。预览接管旧帧修复另完成25项真实浏览器回归。此前Windows d80c／b6e4两包各完成12项功能、5项安装及原生52项／指针29项；这些结果不继承到新工作台包。Mac 8f组件完成真实中文提交、兄弟窗口／即时退出负例、指针13项、默认双聊天10项，以及30分钟真实预览和5次故障恢复。真实DeepSeek新组件、完整Mac原生界面及后续工作台仍有未完成项，不移用旧结果。[任务记录接线](docs/acceptance-runs-integration.md)、[预览输入完成态](docs/computer-preview-action-freshness.md)、[Mac输入边界](docs/macos-keyboard-completion-evidence.md)、[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)与[实施进度](docs/implementation-progress.md)分别记录实际范围。
 
-电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。确定性测试 provider 证明的工具与图片运输，与真实 DeepSeek 模型理解画面并完成任务分别记录。Excel 专用加载项与 macOS 锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻 Codex。
+电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。确定性测试 provider 证明的工具与图片运输，与真实 DeepSeek 模型理解画面并完成任务分别记录。Mac新8f组件已完成真实DeepSeek按钮、中文提交和拖动三任务；新工作台整包与Windows新组件继续分别验收。Excel专用加载项与macOS锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻Codex。
 
 同一交互桌面同时只允许一个 QiuYaTools 原生执行器控制输入，包括不同配置与已配对的代理。执行器异常退出时，独立守护进程会根据输入记录尝试释放本插件按住的键与鼠标；新执行器也必须先完成旧输入恢复，系统拒绝清理时会阻止新控制。Windows 会检查系统是否接受释放事件；macOS 的事件接口没有键盘送达确认，验收依据权限、可读取的鼠标状态及受控应用实测，不能据此保证任意应用均已处理每个键盘事件。
 

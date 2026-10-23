@@ -6,7 +6,8 @@ import { installPluginUpdatesHost } from './updates/host.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
 import { installComputerHost } from './features/computer-use/host.ts'
-import { installComputerTools } from './features/computer-use/tools.ts'
+import { installComputerTools, type ComputerToolsRecorder } from './features/computer-use/tools.ts'
+import { installComputerAcceptanceRuns } from './features/acceptance-runs/integration.ts'
 import pkg from '../package.json' with { type: 'json' }
 
 /** Preferences persisted by Harness in the active profile. */
@@ -50,7 +51,23 @@ export function apply(ctx: Context, config: Config): void {
         if (stopped) return host.dispose()
         cleanup = host.dispose
         child.inject(['tools', 'attachments'], tools => {
-          tools.effect(() => installComputerTools(tools, host.service, { enabled: () => config.enabled.get() && config.computerUseEnabled.get(), entry: host.entry }))
+          tools.effect(() => {
+            const enabled = () => config.enabled.get() && config.computerUseEnabled.get()
+            let recorder: ComputerToolsRecorder | undefined
+            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, recorder: {
+              observed: (...args) => recorder?.observed(...args) ?? Promise.resolve(undefined),
+              issuing: (...args) => recorder?.issuing(...args) ?? Promise.resolve(undefined),
+            } })
+            const integration = tools.inject(['agents', 'sessionQuery', 'profileContext'], runsContext => {
+              runsContext.effect(() => {
+                if (!host.manager) return () => {}
+                const runs = installComputerAcceptanceRuns(runsContext, host.manager, { enabled, version: pkg.version })
+                recorder = runs.computer
+                return async () => { if (recorder === runs.computer) recorder = undefined; await runs.dispose() }
+              })
+            })
+            return async () => { recorder = undefined; unregister(); await integration.dispose() }
+          })
         })
       }).catch(error => child.logger.error('电脑操控初始化失败：%s', error instanceof Error ? error.message : '初始化失败'))
       return async () => { stopped = true; await cleanup?.() }

@@ -39,6 +39,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-chat",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-session",
         "@deepseek-ai/dsh-client-ui-workspace",
@@ -67,7 +68,9 @@
     "test:compat": "node scripts/e2e-harness.mjs",
     "test:compat:install": "node scripts/test-harness-install.mjs",
     "test:computer:preflight": "node scripts/computer-preflight.mjs",
-    "test:computer:browser": "node scripts/test-computer-browser.mjs"
+    "test:computer:browser": "node scripts/test-computer-browser.mjs",
+    "typecheck:acceptance:host": "tsc -p tsconfig.h1-integration.json",
+    "test:acceptance": "node --test tests/acceptance-runs*.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"
@@ -79,6 +82,7 @@
     "@deepseek-ai/dsh-client-locale": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-resources": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-store": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-chat": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
@@ -94,6 +98,7 @@
     "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
     "@deepseek-ai/dsh-user-questions": "0.2.1-rc.2",
     "@deepseek-ai/schemastery": "~3.18.5",
+    "@types/js-yaml": "4.0.9",
     "@types/jsdom": "21.1.7",
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.1",

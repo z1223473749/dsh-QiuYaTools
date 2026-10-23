@@ -1,0 +1,1 @@
+{"compilerOptions": {"target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext", "lib": ["ES2022", "DOM"], "strict": true, "skipLibCheck": false, "esModuleInterop": true, "allowImportingTsExtensions": true, "noEmit": true, "resolveJsonModule": true, "types": ["node"]}, "files": ["src/features/acceptance-runs/integration.ts", "tests/types/acceptance-runs-sdk.ts"]}

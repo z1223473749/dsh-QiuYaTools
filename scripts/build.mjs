@@ -15,12 +15,16 @@ await build({
   // Ship schema validation with the Host; installed/linked plugins cannot rely
   // on the development node_modules directory or a peer-resolution fallback.
   platform: 'node', target: 'node22', format: 'esm',
+  // Keep all features and identifiers while leaving room for the self-contained
+  // Windows runtime under the installer's existing 64 MiB archive limit.
+  minifyWhitespace: true,
 })
-await build({ entryPoints: ['src/features/computer-use/remote.ts'], outfile: 'lib/computer-agent.js', bundle: true, platform: 'node', target: 'node22', format: 'esm' })
+await build({ entryPoints: ['src/features/computer-use/remote.ts'], outfile: 'lib/computer-agent.js', bundle: true, platform: 'node', target: 'node22', format: 'esm', minifyWhitespace: true })
 const client = await build({
   entryPoints: ['src/client/index.tsx'], bundle: true, write: false,
   outfile: 'lib/client.js',
   platform: 'browser', target: 'es2022', format: 'cjs', packages: 'external',
+  minifyWhitespace: true,
   jsx: 'automatic', loader: { '.css': 'text' },
   plugins: [{
     name: 'qiuya-css-modules',

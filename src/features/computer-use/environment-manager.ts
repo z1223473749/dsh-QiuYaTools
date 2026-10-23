@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'node:crypto'
+import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { ComputerDriverRouter } from './driver-router.ts'
 import { ComputerSessionService, type ComputerSessionOptions } from './session.ts'
@@ -20,7 +20,7 @@ export interface ComputerEnvironmentOptions extends Pick<ComputerSessionOptions,
   idleMs?: number
 }
 interface Environment {
-  sessionId?: string; driver: ComputerDriverRouter; service: ComputerSessionService; switching: boolean
+  environmentId: string; sessionId?: string; driver: ComputerDriverRouter; service: ComputerSessionService; switching: boolean
   lastUsed: number; files: Set<AbortController>; unsubscribe: () => void
   retiring: boolean; closeAttempted: boolean; retirement?: Promise<void>; cleanupError?: { code: string; message: string }
   previewDetached: boolean; previewIntent: number
@@ -123,7 +123,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
         local: new ScheduledComputerDriver(new NativeCompanionDriver(), 'local-desktop', this.scheduler),
         remoteFactory: value => new ScheduledRemoteComputerDriver(new RemoteComputerDriver(value), this.scheduler),
       })
-      const created = { sessionId, driver, lastUsed: this.now(), switching: false, retiring: false, closeAttempted: false, previewDetached: false, previewIntent: 0, files: new Set<AbortController>(), unsubscribe: () => {} } as Environment
+      const created = { environmentId: randomUUID(), sessionId, driver, lastUsed: this.now(), switching: false, retiring: false, closeAttempted: false, previewDetached: false, previewIntent: 0, files: new Set<AbortController>(), unsubscribe: () => {} } as Environment
       created.service = new ComputerSessionService(driver, { enabled: () => !this.disposed && !created.switching && !created.retiring && this.options.enabled?.() !== false,
         readAllowedApps: () => this.allowedApps(), now: this.options.now, initialEpoch: this.epochHighWater })
       const unService = created.service.subscribe(() => {
@@ -161,6 +161,15 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     const values = new Map(this.snapshots)
     for (const entry of this.all()) for (const row of entry.service.list()) values.set(row.sessionId, row)
     return [...values.values()].map(row => structuredClone(row))
+  }
+  /** Read existing runtime identity only. Never creates a router, queries the OS or revives history. */
+  runEnvironment(sessionId: string) {
+    if (this.disposed || this.options.enabled?.() === false) return undefined
+    const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined)
+    if (!entry || entry.retiring || entry.switching) return undefined
+    const snapshot = entry.service.get(sessionId)
+    if (!snapshot?.target || !['ready', 'running'].includes(snapshot.state)) return undefined
+    return { environmentId: entry.environmentId, epoch: snapshot.epoch, target: structuredClone(snapshot.target), ...(snapshot.lastObservation ? { observation: structuredClone(snapshot.lastObservation) } : {}) }
   }
   environments() { return this.all().map(entry => ({ ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
   isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
@@ -270,7 +279,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     const entry = this.entry(sessionId)
     if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境，请稍候')
     this.invalidateEntryAuthorization(entry)
-    entry.switching = true; entry.lastUsed = this.now(); this.cancelFiles(sessionId); this.notify()
+    entry.environmentId = randomUUID(); entry.switching = true; entry.lastUsed = this.now(); this.cancelFiles(sessionId); this.notify()
     try {
       const stopped = await Promise.allSettled(entry.service.list().map(row => invoke(() => entry.service.stop(row.sessionId))))
       failMany(failures(stopped), '旧电脑环境尚未释放，不能切换')

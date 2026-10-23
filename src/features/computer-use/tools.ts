@@ -1,23 +1,30 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ComputerError, parseComputerAction, requireIdentity } from './contract.ts'
 import type { ComputerServiceFacade } from './environment-manager.ts'
+import type { ComputerActionRequest, ComputerActionResult, ComputerObservation } from './contract.ts'
 import type { ComputerPermissionCoordinator } from './permission-coordinator.ts'
 
 // Keep Host-only SDK augmentation out of the shared Client TypeScript graph.
 // These structural public seams are verified against the actual SDK in tests.
-interface ToolRunContext { callId: string; agent?: { id: string; session?: unknown }; signal: AbortSignal }
-interface ImageAttachmentRef { attachmentId: string; mediaType: string; bytes: number; width: number; height: number; name?: string; originalDimensions?: { width: number; height: number } }
-type Content = { type: 'text'; text: string } | { type: 'image'; attachment: ImageAttachmentRef }
+export interface ComputerToolRunContext { callId: string; rootCallId?: string; agent?: { id: string; session?: unknown }; signal: AbortSignal }
+export interface ComputerImageAttachmentRef { attachmentId: string; mediaType: string; bytes: number; width: number; height: number; name?: string; originalDimensions?: { width: number; height: number } }
+type Content = { type: 'text'; text: string } | { type: 'image'; attachment: ComputerImageAttachmentRef }
 interface ComputerToolDefinition {
   name: string; description: string; parameters: object
   output: { schema: object; render(args: unknown, value: unknown): Content[] }
-  execute(args: unknown, exec: ToolRunContext): Promise<unknown>
+  execute(args: unknown, exec: ComputerToolRunContext): Promise<unknown>
 }
 interface ComputerToolServices {
   tools: { register(definition: ComputerToolDefinition): () => void }
-  attachments: { saveImage(input: { data: Uint8Array; mediaType: string; name: string }): Promise<ImageAttachmentRef> }
+  attachments: { saveImage(input: { data: Uint8Array; mediaType: string; name: string }): Promise<ComputerImageAttachmentRef> }
 }
-export interface ComputerToolsOptions { sessionId?: (exec: ToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator }
+export interface ComputerToolsRecorder {
+  /** Observes one existing SDK saveImage reference, never captures another image. */
+  observed(exec: ComputerToolRunContext, observation: ComputerObservation, image: ComputerImageAttachmentRef, capturedAt: number): Promise<unknown>
+  /** Persist issued before dispatch; returning a closure never grants control. */
+  issuing(exec: ComputerToolRunContext, request: Readonly<ComputerActionRequest>): Promise<((result: ComputerActionResult | undefined) => Promise<unknown>) | undefined>
+}
+export interface ComputerToolsOptions { recorder?: ComputerToolsRecorder; sessionId?: (exec: ComputerToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator }
 const noParameters = { type: 'object', properties: {}, additionalProperties: false }
 // The public SDK retains structured codes only for its own HarnessError class;
 // PTC forwards just the message. Every tool boundary uses a finite vocabulary
@@ -62,10 +69,10 @@ function publicToolError(error: unknown, fallback = 'COMPUTER_TOOL_FAILED'): Com
   const code = Object.hasOwn(toolErrors, candidate) ? candidate : fallback
   return new ComputerError(code, `[${code}] ${toolErrors[code]}`)
 }
-async function toolRun<T>(exec: ToolRunContext, run: () => T | Promise<T>, fallback?: string): Promise<T> {
+async function toolRun<T>(exec: ComputerToolRunContext, run: () => T | Promise<T>, fallback?: string): Promise<T> {
   try { return await run() } catch (error) { throw publicToolError(exec.signal.aborted ? { code: 'ABORTED' } : error, fallback) }
 }
-async function entryRun<T>(exec: ToolRunContext, run: () => T | Promise<T>): Promise<T> {
+async function entryRun<T>(exec: ComputerToolRunContext, run: () => T | Promise<T>): Promise<T> {
   return toolRun(exec, run, 'COMPUTER_ENTRY_FAILED')
 }
 function parameters(value: unknown, allowed: string[]): Record<string, unknown> {
@@ -75,7 +82,7 @@ function parameters(value: unknown, allowed: string[]): Record<string, unknown> 
 /** Uses only the current Agent's public tool/attachment services; no model requests. */
 export function installComputerTools(ctx: Context, service: ComputerServiceFacade, options: ComputerToolsOptions = {}): () => void {
   const services = ctx as Context & ComputerToolServices
-  const session = (exec: ToolRunContext): string => {
+  const session = (exec: ComputerToolRunContext): string => {
     if (options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用')
     const id = options.sessionId?.(exec) ?? exec.agent?.id
     if (!id) throw new ComputerError('SESSION_REQUIRED', '电脑操控工具必须由当前会话的 Agent 调用')
@@ -118,17 +125,20 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       output: {
         schema: { type: 'object', additionalProperties: true, required: ['targetId', 'frameId', 'width', 'height', 'elements', 'image'], properties: { targetId: { type: 'string' }, frameId: { type: 'string', description: 'Single-use observation frame for the next act. Every successful act consumes it; observe again before another act.' }, width: { type: 'integer' }, height: { type: 'integer' }, elements: { type: 'string' }, image: { type: 'object', additionalProperties: true } } },
         render(_args, value) {
-          const result = value as unknown as { image: ImageAttachmentRef; frameId: string; width: number; height: number; elements: string; targetId: string }
-          return [{ type: 'text', text: JSON.stringify({ targetId: result.targetId, frameId: result.frameId, width: result.width, height: result.height, elements: result.elements }) }, { type: 'image', attachment: result.image }]
+          const result = value as unknown as { image: ComputerImageAttachmentRef; frameId: string; width: number; height: number; elements: string; targetId: string; acceptance?: unknown }
+          return [{ type: 'text', text: JSON.stringify({ targetId: result.targetId, frameId: result.frameId, width: result.width, height: result.height, elements: result.elements, ...(result.acceptance ? { acceptance: result.acceptance } : {}) }) }, { type: 'image', attachment: result.image }]
         },
       },
       async execute(args, exec) {
         parameters(args, [])
         const observation = await service.observe(session(exec), exec.signal)
+        const capturedAt = Date.now()
         exec.signal.throwIfAborted()
         const image = await services.attachments.saveImage({ data: Buffer.from(observation.imageBase64, 'base64'), mediaType: observation.mediaType, name: 'computer-observation.jpg' })
         exec.signal.throwIfAborted()
-        return JSON.parse(JSON.stringify({ targetId: observation.targetId, frameId: observation.frameId, width: observation.width, height: observation.height, elements: observation.elements, image }))
+        const acceptance = await options.recorder?.observed(exec, observation, image, capturedAt)
+        exec.signal.throwIfAborted()
+        return JSON.parse(JSON.stringify({ targetId: observation.targetId, frameId: observation.frameId, width: observation.width, height: observation.height, elements: observation.elements, image, ...(acceptance ? { acceptance } : {}) }))
       },
     }),
     register({
@@ -141,7 +151,17 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
           url: { type: 'string' }, selector: { type: 'string' },
         } },
       } }, output,
-      async execute(args, exec) { const input = parameters(args, ['actionId', 'frameId', 'action']); return JSON.parse(JSON.stringify(await service.act(session(exec), { actionId: input.actionId === undefined ? String(exec.callId) : requireIdentity(input.actionId, '操作'), frameId: requireIdentity(input.frameId, '帧'), action: parseComputerAction(input.action) }, exec.signal))) },
+      async execute(args, exec) {
+        const input = parameters(args, ['actionId', 'frameId', 'action']), id = session(exec)
+        const request = { actionId: input.actionId === undefined ? String(exec.callId) : requireIdentity(input.actionId, '操作'), frameId: requireIdentity(input.frameId, '帧'), action: parseComputerAction(input.action) }
+        const completed = await options.recorder?.issuing(exec, request)
+        let result: ComputerActionResult
+        try { exec.signal.throwIfAborted(); result = await service.act(id, request, exec.signal) }
+        catch (error) { try { await completed?.(undefined) } catch {} throw error }
+        const acceptance = await completed?.(result)
+        exec.signal.throwIfAborted()
+        return JSON.parse(JSON.stringify({ ...result, ...(acceptance ? { acceptance } : {}) }))
+      },
     }),
     register({
       name: 'qiuya_computer_pause', description: 'Pause this chat’s computer session, cancel pending input and release held keys/buttons. Continuing and granting access remain owner actions in the computer panel.', parameters: noParameters, output,
