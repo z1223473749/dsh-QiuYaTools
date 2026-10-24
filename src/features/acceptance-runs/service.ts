@@ -99,6 +99,7 @@ export class AcceptanceRunService {
     #o: RunServiceOptions;
     #verifiers = new Map<string, RunVerifier>();
     #live = new Set<string>();
+    #diagnosticSnapshots = new Map<string, { record: RunRecord; handle: object }>();
     #queues = new Map<string, Promise<unknown>>();
     constructor(options: RunServiceOptions) { this.#o = options; for (const v of options.verifiers ?? []) {
         if (!v.id || !v.version || this.#verifiers.has(v.id))
@@ -148,6 +149,7 @@ export class AcceptanceRunService {
             const saved = await this.#o.store.compareAndSwap(record, 0, () => this.#guard(exec, caller.binding, caller.handle));
             this.#guard(exec, caller.binding, caller.handle);
             this.#live.add(id);
+            this.#diagnosticSnapshots.set(id, { record: clone(saved), handle: caller.handle });
             return { record: saved, replayed: false, readOnly: false };
         });
     }
@@ -157,7 +159,20 @@ export class AcceptanceRunService {
         return replay; if (!this.#live.has(record.runId) || TERMINAL_STATES.includes(record.state))
         fail('HISTORY_READ_ONLY'); if (record.revision !== args.expectedRevision)
         fail('REVISION_CONFLICT'); if (record.revision >= 128)
-        fail('REVISION_LIMIT'); const checkpoint = () => { this.#guard(exec, caller.binding, caller.handle); if (!this.#live.has(record.runId)) fail('HISTORY_READ_ONLY'); }; await update(record, checkpoint); checkpoint(); this.#receipt(record, args.idempotencyKey, content, operation); const saved = await this.#o.store.compareAndSwap(record, args.expectedRevision, checkpoint); checkpoint(); return { record: saved, replayed: false, readOnly: TERMINAL_STATES.includes(saved.state) }; }); }
+        fail('REVISION_LIMIT'); const checkpoint = () => { this.#guard(exec, caller.binding, caller.handle); if (!this.#live.has(record.runId)) fail('HISTORY_READ_ONLY'); }; await update(record, checkpoint); checkpoint(); this.#receipt(record, args.idempotencyKey, content, operation); this.#diagnosticSnapshots.delete(record.runId); const saved = await this.#o.store.compareAndSwap(record, args.expectedRevision, checkpoint); checkpoint(); this.#diagnosticSnapshots.set(saved.runId, { record: clone(saved), handle: caller.handle }); return { record: saved, replayed: false, readOnly: TERMINAL_STATES.includes(saved.state) }; }); }
+    /** Host-only synchronous association with the last committed current checkpoint; no mutation/verdict authority. */
+    diagnosticAssociation(exec: RunExec, expected: { environmentId: string; targetId: string; epoch: number }): { runId: string; checkId: string; attemptId: string } | undefined {
+        if (!exec.agent || exec.signal.aborted) fail('CALLER_NOT_LIVE');
+        const candidates = [...this.#diagnosticSnapshots.values()].filter(item => item.handle === exec.agent).map(item => item.record).filter(record => this.#live.has(record.runId) && record.binding.chatSessionId === exec.agent!.id && record.state === 'running' && !record.cancel && !TERMINAL_STATES.includes(record.state));
+        const out: Array<{ runId: string; checkId: string; attemptId: string }> = [];
+        for (const record of candidates) {
+            this.#guard(exec, record.binding, exec.agent);
+            if (record.binding.environmentId !== expected.environmentId || record.binding.epoch !== expected.epoch || !record.binding.targetIds.includes(expected.targetId)) continue;
+            const attempts = record.attempts.filter(attempt => attempt.verdict === null);
+            if (attempts.length === 1) out.push({ runId: record.runId, checkId: attempts[0]!.checkId, attemptId: attempts[0]!.attemptId });
+        }
+        return out.length === 1 ? out[0] : undefined;
+    }
     #running(record: RunRecord) { if (record.cancel || record.state !== 'running')
         fail('RUN_NOT_RUNNING'); if (this.#now() - record.createdAt >= record.budget.deadlineMs)
         fail('BUDGET_EXHAUSTED'); }
@@ -284,7 +299,7 @@ export class AcceptanceRunService {
         const service = new AcceptanceRunService(options);
         const mutation = (input: unknown, extra: string[]) => { const v = object(input, ['runId', 'expectedRevision', 'idempotencyKey', ...extra]); return { raw: v, args: parseMutation({ runId: v.runId, expectedRevision: v.expectedRevision, idempotencyKey: v.idempotencyKey }) }; };
         const recorder: RunRecorder = {
-            interrupt(runId) { service.#live.delete(uuid(runId)); },
+            interrupt(runId) { service.#live.delete(uuid(runId)); service.#diagnosticSnapshots.delete(uuid(runId)); },
             async setState(exec, input) { const { raw, args } = mutation(input, ['state']); const state = enumeration(raw.state, ['awaitingPermission', 'running', 'paused', 'humanControl']); return service.#mutate(exec, args, 'state', { ...args, state }, record => { if (record.cancel)
                 fail('CANCEL_PENDING'); const transitions: Record<string, readonly string[]> = { queued: ['awaitingPermission', 'running'], awaitingPermission: ['running', 'paused'], running: ['paused', 'humanControl'], paused: ['running', 'humanControl'], humanControl: ['paused', 'running'] }; if (!transitions[record.state]?.includes(state))
                 fail('INVALID_TRANSITION'); record.state = state; }); },

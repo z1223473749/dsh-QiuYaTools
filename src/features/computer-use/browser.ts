@@ -1,3 +1,4 @@
+import type { DiagnosticEvent } from '../browser-diagnostics/contract.ts'
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { access, mkdir, readFile, rm } from 'node:fs/promises'
@@ -128,6 +129,7 @@ export class BrowserSession {
   private ownedLaunch?: OwnedBrowserLaunch
   private readonly sessions = new Map<string, string>()
   private readonly ownedTabs = new Set<string>()
+  private readonly diagnosticStreams = new Set<() => Promise<void>>()
   private readonly observations = new Map<string, ComputerObservation>()
   private readonly previewObservations = new Map<string, ComputerObservation>()
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
@@ -227,6 +229,40 @@ export class BrowserSession {
     const old = this.sessions.get(tabId); if (old) return old
     const result = await this.cdp().send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true }, undefined, signal)
     this.sessions.set(tabId, result.sessionId); return result.sessionId
+  }
+  /** Separate flattened session; enabling these domains never changes another feature's session. */
+  async subscribeDiagnostics(tabId: string, expectedOrigin: string, guard: () => void, onEvent: (event: DiagnosticEvent) => void, onInvalidated: () => void, signal: AbortSignal): Promise<() => Promise<void>> {
+    guard(); signal.throwIfAborted()
+    const before = await this.permission(tabId, signal); guard()
+    if (originOf(before.url) !== expectedOrigin) throw new ComputerError('DIAGNOSTICS_CHANGED', '诊断网站已变化。')
+    const connection = this.cdp(), attached = await connection.send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true }, undefined, signal)
+    let active = false, closed = false, remove = () => {}, closing: Promise<void> | undefined
+    const stop = () => {
+      if (closing) return closing
+      closed = true; active = false; remove(); signal.removeEventListener('abort', invalidated)
+      closing = connection.send('Target.detachFromTarget', { sessionId: attached.sessionId }, undefined, AbortSignal.timeout(2000)).then(() => { this.diagnosticStreams.delete(stop) }, () => { throw new ComputerError('DIAGNOSTICS_CLEANUP_UNCONFIRMED', '诊断订阅的退出尚未确认。') })
+      void closing.catch(() => {})
+      return closing
+    }
+    const invalidated = () => { if (closed) return; void stop().catch(() => {}); onInvalidated() }
+    this.diagnosticStreams.add(stop)
+    remove = connection.subscribe(event => {
+      if (event.method === 'QiuYa.disconnected' || event.method === 'Target.detachedFromTarget' && event.params?.sessionId === attached.sessionId) { invalidated(); return }
+      if (event.sessionId !== attached.sessionId || closed) return
+      if (event.method === 'Page.frameNavigated' || event.method === 'Runtime.executionContextsCleared') { invalidated(); return }
+      if (!active) return
+      try { signal.throwIfAborted(); guard(); onEvent(event) } catch { invalidated() }
+    })
+    signal.addEventListener('abort', invalidated, { once: true })
+    try {
+      guard(); signal.throwIfAborted()
+      for (const method of ['Page.enable', 'Runtime.enable', 'Network.enable']) { await connection.send(method, {}, attached.sessionId, signal); guard(); signal.throwIfAborted(); if (closed) throw new ComputerError('DIAGNOSTICS_CHANGED', '诊断画面已变化。') }
+      const after = await this.permission(tabId, signal); guard(); signal.throwIfAborted()
+      if (originOf(after.url) !== expectedOrigin || closed) throw new ComputerError('DIAGNOSTICS_CHANGED', '诊断网站已变化。')
+      // Runtime.enable may replay old console messages. They are deliberately ignored until all gates commit.
+      active = true
+      return stop
+    } catch (failure) { try { await stop() } catch (cleanup) { throw new AggregateError([failure, cleanup], '诊断初始化与订阅退出未获确认。') }; throw failure }
   }
   async metrics(tabId: string, signal?: AbortSignal): Promise<ComputerGeometry> {
     await this.permission(tabId, signal)
@@ -468,6 +504,7 @@ export class BrowserSession {
     this.closing = true
     let cleanupError: unknown
     try { await this.releaseInputs() } catch (error) { cleanupError = error }
+    await Promise.allSettled([...this.diagnosticStreams].map(stop => stop()))
     const annotationCleanup = await Promise.allSettled([...this.annotationPins].map(pin => pin.view ? pin.view.close() : Promise.reject(new ComputerError('ANNOTATION_CLEANUP_UNCONFIRMED', '上次只读批注通道退出尚未确认。'))))
     const annotationFailure = annotationCleanup.find((result): result is PromiseRejectedResult => result.status === 'rejected'); if (annotationFailure) cleanupError ??= annotationFailure.reason
     let connection = this.connection
@@ -495,7 +532,7 @@ export class BrowserSession {
       this.ownedInput.clear()
     }
     this.connection = undefined; this.sessions.clear(); this.ownedTabs.clear(); this.invalidateObservations()
-    connection?.close(); this.annotationPins.clear(); this.listeners.clear()
+    connection?.close(); this.annotationPins.clear(); this.diagnosticStreams.clear(); this.listeners.clear()
   }
 }
 

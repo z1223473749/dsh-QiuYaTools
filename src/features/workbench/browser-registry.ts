@@ -1,3 +1,4 @@
+import type { DiagnosticEvent } from '../browser-diagnostics/contract.ts'
 import { workbenchCursor } from './preview-model.ts'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -11,7 +12,7 @@ import type { WorkbenchTarget } from './contract.ts'
 import { website, uuid } from './contract.ts'
 
 type BrowserKind = 'chrome' | 'edge'
-type Runtime = Pick<BrowserSession, 'deviceId' | 'profileDir' | 'launch' | 'list' | 'open' | 'closeTab' | 'closeOwnedTab' | 'close' | 'setAllowedOrigins' | 'allowedOrigins' | 'preview' | 'navigationState' | 'hasOwnedRuntime'> & Partial<Pick<BrowserSession, 'annotationView'>>
+type Runtime = Pick<BrowserSession, 'deviceId' | 'profileDir' | 'launch' | 'list' | 'open' | 'closeTab' | 'closeOwnedTab' | 'close' | 'setAllowedOrigins' | 'allowedOrigins' | 'preview' | 'navigationState' | 'hasOwnedRuntime'> & Partial<Pick<BrowserSession, 'annotationView' | 'subscribeDiagnostics'>>
 export interface BrowserRegistryOptions {
   directory: string; enabled(): boolean
   isAllowed(chat: string, browser: BrowserKind, origin: string): boolean
@@ -175,6 +176,18 @@ export class BrowserWorkbenchRegistry implements BrowserPermissionBackend {
     const snapshot = context.service.get(context.chatSessionId)
     if (!snapshot?.target || !['ready', 'running'].includes(snapshot.state)) return undefined
     return { environmentId: context.environmentId, epoch: snapshot.epoch, target: structuredClone(snapshot.target), ...(snapshot.lastObservation ? { observation: structuredClone(snapshot.lastObservation) } : {}) }
+  }
+  /** Host-only opaque adapter. Never returns a CDP endpoint, connection, or service to model/RPC. */
+  diagnosticSource(context: HostWorkbenchContext) {
+    this.authentic(context)
+    const captured = this.contexts.get(context)!, entry = captured.entry, snapshot = context.service.get(context.chatSessionId)
+    if (!snapshot?.target || !entry.browser.subscribeDiagnostics) throw error('DIAGNOSTICS_UNAVAILABLE', '当前浏览器不支持有界诊断。')
+    const origin = website(snapshot.target.appId.slice((entry.browser.deviceId + ':').length)).origin
+    return Object.freeze({ origin, async subscribe(guard: () => void, onEvent: (event: DiagnosticEvent) => void, onInvalidated: () => void, signal: AbortSignal) {
+      context.assertCurrent(); guard(); signal.throwIfAborted()
+      const remove = await entry.browser.subscribeDiagnostics!(context.targetId, origin, () => { context.assertCurrent(); guard() }, onEvent, onInvalidated, signal)
+      try { context.assertCurrent(); guard(); signal.throwIfAborted(); return remove } catch (failure) { await remove(); throw failure }
+    } })
   }
   async pause(context: HostWorkbenchContext) { this.authentic(context); const snapshot = await context.service.pause(context.chatSessionId); this.contexts.get(context)!.assertIdentity(); return snapshot }
   async observe(context: HostWorkbenchContext): Promise<ComputerObservation> { this.authentic(context); const value = await context.service.observe(context.chatSessionId, this.contexts.get(context)!.signal); context.assertCurrent(); return value }

@@ -10,9 +10,8 @@ import { ComputerApprovalCard, SystemPermissionNotice, computerApprovalNeedsSyst
 interface Connection { rpc: { call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
 interface PreviewStatus { sessions: ComputerSessionSnapshot[]; pendingRequests?: ComputerApprovalRequest[]; native?: ComputerNativeView | null; environments?: { sessionId: string; previewDetached?: boolean }[] }
 const endpoint = 'qiuya-tools.computer.control'
-export function clampInlinePreviewPosition(position: { x: number; y: number }, size: { width: number; height: number }, viewport: { width: number; height: number }) {
-  return { x: Math.min(Math.max(8, viewport.width - size.width - 8), Math.max(8, position.x)), y: Math.min(Math.max(8, viewport.height - size.height - 8), Math.max(8, position.y)) }
-}
+export { clampInlinePreviewPosition } from './inline-bounds.ts'
+import { inlinePreviewLayout, observeInlinePreviewLayout } from './inline-bounds.ts'
 export function inlineComputerPreviewUrl(sessionId: string): string { return `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}&view=inline` }
 
 /** An additive, Session-scoped public slot. Unmounting its iframe does not
@@ -27,7 +26,7 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
     const [requests, setRequests] = useState<ComputerApprovalRequest[]>([])
     const [current, setCurrent] = useState<ComputerSessionSnapshot>(), [detached, setDetached] = useState(false)
     const [busy, setBusy] = useState(false), [error, setError] = useState(''), [controlsHidden, setControlsHidden] = useState(false)
-    const [position, setPosition] = useState<{ x: number; y: number }>(), [dragging, setDragging] = useState(false)
+    const [position, setPosition] = useState<{ x: number; y: number }>(), [limits, setLimits] = useState<{ maxWidth: number; maxHeight: number }>(), [dragging, setDragging] = useState(false)
     const anchor = useRef<HTMLDivElement>(null), card = useRef<HTMLElement>(null), drag = useRef<{ pointerId: number; x: number; y: number; left: number; top: number; handle: HTMLElement }>()
     const generation = useRef(0), refreshSequence = useRef(0), pending = useRef(false), mounted = useRef(true)
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++ } }, [])
@@ -73,19 +72,14 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
       if (previous?.handle.hasPointerCapture?.(previous.pointerId)) previous.handle.releasePointerCapture(previous.pointerId)
       if (mounted.current) setDragging(false)
     }
-    const clamp = (point: { x: number; y: number }) => {
-      const box = card.current?.getBoundingClientRect(), view = card.current?.ownerDocument.defaultView ?? window
-      return clampInlinePreviewPosition(point, { width: box?.width || 300, height: box?.height || 180 }, { width: view.innerWidth, height: view.innerHeight })
-    }
-    useLayoutEffect(() => { cancelDrag(); setPosition(undefined); setControlsHidden(false) }, [sessionId])
+    const clamp = (point: { x: number; y: number }) => anchor.current ? inlinePreviewLayout(anchor.current, card.current, sessionId, point) : point
+    useLayoutEffect(() => { cancelDrag(); setPosition(undefined); setLimits(undefined); setControlsHidden(false) }, [sessionId])
     useLayoutEffect(() => {
       if (!enabled || (!active && !requests.length) || !card.current) return
       const view = card.current.ownerDocument.defaultView ?? window
-      const contain = () => setPosition(previous => { const origin = anchor.current?.getBoundingClientRect(), box = card.current?.getBoundingClientRect(), next = clamp(previous ?? { x: (origin?.right ?? view.innerWidth) - (box?.width || 300), y: (origin?.bottom ?? 48) + 10 }); return previous?.x === next.x && previous.y === next.y ? previous : next })
-      contain(); view.addEventListener('resize', contain); view.addEventListener('blur', cancelDrag)
-      const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(contain) : undefined
-      observer?.observe(card.current)
-      return () => { view.removeEventListener('resize', contain); view.removeEventListener('blur', cancelDrag); observer?.disconnect(); cancelDrag() }
+      const contain = () => { if (!anchor.current || !card.current) return; const origin = anchor.current.getBoundingClientRect(), box = card.current.getBoundingClientRect(); setPosition(previous => { const next = inlinePreviewLayout(anchor.current!, card.current, sessionId, previous ?? { x: origin.right - (box.width || 300), y: origin.bottom + 10 }); return previous?.x === next.x && previous.y === next.y ? previous : { x: next.x, y: next.y } }); const next = inlinePreviewLayout(anchor.current, card.current, sessionId, { x: 0, y: 0 }); setLimits(previous => previous?.maxWidth === next.maxWidth && previous.maxHeight === next.maxHeight ? previous : { maxWidth: next.maxWidth, maxHeight: next.maxHeight }) }
+      contain(); const remove = observeInlinePreviewLayout(anchor.current!, card.current, sessionId, contain); view.addEventListener('blur', cancelDrag)
+      return () => { remove(); view.removeEventListener('blur', cancelDrag); cancelDrag() }
     }, [enabled, sessionId, active?.sessionId, requests.length])
     useLayoutEffect(() => { if (active?.state === 'humanControl') cancelDrag() }, [active?.state])
     const startDrag = (event: React.PointerEvent<HTMLElement>) => {
@@ -109,7 +103,7 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
     if (!enabled || (!requests.length && !active)) return null
     const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void control('decide', { requestId: request.requestId, requestVersion: request.requestVersion, decision }) }
     return <div ref={anchor} className="qyt-computer-inline-anchor qyt-computer-surface" data-qyt-computer-chat={sessionId}>
-      {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : undefined} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
+      {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={{ ...limits, visibility: limits && (!limits.maxWidth || !limits.maxHeight) ? 'hidden' : undefined, ...(position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : {}) }} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
         {requests.map(request => {
           const preflight = request.preflight ?? native
           return <React.Fragment key={request.requestId}>

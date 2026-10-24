@@ -1,0 +1,1 @@
+{"compilerOptions": {"target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext", "lib": ["ES2022", "DOM"], "strict": true, "skipLibCheck": false, "jsx": "react-jsx", "esModuleInterop": true, "allowImportingTsExtensions": true, "noEmit": true, "types": ["node", "react", "react-dom"]}, "files": ["src/features/browser-diagnostics/client.tsx"]}

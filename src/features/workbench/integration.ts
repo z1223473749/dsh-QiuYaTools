@@ -1,3 +1,9 @@
+import { BrowserDiagnosticsService } from '../browser-diagnostics/service.ts'
+import { installBrowserDiagnosticTools } from '../browser-diagnostics/tools.ts'
+import { installBrowserDiagnosticHost } from '../browser-diagnostics/host.ts'
+import type { DiagnosticAssociation } from '../browser-diagnostics/contract.ts'
+import type { ComputerToolRunContext } from '../computer-use/tools.ts'
+import type { HostWorkbenchContext } from './browser-registry.ts'
 import { hostServiceIdentity } from '../../host-service-identity.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -19,7 +25,7 @@ import { installWorkbenchHost, type WorkbenchOwnerScope } from './host.ts'
 interface ApprovalPolicy { overrideOf?(session: unknown): string | undefined; config?: { policy?: string } }
 interface Connection { browserPeer?: { principal: { kind: string } } }
 /** Public Host services, real root Agents, and existing desktop manager; no credentials or model config changes. */
-export async function installWorkbench(ctx: Context, desktopManager: ComputerEnvironmentManager, options: { enabled(): boolean; recorder(): ComputerToolsRecorder | undefined }) {
+export async function installWorkbench(ctx: Context, desktopManager: ComputerEnvironmentManager, options: { enabled(): boolean; recorder(): ComputerToolsRecorder | undefined; diagnostics?: boolean; diagnosticAssociation?(exec: ComputerToolRunContext, context: HostWorkbenchContext): DiagnosticAssociation | undefined }) {
   const profile = ctx.get('profileContext') as RunProfile | undefined, agents = ctx.get('agents') as RootAgentRegistry | undefined, query = ctx.get('sessionQuery') as RunSessionQuery | undefined, connection = ctx.get('connection') as Connection | undefined
   const connectionIdentity = hostServiceIdentity(connection)
   if (!profile?.dir || !agents || !query || !connection || !connectionIdentity) throw new ComputerError('WORKBENCH_UNAVAILABLE', '工作台所需的宿主服务尚未就绪。')
@@ -44,8 +50,10 @@ export async function installWorkbench(ctx: Context, desktopManager: ComputerEnv
     // The 2s query budget is not the scope lifetime of an already authenticated frame/owner action.
     return { chatSessionId, signal, assertCurrent() { signal.throwIfAborted(); if (disposed || lifetime.signal.aborted || !options.enabled() || hostServiceIdentity(ctx.get('connection')) !== connectionIdentity || connection.browserPeer !== peer || peer?.principal !== principal || principal?.kind !== 'owner') throw new ComputerError('OWNER_CHANGED', '工作台连接已变化。') } }
   }
+  const diagnostics = new BrowserDiagnosticsService({ registry: browsers, enabled: () => !disposed && options.enabled(), current: isCurrentAgent, canRequest(agent) { let approval: ApprovalPolicy | undefined; try { approval = ctx.get('approval') as ApprovalPolicy | undefined } catch {}; return ((agent.session ? approval?.overrideOf?.(agent.session) : undefined) ?? approval?.config?.policy) !== 'never' }, selected(exec, context) { modelTarget.assertBrowser(exec, context) }, association: options.diagnosticAssociation })
+  let removeDiagnosticTools: (() => void) | undefined, removeDiagnosticHost: (() => Promise<void>) | undefined
   let unregisterHost: (() => Promise<void>) | undefined, unregisterTools: (() => void) | undefined
-  try { unregisterHost = installWorkbenchHost(ctx, { registry, permissions, resolveScope }); unregisterTools = installBrowserWorkbenchTools(ctx, browsers, permissions, { onSelected: (exec, context) => modelTarget.selectBrowser(exec, context), recorder: {
+  try { if (options.diagnostics) { removeDiagnosticHost = installBrowserDiagnosticHost(ctx, diagnostics, resolveScope); removeDiagnosticTools = installBrowserDiagnosticTools(ctx, diagnostics) } unregisterHost = installWorkbenchHost(ctx, { registry, permissions, resolveScope }); unregisterTools = installBrowserWorkbenchTools(ctx, browsers, permissions, { onSelected: (exec, context) => modelTarget.selectBrowser(exec, context), recorder: {
     async observed(exec, context, observation, image, at) { context.assertCurrent(); modelTarget.assertBrowser(exec, context); const value = await options.recorder()?.observed(exec, observation, image, at); context.assertCurrent(); modelTarget.assertBrowser(exec, context); return value },
     async issuing(exec, context, request) {
       context.assertCurrent(); modelTarget.assertBrowser(exec, context)
@@ -63,11 +71,11 @@ export async function installWorkbench(ctx: Context, desktopManager: ComputerEnv
   } }) } catch (failure) {
     disposed = true; lifetime.abort()
     const failures: unknown[] = [failure]
-    for (const work of [() => unregisterHost?.(), () => permissions.dispose(), () => browsers.dispose()]) try { await work() } catch (cleanupFailure) { failures.push(cleanupFailure) }
+    for (const work of [() => removeDiagnosticTools?.(), () => removeDiagnosticHost?.(), () => diagnostics.dispose(), () => unregisterHost?.(), () => permissions.dispose(), () => browsers.dispose()]) try { await work() } catch (cleanupFailure) { failures.push(cleanupFailure) }
     throw new AggregateError(failures, '电脑工作台初始化未完成。')
   }
   let wasEnabled = options.enabled(), stopping: Promise<void> | undefined
   const poll = setInterval(() => { const enabled = options.enabled(); if (!enabled && wasEnabled && !stopping) { modelTarget.clear(); permissions.sweep(); stopping = browsers.stopAll(); void stopping.catch(() => ctx.logger.error('浏览器输入清理未能确认，请在电脑操控设置中检查当前任务。')).finally(() => { stopping = undefined }) } wasEnabled = enabled }, 100)
   poll.unref()
-  return { modelTarget, browsers, permissions, registry, resolveOwnerScope: resolveScope, async dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearInterval(poll); modelTarget.clear(); const failures: unknown[] = []; for (const work of [() => unregisterTools?.(), () => unregisterHost?.(), () => permissions.dispose(), () => stopping, () => browsers.dispose()]) { try { await work() } catch (failure) { failures.push(failure) } } if (failures.length) throw new AggregateError(failures, '工作台清理尚未确认。') } }
+  return { modelTarget, browsers, permissions, registry, diagnostics, resolveOwnerScope: resolveScope, async dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearInterval(poll); modelTarget.clear(); const failures: unknown[] = []; for (const work of [() => removeDiagnosticTools?.(), () => removeDiagnosticHost?.(), () => diagnostics.dispose(), () => unregisterTools?.(), () => unregisterHost?.(), () => permissions.dispose(), () => stopping, () => browsers.dispose()]) { try { await work() } catch (failure) { failures.push(failure) } } if (failures.length) throw new AggregateError(failures, '工作台清理尚未确认。') } }
 }

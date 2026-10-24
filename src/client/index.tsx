@@ -1,3 +1,4 @@
+import { installBrowserDiagnosticClient } from '../features/browser-diagnostics/client.tsx'
 import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
 import { installAcceptanceWorkflowClient } from '../features/acceptance-workflows/client.tsx'
 import { installAcceptanceRunClient } from '../features/acceptance-runs/client.tsx'
@@ -263,7 +264,7 @@ export function apply(ctx: Context): void {
     document.head.append(style)
     return () => { style.remove() }
   })
-  ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)); child.effect(() => installAcceptanceWorkflowClient(child)) })
+  ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)); child.effect(() => installAcceptanceWorkflowClient(child)); child.effect(() => installBrowserDiagnosticClient(child, { feature: { subscribe: listener => form.subscribe(listener), getSnapshot() { const snapshot = form.getSnapshot(); return snapshot.status === 'ready' && snapshot.value?.enabled !== false && snapshot.value?.computerUseEnabled === true } } })) })
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))
