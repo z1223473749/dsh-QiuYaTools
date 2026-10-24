@@ -29,6 +29,7 @@ export class AnnotationEditorSession {
     #listeners = new Set<() => void>();
     #timer?: ReturnType<typeof setTimeout>;
     #closed = false;
+    #styleRead = false;
     #disposing?: Promise<void>;
     #serial = 0;
     #elements: readonly string[] = [];
@@ -87,7 +88,7 @@ export class AnnotationEditorSession {
     #invalidate(message: string): void { this.#clearTimer(); this.#serial++; this.#set({ invalid: true, message }); if (!this.submission.getSnapshot().issued)
         this.submission.cancel(); }
     #abort = (): void => { this.#clearTimer(); this.#serial++; this.#set({ invalid: true, message: '当前聊天已变化，请重新打开批注。' }); };
-    #schedule(): void { if (this.#closed || this.#signal.aborted || this.#snapshot.invalid || this.submission.getSnapshot().issued)
+    #schedule(): void { if (this.#closed || this.#styleRead || this.#signal.aborted || this.#snapshot.invalid || this.submission.getSnapshot().issued)
         return; this.#timer = setTimeout(() => { this.#timer = undefined; void this.check().finally(() => this.#schedule()); }, Math.max(10, Math.min(500, this.options.pollMs ?? 500))); }
     async check(): Promise<void> {
         if (this.submission.getSnapshot().issued || this.#closed || this.#snapshot.invalid)
@@ -119,6 +120,18 @@ export class AnnotationEditorSession {
         this.#assert();
         combined.throwIfAborted();
         return selected;
+    };
+    styles = async (elementId: string, signal: AbortSignal) => {
+        this.#assert();
+        if (this.#styleRead || !this.source.elementHitTest || !this.#elements.includes(elementId) || this.submission.getSnapshot().state !== 'editing') throw new AnnotationError('UNAVAILABLE', '请先选取当前网页元素。');
+        this.#styleRead = true; this.#clearTimer(); this.#serial++;
+        const combined = AbortSignal.any([signal, this.#signal]);
+        try {
+            const baseline = await this.options.api.styles(this.source.capture.anchor.chatSessionId, this.source.captureId, elementId, combined);
+            this.#assert(); combined.throwIfAborted();
+            if (!this.#elements.includes(elementId)) throw new AnnotationError('STALE_ANCHOR', '选中的元素已变化。');
+            return baseline;
+        } finally { this.#styleRead = false; this.#schedule(); }
     };
     dispose(): Promise<void> {
         if (this.#disposing)

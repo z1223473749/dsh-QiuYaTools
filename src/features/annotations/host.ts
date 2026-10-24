@@ -3,9 +3,10 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
 import { hostServiceIdentity } from '../../host-service-identity.ts';
 import { AnnotationError, sameAnchor } from './contract.ts';
+import { parseStyleBaseline } from '../annotation-styles/contract.ts';
 import { requireIdentity } from '../computer-use/contract.ts';
 import { uuid } from '../workbench/contract.ts';
-import type { AnnotationSource, AnnotationSourceScope, AnnotationSourceCapture, AnnotationSourceTarget } from './source-contract.ts';
+import type { AnnotationSource, AnnotationSourceScope, AnnotationSourceCapture, AnnotationSourceTarget, AnnotationElementSelection } from './source-contract.ts';
 import { ANNOTATION_ENDPOINT } from './source-contract.ts';
 import { annotationObject, annotationTarget, annotationCapture, annotationCheck, annotationPointDTO, annotationElement } from './source-validation.ts';
 export interface AnnotationHostOptions {
@@ -76,7 +77,7 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
         source: AnnotationSourceCapture;
         invalid: boolean;
         serial: number;
-        elements: Set<string>;
+        elements: Map<string, AnnotationElementSelection>;
     }>();
     let disposed = false, disposing: Promise<void> | undefined;
     const unregister = connection.fetch.register({ path: '/api/' + ANNOTATION_ENDPOINT, methods: ['POST'], requestBody: 'buffered', async fetch(request) {
@@ -95,13 +96,14 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
                 if (envelope.type !== 'client-request' || envelope.method !== ANNOTATION_ENDPOINT)
                     throw unavailable();
                 rpcId = requireIdentity(envelope.rpcId);
-                const input = annotationObject(envelope.payload, ['op', 'chatSessionId', 'target', 'captureId', 'elementIds', 'point']), fields: Record<string, readonly string[]> = { capture: ['target'], check: ['captureId', 'elementIds'], hitTest: ['captureId', 'point'], release: ['captureId'] };
+                const input = annotationObject(envelope.payload, ['op', 'chatSessionId', 'target', 'captureId', 'elementIds', 'point', 'elementId']), fields: Record<string, readonly string[]> = { capture: ['target'], check: ['captureId', 'elementIds'], hitTest: ['captureId', 'point'], release: ['captureId'], styles: ['captureId', 'elementId'] };
                 if (typeof input.op !== 'string' || !Object.hasOwn(fields, input.op))
                     throw unavailable();
                 annotationObject(input, ['op', 'chatSessionId', ...fields[input.op]!]);
                 if (input.op === 'capture')
                     annotationObject(input.target, ['chatSessionId', 'environmentId', 'workbenchTabId', 'targetId', 'appId', 'kind', 'epoch']);
                 const chat = requireIdentity(input.chatSessionId), target = input.op === 'capture' ? annotationTarget(input.target, chat) : undefined, id = input.op === 'capture' ? undefined : uuid(input.captureId), point = input.op === 'hitTest' ? annotationPointDTO(input.point) : undefined;
+                const elementId = input.op === 'styles' ? uuid(input.elementId) : undefined;
                 let elementIds: readonly string[] = [];
                 if (input.op === 'check') {
                     if (!Array.isArray(input.elementIds) || input.elementIds.length > 64)
@@ -136,7 +138,7 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
                     scope.assertCurrent();
                     if (!sameTarget(captured.capture.anchor, target!) || captured.expiresAt <= Date.now() || leases.has(captured.captureId))
                         throw unavailable();
-                    leases.set(captured.captureId, { owner: scope.ownerKey, source: captured, invalid: false, serial: 0, elements: new Set() });
+                    leases.set(captured.captureId, { owner: scope.ownerKey, source: captured, invalid: false, serial: 0, elements: new Map() });
                     value = captured;
                 }
                 else {
@@ -170,6 +172,14 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
                             lease.invalid = true;
                         value = checked;
                     }
+                    else if (input.op === 'styles') {
+                        const selected = lease.elements.get(elementId!);
+                        if (!selected || !options.source.styles || !lease.source.elementHitTest || lease.source.capture.anchor.kind !== 'browser') throw unavailable();
+                        const serial = ++lease.serial, raw = await bounded(options.source.styles(scope, id!, elementId!), scopeSignal);
+                        scope.assertCurrent();
+                        if (lease.invalid || leases.get(id!) !== lease || lease.serial !== serial) throw unavailable();
+                        value = parseStyleBaseline(raw, lease.source, selected);
+                    }
                     else {
                         if (!lease.source.elementHitTest || lease.source.capture.anchor.kind !== 'browser' || lease.elements.size >= 64 || point!.x > lease.source.capture.anchor.width || point!.y > lease.source.capture.anchor.height)
                             throw unavailable();
@@ -179,7 +189,7 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
                             throw unavailable();
                         const selected = annotationElement(raw, id!, lease.source.capture.anchor);
                         scope.assertCurrent();
-                        lease.elements.add(selected.elementId);
+                        lease.elements.set(selected.elementId, selected);
                         value = selected;
                     }
                 }

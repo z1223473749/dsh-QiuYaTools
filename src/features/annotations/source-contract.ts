@@ -1,5 +1,6 @@
 /** Owner-only Host source contract. It carries no input/control capability and is never a model tool. */
 import type { AnnotationAnchor, AnnotationCapture, AnnotationPoint } from './contract.ts';
+import type { StyleBaseline } from '../annotation-styles/contract.ts';
 export const ANNOTATION_ENDPOINT = 'qiuya-tools.annotations';
 export interface AnnotationSourceScope {
     readonly chatSessionId: string;
@@ -61,6 +62,7 @@ export interface AnnotationSource {
     /** Reobserve read-only. Pixel-equivalent new frame ids may verify the old immutable image; navigation/scroll cannot. */
     check(scope: AnnotationSourceScope, captureId: string, elementIds: readonly string[]): Promise<AnnotationSourceCheck>;
     hitTest(scope: AnnotationSourceScope, captureId: string, point: AnnotationPoint): Promise<AnnotationElementSelection>;
+    styles?(scope: AnnotationSourceScope, captureId: string, elementId: string): Promise<StyleBaseline>;
     release(scope: AnnotationSourceScope, captureId: string): Promise<void>;
     dispose(): void | Promise<void>;
 }

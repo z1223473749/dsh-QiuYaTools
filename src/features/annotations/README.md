@@ -24,4 +24,4 @@ Host 为现有已授权的浏览器目标新建独立的 flattened CDP 只读会
 
 当前 167 项自有回归覆盖不可变来源、真实 React/JSDOM 编辑、真实 isolated-world JavaScript 监听器、fake CDP 事件与协议、替换节点/滚动回原处、旧 owner/聊天/帧拒绝、迟到创建和读取退场、一次提交与持久回执、公开工作台入口和安装回滚。JSDOM 几何、CDP、Image/Canvas 与模型是明确测试替身，不是实际浏览器或像素视觉证明；没有启动 Host、浏览器、PD、模型或发送系统输入。与工作台、浏览器、验收记录联合回归 670 项通过。
 
-常规 typecheck、`tsconfig.annotations.json`（真实公开 Session/Client SDK）与 `tsconfig.annotations-host.json`（真实 Host SDK）均使用 skipLibCheck=false 独立检查通过。三个生产入口仅 write:false，在项目外临时目录生成，不写正式 lib。新候选仍须实际 Harness/浏览器、Mac/Windows、真实 PNG 解码与模型接受图片的验收，不能继承单测作为完成证据。字体/间距/颜色的临时样式反馈 ANN-02 是后续增强，不在本次画面批注补丁中。
+常规 typecheck、`tsconfig.annotations.json`（真实公开 Session/Client SDK）与 `tsconfig.annotations-host.json`（真实 Host SDK）均使用 skipLibCheck=false 独立检查通过。三个生产入口仅 write:false，在项目外临时目录生成，不写正式 lib。新候选仍须实际 Harness/浏览器、Mac/Windows、真实 PNG 解码与模型接受图片的验收，不能继承单测作为完成证据。字体/间距/颜色临时样式反馈见 `../annotation-styles/README.md`；预览只作用于插件内的本地文字样例，不修改目标页面或源码。

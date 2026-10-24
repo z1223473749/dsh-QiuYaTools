@@ -2,6 +2,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { AnnotationSource, AnnotationSourceScope, AnnotationSourceTarget, AnnotationSourceCapture, AnnotationSourceCheck, AnnotationElementSelection } from '../annotations/source-contract.ts';
 import { AnnotationError, captureAnnotation } from '../annotations/contract.ts';
+import { createStyleBaseline } from '../annotation-styles/contract.ts';
+import type { StyleBaseline } from '../annotation-styles/contract.ts';
 import type { AnnotationPoint } from '../annotations/contract.ts';
 import type { WorkbenchFrame } from './client-api.ts';
 import type { WorkbenchRegistry } from './registry.ts';
@@ -203,6 +205,23 @@ export class WorkbenchAnnotationSource implements AnnotationSource {
             const elementId = randomUUID();
             lease.elements.set(elementId, selected);
             return Object.freeze({ captureId: id, elementId, viewportVersion: lease.read.version, rectangle: Object.freeze({ ...selected.rectangle }), role: selected.role, name: selected.name });
+        });
+    }
+    styles(original: AnnotationSourceScope, id: string, elementId: string): Promise<StyleBaseline> {
+        return this.#operation(original, id, async (lease, scope) => {
+            const selected = lease.elements.get(elementId);
+            if (lease.invalid || !selected || !lease.channel?.computedStyles || !lease.read.browser) throw changed();
+            const guard = () => { this.#lease(scope, id); this.#target(lease.target, scope); lease.descriptor?.assertCurrent(); };
+            const verify = async () => {
+                guard();
+                const current = await this.#read(lease.target, scope, lease.descriptor, lease.channel), image = await captureAnnotation(current.frame, current.version);
+                guard();
+                if (!current.browser || current.version !== lease.read.version || image.anchor.imageSHA256 !== lease.value.capture.anchor.imageSHA256 || !sameGeometry(current.frame, lease.read.frame)) { lease.invalid = 'pixels'; throw changed(); }
+                return current.browser;
+            };
+            const before = await verify(), values = await lease.channel.computedStyles(before, selected, scope.signal, guard);
+            guard(); await verify(); guard();
+            return createStyleBaseline(lease.value, { captureId: id, elementId, viewportVersion: lease.read.version, role: selected.role, name: selected.name, rectangle: selected.rectangle }, values);
         });
     }
     async release(original: AnnotationSourceScope, id: string): Promise<void> { const scope = this.#scope(original), lease = this.#lease(scope, id); await this.#remove(lease); scope.assertCurrent(); }

@@ -1,8 +1,9 @@
 /** Public owner RPC bridge; all browser/native operations remain read-only in the Host source. */
 import { AnnotationError, sameAnchor } from './contract.ts';
+import { parseStyleBaseline } from '../annotation-styles/contract.ts';
 import type { AnnotationAnchor, AnnotationPoint } from './contract.ts';
 import { ANNOTATION_ENDPOINT } from './source-contract.ts';
-import type { AnnotationSourceCapture, AnnotationSourceTarget } from './source-contract.ts';
+import type { AnnotationSourceCapture, AnnotationSourceTarget, AnnotationElementSelection } from './source-contract.ts';
 import { annotationCapture, annotationCheck, annotationElement, annotationObject, annotationPointDTO, annotationTarget } from './source-validation.ts';
 import { uuid } from '../workbench/contract.ts';
 export interface AnnotationConnection {
@@ -17,7 +18,7 @@ export interface AnnotationConnection {
     };
 }
 export function createAnnotationAPI(connection: () => AnnotationConnection | undefined) {
-    const leases = new Map<string, AnnotationSourceCapture>();
+    const leases = new Map<string, AnnotationSourceCapture>(), elements = new Map<string, Map<string, AnnotationElementSelection>>();
     const call = async (payload: Record<string, unknown>, signal: AbortSignal) => {
         const peer = connection();
         signal.throwIfAborted();
@@ -43,6 +44,7 @@ export function createAnnotationAPI(connection: () => AnnotationConnection | und
             if (leases.size >= 128)
                 throw new AnnotationError('UNAVAILABLE', '请关闭其他批注后重试。');
             leases.set(captured.captureId, captured);
+            elements.set(captured.captureId, new Map());
             return captured;
         },
         async check(chat: string, captureId: string, elementIds: readonly string[], signal: AbortSignal) {
@@ -61,17 +63,27 @@ export function createAnnotationAPI(connection: () => AnnotationConnection | und
                 throw new AnnotationError('UNAVAILABLE', '此画面不支持网页元素批注。');
             const response = await call({ op: 'hitTest', chatSessionId: chat, captureId, point: annotationPointDTO(point) }, signal), selected = annotationElement(response.value, captureId, lease.capture.anchor);
             response.guard();
+            if (owned(chat, captureId) !== lease) throw new AnnotationError('OWNER_CHANGED', '批注画面已关闭。');
+            elements.get(captureId)?.set(selected.elementId, selected);
             return selected;
+        },
+        async styles(chat: string, captureId: string, elementId: string, signal: AbortSignal) {
+            const lease = owned(chat, captureId), selected = elements.get(captureId)?.get(uuid(elementId));
+            if (!selected || !lease.elementHitTest || lease.capture.anchor.kind !== 'browser') throw new AnnotationError('UNAVAILABLE', '请先选取当前网页元素。');
+            const response = await call({ op: 'styles', chatSessionId: chat, captureId, elementId }, signal), baseline = parseStyleBaseline(response.value, lease, selected);
+            response.guard();
+            if (owned(chat, captureId) !== lease) throw new AnnotationError('OWNER_CHANGED', '批注画面已关闭。');
+            return baseline;
         },
         async release(chat: string, captureId: string, signal: AbortSignal) {
             owned(chat, captureId);
-            leases.delete(captureId);
+            leases.delete(captureId); elements.delete(captureId);
             const response = await call({ op: 'release', chatSessionId: chat, captureId }, signal), value = annotationObject(response.value, ['released', 'captureId']);
             response.guard();
             if (value.released !== true || value.captureId !== captureId)
                 throw new AnnotationError('UNAVAILABLE', '批注画面释放尚未确认。');
         },
-        forget(captureId: string) { leases.delete(captureId); },
+        forget(captureId: string) { leases.delete(captureId); elements.delete(captureId); },
     };
 }
 export type AnnotationAPI = ReturnType<typeof createAnnotationAPI>;

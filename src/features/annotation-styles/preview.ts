@@ -1,0 +1,8 @@
+import type { CSSProperties } from 'react';
+import type { StyleDraft } from './contract.ts';
+const fontPresets = { system: 'system-ui, sans-serif', serif: 'serif', monospace: 'monospace' };
+const px = (value: string, min: number, max: number) => { const match = /^(-?\d+(?:\.\d+)?)px$/u.exec(value); if (!match)
+    return undefined; const n = Number(match[1]); return Number.isFinite(n) && n >= min && n <= max ? n : undefined; };
+const color = (value: string) => /^#[a-f\d]{6}$/iu.test(value) || /^rgba?\([\d.,\s%]+\)$/u.test(value) ? value : undefined;
+/** Local text sample only. Never applies styles to the remote document or a clone of its DOM. */
+export function stylePreview(draft: StyleDraft): Readonly<CSSProperties> { const b = draft.baseline.values, c = draft.changes; return Object.freeze({ fontFamily: c.fontFamily ? fontPresets[c.fontFamily] : 'system-ui, sans-serif', fontSize: c.fontSize ?? px(b['font-size'], 8, 72) ?? 16, fontWeight: c.fontWeight ?? (/^[1-9]00$/u.test(b['font-weight']) ? Number(b['font-weight']) : b['font-weight'] === 'bold' ? 700 : 400), lineHeight: c.lineHeight ?? (b['line-height'] === 'normal' ? 'normal' : px(b['line-height'], 6, 180) ? b['line-height'] : 'normal'), letterSpacing: c.letterSpacing ?? px(b['letter-spacing'], -2, 8) ?? 0, color: c.color ?? color(b.color), backgroundColor: c.backgroundColor ?? color(b['background-color']), paddingTop: c.paddingTop ?? px(b['padding-top'], 0, 64) ?? 12, paddingRight: c.paddingRight ?? px(b['padding-right'], 0, 64) ?? 12, paddingBottom: c.paddingBottom ?? px(b['padding-bottom'], 0, 64) ?? 12, paddingLeft: c.paddingLeft ?? px(b['padding-left'], 0, 64) ?? 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minHeight: 48 }); }

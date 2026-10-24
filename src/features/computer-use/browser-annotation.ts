@@ -1,6 +1,8 @@
 /** Fixed Host read-only CDP source. No model-supplied code, page edits or Input methods. */
 import { createHash, randomUUID } from 'node:crypto';
 import { ComputerError } from './contract.ts';
+import { computedStyleValues } from '../annotation-styles/contract.ts';
+import type { ComputedStyleValues } from '../annotation-styles/contract.ts';
 import type { ComputerObservation, ComputerGeometry } from './contract.ts';
 export interface AnnotationCDP {
     send<T = Record<string, unknown>>(method: string, params?: object, sessionId?: string, signal?: AbortSignal): Promise<T>;
@@ -41,6 +43,7 @@ export interface BrowserAnnotationView {
         y: number;
     }, signal: AbortSignal, guard: () => void): Promise<BrowserAnnotationElement>;
     elementCurrent(snapshot: BrowserAnnotationSnapshot, element: BrowserAnnotationElement, signal: AbortSignal, guard: () => void): Promise<boolean>;
+    computedStyles(snapshot: BrowserAnnotationSnapshot, element: BrowserAnnotationElement, signal: AbortSignal, guard: () => void): Promise<ComputedStyleValues>;
     close(): Promise<void>;
 }
 /** Runs only in a Host-created isolated world; owns no DOM, timers or input capability. */
@@ -62,6 +65,13 @@ export function annotationWorldWatcher() {
 /** Native geometry read in the same pristine isolated world, never a selector or executable client payload. */
 export function annotationElementRectangle(this: Element) { if (this.nodeType !== 1 || this.ownerDocument !== document || !this.isConnected)
     return { connected: false }; const r = Element.prototype.getBoundingClientRect.call(this); return { connected: true, x: r.x, y: r.y, width: r.width, height: r.height }; }
+/** Fixed native getter in the same Host-owned isolated realm. Never accepts CSS, selectors or script from a DTO. */
+export function annotationElementComputedStyles(this: Element) {
+    if (this.nodeType !== 1 || this.ownerDocument !== document || !this.isConnected) return { connected: false };
+    const computed = getComputedStyle(this), values: Record<string, string> = {};
+    for (const property of ['font-family','font-size','font-weight','line-height','letter-spacing','color','background-color','padding-top','padding-right','padding-bottom','padding-left']) values[property] = computed.getPropertyValue(property);
+    return { connected: true, values };
+}
 const fail = () => new ComputerError('ANNOTATION_STALE', '网页已导航、滚动或变化，请重新截取批注。');
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const number = (v: unknown, min: number, max: number): number => { if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max)
@@ -392,7 +402,21 @@ export async function createBrowserAnnotationView(options: {
                 throw fail();
             return Object.freeze({ backendNodeId: node, frameId: hit.frameId, point: Object.freeze({ ...point }), rectangle: Object.freeze(rectangle), role: label(selected?.role?.value, 128), name: label(selected?.name?.value, 256) });
         };
-        return { snapshot, hitTest: element, async elementCurrent(snap, saved, signal, guard) { const actual = await element(snap, saved.point, signal, guard); return actual.backendNodeId === saved.backendNodeId && actual.frameId === saved.frameId && JSON.stringify(actual.rectangle) === JSON.stringify(saved.rectangle) && actual.role === saved.role && actual.name === saved.name; }, close };
+        const sameElement = (a: BrowserAnnotationElement, b: BrowserAnnotationElement) => a.backendNodeId === b.backendNodeId && a.frameId === b.frameId && JSON.stringify(a.rectangle) === JSON.stringify(b.rectangle) && a.role === b.role && a.name === b.name;
+        const computedStyles = async (snap: BrowserAnnotationSnapshot, saved: BrowserAnnotationElement, signal: AbortSignal, guard: () => void): Promise<ComputedStyleValues> => {
+            if (!sameElement(await element(snap, saved.point, signal, guard), saved)) throw fail();
+            const world = worlds.get(saved.frameId); if (!world || world.retired) throw fail();
+            const remote = await send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: saved.backendNodeId, executionContextId: world.contextId, objectGroup: group }, signal, guard), objectId = token(remote.object?.objectId);
+            let values: ComputedStyleValues;
+            try {
+                const read = await send<{ result: { value?: { connected?: boolean; values?: unknown } }; exceptionDetails?: unknown }>('Runtime.callFunctionOn', { objectId, functionDeclaration: annotationElementComputedStyles.toString(), returnByValue: true, silent: true }, signal, guard);
+                if (read.exceptionDetails || read.result?.value?.connected !== true) throw fail();
+                values = computedStyleValues(read.result.value.values);
+            } finally { await cdp.send('Runtime.releaseObject', { objectId }, sessionId).catch(error => { invalid = true; throw error; }); }
+            if (!sameElement(await element(snap, saved.point, signal, guard), saved)) throw fail();
+            return values;
+        };
+        return { snapshot, computedStyles, hitTest: element, async elementCurrent(snap, saved, signal, guard) { const actual = await element(snap, saved.point, signal, guard); return actual.backendNodeId === saved.backendNodeId && actual.frameId === saved.frameId && JSON.stringify(actual.rectangle) === JSON.stringify(saved.rectangle) && actual.role === saved.role && actual.name === saved.name; }, close };
     }
     catch (failure) {
         try {

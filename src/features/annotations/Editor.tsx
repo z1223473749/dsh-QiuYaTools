@@ -5,6 +5,9 @@ import type { AnnotationSubmission } from './submission.ts';
 import type { AnnotationElementSelection } from './source-contract.ts';
 import { ANNOTATION_COLOR, arrowHead, annotationTextLines } from './render.ts';
 import { ANNOTATION_STYLES } from './styles.ts';
+import { StyleFeedbackEditor } from '../annotation-styles/Editor.tsx';
+import { withStyleFeedback } from '../annotation-styles/contract.ts';
+import type { StyleBaseline, StyleFeedback } from '../annotation-styles/contract.ts';
 export interface AnnotationEditorProps {
     readonly capture: AnnotationCapture;
     readonly currentAnchor?: AnnotationAnchor;
@@ -13,6 +16,7 @@ export interface AnnotationEditorProps {
     readonly captureId?: string;
     readonly onElement?: (point: AnnotationPoint, signal: AbortSignal) => Promise<AnnotationElementSelection>;
     readonly onDraftChange?: (draft: AnnotationDraft) => void;
+    readonly onStyles?: (elementId: string, signal: AbortSignal) => Promise<StyleBaseline>;
 }
 const idle = Object.freeze({ state: 'editing' as const, issued: false, message: '' }), noSubscribe = () => () => { }, idleSnapshot = () => idle;
 function Mark({ mark, width, height }: {
@@ -30,17 +34,17 @@ function Mark({ mark, width, height }: {
     return <path d={`M${mark.from.x},${mark.from.y}L${mark.to.x},${mark.to.y}M${x1},${y1}L${mark.to.x},${mark.to.y}L${x2},${y2}`}/>;
 }
 /** One frozen frame per editor mount. Opening another frame must mount a new editor. */
-export function AnnotationEditor({ capture, currentAnchor, submission, onClose, captureId, onElement, onDraftChange }: AnnotationEditorProps) {
+export function AnnotationEditor({ capture, currentAnchor, submission, onClose, captureId, onElement, onDraftChange, onStyles }: AnnotationEditorProps) {
     const [draft, setDraft] = useState(() => createAnnotationDraft(capture)), [tool, setTool] = useState<AnnotationTool>('rectangle'), [gesture, setGesture] = useState<{
         pointerId: number;
         from: AnnotationPoint;
         to: AnnotationPoint;
-    }>(), [textAt, setTextAt] = useState<AnnotationPoint>(), [text, setText] = useState(''), [error, setError] = useState(''), [selecting, setSelecting] = useState(false);
+    }>(), [textAt, setTextAt] = useState<AnnotationPoint>(), [text, setText] = useState(''), [error, setError] = useState(''), [selecting, setSelecting] = useState(false), [styleBaseline, setStyleBaseline] = useState<StyleBaseline>(), [styleLoading, setStyleLoading] = useState(false), [styleFeedbacks, setStyleFeedbacks] = useState<readonly StyleFeedback[]>([]);
     const draftRef = useRef(draft);
     draftRef.current = draft;
     const stage = useRef<HTMLDivElement>(null), composing = useRef(false), mounted = useRef(true), elementController = useRef(new AbortController()), elementInFlight = useRef(false), state = useSyncExternalStore(submission?.subscribe ?? noSubscribe, submission?.getSnapshot ?? idleSnapshot);
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; elementController.current.abort(); submission?.dispose(); }; }, [submission]);
-    const anchor = draft.capture.anchor, stale = !currentAnchor || !sameAnchor(anchor, currentAnchor) || !sameAnchor(anchor, capture.anchor), editable = !stale && state.state === 'editing' && !selecting, available = submission?.available === true;
+    const anchor = draft.capture.anchor, stale = !currentAnchor || !sameAnchor(anchor, currentAnchor) || !sameAnchor(anchor, capture.anchor), editable = !stale && state.state === 'editing' && !selecting && !styleLoading && !styleBaseline, available = submission?.available === true;
     useEffect(() => { if (stale) {
         elementController.current.abort();
         setGesture(undefined);
@@ -60,9 +64,24 @@ export function AnnotationEditor({ capture, currentAnchor, submission, onClose, 
         setError(e instanceof Error ? e.message : '批注未能添加。');
     } };
     const submit = () => { if (!editable || !available || !submission || textAt)
-        return; setError(''); void submission.submit(draft).catch(e => { if (mounted.current)
-        setError(e instanceof Error ? e.message : '批注未能提交。'); }); };
+        return; setError(''); try { void submission.submit(withStyleFeedback(draft, styleFeedbacks)).catch(e => { if (mounted.current)
+        setError(e instanceof Error ? e.message : '批注未能提交。'); }); } catch (error) { setError(error instanceof Error ? error.message : '批注未能提交。'); } };
     const close = () => { elementController.current.abort(); submission?.cancel(); onClose(); };
+    const selectedElement = [...draft.marks].reverse().find((mark): mark is Extract<AnnotationMark, {kind:'element'}> => mark.kind === 'element');
+    const appliedFeedbacks = styleFeedbacks.filter(feedback => draft.marks.some(mark => mark.kind === 'element' && mark.elementId === feedback.elementId));
+    const openStyles = async () => {
+        if (!editable || !onStyles || !selectedElement || appliedFeedbacks.length >= 8) return;
+        setStyleLoading(true); setError('');
+        try { const baseline = await onStyles(selectedElement.elementId, elementController.current.signal); if (!mounted.current || elementController.current.signal.aborted) return; if (baseline.captureId !== captureId || baseline.elementId !== selectedElement.elementId || !sameAnchor(baseline.anchor, anchor)) throw Error('元素或画面已变化，请重新选取。'); setStyleBaseline(baseline); }
+        catch (error) { if (mounted.current && !elementController.current.signal.aborted) setError(error instanceof Error ? error.message : '当前元素样式暂不可用。'); }
+        finally { if (mounted.current) setStyleLoading(false); }
+    };
+    const addStyleFeedback = (feedback: StyleFeedback) => {
+        if (!styleBaseline || !sameAnchor(feedback.anchor, anchor) || feedback.baselineId !== styleBaseline.baselineId || !draftRef.current.marks.some(mark => mark.kind === 'element' && mark.elementId === feedback.elementId)) throw Error('元素或画面已变化。');
+        const next = [...appliedFeedbacks.filter(value => value.elementId !== feedback.elementId), feedback];
+        withStyleFeedback(draftRef.current, next);
+        setStyleFeedbacks(next); setStyleBaseline(undefined);
+    };
     const provisional: AnnotationMark | undefined = gesture && (tool === 'rectangle' || tool === 'arrow') ? { id: 'provisional', kind: tool, from: gesture.from, to: gesture.to } : undefined;
     // A mounted editor must never expose a previous chat's screenshot or note after owner scope changes.
     if (!currentAnchor || currentAnchor.chatSessionId !== anchor.chatSessionId || capture.anchor.chatSessionId !== anchor.chatSessionId)
@@ -72,7 +91,10 @@ export function AnnotationEditor({ capture, currentAnchor, submission, onClose, 
         submit();
     } }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}>
     <style>{ANNOTATION_STYLES}</style><header><div><h3>画面批注</h3><p className="qyt-ann-muted">在这张画面上标注，再发送到当前聊天。</p></div><button type="button" onClick={close}>{state.issued ? '关闭' : '取消'}</button></header>
-    <div className="qyt-ann-toolbar" aria-label="批注工具">{([['rectangle', '框选'], ['arrow', '箭头'], ['text', '文字']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={tool === value} disabled={!editable} onClick={() => { setTool(value); setGesture(undefined); setTextAt(undefined); }}>{label}</button>)}<button type="button" disabled={!editable || !onElement || !captureId} aria-pressed={tool === 'element'} title={onElement ? '只读选取当前网页元素，不点击网页' : '此画面不支持网页元素批注'} onClick={() => { setTool('element'); setGesture(undefined); setTextAt(undefined); }}>网页元素</button><button type="button" disabled={!editable || !draft.marks.length} onClick={() => setDraft(previous => Object.freeze({ ...previous, marks: Object.freeze(previous.marks.slice(0, -1)) }))}>撤销</button></div>
+    <div className="qyt-ann-toolbar" aria-label="批注工具">{([['rectangle', '框选'], ['arrow', '箭头'], ['text', '文字']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={tool === value} disabled={!editable} onClick={() => { setTool(value); setGesture(undefined); setTextAt(undefined); }}>{label}</button>)}<button type="button" disabled={!editable || !onElement || !captureId} aria-pressed={tool === 'element'} title={onElement ? '只读选取当前网页元素，不点击网页' : '此画面不支持网页元素批注'} onClick={() => { setTool('element'); setGesture(undefined); setTextAt(undefined); }}>网页元素</button><button type="button" disabled={!editable || !onStyles || !selectedElement || appliedFeedbacks.length >= 8} onClick={() => { void openStyles(); }}>样式反馈</button><button type="button" disabled={!editable || !draft.marks.length} onClick={() => setDraft(previous => Object.freeze({ ...previous, marks: Object.freeze(previous.marks.slice(0, -1)) }))}>撤销</button></div>
+    {styleLoading && <p role="status">正在只读核验当前元素的样式…</p>}
+    {styleBaseline && <StyleFeedbackEditor key={styleBaseline.baselineId} baseline={styleBaseline} currentAnchor={currentAnchor} currentCaptureId={captureId} currentElementId={selectedElement?.elementId} onAdd={addStyleFeedback} onClose={() => setStyleBaseline(undefined)}/>}
+    {appliedFeedbacks.length > 0 && <div className="qyt-ann-style-notes" aria-label="本次样式建议">{appliedFeedbacks.map(feedback => <div key={feedback.elementId}><span>已添加元素样式建议（尚未发送）</span><button type="button" disabled={!editable} onClick={() => setStyleFeedbacks(previous => previous.filter(value => value.elementId !== feedback.elementId))}>移除样式建议</button></div>)}</div>}
     <div ref={stage} className="qyt-ann-stage" aria-label="批注画布">
       <img src={'data:' + draft.capture.mediaType + ';base64,' + draft.capture.imageBase64} alt="本次批注的冻结画面" draggable={false}/>
       <svg viewBox={`0 0 ${anchor.width} ${anchor.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="批注覆盖层" fill="none" stroke={ANNOTATION_COLOR} strokeWidth={Math.max(2, anchor.width / 400)} strokeLinejoin="round" strokeLinecap="round" onPointerDown={e => {
