@@ -10,7 +10,7 @@ import { projectVisionNativeStatus, withVisionFailureEvidence } from './live-vis
 import { visionDigest, visionExternalFailure as fail, validateExternalConfig, validateExternalRequest, validateExternalBinding,
   verifyExternalFixture, sameExternalIdentity, sameExternalExecutable, externalIdentityRetired, readPrivateJSON, writePrivateJSON, removePrivateJSON, externalFile } from './live-vision-external-core.mjs'
 
-function oracleRPC(path) {
+export function oracleRPC(path) {
   const child = spawn(path, [], { stdio: ['pipe', 'pipe', 'pipe'] }), pending = new Map(); let sequence = 0, readyResolve, readyReject
   const ready = new Promise((done, reject) => { readyResolve = done; readyReject = reject }), exits = new Promise(done => child.once('exit', (code, signal) => done({ code, signal })))
   child.stderr.resume(); child.stdin.on('error', () => {})
