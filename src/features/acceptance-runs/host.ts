@@ -1,3 +1,4 @@
+import type { ConnectionRpcFailure } from '@deepseek-ai/dsh-client-connection';
 import type { Context } from '@deepseek-ai/cordis';
 import { createHash } from 'node:crypto';
 import { canonicalJSON, object, opaque, uuid, RunError, text } from './contract.ts';
@@ -107,7 +108,7 @@ export function installAcceptanceRunHost(ctx: Context, reader: RunHistoryReader,
                 return Response.json({ type: 'server-response', rpcId, result: { ok: true, value: op === 'evidence' ? value : JSON.parse(canonicalJSON(value)) } }, { headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
             }
             catch (error) {
-                return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { code: errorCode(error), message: '任务记录暂不可用，请刷新后重试。' } } }, { headers: { 'Cache-Control': 'no-store' } });
+                return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { details: {}, code: errorCode(error), message: '任务记录暂不可用，请刷新后重试。' } satisfies ConnectionRpcFailure } }, { headers: { 'Cache-Control': 'no-store' } });
             }
         } });
     return async () => { if (disposed)

@@ -27,11 +27,27 @@ test('late source capture after cancellation is released with fresh cleanup sign
 test('foreign current chat is rejected before asking Host for any capture', async (t) => { const f = await setup(t); f.state.chat = 'chat-b'; await assert.rejects(f.open()); assert.equal(f.calls.length, 0); });
 test('late hitTest after owner cancellation cannot return an element and abort reaches the device reader', async (t) => { const f = await setup(t), s = await f.start(), entered = defer(), held = defer(); let signal; f.state.elementBefore = async (value) => { signal = value; entered.resolve(); await held.promise; }; const p = s.element({ x: 15, y: 15 }, new AbortController().signal), rejected = assert.rejects(p); await entered.promise; f.controller.abort(); assert.equal(signal.aborted, true); held.resolve(); await rejected; assert.equal(s.currentAnchor(), undefined); assert.equal(f.calls.some(c => c[0] === 'prompt'), false); });
 test('cancel while final verification is awaiting issues no beginSubmission or prompt even if verifier returns late valid', async (t) => { const f = await setup(t), s = await f.start(), entered = defer(), held = defer(); f.state.checkBefore = async () => { entered.resolve(); await held.promise; }; const p = s.submission.submit(f.draft()), rejected = assert.rejects(p); await entered.promise; s.submission.cancel(); held.resolve(); await rejected; assert.equal(f.calls.some(c => c[0] === 'begin' || c[0] === 'prompt'), false); });
-test('a public prompt already issued is not undone by an old pending poll returning invalid; durable receipt still confirms once', async (t) => { const f = await setup(t), s = await f.start(), entered = defer(), held = defer(); let count = 0; f.api.check = async (chat, id, ids) => { if (++count === 1) {
-    entered.resolve();
-    await held.promise;
-    return { valid: false, captureId: id, reason: 'scroll' };
-} return { valid: true, captureId: id, anchor: f.capture.anchor, checkedAgainst: { frameId: 'actual-new', imageSHA256: f.capture.anchor.imageSHA256, viewportVersion: f.capture.anchor.viewportVersion } }; }; const polling = s.check(); await entered.promise; await s.submission.submit(f.draft()); assert.equal(s.submission.getSnapshot().state, 'awaiting-receipt'); held.resolve(); await polling; assert.equal(s.getSnapshot().invalid, false); f.publish(f.calls.find(c => c[0] === 'begin')[1].text); assert.equal(s.submission.getSnapshot().state, 'delivered'); assert.equal(f.calls.filter(c => c[0] === 'prompt').length, 1); assert.equal(f.listeners.size, 0); });
+test('submission drains an existing poll and preserves its real invalidation before any public prompt', async (t) => {
+    const f = await setup(t), s = await f.start(), entered = defer(), held = defer();
+    let count = 0;
+    f.api.check = async (chat, id) => {
+        count++; entered.resolve(); await held.promise;
+        return { valid: false, captureId: id, reason: 'scroll' };
+    };
+    const polling = s.check(); await entered.promise;
+    const verifying = new Promise(resolve => { const off = s.submission.subscribe(() => {
+        if (s.submission.getSnapshot().state === 'verifying') { off(); resolve(); }
+    }); });
+    const submitting = s.submission.submit(f.draft()), rejected = assert.rejects(submitting);
+    await verifying;
+    assert.equal(count, 1);
+    assert.equal(f.calls.some(c => c[0] === 'begin' || c[0] === 'prompt'), false);
+    held.resolve(); await polling; await rejected;
+    assert.equal(s.getSnapshot().invalid, true);
+    assert.equal(count, 1);
+    assert.equal(f.calls.some(c => c[0] === 'begin' || c[0] === 'prompt'), false);
+    assert.equal(f.listeners.size, 0);
+});
 test('same chat string with replaced public binding cannot receive the old captured draft', async (t) => { const entered = defer(), held = defer(), f = await setup(t, { render: async () => { entered.resolve(); await held.promise; return image; } }), s = await f.start(); const p = s.submission.submit(f.draft()), rejected = assert.rejects(p); await entered.promise; f.state.binding = { ...f.binding }; held.resolve(); await rejected; assert.equal(f.calls.some(c => c[0] === 'prompt'), false); });
 test('one shared dispose promise retains unknown release and never replays the owner cleanup', async (t) => { const f = await setup(t), s = await f.start(); f.state.releaseError = true; const a = s.dispose(), b = s.dispose(); assert.equal(a, b); await assert.rejects(a, /unknown/); await assert.rejects(b, /unknown/); assert.equal(f.calls.filter(c => c[0] === 'release').length, 1); assert.equal(f.calls.filter(c => c[0] === 'forget').length, 1); });
 function integrationFixture() { let route, unregisters = 0, disposes = 0; const state = { enabled: true, registerError: false, unregisterError: false, disposeError: false }, connection = { browserPeer: { principal: { kind: 'owner' } }, fetch: { register(value) { if (state.registerError)

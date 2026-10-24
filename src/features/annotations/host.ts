@@ -1,6 +1,6 @@
 /** Exact-owner, read-only annotation source route. No Agent/model tools or device action entry. */
 import type { Context } from '@deepseek-ai/cordis';
-import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
+import type { ConnectionRpcFailure, HostConnectionHandle } from '@deepseek-ai/dsh-client-connection';
 import { hostServiceIdentity } from '../../host-service-identity.ts';
 import { AnnotationError, sameAnchor } from './contract.ts';
 import { parseStyleBaseline } from '../annotation-styles/contract.ts';
@@ -198,7 +198,7 @@ export function installAnnotationHost(ctx: Context, options: AnnotationHostOptio
             }
             catch (error) {
                 const code = error instanceof AnnotationError ? error.code : 'UNAVAILABLE';
-                return Response.json({ type: 'server-response', ...(rpcId === undefined ? {} : { rpcId }), result: { ok: false, error: { code, message: code === 'OWNER_CHANGED' ? '当前聊天连接已变化，请重新打开批注。' : '批注画面暂不可用，请重新截取。' } } }, { headers });
+                return Response.json({ type: 'server-response', ...(rpcId === undefined ? {} : { rpcId }), result: { ok: false, error: { details: {}, code, message: code === 'OWNER_CHANGED' ? '当前聊天连接已变化，请重新打开批注。' : '批注画面暂不可用，请重新截取。' } satisfies ConnectionRpcFailure } }, { headers });
             }
         } });
     return () => {

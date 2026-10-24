@@ -1,3 +1,4 @@
+import type { ConnectionRpcFailure } from '@deepseek-ai/dsh-client-connection';
 import type { Context } from '@deepseek-ai/cordis'
 import { hostServiceIdentity } from '../../host-service-identity.ts'
 import type { RunReadScope } from '../acceptance-runs/service.ts'
@@ -29,7 +30,7 @@ export function installBrowserDiagnosticHost(ctx: Context, service: BrowserDiagn
       const scope: DiagnosticOwnerScope = { chatSessionId: chat, signal: AbortSignal.any([signal, resolved.signal]), grantSignal: AbortSignal.any([lifetime.signal, resolved.signal]), assertCurrent() { current(); this.signal.throwIfAborted(); resolved.assertCurrent() }, assertGrantCurrent() { grantCurrent(); this.grantSignal.throwIfAborted(); resolved.assertCurrent() } }
       scope.assertCurrent(); const value = op === 'status' ? (() => { const status = service.status(scope); return { pending: status.pending, sessions: status.sessions.map(row => ({ ...row, entryCount: row.entries.length, entries: [] })) } })() : op === 'get' ? { pending: [], sessions: [service.ownerRead(scope, id!)] } : op === 'decide' ? await service.decide(scope, id!, v.allow as boolean) : await service.ownerStop(scope, id!); scope.assertCurrent()
       return Response.json({ type: 'server-response', rpcId, result: { ok: true, value } }, { headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } })
-    } catch (failure) { return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { code: failure instanceof ComputerError ? failure.code : 'DIAGNOSTICS_UNAVAILABLE', message: '诊断请求未能确认，请刷新查看。' } } }, { headers: { 'Cache-Control': 'no-store' } }) }
+    } catch (failure) { return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { details: {}, code: failure instanceof ComputerError ? failure.code : 'DIAGNOSTICS_UNAVAILABLE', message: '诊断请求未能确认，请刷新查看。' } satisfies ConnectionRpcFailure } }, { headers: { 'Cache-Control': 'no-store' } }) }
   } })
   return async () => { if (disposed) return; disposed = true; lifetime.abort(); await remove() }
 }

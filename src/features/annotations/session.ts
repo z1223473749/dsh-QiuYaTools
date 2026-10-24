@@ -32,6 +32,9 @@ export class AnnotationEditorSession {
     #styleRead = false;
     #disposing?: Promise<void>;
     #serial = 0;
+    // Keep every read of the same frozen Host lease in one lane. A final check
+    // must follow an already issued poll without changing its serial in flight.
+    #sourceTail: Promise<void> = Promise.resolve();
     #elements: readonly string[] = [];
     #unsubscribe: () => void;
     private constructor(readonly options: AnnotationEditorSessionOptions, readonly source: AnnotationSourceCapture) {
@@ -41,15 +44,18 @@ export class AnnotationEditorSession {
                 this.#assert();
                 if (!sameAnchor(anchor, source.capture.anchor))
                     throw new AnnotationError('STALE_ANCHOR', '批注画面归属已变化。');
-                const checked = await options.api.check(anchor.chatSessionId, source.captureId, elementIds, signal);
-                this.#assert();
-                if (!checked.valid) {
-                    this.#invalidate('画面已导航、滚动或变化，请重新截取。');
-                    throw new AnnotationError('STALE_ANCHOR', '画面已变化，请重新截取后批注。');
-                }
-                return checked.anchor;
+                return this.#readSource(async () => {
+                    const checked = await options.api.check(anchor.chatSessionId, source.captureId, elementIds, signal);
+                    this.#assert();
+                    signal.throwIfAborted();
+                    if (!checked.valid) {
+                        this.#invalidate('画面已导航、滚动或变化，请重新截取。');
+                        throw new AnnotationError('STALE_ANCHOR', '画面已变化，请重新截取后批注。');
+                    }
+                    return checked.anchor;
+                }, signal);
             }, ...(options.render ? { render: options.render } : {}), signal: this.#signal });
-        this.#unsubscribe = this.submission.subscribe(() => { if (this.submission.getSnapshot().issued)
+        this.#unsubscribe = this.submission.subscribe(() => { if (this.submission.getSnapshot().state !== 'editing')
             this.#clearTimer(); });
         this.#signal.addEventListener('abort', this.#abort, { once: true });
         if (this.#signal.aborted)
@@ -83,25 +89,36 @@ export class AnnotationEditorSession {
     currentAnchor(): AnnotationAnchor | undefined { if (this.#closed || this.#signal.aborted || this.options.currentChat() !== this.source.capture.anchor.chatSessionId)
         return undefined; if (this.submission.getSnapshot().issued)
         return this.source.capture.anchor; return this.#snapshot.invalid || this.source.expiresAt <= Date.now() ? undefined : this.#snapshot.currentAnchor; }
+    #readSource<T>(read: () => Promise<T>, signal: AbortSignal): Promise<T> {
+        const pending = this.#sourceTail.then(() => {
+            this.#assert();
+            signal.throwIfAborted();
+            return read();
+        });
+        this.#sourceTail = pending.then(() => { }, () => { });
+        return pending;
+    }
     #clearTimer(): void { if (this.#timer !== undefined)
         clearTimeout(this.#timer); this.#timer = undefined; }
     #invalidate(message: string): void { this.#clearTimer(); this.#serial++; this.#set({ invalid: true, message }); if (!this.submission.getSnapshot().issued)
         this.submission.cancel(); }
     #abort = (): void => { this.#clearTimer(); this.#serial++; this.#set({ invalid: true, message: '当前聊天已变化，请重新打开批注。' }); };
-    #schedule(): void { if (this.#closed || this.#styleRead || this.#signal.aborted || this.#snapshot.invalid || this.submission.getSnapshot().issued)
+    #schedule(): void { if (this.#closed || this.#styleRead || this.#signal.aborted || this.#snapshot.invalid || this.submission.getSnapshot().state !== 'editing')
         return; this.#timer = setTimeout(() => { this.#timer = undefined; void this.check().finally(() => this.#schedule()); }, Math.max(10, Math.min(500, this.options.pollMs ?? 500))); }
     async check(): Promise<void> {
-        if (this.submission.getSnapshot().issued || this.#closed || this.#snapshot.invalid)
+        if (this.submission.getSnapshot().state !== 'editing' || this.#styleRead || this.#closed || this.#snapshot.invalid)
             return;
         const serial = ++this.#serial;
         try {
             this.#assert();
-            const check = await this.options.api.check(this.source.capture.anchor.chatSessionId, this.source.captureId, this.#elements, this.#signal);
-            this.#assert();
-            if (serial !== this.#serial || this.submission.getSnapshot().issued)
-                return;
-            if (!check.valid)
-                this.#invalidate('画面已导航、滚动或变化，请关闭草稿后重新截取。');
+            await this.#readSource(async () => {
+                const check = await this.options.api.check(this.source.capture.anchor.chatSessionId, this.source.captureId, this.#elements, this.#signal);
+                this.#assert();
+                if (serial !== this.#serial || this.submission.getSnapshot().issued)
+                    return;
+                if (!check.valid)
+                    this.#invalidate('画面已导航、滚动或变化，请关闭草稿后重新截取。');
+            }, this.#signal);
         }
         catch {
             if (!this.#closed && !this.submission.getSnapshot().issued && serial === this.#serial)
@@ -114,12 +131,17 @@ export class AnnotationEditorSession {
     } ; this.#elements = Object.freeze(draft.marks.filter(mark => mark.kind === 'element').map(mark => mark.elementId)); };
     element = async (point: AnnotationPoint, signal: AbortSignal) => {
         this.#assert();
-        if (!this.source.elementHitTest)
+        if (!this.source.elementHitTest || this.submission.getSnapshot().state !== 'editing')
             throw new AnnotationError('UNAVAILABLE', '此画面不支持网页元素批注。');
-        const combined = AbortSignal.any([signal, this.#signal]), selected = await this.options.api.hitTest(this.source.capture.anchor.chatSessionId, this.source.captureId, point, combined);
-        this.#assert();
-        combined.throwIfAborted();
-        return selected;
+        const combined = AbortSignal.any([signal, this.#signal]);
+        return this.#readSource(async () => {
+            if (this.submission.getSnapshot().state !== 'editing')
+                throw new AnnotationError('UNAVAILABLE', '此批注正在提交，暂时不能选取元素。');
+            const selected = await this.options.api.hitTest(this.source.capture.anchor.chatSessionId, this.source.captureId, point, combined);
+            this.#assert();
+            combined.throwIfAborted();
+            return selected;
+        }, combined);
     };
     styles = async (elementId: string, signal: AbortSignal) => {
         this.#assert();
@@ -127,10 +149,14 @@ export class AnnotationEditorSession {
         this.#styleRead = true; this.#clearTimer(); this.#serial++;
         const combined = AbortSignal.any([signal, this.#signal]);
         try {
-            const baseline = await this.options.api.styles(this.source.capture.anchor.chatSessionId, this.source.captureId, elementId, combined);
-            this.#assert(); combined.throwIfAborted();
-            if (!this.#elements.includes(elementId)) throw new AnnotationError('STALE_ANCHOR', '选中的元素已变化。');
-            return baseline;
+            return await this.#readSource(async () => {
+                if (this.submission.getSnapshot().state !== 'editing')
+                    throw new AnnotationError('UNAVAILABLE', '此批注正在提交，暂时不能读取样式。');
+                const baseline = await this.options.api.styles(this.source.capture.anchor.chatSessionId, this.source.captureId, elementId, combined);
+                this.#assert(); combined.throwIfAborted();
+                if (!this.#elements.includes(elementId)) throw new AnnotationError('STALE_ANCHOR', '选中的元素已变化。');
+                return baseline;
+            }, combined);
         } finally { this.#styleRead = false; this.#schedule(); }
     };
     dispose(): Promise<void> {

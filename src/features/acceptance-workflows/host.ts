@@ -1,3 +1,4 @@
+import type { ConnectionRpcFailure } from '@deepseek-ai/dsh-client-connection';
 import type { Context } from '@deepseek-ai/cordis';
 import { hostServiceIdentity } from '../../host-service-identity.ts';
 import { RunError, object, opaque, text, uuid, integer, canonicalJSON } from '../acceptance-runs/contract.ts';
@@ -98,7 +99,7 @@ export function installAcceptanceWorkflowHost(ctx: Context, service: Pick<Accept
                 return Response.json({ type: 'server-response', rpcId, result: { ok: true, value: JSON.parse(canonicalJSON(result)) } }, { headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
             }
             catch (error) {
-                return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { code: error instanceof RunError ? error.code : 'WORKFLOW_UNAVAILABLE', message: '验收任务已变化，请刷新后查看。' } } }, { headers: { 'Cache-Control': 'no-store' } });
+                return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { details: {}, code: error instanceof RunError ? error.code : 'WORKFLOW_UNAVAILABLE', message: '验收任务已变化，请刷新后查看。' } satisfies ConnectionRpcFailure } }, { headers: { 'Cache-Control': 'no-store' } });
             }
         } });
     return async () => {

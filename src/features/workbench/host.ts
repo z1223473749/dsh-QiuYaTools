@@ -1,6 +1,6 @@
 import { hostServiceIdentity } from '../../host-service-identity.ts'
 import type { Context } from '@deepseek-ai/cordis'
-import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import type { ConnectionRpcFailure, HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import { ComputerError, requireIdentity, parseComputerAction } from '../computer-use/contract.ts'
 import type { ComputerActionRequest, ComputerActionResult, ComputerObservation } from '../computer-use/contract.ts'
 import { siteOrigin, uuid, website } from './contract.ts'
@@ -223,7 +223,7 @@ export function installWorkbenchHost(ctx: Context, options: WorkbenchHostOptions
       owner.assertCurrent()
       return Response.json({ type: 'server-response', rpcId, result: { ok: true, value } }, { headers })
     } catch (error) {
-      return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { code: errorCode(error), message: '工作台操作未能确认，请刷新查看，不要重复提交。' } } }, { headers })
+      return Response.json({ type: 'server-response', rpcId, result: { ok: false, error: { details: {}, code: errorCode(error), message: '工作台操作未能确认，请刷新查看，不要重复提交。' } satisfies ConnectionRpcFailure } }, { headers })
     }
   } })
   return async () => { if (disposed) return; disposed = true; lifetime.abort(new Error('Workbench provider disposed')); issued.clear(); await unregister() }

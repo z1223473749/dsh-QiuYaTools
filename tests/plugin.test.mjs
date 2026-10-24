@@ -126,11 +126,15 @@ test('built client follows the Harness loader and settings contribution lifecycl
   assert.ok(requestedModules.includes('react'), 'React comes from the host to preserve hook identity')
 
   const mounted = mountClient(plugin, { status: 'ready', writable: true, value: { enabled: true } })
-  assert.deepEqual(mounted.injectedSlots, ['conversation.session.header.utilities', 'settings.section'])
-  assert.deepEqual(mounted.injectedServices, [['connection']], 'the version check uses one optional public connection injection')
+  assert.deepEqual(mounted.injectedSlots, ['settings.section'])
+  assert.deepEqual(mounted.injectedServices, [
+    ['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'],
+    ['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'],
+    ['connection'],
+  ], 'chat workbench contributions wait for the actual public sidebar services; version checks keep one optional connection')
   assert.deepEqual(mounted.requestedConfigIds, ['qiuya-tools'])
-  assert.equal(mounted.sections.size, 2)
-  assert.equal(mounted.sections.get('qiuya-tools-computer-inline').options.name, 'conversation.session.header.utilities', 'the inline preview is additive, not a settings replacement')
+  assert.equal(mounted.sections.size, 1)
+  assert.equal(mounted.sections.has('qiuya-tools-computer-inline'), false, 'an SSR client without chat services must not register the obsolete header preview')
   const { options } = mounted.sections.get('qiuya-tools')
   assert.equal(options.name, 'settings.section')
   assert.equal(options.label(), 'QiuYaTools')
