@@ -4,11 +4,12 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RootAgentRegistry, RunAttachmentStore, RunProfile, RunSessionQuery } from './sdk-host-seams.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ComputerEnvironmentManager } from '../computer-use/environment-manager.ts'
+import type { ComputerObservation } from '../computer-use/contract.ts'
 import type { ComputerToolsRecorder } from '../computer-use/tools.ts'
 import { canonicalJSON, RunError, TERMINAL_STATES } from './contract.ts'
 import type { AgentBinding, EvidenceRef, RunView } from './contract.ts'
 import { AcceptanceRunService } from './service.ts'
-import type { MutationResult, RunAuthority, RunExec, RunHistoryReader, RunReadScope } from './service.ts'
+import type { MutationResult, RunAuthority, RunExec, RunHistoryReader, RunReadScope, RunVerifier } from './service.ts'
 import { AcceptanceRunStore } from './storage.ts'
 import { installAcceptanceRunHost } from './host.ts'
 import { installAcceptanceRunTools } from './tools.ts'
@@ -21,6 +22,9 @@ export interface ComputerRunDependencies {
   profileDirectory: string
   enabled(): boolean
   version: string
+  verifiers?: readonly RunVerifier[]
+  /** Host-only observation after actual normalized attachment readback and committed H1 evidence. */
+  onEvidenceCommitted?(exec: RunExec, evidence: EvidenceRef, observation: ComputerObservation): void
 }
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const geometryDigest = (geometry: EvidenceRef['geometry']) => sha(Buffer.from(canonicalJSON(geometry)))
@@ -69,7 +73,7 @@ export function createComputerRunBridge(deps: ComputerRunDependencies) {
     if (data.ref.attachmentId !== ref.attachmentId || data.ref.mediaType !== ref.mediaType || data.ref.bytes !== ref.bytes || data.ref.width !== ref.width || data.ref.height !== ref.height || data.data.byteLength !== ref.bytes || sha(data.data) !== ref.sha256) throw new RunError('EVIDENCE_UNAVAILABLE')
     return data.data
   }
-  const core = AcceptanceRunService.create({ store: new AcceptanceRunStore({ profileDirectory: deps.profileDirectory }), authority,
+  const core = AcceptanceRunService.create({ verifiers: deps.verifiers, store: new AcceptanceRunStore({ profileDirectory: deps.profileDirectory }), authority,
     evidence: { async inspect(ref, signal) { const bytes = await readImage(ref, signal); return { attachmentId: ref.attachmentId, sha256: sha(bytes), mediaType: ref.mediaType, bytes: bytes.byteLength, width: ref.width, height: ref.height } } },
     // Helper/model identities are not exposed by the public observation seam. Do not fabricate version receipts.
     versions: { plugin: deps.version, runtime: process.version, helper: 'not-recorded', protocol: 'qiuya-computer/1', model: 'not-recorded' },
@@ -118,6 +122,9 @@ export function createComputerRunBridge(deps: ComputerRunDependencies) {
         geometry: { ...observation.geometry }, geometryDigest: geometryDigest(observation.geometry), capturedAt, source: 'computer-observe',
         sha256: sha(stored.data), mediaType, bytes: image.bytes, width: image.width, height: image.height, attachmentId: image.attachmentId, commitState: 'committed' }
       const result = await core.recorder.commitEvidence(exec, { ...mutation(view.record), evidence })
+      if (!authority.current(expected, exec.agent!) || exec.signal.aborted || !sameFrame()) throw new RunError('CALLER_NOT_LIVE')
+      try { deps.onEvidenceCommitted?.(exec, evidence, observation) } catch (error) { interrupt(view.record.runId); throw error }
+      if (!authority.current(expected, exec.agent!) || exec.signal.aborted || !sameFrame()) { interrupt(view.record.runId); throw new RunError('CALLER_NOT_LIVE') }
       return { runId: result.record.runId, revision: result.record.revision, checkId: attempt.checkId, attemptId: attempt.attemptId, evidenceId: evidence.evidenceId }
     },
     async issuing(exec, request) {
@@ -164,12 +171,12 @@ export function createComputerRunBridge(deps: ComputerRunDependencies) {
         ? { ...value, state: latest.state, recovery: latest.recovery, readOnly: true, replayPermitted: false } : value },
     evidence: (scope, runId, evidenceId) => core.reader.evidence(scope, runId, evidenceId),
   }
-  return { service: core.service, computer, onBegin, reader, readImage,
+  return { service: core.service, computer, onBegin, reader, readImage, interrupt,
     dispose() { lifetime.abort(new RunError('CALLER_NOT_LIVE')) } }
 }
 
 /** Actual owner/profile services only. No personal model configuration or extra Agent is created. */
-export function installComputerAcceptanceRuns(ctx: Context, manager: Pick<ComputerEnvironmentManager, 'runEnvironment'>, options: { enabled(): boolean; version: string }) {
+export function installComputerAcceptanceRuns(ctx: Context, manager: Pick<ComputerEnvironmentManager, 'runEnvironment'>, options: { enabled(): boolean; version: string; verifiers?: readonly RunVerifier[]; onEvidenceCommitted?: ComputerRunDependencies['onEvidenceCommitted'] }) {
   const profile = ctx.get('profileContext') as RunProfile | undefined
   const agents = ctx.get('agents') as RootAgentRegistry | undefined
   const attachments = ctx.get('attachments') as RunAttachmentStore | undefined
@@ -179,7 +186,7 @@ export function installComputerAcceptanceRuns(ctx: Context, manager: Pick<Comput
   const connectionIdentity = hostServiceIdentity(connection)
   if (!connectionIdentity) throw new RunError('RUN_SERVICES_UNAVAILABLE')
   const lifetime = new AbortController()
-  const bridge = createComputerRunBridge({ agents, attachments, manager, profileDirectory: profile.dir, enabled: () => !lifetime.signal.aborted && options.enabled(), version: options.version })
+  const bridge = createComputerRunBridge({ agents, attachments, manager, profileDirectory: profile.dir, enabled: () => !lifetime.signal.aborted && options.enabled(), version: options.version, verifiers: options.verifiers, onEvidenceCommitted: options.onEvidenceCommitted })
   const resolveScope = async (chatSessionId: string, signal: AbortSignal): Promise<RunReadScope> => {
     const peer = connection.browserPeer, principal = peer?.principal
     const assertCurrent = () => {
@@ -197,5 +204,5 @@ export function installComputerAcceptanceRuns(ctx: Context, manager: Pick<Comput
   let unregisterHost: () => Promise<void>
   try { unregisterHost = installAcceptanceRunHost(ctx, bridge.reader, { resolveScope, readEvidence: bridge.readImage }) }
   catch (error) { unregisterTools(); bridge.dispose(); throw error }
-  return { computer: bridge.computer, async dispose() { lifetime.abort(); bridge.dispose(); unregisterTools(); await unregisterHost() } }
+  return { computer: bridge.computer, ledger: { service: bridge.service, reader: bridge.reader, onBegin: bridge.onBegin, interrupt: bridge.interrupt }, async dispose() { lifetime.abort(); bridge.dispose(); unregisterTools(); await unregisterHost() } }
 }

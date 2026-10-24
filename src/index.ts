@@ -8,6 +8,8 @@ import { PROJECT_REPOSITORY } from './project.ts'
 import { installComputerHost } from './features/computer-use/host.ts'
 import { installComputerTools, type ComputerToolsRecorder } from './features/computer-use/tools.ts'
 import { installComputerAcceptanceRuns } from './features/acceptance-runs/integration.ts'
+import { installAcceptanceWorkflows } from './features/acceptance-workflows/integration.ts'
+import { WorkflowEvidenceVerifier } from './features/acceptance-workflows/verifier.ts'
 import { installWorkbench } from './features/workbench/integration.ts'
 import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
@@ -64,15 +66,17 @@ export function apply(ctx: Context, config: Config): void {
               runsContext.effect(() => {
                 if (!host.manager) return () => {}
                 const nativeManager = host.manager, runEnvironments = { runEnvironment(id: string) { return modelTarget ? modelTarget.runEnvironment(id) : nativeManager.runEnvironment(id) } }
-                const runs = installComputerAcceptanceRuns(runsContext, runEnvironments, { enabled, version: pkg.version })
+                const workflowVerifier = new WorkflowEvidenceVerifier()
+                const runs = installComputerAcceptanceRuns(runsContext, runEnvironments, { enabled, version: pkg.version, verifiers: [workflowVerifier.verifier], onEvidenceCommitted: (exec, evidence, observation) => workflowVerifier.capture(exec, evidence, observation) })
                 recorder = runs.computer
-                let stopped = false, workbench: Awaited<ReturnType<typeof installWorkbench>> | undefined
-                const preparing = installWorkbench(runsContext, nativeManager, { enabled, recorder: () => recorder }).then(async value => { if (stopped) { await value.dispose(); return } workbench = value; modelTarget = value.modelTarget }).catch(() => runsContext.logger.error('电脑工作台初始化失败，请检查当前宿主版本与插件连接。'))
+                let stopped = false, workbench: Awaited<ReturnType<typeof installWorkbench>> | undefined, workflows: Awaited<ReturnType<typeof installAcceptanceWorkflows>> | undefined
+                const preparing = installWorkbench(runsContext, nativeManager, { enabled, recorder: () => recorder }).then(async value => { if (stopped) { await value.dispose(); return } workbench = value; modelTarget = value.modelTarget; const prepared = await installAcceptanceWorkflows(runsContext, { enabled, target: value.modelTarget, verifier: workflowVerifier, ledger: runs.ledger }); if (stopped) { await prepared.dispose(); return } workflows = prepared }).catch(() => runsContext.logger.error('电脑工作台初始化失败，请检查当前宿主版本与插件连接。'))
                 return async () => {
                   stopped = true; if (recorder === runs.computer) recorder = undefined
                   if (modelTarget === workbench?.modelTarget) modelTarget = undefined
                   await preparing
-                  const results = await Promise.allSettled([runs.dispose(), workbench?.dispose()]), failed = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
+                  const workflowResults = await Promise.allSettled([workflows?.dispose()]); workflowVerifier.dispose()
+                  const results = [...workflowResults, ...await Promise.allSettled([runs.dispose(), workbench?.dispose()])], failed = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
                   if (failed.length) throw new AggregateError(failed.map(value => value.reason), '工作台清理尚未确认。')
                 }
               })

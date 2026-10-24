@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
+import { installAcceptanceWorkflowClient } from '../features/acceptance-workflows/client.tsx'
 import { installAcceptanceRunClient } from '../features/acceptance-runs/client.tsx'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -262,7 +263,7 @@ export function apply(ctx: Context): void {
     document.head.append(style)
     return () => { style.remove() }
   })
-  ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)) })
+  ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)); child.effect(() => installAcceptanceWorkflowClient(child)) })
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))

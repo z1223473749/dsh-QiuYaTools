@@ -72,7 +72,9 @@
     "typecheck:acceptance:host": "tsc -p tsconfig.h1-integration.json",
     "test:acceptance": "node --test tests/acceptance-runs*.test.mjs",
     "typecheck:workbench:host": "tsc -p tsconfig.workbench-host.json",
-    "test:workbench": "node --test tests/workbench*.test.mjs"
+    "test:workbench": "node --test tests/workbench*.test.mjs",
+    "typecheck:workflows:host": "tsc -p tsconfig.workflows-host.json",
+    "test:workflows": "node --test tests/acceptance-workflows*.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"

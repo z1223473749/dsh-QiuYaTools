@@ -10,7 +10,8 @@ import { RunReadLifetime } from './client-api.ts';
 import type { createRunUIStore } from './ui-store.ts';
 export type RunUIProps = PropsStore<ReturnType<typeof createRunUIStore>>;
 const codeLabels: Record<string, string> = { VERIFIED: '独立验收已确认', BUSINESS_MISMATCH: '实际结果与预期不符', VERIFIER_UNAVAILABLE: '尚无独立验收依据', VERIFIER_FAILED: '验收结果未能确认', EVIDENCE_UNAVAILABLE: '证据暂不可用', MISSING_EVIDENCE: '缺少检查点证据', ACTION_UNKNOWN: '操作结果待确认', NOT_EXECUTED: '尚未执行', INTERRUPTED: '运行已中断', ENVIRONMENT_UNAVAILABLE: '操作环境暂不可用', BUDGET_EXHAUSTED: '已达到本次任务限制' };
-export function RunGlyph() { return <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10H3V6a2 2 0 0 1 2-2Zm3 16h8m-4-4v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="m8 10 2.5 2.5L16 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>; }
+import { RunGlyph } from './RunGlyph.tsx';
+export { RunGlyph } from './RunGlyph.tsx';
 export function EvidenceThumbnail({ refValue, chatSessionId, api, onUnavailable }: {
     refValue: EvidenceRef;
     chatSessionId: string;
