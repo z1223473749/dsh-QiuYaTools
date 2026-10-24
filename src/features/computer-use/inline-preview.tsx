@@ -110,8 +110,13 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
     const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void control('decide', { requestId: request.requestId, requestVersion: request.requestVersion, decision }) }
     return <div ref={anchor} className="qyt-computer-inline-anchor qyt-computer-surface" data-qyt-computer-chat={sessionId}>
       {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : undefined} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
-        {!!requests.length && <SystemPermissionNotice native={native} busy={busy} onOpenSettings={kind => { void control('openSettings', { kind }) }} onRefresh={() => { void control('refresh') }}/>}
-        {requests.map(request => <ComputerApprovalCard key={request.requestId} request={request} busy={busy} allowDisabled={computerApprovalNeedsSystemPermissions(native)} onDecision={decision => decide(request, decision)}/>)}
+        {requests.map(request => {
+          const preflight = request.preflight ?? native
+          return <React.Fragment key={request.requestId}>
+            <SystemPermissionNotice native={preflight} busy={busy} onOpenSettings={kind => { void control('openSettings', { kind }) }} onRefresh={() => { void control('refresh') }}/>
+            <ComputerApprovalCard request={request} busy={busy} allowDisabled={computerApprovalNeedsSystemPermissions(preflight)} onDecision={decision => decide(request, decision)}/>
+          </React.Fragment>
+        })}
         {active && <div className="qyt-computer-inline-image">
           <div className="qyt-computer-inline-actions" aria-label="电脑预览悬浮控件" onFocusCapture={() => setControlsHidden(false)}>
             <button type="button" className="qyt-computer-inline-grip" aria-label="拖动电脑小预览" title="拖动小预览；方向键移动" onPointerDown={startDrag} onKeyDown={nudge}><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><circle cx="5" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="10" cy="12" r="1"/></svg></button>

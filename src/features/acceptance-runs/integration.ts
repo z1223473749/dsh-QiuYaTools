@@ -12,6 +12,7 @@ import type { MutationResult, RunAuthority, RunExec, RunHistoryReader, RunReadSc
 import { AcceptanceRunStore } from './storage.ts'
 import { installAcceptanceRunHost } from './host.ts'
 import { installAcceptanceRunTools } from './tools.ts'
+import { hostServiceIdentity } from '../../host-service-identity.ts'
 
 export interface ComputerRunDependencies {
   agents: RootAgentRegistry
@@ -175,13 +176,15 @@ export function installComputerAcceptanceRuns(ctx: Context, manager: ComputerEnv
   const query = ctx.get('sessionQuery') as RunSessionQuery | undefined
   const connection = ctx.get('connection') as { browserPeer?: { principal: { kind: string } } } | undefined
   if (!profile?.dir || !agents || !attachments || !query || !connection) throw new RunError('RUN_SERVICES_UNAVAILABLE')
+  const connectionIdentity = hostServiceIdentity(connection)
+  if (!connectionIdentity) throw new RunError('RUN_SERVICES_UNAVAILABLE')
   const lifetime = new AbortController()
   const bridge = createComputerRunBridge({ agents, attachments, manager, profileDirectory: profile.dir, enabled: () => !lifetime.signal.aborted && options.enabled(), version: options.version })
   const resolveScope = async (chatSessionId: string, signal: AbortSignal): Promise<RunReadScope> => {
     const peer = connection.browserPeer, principal = peer?.principal
     const assertCurrent = () => {
       signal.throwIfAborted()
-      if (lifetime.signal.aborted || !options.enabled() || ctx.get('connection') !== connection || connection.browserPeer !== peer || peer?.principal !== principal || principal?.kind !== 'owner') throw new RunError('OWNER_CHANGED')
+      if (lifetime.signal.aborted || !options.enabled() || hostServiceIdentity(ctx.get('connection')) !== connectionIdentity || connection.browserPeer !== peer || peer?.principal !== principal || principal?.kind !== 'owner') throw new RunError('OWNER_CHANGED')
     }
     assertCurrent()
     const observation = await bounded(AbortSignal.any([signal, lifetime.signal]), child => query.observeSession(SessionId(chatSessionId), { signal: child, projectionMode: 'none' }).then(observation => { if (child.aborted) { observation[Symbol.dispose](); throw new RunError('READ_CANCELLED') } return observation }))

@@ -308,3 +308,51 @@ test('hidden controls restore on unpressed re-entry or keyboard focus and cannot
   assert.equal(card.dataset.controlsHidden, 'false')
   assert.deepEqual(f.mutations(), [])
 })
+
+test('a macOS browser request uses its own browser preflight and one real DOM approval click never inherits local TCC', async t => {
+  const f = await fixture(t); f.states.clear()
+  f.native.value = { platform: 'darwin', mode: 'local', available: true, permissions: { screenRecording: false, accessibility: false, postEvents: false } }
+  f.requests.set('request-A', approval('A', { preflight: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } }))
+  await f.render({ seat: 'A' })
+  assert.equal(f.button('seat', '允许一次').disabled, false)
+  assert.equal(f.button('seat', '始终允许').disabled, false)
+  assert.equal(f.container('seat').querySelector('[aria-label="系统权限引导"]'), null)
+  const once = f.button('seat', '允许一次')
+  await act(async () => { once.click(); once.click(); await settle() })
+  assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'once' }])
+  assert.ok(f.container('seat').querySelector('iframe'))
+})
+
+test('a native macOS request missing TCC stays blocked even when current global status belongs to a browser', async t => {
+  const f = await fixture(t); f.states.clear()
+  f.native.value = { platform: 'darwin', mode: 'browser', available: true, permissions: {} }
+  f.requests.set('request-A', approval('A', { preflight: { platform: 'darwin', mode: 'local', available: true, permissions: {} } }))
+  await f.render({ seat: 'A' })
+  assert.equal(f.button('seat', '允许一次').disabled, true); assert.equal(f.button('seat', '始终允许').disabled, true)
+  assert.ok(f.container('seat').querySelector('[aria-label="系统权限引导"]'))
+  await f.click('seat', '允许一次'); assert.deepEqual(f.mutations(), [])
+  await f.click('seat', '拒绝'); assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'deny' }])
+})
+
+test('simultaneous browser and remote-native approvals retain each request preflight and exact Session routing', async t => {
+  const f = await fixture(t); f.states.clear(); f.native.value = { platform: 'win32', mode: 'local', available: true }
+  f.requests.set('request-A', approval('A', { preflight: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } }))
+  f.requests.set('request-B', approval('B', { preflight: { platform: 'darwin', mode: 'remote', available: true, permissions: { screenRecording: false, accessibility: false } } }))
+  await f.render({ browser: 'A', remote: 'B' })
+  assert.equal(f.button('browser', '允许一次').disabled, false); assert.equal(f.container('browser').querySelector('[aria-label="系统权限引导"]'), null)
+  assert.equal(f.button('remote', '允许一次').disabled, true); assert.equal(f.button('remote', '始终允许').disabled, true)
+  assert.match(f.container('remote').textContent, /请在独立电脑上开启以下权限/u)
+  assert.equal(f.button('remote', '前往开启屏幕录制'), undefined)
+  await f.click('browser', '允许一次'); assert.equal(f.requests.has('request-B'), true)
+  assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'once' }])
+})
+
+test('request-scoped native permission refresh keeps postEvents refusal and later unlocks only that request', async t => {
+  const f = await fixture(t); f.states.clear(); f.native.value = { platform: 'darwin', mode: 'browser', available: true }
+  const preflight = { platform: 'darwin', mode: 'local', permissions: { screenRecording: true, accessibility: true, postEvents: false, inputMonitoring: false } }
+  f.requests.set('request-A', approval('A', { preflight })); await f.render({ seat: 'A' })
+  assert.equal(f.button('seat', '允许一次').disabled, true)
+  f.requests.get('request-A').preflight.permissions.postEvents = true; await f.click('seat', '刷新权限')
+  assert.equal(f.button('seat', '允许一次').disabled, false); assert.match(f.container('seat').textContent, /建议开启输入监控/u)
+  await f.click('seat', '始终允许'); assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'always' }])
+})

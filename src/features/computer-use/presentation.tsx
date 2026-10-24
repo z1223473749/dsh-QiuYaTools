@@ -5,9 +5,9 @@ export interface ComputerApprovalRequest { requestId: string; requestVersion: nu
 export interface NativeApplication { appId: string; name: string; running: boolean }
 export interface ComputerNativeView { available?: boolean; platform?: string; permissions?: Record<string, boolean>; message?: string; mode?: 'local' | 'remote' | 'browser' }
 export type SystemPermissionKind = 'screenRecording' | 'accessibility' | 'inputMonitoring'
-export const computerApprovalNeedsSystemPermissions = (native: ComputerNativeView | null | undefined): boolean => native?.platform === 'darwin' && (native.permissions?.screenRecording !== true || native.permissions?.accessibility !== true || native.permissions?.postEvents === false)
+export const computerApprovalNeedsSystemPermissions = (native: ComputerNativeView | null | undefined): boolean => native?.platform === 'darwin' && native.mode !== 'browser' && (native.permissions?.screenRecording !== true || native.permissions?.accessibility !== true || native.permissions?.postEvents === false)
 export function SystemPermissionNotice({ native, busy, full = false, onOpenSettings, onRefresh }: { native: ComputerNativeView | null | undefined; busy: boolean; full?: boolean; onOpenSettings(kind: SystemPermissionKind): void; onRefresh(): void }) {
-  if (native?.platform !== 'darwin') return null
+  if (native?.platform !== 'darwin' || native.mode === 'browser') return null
   const permissions = native.permissions
   const items = ([
     ['screenRecording', '屏幕录制', '读取你授权应用的画面。', permissions?.screenRecording],

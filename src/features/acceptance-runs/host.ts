@@ -4,6 +4,7 @@ import { canonicalJSON, object, opaque, uuid, RunError, text } from './contract.
 import type { EvidenceRef } from './contract.ts';
 import type { RunHistoryReader, RunReadScope } from './service.ts';
 import { RUN_ENDPOINT } from './model.ts';
+import { hostServiceIdentity } from '../../host-service-identity.ts';
 interface Route {
     path: string;
     methods: readonly [
@@ -55,13 +56,16 @@ export function installAcceptanceRunHost(ctx: Context, reader: RunHistoryReader,
     const connection = ctx.get('connection') as HostConnection | undefined;
     if (!connection)
         throw new RunError('CONNECTION_UNAVAILABLE');
+    const connectionIdentity = hostServiceIdentity(connection);
+    if (!connectionIdentity)
+        throw new RunError('CONNECTION_UNAVAILABLE');
     const lifetime = new AbortController();
     let disposed = false;
     const unregister = connection.fetch.register({ path: '/api/' + RUN_ENDPOINT, methods: ['POST'], requestBody: 'buffered', async fetch(request) {
             const peer = connection.browserPeer, principal = peer?.principal;
             if (disposed || principal?.kind !== 'owner')
                 return new Response('Forbidden', { status: 403 });
-            const assertOwner = () => { if (disposed || request.signal.aborted || lifetime.signal.aborted || ctx.get('connection') !== connection || connection.browserPeer !== peer || peer?.principal !== principal || principal.kind !== 'owner') throw new RunError('OWNER_CHANGED'); };
+            const assertOwner = () => { if (disposed || request.signal.aborted || lifetime.signal.aborted || hostServiceIdentity(ctx.get('connection')) !== connectionIdentity || connection.browserPeer !== peer || peer?.principal !== principal || principal.kind !== 'owner') throw new RunError('OWNER_CHANGED'); };
             let rpcId: string | undefined;
             try {
                 assertOwner();

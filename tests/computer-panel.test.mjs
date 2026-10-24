@@ -225,3 +225,20 @@ for (const order of ['enabled-first', 'seat-first']) test(`late initial current-
   assert.equal(select.value, 'remote'); assert.equal(f.dom.window.document.querySelector('input[type=password]').value, '')
   assert.equal(f.button('连接当前聊天的环境').disabled, true)
 })
+
+test('macOS browser approval and full settings view never invent native TCC prerequisites', async t => {
+  const f = await fixture(t, { native: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } })
+  f.status.pendingRequests = [request('A', { preflight: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } })]
+  await f.render(); assert.equal(f.button('允许一次').disabled, false); assert.equal(f.button('始终允许').disabled, false)
+  assert.equal(f.dom.window.document.querySelector('[aria-label="系统权限引导"]'), null)
+  await f.click('允许一次'); assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'once' }])
+})
+
+test('browser overview cannot unlock a remote macOS native request with missing TCC permissions', async t => {
+  const f = await fixture(t, { native: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } })
+  f.status.pendingRequests = [request('B', { preflight: { platform: 'darwin', mode: 'remote', available: true, permissions: {} } })]
+  await f.render(); assert.equal(f.button('允许一次').disabled, true); assert.equal(f.button('始终允许').disabled, true)
+  assert.match(f.dom.window.document.body.textContent, /请在独立电脑上开启以下权限/u)
+  assert.equal(f.button('前往开启辅助功能'), undefined)
+  await f.click('允许一次'); assert.deepEqual(f.mutations(), [])
+})
