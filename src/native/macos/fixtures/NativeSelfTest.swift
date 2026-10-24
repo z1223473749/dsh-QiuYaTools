@@ -747,8 +747,10 @@ import Foundation
             let root = KeyboardFocusSnapshot(pid: 99, frame: CGRect(x: 1, y: 2, width: 3, height: 4), isWindow: true, identityStable: true)
             precondition(!TransientKeyboardAXRead.mayWait(focused: root, error: AXError.cannotComplete.rawValue, stage: "focused-window", now: 0, deadline: 1))
             precondition(!TransientKeyboardAXRead.mayWait(focused: nil, error: AXError.cannotComplete.rawValue, stage: "deadline", now: 0, deadline: 1))
-            precondition(!TransientKeyboardAXRead.mayWait(focused: nil, error: AXError.cannotComplete.rawValue, stage: "focused-window", now: 1, deadline: 1))
-            cases.append("retry-eligibility-never-accepts-existing-root-or-expired-read")
+            precondition(TransientKeyboardAXRead.mayWait(focused: nil, error: AXError.cannotComplete.rawValue, stage: "focused-window", now: 1, deadline: 1))
+            // Waiting is not an accepted proof; BoundedKeyboardDownReadiness
+            // still rejects every expired ready result before a new Down.
+            cases.append("retry-eligibility-refuses-existing-root-and-classifies-expired-cannotComplete-only-as-wait")
         }
         var terminalCases = [String]()
         for kind in ["unchanged", "epoch", "human", "owner", "permission", "held-key", "owned-release", "geometry", "foreground", "process-birth", "cancel"] {

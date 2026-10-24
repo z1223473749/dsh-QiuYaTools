@@ -427,7 +427,10 @@ enum CompletedKeyboardInputPolicy {
               identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
             throw ComputerError("FOCUS_CHANGED", "The keyboard action's selected window identity is unavailable; input stopped.")
         }
-        defer { focusAttempt?.merge(identity.diagnosticSnapshot) { _, latest in latest } }
+        defer {
+            focusAttempt?.merge(identity.diagnosticSnapshot) { _, latest in latest }
+            focusAttempt?.merge(budget.diagnosticSnapshot) { _, latest in latest }
+        }
         let checkpoint = {
             try self.keyboardCheckpoint(epoch, generation: generation, ownerId: ownerId, keys: keys)
         }

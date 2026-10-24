@@ -59,8 +59,9 @@ export function projectVisionRuntimeFailure(error, status) {
       inputRoute: ['metadata', 'pointer', 'keyboard'].includes(attempt.inputRoute) ? attempt.inputRoute : 'unknown',
       inputRouteStage: ['not-requested', 'metadata', 'pointer-route', 'keyboard-root', 'metadata-recheck', 'checked', 'deadline'].includes(attempt.inputRouteStage) ? attempt.inputRouteStage : 'unknown',
       keyboardFocusStage: ['not-requested', 'focused-window', 'owner', 'geometry', 'role', 'root-recheck', 'checked', 'deadline'].includes(attempt.keyboardFocusStage) ? attempt.keyboardFocusStage : 'unknown',
-      ...Object.fromEntries(['settledMs', 'readinessSamples', 'consecutiveReadinessSamples', 'metadataSamples', 'componentProofCalls', 'componentProofMs', 'acceptedComponentProofs', 'componentAXError', 'logicalRootPoints', 'axSettableResult', 'axFrontmostResult', 'raiseResult', 'inputRouteChecks', 'inputRouteMs', 'keyboardFocusSamples', 'keyboardAXError'].map(key => [key, integer(attempt[key])])),
+      ...Object.fromEntries(['settledMs', 'readinessSamples', 'consecutiveReadinessSamples', 'metadataSamples', 'componentProofCalls', 'componentProofMs', 'acceptedComponentProofs', 'componentAXError', 'logicalRootPoints', 'axSettableResult', 'axFrontmostResult', 'raiseResult', 'inputRouteChecks', 'inputRouteMs', 'keyboardFocusSamples', 'keyboardAXError', 'keyboardSampleMs', 'keyboardTransientAXRetries', 'keyboardReadinessRetries', 'keyboardRetryBudgetRemainingMs', 'keyboardRetryIdentityChecks', 'keyboardPostAwaitIdentityChecks'].map(key => [key, integer(attempt[key])])),
       inputPosted: bool(attempt.inputPosted), activationAccepted: bool(attempt.activationAccepted), inputRouteAccepted: bool(attempt.inputRouteAccepted), keyboardFocusAccepted: bool(attempt.keyboardFocusAccepted),
+      keyboardSampleDeadlineExceeded: bool(attempt.keyboardSampleDeadlineExceeded), keyboardSampleReadyExpired: bool(attempt.keyboardSampleReadyExpired), keyboardIndependentIdentityAccepted: bool(attempt.keyboardIndependentIdentityAccepted), keyboardReadyProofExpired: bool(attempt.keyboardReadyProofExpired),
     } : null,
   }
 }

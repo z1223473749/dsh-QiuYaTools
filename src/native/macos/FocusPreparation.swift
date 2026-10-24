@@ -196,7 +196,12 @@ enum KeyboardDownProof { case ready, temporarilyUnavailable }
 private enum KeyboardDownReadError: Error { case temporarilyUnavailable }
 enum TransientKeyboardAXRead {
     static func mayWait(focused: KeyboardFocusSnapshot?, error: Int32?, stage: String, now: TimeInterval, deadline: TimeInterval) -> Bool {
-        focused == nil && error == AXError.cannotComplete.rawValue && stage != "deadline" && now.isFinite && deadline.isFinite && now < deadline
+        // This classifies only a failed read, never authorizes a Down. The
+        // caller has already rechecked exact CG/process/frontmost identity.
+        // An expired cannotComplete read consumes the same action retry budget;
+        // a later successful proof must still finish inside its own60ms cap.
+        focused == nil && error == AXError.cannotComplete.rawValue && now.isFinite && deadline.isFinite &&
+            (stage != "deadline" || now >= deadline)
     }
 }
 
@@ -204,6 +209,13 @@ enum TransientKeyboardAXRead {
 /// never gets replayed, and repeated transient AX failures cannot renew the cap.
 @MainActor final class KeyboardReadinessRetryBudget {
     private(set) var remaining: TimeInterval = 0.5
+    private var retries = 0, readyProofExpired = false
+    var diagnosticSnapshot: [String: Any] {
+        ["keyboardReadinessRetries": retries, "keyboardReadyProofExpired": readyProofExpired,
+         "keyboardRetryBudgetRemainingMs": max(0, min(500, Int((remaining * 1000).rounded(.down))))]
+    }
+    func noteRetry() { retries = min(1_000_000, retries + 1) }
+    func noteReadyProofExpired() { readyProofExpired = true }
     func charge(_ elapsed: TimeInterval) throws {
         guard elapsed.isFinite, elapsed >= 0 else { throw ComputerError("FOCUS_CHANGED", "Keyboard readiness could not be verified.") }
         remaining = max(0, remaining - elapsed)
@@ -224,8 +236,11 @@ enum TransientKeyboardAXRead {
             let begin = backend.now(), deadline = begin + (retries == 0 ? 0.06 : min(0.06, budget.remaining))
             let proof = try backend.proof(deadline)
             try Task.checkCancellation(); try checkpoint()
-            guard backend.now() < deadline else { throw ComputerError("FOCUS_CHANGED", "Keyboard readiness could not be verified in time.") }
             if case .ready = proof {
+                guard backend.now() < deadline else {
+                    budget.noteReadyProofExpired()
+                    throw ComputerError("FOCUS_CHANGED", "Keyboard readiness could not be verified in time.")
+                }
                 if retries > 0 { try budget.charge(backend.now() - begin) }
                 return
             }
@@ -237,6 +252,7 @@ enum TransientKeyboardAXRead {
             try budget.charge(backend.now() - begin)
             guard budget.remaining > 0, retries < 64 else { throw ComputerError("FOCUS_CHANGED", "The target keyboard focus remained unavailable; input stopped.") }
             retries += 1
+            budget.noteRetry()
             let waitBegin = backend.now()
             let waitDeadline = waitBegin + budget.remaining
             try await backend.sleep(max(1, UInt64((min(0.01, budget.remaining) * 1_000_000_000).rounded(.up))))
@@ -273,6 +289,8 @@ private struct FocusProcessBirth: Equatable {
     var keyboardRetryIdentityChecks = 0
     var keyboardPostAwaitIdentityChecks = 0
     var keyboardTransientAXRetries = 0
+    var keyboardSampleSeconds: TimeInterval = 0
+    var keyboardSampleDeadlineExceeded = false, keyboardSampleReadyExpired = false, keyboardIndependentIdentityAccepted = false
     var snapshot: [String: Any] {
         ["metadataSamples": metadataSamples, "inputRoute": route, "inputRouteChecks": routeChecks,
          "inputRouteAccepted": routeAccepted, "inputRouteStage": routeStage,
@@ -282,6 +300,10 @@ private struct FocusProcessBirth: Equatable {
          "keyboardCompletionChecks": completionChecks, "keyboardCompletionAccepted": completionAccepted,
          "keyboardRetryIdentityChecks": keyboardRetryIdentityChecks, "keyboardPostAwaitIdentityChecks": keyboardPostAwaitIdentityChecks,
          "keyboardTransientAXRetries": keyboardTransientAXRetries]
+            .merging(["keyboardSampleMs": max(0, min(60_000, Int((keyboardSampleSeconds * 1000).rounded()))),
+                      "keyboardSampleDeadlineExceeded": keyboardSampleDeadlineExceeded,
+                      "keyboardSampleReadyExpired": keyboardSampleReadyExpired,
+                      "keyboardIndependentIdentityAccepted": keyboardIndependentIdentityAccepted]) { original, _ in original }
     }
 }
 
@@ -350,7 +372,18 @@ private struct FocusProcessBirth: Equatable {
         diagnostics.metadataSamples += 1; diagnostics.routeChecks += 1
         diagnostics.route = route.kind; diagnostics.routeAccepted = false; diagnostics.routeStage = "metadata"
         diagnostics.keyboardAccepted = false
-        defer { diagnostics.routeSeconds += max(0, ProcessInfo.processInfo.systemUptime-begin) }
+        if case .keyboard = route {
+            diagnostics.keyboardIndependentIdentityAccepted = false
+            diagnostics.keyboardSampleReadyExpired = false
+        }
+        defer {
+            let end = ProcessInfo.processInfo.systemUptime
+            diagnostics.routeSeconds += max(0, end-begin)
+            if case .keyboard = route {
+                diagnostics.keyboardSampleSeconds = max(0, end-begin)
+                diagnostics.keyboardSampleDeadlineExceeded = end >= deadline
+            }
+        }
         guard processIdentityCurrent else { throw ComputerError("TARGET_GONE", "The target application exited or its process identity changed.") }
         let windows = try currentWindows(), foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
         try ExactWindowFocus.validate(target: target, geometry: geometry, windows: windows)
@@ -372,10 +405,11 @@ private struct FocusProcessBirth: Equatable {
                 try ExactInputIdentity.check(target: target, geometry: geometry, before: windows, after: after,
                     beforePid: foreground, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
             case .keyboard:
-                // Retry eligibility itself never swallows changed CG metadata,
-                // siblings, foreground loss, process replacement or a deadline.
+                // A failed/expired AX read may wait only after this exact
+                // identity proof; changed metadata or identity always throws.
                 try ExactInputIdentity.check(target: target, geometry: geometry, before: windows, after: after,
                     beforePid: foreground, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
+                diagnostics.keyboardIndependentIdentityAccepted = true
                 if retryTransientKeyboardAX, TransientKeyboardAXRead.mayWait(focused: focused, error: diagnostics.keyboardAXError,
                     stage: diagnostics.keyboardStage, now: ProcessInfo.processInfo.systemUptime, deadline: deadline) {
                     throw KeyboardDownReadError.temporarilyUnavailable
@@ -385,6 +419,7 @@ private struct FocusProcessBirth: Equatable {
             }
             guard ProcessInfo.processInfo.systemUptime < deadline else {
                 diagnostics.routeStage = "deadline"
+                if case .keyboard = route { diagnostics.keyboardSampleReadyExpired = true }
                 throw ComputerError("FOCUS_CHANGED", "Window input identity could not be verified; input stopped.")
             }
             diagnostics.routeStage = "checked"; diagnostics.routeAccepted = true
