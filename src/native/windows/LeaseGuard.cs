@@ -67,7 +67,7 @@ internal sealed class DesktopLeaseGuard : IDisposable
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                 var bytes = Encoding.UTF8.GetBytes(json); stream.Write(bytes); stream.Flush(true);
             }
-            File.Move(temporary, journalPath, true);
+            AtomicJournalPublish.Publish(temporary, journalPath);
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException) {
             throw new NativeFailure("input-journal-failed", "Owned input could not be durably recorded; no further input is allowed");
         } finally { try { File.Delete(temporary); } catch (IOException) { } }

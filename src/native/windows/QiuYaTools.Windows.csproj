@@ -7,6 +7,7 @@
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
+    <SatelliteResourceLanguages>en;zh-Hans;zh-Hant</SatelliteResourceLanguages>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>qiuya-windows</AssemblyName>
     <RootNamespace>QiuYaTools.Windows</RootNamespace>
