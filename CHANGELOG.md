@@ -2,6 +2,9 @@
 
 ## 0.6.0-beta.1
 
+- 完成Mac最终整合候选的12项真实功能、5项官方安装与恢复、10项Chrome通道及真实DeepSeek三任务（25次SDK请求）；正常清理、39张界面与3张模型截图分别核验，截图全部保存在项目外。README更新当前证据范围，Windows剩余验收继续单独记证。详见[Mac最终候选验收](docs/macos-final-candidate-acceptance.md)。
+
+
 - 增加Windows双聊天执行器之间的精确前台交接，保持FIFO、物理输入中断、一次票据与未知输入不重放。218项专项、当前源码1976项回归和三平台包校验通过；ARM64最终包完成七项真实工作台流程，原生双会话、x64与真实模型继续按绑定版本验收。详见[Windows前台交接](docs/windows-foreground-handoff.md)。
 
 - 增加验收模板、不可变清单版本和会话内再次验收；新任务必须取得新的模型观察，旧失败与新结果保留对比。修复浏览器客户端加载了仅 Host 可用模块的问题。962项相关回归、三平台包校验及Mac实际SDK七项闭环通过，Windows和真实DeepSeek继续按实际候选单独验收。详见[验收模板与版本对比](docs/acceptance-template-development.md)。

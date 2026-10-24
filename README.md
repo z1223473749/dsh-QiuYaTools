@@ -67,9 +67,11 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 各系统、架构、旧系统、现有功能、模型、耐久和安装结果按包与组件哈希分别记录。ARM Windows 中运行 x64 程序的结果不等于原生 x64 硬件验收，universal 编译也不等于 Intel Mac 或最低系统已实机通过。参见[测试与交付证据](docs/computer-use-test-report.md)。
 
-当前开发候选明确要求模型在每次成功操作后重新观察。最新源码完成TypeScript检查与1165项完整回归；自动验收记录已接入当前会话工具、画面证据和只读历史，包含135项专项回归，三入口JS及三平台候选均已构建并校验，实际Host、界面与Windows文件系统专项继续验收。JS只压缩空白，保留原有功能及64 MiB安装包限制。预览接管旧帧修复另完成25项真实浏览器回归。此前Windows d80c／b6e4两包各完成12项功能、5项安装及原生52项／指针29项；这些结果不继承到新工作台包。Mac 8f组件完成真实中文提交、兄弟窗口／即时退出负例、指针13项、默认双聊天10项，以及30分钟真实预览和5次故障恢复。真实DeepSeek新组件、完整Mac原生界面及后续工作台仍有未完成项，不移用旧结果。[任务记录接线](docs/acceptance-runs-integration.md)、[预览输入完成态](docs/computer-preview-action-freshness.md)、[Mac输入边界](docs/macos-keyboard-completion-evidence.md)、[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)与[实施进度](docs/implementation-progress.md)分别记录实际范围。
+当前完整工作区已完成 TypeScript 检查与1976项直接回归，前台交接单元另完成218项相邻测试，三入口JS和三平台候选均通过构建与原64 MiB安装包限制。Mac最终整合候选已通过完整12项功能、5项安装与恢复、Chrome专用通道10项，以及真实DeepSeek的按钮确认、中文提交和拖动三任务。完整功能验收包含实际Host、原生窗口与拖出、聊天授权、已绘制预览帧、人工接管、真实TXT上传、计划批注、精确归档及8 MiB文件交换；39张界面截图和三张真实模型结果图已在仓库外复核。范围、版本与清理证明见[Mac最终候选验收](docs/macos-final-candidate-acceptance.md)。
 
-电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。确定性测试 provider 证明的工具与图片运输，与真实 DeepSeek 模型理解画面并完成任务分别记录。Mac新8f组件已完成真实DeepSeek按钮、中文提交和拖动三任务；新工作台整包与Windows新组件继续分别验收。Excel专用加载项与macOS锁屏操控属于单独的完整对齐阶段，当前基础包不宣称已完全复刻Codex。
+自动验收、工作台、批注、网页诊断、临时样式反馈和模板版本对比已分别完成Mac实际SDK闭环；其中的确定性测试provider用于证明工具与图像运输。真实DeepSeek另使用当前账户的公开SDK进行实际图片任务，由独立测试驱动模拟“允许一次”，不宣称真人点过授权。Windows当前原生组件的52项基础与29项专属指针测试已完成，最终整合包ARM64工作台七项通过；其余Windows逐项界面、完整整包、长测和真实模型最终交付仍继续验收，结果不沿用历史包。详见[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)及[测试与交付报告](docs/computer-use-test-report.md)。
+
+电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。当前Mac实测环境为Apple Silicon；universal构建不等于Intel Mac或最低系统已实机通过，ARM Windows中的x64程序测试也不等于原生x64硬件。Excel专用加载项与macOS锁屏操控仍属于单独的完整对齐阶段，当前基础包不宣称已完全复刻Codex。
 
 同一交互桌面同时只允许一个 QiuYaTools 原生执行器控制输入，包括不同配置与已配对的代理。执行器异常退出时，独立守护进程会根据输入记录尝试释放本插件按住的键与鼠标；新执行器也必须先完成旧输入恢复，系统拒绝清理时会阻止新控制。Windows 会检查系统是否接受释放事件；macOS 的事件接口没有键盘送达确认，验收依据权限、可读取的鼠标状态及受控应用实测，不能据此保证任意应用均已处理每个键盘事件。
 
