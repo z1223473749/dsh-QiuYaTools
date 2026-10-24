@@ -13,7 +13,7 @@ const require = createRequire(anchor), { build } = require('esbuild')
 const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href)
 const { ToolRuntime } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-tools')).href)
 const root = fileURLToPath(new URL('../', import.meta.url))
-const built = await build({ stdin: { resolveDir: root, contents: "export * from './src/features/workbench/model-target.ts';export * from './src/features/workbench/desktop-registry.ts';export * from './src/features/workbench/browser-registry.ts';export * from './src/features/workbench/site-permissions.ts';export * from './src/features/workbench/integration.ts';export {ComputerEnvironmentManager} from './src/features/computer-use/environment-manager.ts';export {ComputerDriverRouter} from './src/features/computer-use/driver-router.ts';export {BrowserDeviceDriver} from './src/features/computer-use/browser.ts';export {createComputerRunBridge} from './src/features/acceptance-runs/integration.ts';export {WORKBENCH_ENDPOINT} from './src/features/workbench/client-api.ts';" }, bundle: true, write: false, platform: 'node', format: 'esm', nodePaths: [join(dirname(anchor), 'node_modules')] })
+const built = await build({ stdin: { resolveDir: root, contents: "export * from './src/features/workbench/model-target.ts';export * from './src/features/workbench/desktop-registry.ts';export * from './src/features/workbench/browser-registry.ts';export * from './src/features/workbench/site-permissions.ts';export * from './src/features/workbench/integration.ts';export {ComputerEnvironmentManager} from './src/features/computer-use/environment-manager.ts';export {ComputerDriverRouter} from './src/features/computer-use/driver-router.ts';export {BrowserDeviceDriver} from './src/features/computer-use/browser.ts';export {createComputerRunBridge} from './src/features/acceptance-runs/integration.ts';export {WORKBENCH_ENDPOINT} from './src/features/workbench/client-api.ts';export {currentModelObservationGeneration} from './src/features/computer-use/model-observation.ts';" }, bundle: true, write: false, platform: 'node', format: 'esm', nodePaths: [join(dirname(anchor), 'node_modules')] })
 const api = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'))
 const turn = () => new Promise(resolve => setImmediate(resolve))
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
@@ -179,4 +179,40 @@ test('actual 2s query budget rejects a pending scope and safely disposes a late 
   const status = own.call({ op: 'status', chatSessionId: 'chat-one' }); await entered.promise; const result = await status
   assert.equal(result.result.ok, false); assert.equal(result.result.value, undefined); assert.equal(own.queries[0].options.signal.aborted, true); assert.deepEqual(own.disposals, [])
   barrier.resolve(); await turn(); assert.deepEqual(own.disposals, ['chat-one']); assert.equal(f.desktops.get('chat-one').actions.length, 0)
+})
+
+
+test('trusted model receipt follows the real selected service and cached view switches cannot advance its Host ticket', async t => {
+  const f = await fixture(t), native = await f.native(), chat = native.exec.agent.id
+  assert.equal(f.target.modelObservationGeneration(chat), undefined)
+  await f.manager.observe(chat)
+  const nativeTicket = f.target.modelObservationGeneration(chat)
+  assert(Number.isSafeInteger(nativeTicket) && nativeTicket > 0)
+  await f.manager.preview(chat)
+  assert.equal(f.target.modelObservationGeneration(chat), nativeTicket)
+  const browser = await f.browser(), context = browser.context
+  f.target.selectBrowser(browser.exec, context)
+  assert.equal(f.target.modelObservationGeneration(chat), undefined)
+  await f.browsers.observe(context)
+  const browserTicket = f.target.modelObservationGeneration(chat), boundary = api.currentModelObservationGeneration()
+  assert(browserTicket > nativeTicket && browserTicket <= boundary)
+  await f.browsers.preview(chat, browser.view.environmentId, browser.view.workbenchTabId, f.owner())
+  assert.equal(f.target.modelObservationGeneration(chat), browserTicket)
+  assert.equal(api.currentModelObservationGeneration(), boundary)
+  f.target.selectDesktop(native.exec)
+  assert.equal(f.target.modelObservationGeneration(chat), nativeTicket)
+  assert(f.target.modelObservationGeneration(chat) <= boundary)
+  f.target.selectBrowser(browser.exec, context)
+  assert.equal(f.target.modelObservationGeneration(chat), browserTicket)
+  assert.throws(() => f.browsers.readObservationGeneration({ ...context }), { code: 'INVALID_CONTEXT' })
+  assert.equal(f.desktops.get(chat).actions.length + f.browserStates[0].actions.length, 0)
+})
+
+test('real selected browser receipt disappears after caller replacement rather than falling back to desktop cache', async t => {
+  const f = await fixture(t), native = await f.native(); await f.manager.observe(native.exec.agent.id)
+  const b = await f.browser(); f.target.selectBrowser(b.exec, b.context); await f.browsers.observe(b.context)
+  assert(Number.isSafeInteger(f.target.modelObservationGeneration(b.exec.agent.id)))
+  f.agents.set(b.exec.agent.id, { id: b.exec.agent.id })
+  assert.equal(f.target.modelObservationGeneration(b.exec.agent.id), undefined)
+  assert.equal(f.desktops.get(b.exec.agent.id).actions.length + f.browserStates[0].actions.length, 0)
 })

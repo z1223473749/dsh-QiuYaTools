@@ -4,7 +4,7 @@ import type { BrowserWorkbenchRegistry, HostWorkbenchContext } from './browser-r
 import type { BrowserExecution, SiteOwnerScope } from './site-permissions.ts'
 type Agent = NonNullable<BrowserExecution['agent']>
 export interface HostModelTargetContext { readonly kind: 'browser' | 'desktop'; readonly environmentId: string; readonly targetId: string; readonly appId: string; readonly epoch: number; assertCurrent(): void; assertIdentity(): void; stop(owner: SiteOwnerScope): Promise<boolean> }
-type DesktopController = Pick<ComputerEnvironmentManager, 'runEnvironment'> & Partial<Pick<ComputerEnvironmentManager, 'stop' | 'get'>>
+type DesktopController = Pick<ComputerEnvironmentManager, 'runEnvironment'> & Partial<Pick<ComputerEnvironmentManager, 'stop' | 'get' | 'modelObservationGeneration'>>
 type Selected = { kind: 'desktop'; agent: Agent } | { kind: 'browser'; agent: Agent; context: HostWorkbenchContext }
 /** Model-facing authority source. SDK view focus/float/dock/close never writes this registry. */
 export class ModelTargetRegistry {
@@ -34,6 +34,12 @@ export class ModelTargetRegistry {
     if (!selection) return this.desktops.runEnvironment(chat)
     if (!this.current(selection.agent) || selection.agent.id !== chat) return undefined
     try { return selection.kind === 'browser' ? this.browsers.readEnvironment(selection.context) : this.desktops.runEnvironment(chat) } catch { return undefined }
+  }
+  /** Host-only trusted successful observe receipt from the exact selected service, independent of UI tabs. */
+  modelObservationGeneration(chat: string): number | undefined {
+    const selection = this.selected.get(chat)
+    if (selection && (!this.current(selection.agent) || selection.agent.id !== chat)) return undefined
+    try { return selection?.kind === 'browser' ? this.browsers.readObservationGeneration(selection.context) : this.desktops.modelObservationGeneration?.(chat) } catch { return undefined }
   }
   assertBrowser(exec: BrowserExecution, context: HostWorkbenchContext) {
     const agent = this.agent(exec), selection = this.selected.get(agent.id)

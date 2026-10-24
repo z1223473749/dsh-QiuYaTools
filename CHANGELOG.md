@@ -2,6 +2,8 @@
 
 ## 0.6.0-beta.1
 
+- 增加验收模板、不可变清单版本和会话内再次验收；新任务必须取得新的模型观察，旧失败与新结果保留对比。修复浏览器客户端加载了仅 Host 可用模块的问题。962项相关回归、三平台包校验及Mac实际SDK七项闭环通过，Windows和真实DeepSeek继续按实际候选单独验收。详见[验收模板与版本对比](docs/acceptance-template-development.md)。
+
 - 增加网页元素的临时样式反馈：读取真实计算样式，在插件本地比较字体、间距与颜色，确认后随画面批注发到当前聊天；不修改目标页面。837项相关回归、三平台归档与Mac实际SDK七项闭环通过，Windows及真实DeepSeek另验。详见[样式反馈验收](docs/annotation-style-feedback-acceptance.md)。
 
 - 增加会话网页诊断的独立授权、有限日志与网络元数据及检查点关联；修正小预览在窄聊天中越界、遮挡诊断说明的问题。714项相关回归、三平台归档校验与Mac实际SDK七项闭环通过，实际截图在项目外，Windows及真实DeepSeek另按版本验收。详见[网页诊断与验收](docs/browser-diagnostics-h5-implementation.md)。

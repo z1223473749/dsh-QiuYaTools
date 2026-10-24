@@ -145,7 +145,7 @@ export async function installAcceptanceWorkflows(ctx: Context, options: Workflow
         enabled = next;
     }, 100);
     poll.unref();
-    return { service, async dispose() {
+    return { service, authenticate, resolveOwnerScope: resolveScope, async dispose() {
             if (disposed)
                 return;
             disposed = true;

@@ -1,3 +1,4 @@
+import { readModelObservationGeneration } from '../computer-use/model-observation.ts'
 import type { DiagnosticEvent } from '../browser-diagnostics/contract.ts'
 import { workbenchCursor } from './preview-model.ts'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
@@ -188,6 +189,11 @@ export class BrowserWorkbenchRegistry implements BrowserPermissionBackend {
       const remove = await entry.browser.subscribeDiagnostics!(context.targetId, origin, () => { context.assertCurrent(); guard() }, onEvent, onInvalidated, signal)
       try { context.assertCurrent(); guard(); signal.throwIfAborted(); return remove } catch (failure) { await remove(); throw failure }
     } })
+  }
+  /** Host-only identity-pinned receipt for a real model observe; never owner preview metadata. */
+  readObservationGeneration(context: HostWorkbenchContext): number | undefined {
+    this.assertAfter(context)
+    return readModelObservationGeneration(context.service, context.chatSessionId, context.service.get(context.chatSessionId))
   }
   async pause(context: HostWorkbenchContext) { this.authentic(context); const snapshot = await context.service.pause(context.chatSessionId); this.contexts.get(context)!.assertIdentity(); return snapshot }
   async observe(context: HostWorkbenchContext): Promise<ComputerObservation> { this.authentic(context); const value = await context.service.observe(context.chatSessionId, this.contexts.get(context)!.signal); context.assertCurrent(); return value }

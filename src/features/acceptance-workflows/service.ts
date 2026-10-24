@@ -41,6 +41,8 @@ export interface WorkflowOptions {
     };
     clock?(): number;
 }
+/** Host-only; never parsed from a tool argument or persisted as authority. */
+export type WorkflowStartPrerequisite = (target?: WorkflowTarget) => void;
 interface Active {
     identity: WorkflowIdentity;
     target?: WorkflowTarget;
@@ -62,6 +64,7 @@ export class AcceptanceWorkflowService {
     private readonly tails = new Map<string, Promise<unknown>>();
     private readonly repairWaits = new Map<string, RepairWait>();
     private disposed = false;
+    private readonly startPrerequisites = new Map<string, WorkflowStartPrerequisite>();
     constructor(private readonly options: WorkflowOptions) { }
     private now() { return this.options.clock?.() ?? Date.now(); }
     private live() {
@@ -180,7 +183,7 @@ export class AcceptanceWorkflowService {
         const recovery = record.phase === 'discarded' ? 'none' : record.cancel && !completeCancel ? 'cancel-unconfirmed' : completeCancel ? 'none' : changed ? 'target-changed' : interrupted ? 'restart-interrupted' : 'none';
         return { record: clone(record), ...(run ? { run } : {}), readOnly: interrupted || ['discarded', 'closed', 'cancelRequested', 'interrupted'].includes(record.phase) || !!run && TERMINAL_STATES.includes(run.state), replayPermitted: false, recovery };
     }
-    async propose(exec: RunExec, input: unknown): Promise<WorkflowView> {
+    async propose(exec: RunExec, input: unknown, prerequisite?: WorkflowStartPrerequisite): Promise<WorkflowView> {
         const v = object(input, ['plan', 'previousWorkflowId']), plan = parseWorkflowPlan(v.plan), identity = this.identity(exec), previousWorkflowId = v.previousWorkflowId === null ? null : uuid(v.previousWorkflowId);
         const h = hash({ chat: identity.chatSessionId, instance: identity.instanceId, callId: text(exec.callId), domain: 'workflow-v1' }).slice(0, 32), workflowId = `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20)}`;
         return this.serial(workflowId, async () => {
@@ -189,6 +192,8 @@ export class AcceptanceWorkflowService {
             exec.signal.throwIfAborted();
             if (prior) {
                 if (prior.creatorInstanceId !== identity.instanceId || hash(prior.plan) !== hash(plan) || prior.previousWorkflowId !== previousWorkflowId)
+                    fail('IDEMPOTENCY_CONFLICT');
+                if (prerequisite && this.startPrerequisites.get(workflowId) !== prerequisite)
                     fail('IDEMPOTENCY_CONFLICT');
                 return this.summary(prior);
             }
@@ -201,6 +206,8 @@ export class AcceptanceWorkflowService {
             const now = this.now(), record: WorkflowRecord = { schemaVersion: 1, workflowId, chatSessionId: identity.chatSessionId, creatorInstanceId: identity.instanceId, revision: 1, phase: 'draft', plan, planSHA256: null, runId: null, previousWorkflowId, createdAt: now, updatedAt: now, frozenAt: null, repairs: [], authorizedAttempts: [], cancel: null };
             const saved = await this.options.store.compareAndSwap(record, 0, () => { this.identity(exec); identity.assertCurrent(); });
             this.identity(exec);
+            if (prerequisite)
+                this.startPrerequisites.set(workflowId, prerequisite);
             this.active.set(workflowId, { identity, interrupted: false });
             return this.summary(saved);
         });
@@ -232,10 +239,16 @@ export class AcceptanceWorkflowService {
             this.mutation(record, v);
             if (record.phase !== 'draft')
                 fail('PLAN_FROZEN');
-            const target = this.options.capture(exec);
-            target.assertCurrent();
+            let target: WorkflowTarget | undefined;
+            const fresh = () => this.startPrerequisites.get(id)?.(target);
+            fresh();
+            const captured = this.options.capture(exec);
+            target = captured;
+            captured.assertCurrent();
+            fresh();
             const previous = record.previousWorkflowId ? await this.load(record.previousWorkflowId) : undefined;
-            target.assertCurrent();
+            captured.assertCurrent();
+            fresh();
             this.guard(exec, record, false);
             if (previous && previous.chatSessionId !== record.chatSessionId)
                 fail('WORKFLOW_NOT_FOUND');
@@ -245,7 +258,8 @@ export class AcceptanceWorkflowService {
             if (latest?.interrupted && previousRunId !== latest.runId)
                 fail('PREVIOUS_WORKFLOW_REQUIRED');
             const existing = await this.options.h1.service.list(exec);
-            target.assertCurrent();
+            captured.assertCurrent();
+            fresh();
             this.guard(exec, record, false);
             if (existing.some(row => !TERMINAL_STATES.includes(row.state)))
                 fail('RUN_ALREADY_RUNNING');
@@ -253,20 +267,22 @@ export class AcceptanceWorkflowService {
             try {
                 const checks = record.plan.checks.map(({ rule: _rule, ...check }) => ({ ...check, verifierId: WORKFLOW_VERIFIER_ID }));
                 begun = await this.options.h1.service.begin(exec, { title: record.plan.title, checks, budget: record.plan.budget, idempotencyKey: 'workflow-start:' + id, previousRunId });
-                target.assertCurrent();
+                captured.assertCurrent();
+                fresh();
                 this.guard(exec, record, false);
-                if (begun.readOnly || begun.record.binding.environmentId !== target.environmentId || begun.record.binding.epoch !== target.epoch || begun.record.binding.targetIds.length !== 1 || begun.record.binding.targetIds[0] !== target.targetId)
+                if (begun.readOnly || begun.record.binding.environmentId !== captured.environmentId || begun.record.binding.epoch !== captured.epoch || begun.record.binding.targetIds.length !== 1 || begun.record.binding.targetIds[0] !== captured.targetId)
                     fail('OWNER_CHANGED');
-                this.options.verifier.attach(begun.record.runId, begun.record.binding, exec.agent!, record.plan, target.kind, () => target.assertCurrent());
-                this.active.get(id)!.target = target;
+                this.options.verifier.attach(begun.record.runId, begun.record.binding, exec.agent!, record.plan, captured.kind, () => captured.assertCurrent());
+                this.active.get(id)!.target = captured;
                 this.active.get(id)!.runId = begun.record.runId;
                 record.phase = 'running';
                 record.runId = begun.record.runId;
                 record.planSHA256 = hash(record.plan);
                 record.frozenAt = begun.record.createdAt;
-                record = await this.save(record, record.revision, () => { target.assertCurrent(); this.guard(exec, record, false); });
+                record = await this.save(record, record.revision, () => { captured.assertCurrent(); fresh(); this.guard(exec, record, false); });
                 begun = await this.options.h1.onBegin(exec, begun);
-                target.assertCurrent();
+                captured.assertCurrent();
+                fresh();
                 this.guard(exec, record);
                 return this.summary(record, { record: begun.record, state: begun.record.state, readOnly: begun.readOnly, recovery: 'none', unavailableEvidenceIds: [], replayPermitted: false });
             }
@@ -510,5 +526,6 @@ export class AcceptanceWorkflowService {
             return;
         this.disposed = true;
         this.interruptAll();
+        this.startPrerequisites.clear();
     }
 }

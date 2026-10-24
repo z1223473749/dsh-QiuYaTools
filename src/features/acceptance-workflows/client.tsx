@@ -9,11 +9,13 @@ import { runAddress } from '../acceptance-runs/model.ts';
 import { createWorkflowAPI, type WorkflowAPI } from './client-api.ts';
 import { acceptanceWorkflowDefinition } from './projector.ts';
 import { WorkflowCard } from './WorkflowCard.tsx';
+import { templateAddress } from '../acceptance-templates/client.tsx';
 interface Face {
     api: WorkflowAPI;
     openRun(id: string): void;
+    openTemplates(id: string): void;
 }
-export function WorkflowNodeView({ node, sessionId, api, openRun }: PropsRuntime<'conversation.chat.node', 'qiuya-workflow'> & InjectFace<Face>) { return <WorkflowCard summary={node.data.workflow} sessionId={sessionId} api={api} onOpenRun={openRun}/>; }
+export function WorkflowNodeView({ node, sessionId, api, openRun, openTemplates }: PropsRuntime<'conversation.chat.node', 'qiuya-workflow'> & InjectFace<Face>) { return <WorkflowCard summary={node.data.workflow} sessionId={sessionId} api={api} onOpenRun={openRun} onTemplates={openTemplates}/>; }
 export function installAcceptanceWorkflowClient(ctx: Context): () => void {
     let disposed = false;
     const cleanups: Array<() => void> = [], api = createWorkflowAPI(() => ctx.get('connection') as RunReadConnection | undefined);
@@ -35,7 +37,7 @@ export function installAcceptanceWorkflowClient(ctx: Context): () => void {
     try {
         cleanups.push(ctx.uiConversation.events.register(acceptanceWorkflowDefinition()));
         cleanups.push(ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: 'qiuya-workflow', inject(sessionId: string): Face {
-                return { api, openRun(id) {
+                return { api, openTemplates(id) { if (!disposed && ctx.sidebarRight.mounted.getSnapshot() === sessionId) ctx.sidebarRight.openResource(templateAddress(sessionId,id)); }, openRun(id) {
                         if (!disposed && ctx.sidebarRight.mounted.getSnapshot() === sessionId)
                             ctx.sidebarRight.openResource(runAddress(sessionId, id));
                     } };

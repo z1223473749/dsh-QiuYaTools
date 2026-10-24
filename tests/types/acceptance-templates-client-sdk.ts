@@ -1,0 +1,11 @@
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote';
+import type { Context } from '@deepseek-ai/cordis';
+import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
+import type { ResourceProvider } from '@deepseek-ai/dsh-client-resources/client';
+import { installAcceptanceTemplateClient } from '../../src/features/acceptance-templates/client.tsx';
+import { TemplateRerunSubmission } from '../../src/features/acceptance-templates/rerun-submission.ts';
+declare const context: Context, binding: SessionBinding;
+const request=new TemplateRerunSubmission({currentChat:()=>undefined,binding:()=>binding,signal:new AbortController().signal});
+const prompt:SessionBinding['session']['prompt']=binding.session.prompt;
+void[request,prompt,installAcceptanceTemplateClient,context];

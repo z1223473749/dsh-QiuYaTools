@@ -1,3 +1,4 @@
+import { beginModelObservation, commitModelObservation, clearModelObservations } from './model-observation.ts'
 import { ComputerError, checkActionBounds, computerError, parseComputerAction, requireIdentity, sameGeometry, validGeometry } from './contract.ts'
 import type { ComputerActionRequest, ComputerActionResult, ComputerObservation, ComputerSessionSnapshot, ComputerState, DeviceDriver, NativeTarget } from './contract.ts'
 
@@ -217,6 +218,7 @@ export class ComputerSessionService {
     this.assertEnabled()
     const record = this.record(sessionId), target = record.snapshot.target, epoch = record.snapshot.epoch
     if (!target || !['ready', 'running', 'paused', 'humanControl'].includes(record.snapshot.state)) throw new ComputerError('NOT_READY', '电脑会话尚未就绪')
+    const generation = preview ? undefined : beginModelObservation()
     return this.operation(record, signal, async operationSignal => {
       const current = (await this.driver.targets(operationSignal)).find(item => item.id === target.id)
       operationSignal.throwIfAborted()
@@ -233,7 +235,7 @@ export class ComputerSessionService {
         record.previewFrames.set(metadata.frameId, { metadata: structuredClone(metadata), capturedAt: now })
         while (record.previewFrames.size > 8) record.previewFrames.delete(record.previewFrames.keys().next().value!)
       }
-      else { record.snapshot.lastObservation = structuredClone(metadata); this.notify() }
+      else { record.snapshot.lastObservation = structuredClone(metadata); commitModelObservation(this, sessionId, { generation: generation!, epoch, targetId: target.id, frameId: observation.frameId }); this.notify() }
       return observation
     })
   }
@@ -383,6 +385,7 @@ export class ComputerSessionService {
     this.unsubscribe?.()
     const stopping = [...this.sessions.keys()].map(id => this.stop(id))
     this.disposed = true
+    clearModelObservations(this)
     this.disposing = (async () => {
       try {
         const results = await Promise.allSettled([...stopping, this.permissionTail])

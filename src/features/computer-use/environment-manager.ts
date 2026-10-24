@@ -1,3 +1,4 @@
+import { readModelObservationGeneration } from './model-observation.ts'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { ComputerDriverRouter } from './driver-router.ts'
@@ -179,6 +180,13 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     const snapshot = entry.service.get(sessionId)
     if (!snapshot?.target || !['ready', 'running'].includes(snapshot.state)) return undefined
     return { environmentId: entry.environmentId, epoch: snapshot.epoch, target: structuredClone(snapshot.target), ...(snapshot.lastObservation ? { observation: structuredClone(snapshot.lastObservation) } : {}) }
+  }
+  /** Host-only successful model observation receipt, never a preview or a serialized frame field. */
+  modelObservationGeneration(sessionId: string): number | undefined {
+    if (this.disposed || this.options.enabled?.() === false) return undefined
+    const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined)
+    if (!entry || entry.retiring || entry.switching) return undefined
+    return readModelObservationGeneration(entry.service, sessionId, entry.service.get(sessionId))
   }
   environments() { return this.all().map(entry => ({ ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
   isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
