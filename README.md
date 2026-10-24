@@ -67,9 +67,9 @@ https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya
 
 各系统、架构、旧系统、现有功能、模型、耐久和安装结果按包与组件哈希分别记录。ARM Windows 中运行 x64 程序的结果不等于原生 x64 硬件验收，universal 编译也不等于 Intel Mac 或最低系统已实机通过。参见[测试与交付证据](docs/computer-use-test-report.md)。
 
-当前完整工作区已完成 TypeScript 检查与1976项直接回归，前台交接单元另完成218项相邻测试，三入口JS和三平台候选均通过构建与原64 MiB安装包限制。Mac最终整合候选已通过完整12项功能、5项安装与恢复、Chrome专用通道10项，以及真实DeepSeek的按钮确认、中文提交和拖动三任务。完整功能验收包含实际Host、原生窗口与拖出、聊天授权、已绘制预览帧、人工接管、真实TXT上传、计划批注、精确归档及8 MiB文件交换；39张界面截图和三张真实模型结果图已在仓库外复核。范围、版本与清理证明见[Mac最终候选验收](docs/macos-final-candidate-acceptance.md)。
+每次交付均重新记录类型检查、完整回归、三入口 JS 构建和三个平台安装包的校验结果，安装包保持原有 64 MiB 限制。实际功能验收覆盖 Host、原生窗口与拖出、聊天授权、已绘制的实时预览、人工接管、TXT 上传、计划批注、精确归档和文件交换；安装、升级、损坏包恢复与回滚单独验证。项目外报告会列出测试使用的完整包、原生组件、运行环境和截图，不能将旧候选的通过状态直接当作新包已通过。历史范围见[Mac 候选验收](docs/macos-final-candidate-acceptance.md)。
 
-自动验收、工作台、批注、网页诊断、临时样式反馈和模板版本对比已分别完成Mac实际SDK闭环；其中的确定性测试provider用于证明工具与图像运输。真实DeepSeek另使用当前账户的公开SDK进行实际图片任务，由独立测试驱动模拟“允许一次”，不宣称真人点过授权。Windows当前原生组件的52项基础与29项专属指针测试已完成，最终整合包ARM64工作台七项通过；其余Windows逐项界面、完整整包、长测和真实模型最终交付仍继续验收，结果不沿用历史包。详见[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)及[测试与交付报告](docs/computer-use-test-report.md)。
+自动验收、工作台、批注、网页诊断、临时样式反馈和模板版本对比分别进行实际 SDK 与界面测试；确定性测试 provider 只用于验证工具调用、状态和图像运输。真实 DeepSeek 测试另使用当前账户的公开 SDK，执行看图点击、中文输入提交和拖动任务，由独立测试驱动模拟“允许一次”。Windows 使用 PD 内的真实交互桌面，分别记录 ARM64 与 x64 程序的结果；预览耐久、故障恢复和每项功能的状态单独列出。详见[候选视觉与模型结果](docs/current-candidate-visual-and-model-acceptance.md)及[测试与交付报告](docs/computer-use-test-report.md)。
 
 电脑操控需要支持图片输入的模型。原生操作使用前台鼠标与焦点；浏览器专用通道支持后台标签页操作。当前Mac实测环境为Apple Silicon；universal构建不等于Intel Mac或最低系统已实机通过，ARM Windows中的x64程序测试也不等于原生x64硬件。Excel专用加载项与macOS锁屏操控仍属于单独的完整对齐阶段，当前基础包不宣称已完全复刻Codex。
 

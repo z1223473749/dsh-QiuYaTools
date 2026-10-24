@@ -43,7 +43,7 @@ import Foundation
         window.minSize = NSSize(width: 360, height: 260)
         window.contentView = view
         window.delegate = self; view.navigationDelegate = self; view.uiDelegate = self
-        window.center(); view.load(URLRequest(url: navigation.initial)); window.makeKeyAndOrderFront(nil)
+        window.center(); view.load(URLRequest(url: navigation.initial)); window.orderFront(nil)
     }
     func windowWillClose(_ notification: Notification) {
         if notifyClose { Wire.send(["event": "previewClosed", "sessionId": sessionId]) }
