@@ -12,6 +12,8 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { WKAssociationReceipts, consumeWKAssociationRows, WKFrameReceiver, macProcessCheckPassed, macResourceVerdict, macSelfResponsibleNative, wkPreviewInstrumentation } from './computer-wkwebview-soak-evidence.mjs'
 
+import { WKControlledRetirement, retiredWKAssociation } from './wk-controlled-retirement.mjs'
+
 const run = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const minutes = Number(arg('--minutes', '30')), expectedFaults = Number(arg('--faults', '5'))
@@ -110,9 +112,11 @@ if (!process.argv.includes('--worker')) {
   let driver, host, fixture, unsubscribe, fatal, report, measurementStart = 0, generation = 0, phase = 'setup', attachmentWrites = 0
   let fixtureReady, fixtureTelemetry, fixtureTickAt, fixtureError = '', fixtureBuffer = '', productionPageSha256
   const mark = (kind, detail = {}) => { trace.push({ atMs: Date.now(), phase, kind, ...detail }); if (trace.length > 4000) trace.shift() }
+  const retiredHTTP = new WKControlledRetirement({reportPath,nonce:associationNonce??reportPath.split('/')[2]})
   const identity = value => ({ pid: value.pid, birthMicros: value.birthMicros, uniqueId: value.uniqueId, path: value.path, role: value.role })
   const key = value => `${value.pid}:${value.birthMicros}:${value.uniqueId}`
   const server = createServer(async (request, response) => {
+    const requestPath=new URL(request.url,'http://127.0.0.1').pathname,requestToken=retiredHTTP.request({method:request.method,path:requestPath,host:request.headers.host,origin:request.headers.origin,generationHeader:request.headers['x-qyt-wk-generation'],nonceHeader:request.headers['x-qyt-wk-nonce'],contentLength:Number(request.headers['content-length']),expectedOrigin:`http://127.0.0.1:${server.address().port}`,generation:receiver.active,native:generations.find(x=>x.generation===receiver.active)?.native})
     try {
       const path = new URL(request.url, 'http://127.0.0.1').pathname
       let bytes = 0; const chunks = []
@@ -133,7 +137,7 @@ if (!process.argv.includes('--worker')) {
       }
       const headers = Object.fromEntries(result.headers); delete headers['content-length']
       response.writeHead(result.status, headers); response.end(content)
-    } catch (error) { fatal ??= error; mark('test-http-failure', { method: request.method, message: error.message }); if (!response.headersSent) response.writeHead(500); response.end() }
+    } catch (error) { if(retiredHTTP.aborted(requestToken,error,{aborted:request.aborted,complete:request.complete})){mark('controlled-retired-clock-request-pending-proof',{generation:requestToken.generation,requestId:requestToken.id});response.destroy();return}fatal ??= error; mark('test-http-failure', { method: request.method, message: error.message }); if (!response.headersSent) response.writeHead(500); response.end() }
   })
   async function waitFor(operation, message, timeout = 20000) {
     const until = Date.now() + timeout
@@ -153,7 +157,7 @@ if (!process.argv.includes('--worker')) {
     launchArgs.splice(0, launchArgs.length, `DYLD_INSERT_LIBRARIES=${associationLibrary}`, `QIUYA_WK_SOAK_ASSOC_CONFIG=${config}`, companion)
   }
   async function refreshViewAssociation() {
-    if (!activeAssociation?.receiver) return []
+    if (!activeAssociation?.receiver || activeAssociation.retiredExactly === true) return []
     let bytes
     try { bytes = await readFile(activeAssociation.file, 'utf8') } catch (error) { if (error.code === 'ENOENT') return []; throw error }
     return consumeWKAssociationRows(activeAssociation, bytes)
@@ -270,22 +274,24 @@ if (!process.argv.includes('--worker')) {
         assert.equal(key(before), key(native)); assert.equal(before.path, companion); assert.equal(before.parentPid, process.pid)
         // Kill while the helper and WK page are live. Do not close the view or
         // dispose the driver before fault injection.
-        receiver.active = 0; receiver.stats.useGeneration(0)
+        retiredHTTP.begin(generation,native);receiver.active = 0; receiver.stats.useGeneration(0)
         const began = Date.now(); mark('controlled-helper-termination', { generation, pid: native.pid, birthMicros: native.birthMicros, uniqueId: native.uniqueId })
-        process.kill(native.pid, 'SIGTERM')
-        await waitFor(async () => (await observe(observer, { op: 'check', identities: [native] })).passed, 'The terminated owned helper did not exit', 10000)
+        process.kill(native.pid, 'SIGTERM');retiredHTTP.issued(generation)
+        let retiredNativeProof;await waitFor(async () => {const proof=await observe(observer,{op:'check',identities:[native]});if(macProcessCheckPassed(proof,[native])){retiredNativeProof=proof;return true}return false}, 'The terminated owned helper did not exit', 10000);retiredHTTP.confirm(generation,retiredNativeProof)
         await host.service.stop(sessionId); if (viewAssociation) await prepareViewAssociation(); await host.service.start(sessionId, target.id, { allowOnce: true }); await host.service.pause(sessionId)
         const reopened = await openGeneration()
         assert.notEqual(key(reopened.native), key(native), 'Fault recovery must create a new exact native process identity')
         await sample()
         faults.push({ type: 'live-native-helper-termination-explicit-reopen', oldGeneration: old.generation, nextGeneration: generation, atMs: began - measurementStart,
           recoveryMs: Date.now() - began, oldNative: native, oldPageRetired: true, inputReleasedState: host.service.get(sessionId).state })
+        retiredHTTP.close(old.generation)
         nextFault += minutes * 60000 / (expectedFaults + 1); phase = 'capture'
       }
       await sleep(100)
     }
     await sample(); receiver.stats.finish(Date.now()); receiver.active = 0
     const finalWindow = await windowEvidence(await nativeIdentity(), 'native-wk-final')
+    retiredHTTP.assertComplete()
     const statistics = receiver.stats.summary(), resourceBounds = macResourceVerdict(resources)
     for (const item of generations) item.measuredFrames = receiver.stats.frames.filter(frame => frame[0] === item.generation).length
     const transportFailures = [...receiver.generations.values()].reduce((sum, value) => sum + value.transportFailures, 0)
@@ -297,7 +303,7 @@ if (!process.argv.includes('--worker')) {
       instrumentation: 'The loopback test carrier injects the same independent pixel probe used by native WebView2 before the production script, then batches bounded HTTP notifications. Host/capture/preview source/helper are unchanged. An optional read-only WK getter library observes only the test-owned view and is recorded with its source/library hashes; the optional responsibility launcher changes TCC attribution and is recorded separately. This is not an official Harness owner-authentication test.',
       limitations: ['Capture-only animation load; no scroll/drag endurance or in-flight input-stop latency.', 'Source JPEG/canvas backing resolution is asserted independently of the scaled physical NSPanel viewport.', 'Resource totals include the outer Node controller, measured Node, source fixture, metadata/window observers, native helper/guardian and verified participating WebKit XPC processes. Participating RSS is counted in full even if a process is shared; this is not exclusive memory ownership. RSS and physical footprint are distinct raw fields.', 'macOS coalition/responsibility SPI is test-only and version-dependent. Missing permission/ambiguous live XPC attribution fails acceptance.'], testedAt: new Date().toISOString() }
     await writeFile(join(output, 'source-bindings.json'), JSON.stringify({ helper: { path: companion, sha256: report.helperSha256 }, runtimeSha256, productionPageSha256, responsibilityCarrier: carrier, associationCarrier,
-      files: Object.fromEntries(await Promise.all(['scripts/soak-computer-wkwebview.mjs', 'scripts/computer-wkwebview-soak-evidence.mjs', 'scripts/computer-webview2-soak-evidence.mjs', 'src/native/macos/fixtures/WKSoakObserver.swift', 'src/native/macos/fixtures/SoakFixture.swift', 'src/native/macos/fixtures/WKDisclaimLauncher.c', 'src/native/macos/fixtures/WKSoakAssociationProbe.m'].map(async path => [path, await hashFile(join(root, path))]))) }, null, 2))
+      files: Object.fromEntries(await Promise.all(['scripts/wk-controlled-retirement.mjs', 'scripts/soak-computer-wkwebview.mjs', 'scripts/computer-wkwebview-soak-evidence.mjs', 'scripts/computer-webview2-soak-evidence.mjs', 'src/native/macos/fixtures/WKSoakObserver.swift', 'src/native/macos/fixtures/SoakFixture.swift', 'src/native/macos/fixtures/WKDisclaimLauncher.c', 'src/native/macos/fixtures/WKSoakAssociationProbe.m'].map(async path => [path, await hashFile(join(root, path))]))) }, null, 2))
   } catch (error) {
     const blocked = !fixture && /preflight|interactive-session|unlocked owned desktop/u.test(error.message)
     report = { status: blocked ? 'blocked' : 'failed', kind: 'real-native-macOS-WKWebView-production-canvas-endurance', responsibilityCarrier: carrier, associationCarrier, reason: error.message, statistics: receiver.stats.summary(), resources, generations, faults, fixtureReady, fixtureTelemetry, fixtureError, testedAt: new Date().toISOString() }; process.exitCode = blocked ? 2 : 1
@@ -307,6 +313,7 @@ if (!process.argv.includes('--worker')) {
     const errors = [], forced = []
     let cleanupAttribution
     try {
+      if(activeAssociation?.receiver?.latest?.length===3){const members=[activeAssociation.receiver.native,...activeAssociation.receiver.latest.map(x=>x.process)],check=await observe(observer,{op:'check',identities:members});if(retiredWKAssociation(activeAssociation,[...known.values()],check)){activeAssociation.retiredExactly=true;mark('old-view-getter-retired-after-exact-four-member-exit',{generation:activeAssociation.generation})}}
       cleanupAttribution = (await processSnapshot(false)).attribution
       if (cleanupAttribution?.complete !== true) errors.push(`Before-dispose ownership incomplete: ${cleanupAttribution?.errors?.join(',') ?? 'missing-attribution'}`)
     } catch (error) { errors.push(`Before-dispose ownership: ${error.message}`) }
@@ -321,6 +328,7 @@ if (!process.argv.includes('--worker')) {
     let checked = { passed: false, results: [] }
     const immediate = [...known.values()].filter(item => !['runner', 'controller'].includes(item.role))
     try { for (let attempt = 0; attempt < 30; attempt++) { checked = await observe(observer, { op: 'check', identities: immediate }); if (macProcessCheckPassed(checked, immediate)) break; await sleep(500) } } catch (error) { errors.push(error.message) }
+    report.retiredNotificationEvidence=retiredHTTP.snapshot()
     report.cleanup = { ...checked, passed: errors.length === 0 && forced.length === 0 && macProcessCheckPassed(checked, immediate), errors, forced, ownershipBeforeDispose: cleanupAttribution, runnerDeferredUntilOuterVerification: true }
     if (!report.cleanup.passed) report.status = 'failed'
     if (viewAssociation) await writeFile(join(output, 'view-associations.json'), JSON.stringify({ carrier: associationCarrier, generations: associationRuns.map(run => ({ generation: run.generation, rows: run.rows, samples: run.receiver?.samples ?? [] })) }, null, 2))

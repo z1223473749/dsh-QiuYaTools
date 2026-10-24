@@ -51,7 +51,7 @@ export function installWKFrameReporter({ generation, reportPath, associationNonc
       document: { visibility: document.visibilityState, width: innerWidth, height: innerHeight, devicePixelRatio } }
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2500)
     try {
-      const result = await fetch(reportPath, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending), signal: controller.signal, cache: 'no-store' })
+      const result = await fetch(reportPath, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-qyt-wk-generation': String(generation), 'x-qyt-wk-nonce': associationNonce??reportPath.split('/')[2] }, body: JSON.stringify(pending), signal: controller.signal, cache: 'no-store' })
       if (!result.ok) throw new Error('Isolated clock receipt was rejected')
       pending = undefined
     } catch { transportFailures++ }
