@@ -70,7 +70,7 @@ export async function withVisionFailureEvidence(run, readStatus, record) {
     let timer, status
     try { status = await Promise.race([Promise.resolve().then(readStatus), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('bounded status diagnostic')), 1000) })]) } catch {} finally { clearTimeout(timer) }
     // Evidence collection cannot replace the original rejection or replay it.
-    try { record(projectVisionRuntimeFailure(error, status)) } catch {}
+    try { record(projectVisionRuntimeFailure(error, status), error) } catch {}
     throw error
   }
 }

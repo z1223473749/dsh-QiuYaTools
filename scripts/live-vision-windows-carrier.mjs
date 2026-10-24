@@ -1,3 +1,4 @@
+import {projectVisionNativeRejection} from './live-vision-tool-failure-diagnostic.mjs'
 import {makeWindowsFinalEvidenceBatch,collectWindowsFinalEvidence} from './live-vision-windows-evidence-batch.mjs'
 /** Mac-side test-only reverse relay. Windows initiates all cross-VM connections. */
 import { createServer } from 'node:http'
@@ -34,7 +35,7 @@ export async function runWindowsVisionCarrier(configPath){
   return value
  })
  const bridgeToken=randomBytes(32).toString('hex'),fileKey=randomBytes(24).toString('hex'),queue=new WindowsVisionQueue({timeoutMs:30000}),files=new Map(),records=[],cleanupErrors=[]
- let active,hello,stopping=false,fatal,failureDiagnostic,guestRoot,taskName,taskArguments,principal,oldIdle,restored=false,naturalTaskExit,cancellation,guestFinalReport,taskUnregistered=false,preparedEvidenceBatch
+ let active,hello,stopping=false,fatal,failureDiagnostic,guestRoot,taskName,taskArguments,principal,oldIdle,restored=false,naturalTaskExit,cancellation,guestFinalReport,taskUnregistered=false,preparedEvidenceBatch,nativeRejectionCount=0
  const command=(kind,args,options)=>diagnostics.command(kind,()=>exec(prl,args,options))
  const binding=r=>Object.fromEntries(['version','runId','rendezvousNonce','requestId','sessionId','task'].map(k=>[k,r[k]]))
  const cancellationClean=()=>!!cancellation&&windowsVisionCancelGuestPassed(guestFinalReport,cfg,cancellation,hello?.carrierIdentity)&&naturalTaskExit?.result===0&&taskUnregistered&&restored&&cleanupErrors.length===0&&!fatal
@@ -70,6 +71,7 @@ export async function runWindowsVisionCarrier(configPath){
     const body=await readBody(req),request=JSON.parse(body);if(request.version!==1||!Number.isSafeInteger(request.requestId)||typeof request.clientId!=='string')fail('VISION_WINDOWS_AGENT_REQUEST')
     const result=await queue.request({kind:'rpc',binding:binding(record.request),authorization:req.headers.authorization,body});if(!result.ok)fail('VISION_WINDOWS_RPC_FAILED')
     if(typeof result.body!=='string'||Buffer.byteLength(result.body)>48*1024*1024||!Number.isSafeInteger(result.status))fail('VISION_WINDOWS_RPC_REPLY')
+    try{const rejection=projectVisionNativeRejection(request,JSON.parse(result.body));if(rejection&&nativeRejectionCount<32)await writePrivateJSON(join(evidence,'native-rejection-'+String(++nativeRejectionCount).padStart(3,'0')+'.json'),{version:1,runId:cfg.runId,task:record.request.task,...rejection,source:'original-native-request-response-only',inputReplay:false})}catch{}
     if(request.op==='observe'){
      const value=JSON.parse(result.body)
      if(value.ok===true&&value.result?.targetId===record.ready.target.id&&value.result.mediaType==='image/jpeg'&&typeof value.result.imageBase64==='string'&&value.result.imageBase64.length<8*1024*1024){record.images=(record.images??0)+1;if(record.images<=128)await writeFile(join(evidence,`windows-task-${record.request.task}-observation-${record.images}.jpg`),Buffer.from(value.result.imageBase64,'base64'),{mode:0o600})}

@@ -1,3 +1,4 @@
+import {projectVisionToolFailureContext} from './live-vision-tool-failure-diagnostic.mjs'
 /** Temporary test plugin. Install only through the owner's official HMR gate. */
 import { spawn } from 'node:child_process'
 import { chmod, cp, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
@@ -213,8 +214,8 @@ export function apply(ctx, config) {
               record.policy.recordObservation(result, record.nonce)
             }
             record.policy.tools.push(projectVisionTool(name, args, result)); return result
-            }, () => record.native.status(AbortSignal.timeout(1000)), failure => {
-              if (record.policy.tools.length < 128) record.policy.tools.push({ name, isError: true, failure })
+            }, () => record.native.status(AbortSignal.timeout(1000)), (failure, actualError) => {
+              if (record.policy.tools.length < 128) record.policy.tools.push({ name, isError: true, failure: {...failure,...projectVisionToolFailureContext(actualError,name,exec.callId)} })
             })
           } })
         }

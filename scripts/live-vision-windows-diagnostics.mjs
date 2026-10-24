@@ -1,7 +1,9 @@
 /** Test-carrier diagnostics: finite stages and digests only; never log commands or raw errors. */
-import { createHash } from 'node:crypto'
-import { join } from 'node:path'
-import { writePrivateJSON } from './live-vision-external-core.mjs'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
+import { open, lstat, link, unlink } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
+import { checkPrivateDirectory, visionExternalFailure } from './live-vision-external-core.mjs'
 
 const digest = value => {
  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(typeof value === 'string' ? value : '')
@@ -10,6 +12,21 @@ const digest = value => {
 const systemCodes = new Set(['EPERM','EACCES','ENOENT','ENOTDIR','EIO','EINVAL','ENOMEM','ENOBUFS','EADDRINUSE','EADDRNOTAVAIL','ECONNREFUSED','ECONNRESET','EPIPE','ETIMEDOUT','EHOSTUNREACH','ENETUNREACH','ABORT_ERR','ERR_SERVER_ALREADY_LISTEN','ERR_SOCKET_BAD_PORT','ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])
 const safeCode = code => typeof code === 'string' && (systemCodes.has(code) || /^VISION_[A-Z0-9_]{1,100}$/u.test(code)) ? code : null
 const label = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,79}$/u.test(value)
+
+// Observational logs stay awaited and atomic. Protocol receipts retain their
+// durable writePrivateJSON barrier; diagnostics do not add a per-event fsync.
+async function writeDiagnosticReceipt(path, value) {
+ if (!/^windows-carrier-stage-\d{4}\.json$/u.test(basename(path))) visionExternalFailure('VISION_WINDOWS_DIAGNOSTIC_STAGE')
+ await checkPrivateDirectory(dirname(path))
+ const bytes = Buffer.from(JSON.stringify(value)), temporary = join(dirname(path), `.diagnostic-${randomUUID()}.json`)
+ if (bytes.length > 65536) visionExternalFailure('VISION_EXTERNAL_FILE_BOUNDARY')
+ const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+ try {
+  try { await handle.writeFile(bytes) } finally { await handle.close() }
+  if (await lstat(path).then(() => true, error => error.code === 'ENOENT' ? false : Promise.reject(error))) visionExternalFailure('VISION_EXTERNAL_REPLAY')
+  await link(temporary, path)
+ } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
+}
 
 export function projectWindowsCarrierError(error) {
  const code = safeCode(error?.code), exitCode = Number.isSafeInteger(error?.code) ? error.code : null
@@ -28,7 +45,7 @@ export function projectWindowsCarrierError(error) {
  }
 }
 
-export function createWindowsCarrierDiagnostics({ runId, evidence, writeReceipt = writePrivateJSON, now = Date.now }) {
+export function createWindowsCarrierDiagnostics({ runId, evidence, writeReceipt = writeDiagnosticReceipt, now = Date.now }) {
  let sequence = 0, currentStage = 'initialization'
  const failures = new WeakMap()
  const persist = async value => {
