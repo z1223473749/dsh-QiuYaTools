@@ -7,6 +7,8 @@ import Foundation
 import ScreenCaptureKit
 import Vision
 import CoreText
+import Security
+import CryptoKit
 
 private struct Failure: Error { let code: String; var diagnostic: [String: Any]? = nil }
 private func fail(_ code: String, diagnostic: [String: Any]? = nil) -> Failure { Failure(code: code, diagnostic: diagnostic) }
@@ -72,18 +74,21 @@ private struct AXPhysicalHit {
     let elementAvailable: Bool
     let pidResult: Int32?
     let pid: pid_t?
+    var element: AXUIElement? = nil
+    var window: AXUIElement? = nil
 }
 private func axPhysicalHit(_ point: CGPoint, diagnosticOnly: Bool = false) -> AXPhysicalHit {
     var element: AXUIElement?
     let system = AXUIElementCreateSystemWide()
-    if diagnosticOnly { AXUIElementSetMessagingTimeout(system, 0.1) }
+    AXUIElementSetMessagingTimeout(system, 0.1)
     let copied = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
     guard copied == .success, let element else { return AXPhysicalHit(copyResult: copied.rawValue, elementAvailable: false, pidResult: nil, pid: nil) }
-    if diagnosticOnly { AXUIElementSetMessagingTimeout(element, 0.1) }
+    AXUIElementSetMessagingTimeout(element, 0.1)
     var pid: pid_t = 0
     let hitWindow = attribute(element, kAXWindowAttribute).flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil } ?? element
+    AXUIElementSetMessagingTimeout(hitWindow, 0.1)
     let result = AXUIElementGetPid(hitWindow, &pid)
-    return AXPhysicalHit(copyResult: copied.rawValue, elementAvailable: true, pidResult: result.rawValue, pid: result == .success ? pid : nil)
+    return AXPhysicalHit(copyResult: copied.rawValue, elementAvailable: true, pidResult: result.rawValue, pid: result == .success ? pid : nil, element: element, window: hitWindow)
 }
 private func systemWindowOwner(_ pid: pid_t) -> Bool {
     // A diagnostic label only. This broad label never controls input guards.
@@ -131,6 +136,212 @@ private func firstPhysicalWindow(_ rows: [[String: Any]], point: CGPoint,
         return !systemCursorWindow(value, verifyOwner: verifyCursorOwner)
     }
 }
+// Public SDK AXUIElement.h334-339 defines system-wide position hit-testing by
+// topmost window z-order. CGWindow bounds are rectangles, not a hit-test mask.
+// This test-only exception requires exact own AX control/window AND a unique
+// verified Apple Dock rectangle. No production driver or permission is changed.
+private let dockExecutable = "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
+private struct DockProof: Equatable {
+    let process: Identity
+    let device: Int32
+    let inode: UInt64
+    let sha256: String
+    let appleCodeStatus: Int32
+    let protectedRegularFile: Bool
+}
+private func shaFile(_ path: String, maximum: Int = 64 * 1024 * 1024) throws -> (String, stat) {
+    let fd = open(path, O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { throw fail("route-executable-open-failed") }
+    let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? file.close() }
+    var before = stat(), after = stat(), leaf = stat()
+    guard fstat(fd, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG, before.st_size > 0,
+          before.st_size <= maximum else { throw fail("route-executable-not-regular") }
+    let bytes = try file.readToEnd() ?? Data()
+    guard bytes.count == before.st_size, fstat(fd, &after) == 0, lstat(path, &leaf) == 0,
+          before.st_dev == after.st_dev, before.st_ino == after.st_ino, before.st_size == after.st_size,
+          before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec, before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+          before.st_dev == leaf.st_dev, before.st_ino == leaf.st_ino, (leaf.st_mode & S_IFMT) == S_IFREG else { throw fail("route-executable-changed") }
+    return (SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), after)
+}
+private func verifiedDock(_ pid: pid_t) -> DockProof? {
+    do {
+        let before = try identity(pid)
+        guard before.parentPid == 1, before.executable == dockExecutable,
+              let resolved = Darwin.realpath(dockExecutable, nil) else { return nil }
+        defer { free(resolved) }
+        guard String(cString: resolved) == dockExecutable else { return nil }
+        let (digest, file) = try shaFile(dockExecutable)
+        guard file.st_uid == 0, (file.st_mode & (S_IWGRP | S_IWOTH)) == 0 else { return nil }
+        var requirement: SecRequirement?, code: SecCode?
+        guard SecRequirementCreateWithString("anchor apple and identifier \"com.apple.dock\"" as CFString, [], &requirement) == errSecSuccess,
+              let requirement,
+              SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary, [], &code) == errSecSuccess,
+              let code else { return nil }
+        let status = SecCodeCheckValidity(code, [], requirement)
+        guard status == errSecSuccess, try identity(pid) == before else { return nil }
+        var leaf = stat()
+        guard lstat(dockExecutable, &leaf) == 0, leaf.st_dev == file.st_dev, leaf.st_ino == file.st_ino,
+              leaf.st_size == file.st_size, leaf.st_mtimespec.tv_sec == file.st_mtimespec.tv_sec,
+              leaf.st_mtimespec.tv_nsec == file.st_mtimespec.tv_nsec else { return nil }
+        return DockProof(process: before, device: file.st_dev, inode: file.st_ino, sha256: digest,
+                         appleCodeStatus: status, protectedRegularFile: true)
+    } catch { return nil }
+}
+private struct ExactAXFacts {
+    var global = true
+    var copyResult: Int32 = 0
+    var pidResult: Int32 = 0
+    var pid: Int32
+    var controlEqual = true
+    var windowEqual = true
+    var roleAllowed = true
+    var labelMatches = true
+    var enabled = true
+    var pointInside = true
+    var actualRole = "AXButton"
+    var matchedLabel = "暂停"
+}
+private struct RouteProof: Equatable {
+    let mode: String
+    let prefix: [String]
+    let dock: DockProof?
+    let actualRole: String
+    let matchedLabel: String
+}
+private func exactOwnCGMapping(_ rows: [[String: Any]], frame: CGRect, id: UInt32, pid: Int32) -> Bool {
+    // Match the SAME tolerance as axWindow, before deriving any AX identity.
+    // A same-PID sibling with indistinguishable geometry must never be adopted.
+    let matching = rows.filter { value in
+        guard (value[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+              ((value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0,
+              let r = try? bounds(value) else { return false }
+        return abs(r.minX - frame.minX) < 4 && abs(r.minY - frame.minY) < 4 &&
+               abs(r.width - frame.width) < 4 && abs(r.height - frame.height) < 4
+    }
+    return matching.count == 1 && (matching[0][kCGWindowNumber as String] as? NSNumber)?.uint32Value == id
+}
+private func exactRoute(_ rows: [[String: Any]], point: CGPoint, previewID: UInt32, previewPID: Int32,
+                        previewFrame: CGRect, ax: ExactAXFacts,
+                        verifyCursor: (pid_t) -> Bool = verifiedWindowServer,
+                        verifyDock: (pid_t) -> DockProof? = verifiedDock) -> RouteProof? {
+    guard point.x.isFinite, point.y.isFinite, previewFrame.contains(point),
+          exactOwnCGMapping(rows, frame: previewFrame, id: previewID, pid: previewPID), ax.global,
+          ax.copyResult == 0, ax.pidResult == 0, ax.pid == previewPID, ax.controlEqual, ax.windowEqual,
+          ax.roleAllowed, ax.labelMatches, ax.enabled, ax.pointInside else { return nil }
+    let relevant = rows.filter { value in
+        ((value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0) > 0 &&
+        (try? bounds(value).contains(point)) == true && !systemCursorWindow(value, verifyOwner: verifyCursor)
+    }
+    let own = relevant.enumerated().filter { _, value in
+        (value[kCGWindowNumber as String] as? NSNumber)?.uint32Value == previewID &&
+        (value[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == previewPID
+    }
+    guard own.count == 1, let matched = own.first, (try? bounds(matched.element)) == previewFrame,
+          matched.offset <= 1 else { return nil }
+    let prefix = relevant.prefix(matched.offset + 1).map { value in
+        [String((value[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0),
+         String((value[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0),
+         String((value[kCGWindowLayer as String] as? NSNumber)?.intValue ?? Int.min),
+         String((value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0),
+         String(describing: try? bounds(value))].joined(separator: ":")
+    }
+    if matched.offset == 0 { return RouteProof(mode: "exact-global-ax-and-own-cg", prefix: prefix, dock: nil, actualRole: ax.actualRole, matchedLabel: ax.matchedLabel) }
+    let front = relevant[0]
+    guard (front[kCGWindowLayer as String] as? NSNumber)?.intValue == 20,
+          let owner = (front[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+          let dock = verifyDock(owner), dock.process.pid == owner, dock.process.parentPid == 1,
+          dock.process.executable == dockExecutable, dock.appleCodeStatus == errSecSuccess,
+          dock.protectedRegularFile, dock.device > 0, dock.inode > 0,
+          dock.sha256.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
+    return RouteProof(mode: "exact-global-ax-own-window-with-pinned-apple-dock-rectangle", prefix: prefix, dock: dock, actualRole: ax.actualRole, matchedLabel: ax.matchedLabel)
+}
+private func sameExactRoute(_ first: RouteProof, _ second: RouteProof) -> Bool { first == second }
+private func pureExactRouteTests() throws -> [[String: Any]] {
+    let point = CGPoint(x: 25, y: 25), frame = CGRect(x: 10, y: 10, width: 50, height: 50)
+    func cg(_ id: UInt32, _ pid: Int32, _ layer: Int, _ rect: CGRect) -> [String: Any] {
+        [kCGWindowNumber as String: NSNumber(value: id), kCGWindowOwnerPID as String: NSNumber(value: pid),
+         kCGWindowLayer as String: NSNumber(value: layer), kCGWindowAlpha as String: NSNumber(value: 1),
+         kCGWindowBounds as String: rect.dictionaryRepresentation]
+    }
+    let dock = cg(9, 726, 20, CGRect(x: 0, y: 0, width: 500, height: 500)), own = cg(1, 81, 3, frame)
+    let pin = DockProof(process: Identity(pid: 726, birthMicros: "100", executable: dockExecutable, parentPid: 1),
+                        device: 1, inode: 22, sha256: String(repeating: "a", count: 64), appleCodeStatus: 0, protectedRegularFile: true)
+    func route(_ values: [[String: Any]] = [], _ facts: ExactAXFacts = ExactAXFacts(pid: 81), _ proof: DockProof? = pin) -> RouteProof? {
+        exactRoute(values.isEmpty ? [dock, own] : values, point: point, previewID: 1, previewPID: 81, previewFrame: frame,
+                   ax: facts, verifyCursor: { _ in false }, verifyDock: { _ in proof })
+    }
+    guard let accepted = route(), route([own]) != nil,
+          (firstPhysicalWindow([dock, own], point: point, verifyCursorOwner: { _ in false })?[kCGWindowNumber as String] as? NSNumber)?.uint32Value == 9 else { throw fail("exact-route-positive-regression") }
+    var results: [[String: Any]] = [["name": "global-own-AX-corrects-only-verified-Dock-rectangle", "passed": true]]
+    func deny(_ name: String, _ facts: ExactAXFacts) throws { guard route([], facts) == nil else { throw fail("exact-route-negative-" + name) }; results.append(["name": name, "passed": true]) }
+    var f = ExactAXFacts(pid: 81); f.controlEqual = false; try deny("PID-only-and-wrong-control-object", f)
+    f = ExactAXFacts(pid: 81); f.windowEqual = false; try deny("same-PID-sibling-WK-window", f)
+    f = ExactAXFacts(pid: 82); try deny("wrong-global-owner-PID", f)
+    f = ExactAXFacts(pid: 81); f.copyResult = -25204; try deny("AX-hit-unavailable", f)
+    f = ExactAXFacts(pid: 81); f.pidResult = -25204; try deny("AX-owner-unavailable", f)
+    f = ExactAXFacts(pid: 81); f.global = false; try deny("application-scoped-hit-not-global", f)
+    f = ExactAXFacts(pid: 81); f.roleAllowed = false; try deny("wrong-control-role", f)
+    f = ExactAXFacts(pid: 81); f.labelMatches = false; try deny("wrong-requested-label", f)
+    f = ExactAXFacts(pid: 81); f.enabled = false; try deny("disabled-control", f)
+    f = ExactAXFacts(pid: 81); f.pointInside = false; try deny("point-outside-exact-control", f)
+    for (name, values) in [("missing-exact-CG-window", [dock]),
+                           ("changed-CG-geometry", [dock, cg(1, 81, 3, CGRect(x: 10, y: 10, width: 51, height: 50))]),
+                           ("third-party-layer20-before-own", [cg(8, 999, 20, frame), own]),
+                           ("Dock-plus-third-party-overlay", [dock, cg(8, 999, 10, frame), own]),
+                           ("multiple-Dock-rectangles", [dock, cg(10, 726, 20, frame), own]),
+                           ("duplicate-own-CG-window", [dock, own, own]),
+                           ("same-PID-same-geometry-sibling-behind-own", [dock, own, cg(2, 81, 3, frame)])] {
+        // The fake verifier must not allow another owner to borrow a Dock proof.
+        guard route(values) == nil else { throw fail("exact-route-negative-" + name) }
+        results.append(["name": name, "passed": true])
+    }
+    let wrongPath = DockProof(process: Identity(pid: 726, birthMicros: "100", executable: "/tmp/Dock", parentPid: 1), device: 1, inode: 22, sha256: pin.sha256, appleCodeStatus: 0, protectedRegularFile: true)
+    let wrongSignature = DockProof(process: pin.process, device: 1, inode: 22, sha256: pin.sha256, appleCodeStatus: -67062, protectedRegularFile: true)
+    let unprotected = DockProof(process: pin.process, device: 1, inode: 22, sha256: pin.sha256, appleCodeStatus: 0, protectedRegularFile: false)
+    for (name, proof) in [("Dock-lookalike-canonical-path", wrongPath), ("Apple-signature-rejected", wrongSignature), ("Dock-file-not-protected", unprotected)] {
+        guard route([], ExactAXFacts(pid: 81), proof) == nil else { throw fail("exact-route-negative-" + name) }; results.append(["name": name, "passed": true])
+    }
+    for (name, changed) in [
+        ("Dock-PID-reused-birth-before-down", DockProof(process: Identity(pid: 726, birthMicros: "101", executable: dockExecutable, parentPid: 1), device: 1, inode: 22, sha256: pin.sha256, appleCodeStatus: 0, protectedRegularFile: true)),
+        ("Dock-inode-changed-before-down", DockProof(process: pin.process, device: 1, inode: 23, sha256: pin.sha256, appleCodeStatus: 0, protectedRegularFile: true)),
+        ("Dock-file-SHA-changed-before-down", DockProof(process: pin.process, device: 1, inode: 22, sha256: String(repeating: "b", count: 64), appleCodeStatus: 0, protectedRegularFile: true))] {
+        guard let second = route([], ExactAXFacts(pid: 81), changed), !sameExactRoute(accepted, second) else { throw fail("exact-route-negative-" + name) }; results.append(["name": name, "passed": true])
+    }
+    guard let changedWindow = route([cg(10, 726, 20, CGRect(x: 0, y: 0, width: 500, height: 500)), own]),
+          !sameExactRoute(accepted, changedWindow) else { throw fail("Dock-CG-window-reused") }
+    results.append(["name": "Dock-CG-window-changed-before-down", "passed": true])
+    return results
+}
+
+private func ownAXFacts(_ hit: AXPhysicalHit, point: CGPoint, expected: AXUIElement,
+                        expectedWindow: AXUIElement, roles: Set<String>, label: String?, subrole: String?, pid: Int32) -> ExactAXFacts {
+    var facts = ExactAXFacts(copyResult: hit.copyResult, pidResult: hit.pidResult ?? -1, pid: hit.pid ?? 0,
+                             controlEqual: false, windowEqual: false, roleAllowed: false,
+                             labelMatches: false, enabled: false, pointInside: false)
+    // Never read labels or other attributes from another application's hit.
+    guard hit.copyResult == 0, hit.pidResult == 0, hit.pid == pid,
+          let element = hit.element, let window = hit.window else { return facts }
+    facts.windowEqual = CFEqual(window, expectedWindow)
+    var current: AXUIElement? = element
+    for _ in 0..<5 {
+        guard let node = current else { break }
+        if CFEqual(node, expected) { facts.controlEqual = true; break }
+        guard let parent = attribute(node, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+        current = (parent as! AXUIElement)
+    }
+    let role = attribute(expected, kAXRoleAttribute) as? String ?? ""
+    facts.roleAllowed = roles.contains(role)
+    facts.actualRole = roles.contains(role) ? role : "other-role"
+    facts.labelMatches = label.map { named(expected, $0) } ?? (subrole != nil && attribute(expected, kAXSubroleAttribute) as? String == subrole)
+    facts.matchedLabel = facts.labelMatches ? (label ?? subrole ?? "") : ""
+    // AXImage has no disabled state in this fixed preview; buttons/editors
+    // must positively publish enabled, rather than falling back to a bare PID.
+    facts.enabled = (attribute(expected, kAXEnabledAttribute) as? Bool) == true ||
+                    (role == "AXImage" && attribute(expected, kAXEnabledAttribute) == nil)
+    facts.pointInside = rectangle(expected)?.contains(point) == true
+    return facts
+}
+
 private func physicalDiagnostic(_ point: CGPoint, binding: Binding, rows: [[String: Any]], ax: AXPhysicalHit,
                                 isSystem: (pid_t) -> Bool = systemWindowOwner) -> [String: Any] {
     var projected = [[String: Any]]()
@@ -279,40 +490,122 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         guard let last else { throw fail("owned-preview-ax-not-ready") }
         return last
     }
-    func physicalHit(_ point: CGPoint) throws -> pid_t {
+    func physicalHit(_ point: CGPoint, expected: AXUIElement, roles: Set<String>, label: String?, subrole: String?) throws -> RouteProof {
+        let (preview, _) = try validate()
+        guard let preview else { throw fail("owned-preview-retired") }
         let rows = windowRows()
-        let hit = firstPhysicalWindow(rows, point: point)
-        guard (hit?[kCGWindowNumber as String] as? NSNumber)?.uint32Value == binding.previewWindowId,
-              (hit?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == binding.preview.pid else {
-            throw fail("owned-preview-physical-point-obscured", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: axPhysicalHit(point, diagnosticOnly: true)))
+        guard exactOwnCGMapping(rows, frame: preview, id: binding.previewWindowId, pid: binding.preview.pid) else { throw fail("owned-CG-to-AX-window-mapping-not-unique") }
+        let expectedWindow = try axWindow(binding.preview, preview)
+        AXUIElementSetMessagingTimeout(expected, 0.1); AXUIElementSetMessagingTimeout(expectedWindow, 0.1)
+        let digest = try shaFile(binding.preview.executable).0
+        guard digest == "0000000000000000000000000000000000000000000000000000000000000000" else { throw fail("owned-preview-executable-changed") }
+        func dockProof(_ values: [[String: Any]]) -> DockProof? {
+            guard let front = firstPhysicalWindow(values, point: point),
+                  (front[kCGWindowNumber as String] as? NSNumber)?.uint32Value != binding.previewWindowId,
+                  (front[kCGWindowLayer as String] as? NSNumber)?.intValue == 20,
+                  let pid = (front[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else { return nil }
+            return verifiedDock(pid)
         }
-        let ax = axPhysicalHit(point)
-        guard ax.copyResult == AXError.success.rawValue, ax.elementAvailable else {
-            throw fail("physical-ax-hit-unavailable", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: ax))
+        // Heavy filesystem/signature checks precede the actual global AX hit;
+        // a stale AX result from before a code-check must not authorize Down.
+        let dock = dockProof(rows), ax = axPhysicalHit(point)
+        let facts = ownAXFacts(ax, point: point, expected: expected, expectedWindow: expectedWindow,
+                               roles: roles, label: label, subrole: subrole, pid: binding.preview.pid)
+        guard let proof = exactRoute(rows, point: point, previewID: binding.previewWindowId,
+                                     previewPID: binding.preview.pid, previewFrame: preview, ax: facts,
+                                     verifyDock: { pid in dock?.process.pid == pid ? dock : nil }) else {
+            var diagnostic = physicalDiagnostic(point, binding: binding, rows: rows, ax: ax)
+            diagnostic["exactOwnAX"] = ["global": facts.global, "controlEqual": facts.controlEqual,
+                "windowEqual": facts.windowEqual, "roleAllowed": facts.roleAllowed, "labelMatches": facts.labelMatches,
+                "enabled": facts.enabled, "pointInside": facts.pointInside]
+            throw fail("owned-preview-physical-point-obscured", diagnostic: diagnostic)
         }
-        guard ax.pidResult == AXError.success.rawValue, ax.pid == binding.preview.pid else {
-            throw fail("physical-ax-hit-owner-mismatch", diagnostic: physicalDiagnostic(point, binding: binding, rows: rows, ax: ax))
-        }
-        return ax.pid!
+        _ = try validate()
+        let after = windowRows(), dockAfter = dockProof(after), finalHit = axPhysicalHit(point)
+        let finalFacts = ownAXFacts(finalHit, point: point, expected: expected, expectedWindow: expectedWindow,
+                                    roles: roles, label: label, subrole: subrole, pid: binding.preview.pid)
+        guard let rechecked = exactRoute(after, point: point, previewID: binding.previewWindowId,
+                                        previewPID: binding.preview.pid, previewFrame: preview, ax: finalFacts,
+                                        verifyDock: { pid in dockAfter?.process.pid == pid ? dockAfter : nil }),
+              sameExactRoute(rechecked, proof) else { throw fail("owned-preview-route-changed-during-preflight") }
+        return proof
     }
-    func click(_ point: CGPoint) async throws -> [String: Any] {
+    func click(_ point: CGPoint, expected: AXUIElement, roles: Set<String>, label: String? = nil, subrole: String? = nil) async throws -> [String: Any] {
         _ = try validate()
         guard emptyInput(), point.x.isFinite, point.y.isFinite else { throw fail("input-not-empty-before-click") }
-        let hitPid = try physicalHit(point)
+        let route = try physicalHit(point, expected: expected, roles: roles, label: label, subrole: subrole)
         let source = CGEventSource(stateID: .combinedSessionState)
-        guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left),
-              let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-              let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { throw fail("fixture-cgevent-unavailable") }
+        guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { throw fail("fixture-cgevent-unavailable") }
+        let moveCreatedUptime = DispatchTime.now().uptimeNanoseconds
+        let moveTimestamp = move.timestamp, moveEventNumber = move.getIntegerValueField(.mouseEventNumber)
+        let movePostUptime = DispatchTime.now().uptimeNanoseconds
         move.post(tap: .cghidEventTap)
         try await Task.sleep(nanoseconds: 40_000_000)
-        _ = try validate(); _ = try physicalHit(point)
+        _ = try validate()
+        let beforeDown = try physicalHit(point, expected: expected, roles: roles, label: label, subrole: subrole)
+        guard sameExactRoute(beforeDown, route) else { throw fail("owned-preview-route-changed-before-down") }
         guard emptyInput() else { throw fail("input-changed-before-click") }
-        down.setIntegerValueField(.mouseEventClickState, value: 1); up.setIntegerValueField(.mouseEventClickState, value: 1)
+        // Reserve only an emergency own-button release before the Down. The
+        // normal Down/Up are each created at their actual emission boundary;
+        // never queue a pre-created Up from before Move/AX/hash preparation.
+        guard let emergencyUp = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left),
+              let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left) else { throw fail("fixture-cgevent-unavailable") }
+        down.setIntegerValueField(.mouseEventClickState, value: 1); emergencyUp.setIntegerValueField(.mouseEventClickState, value: 1)
+        let downCreatedUptime = DispatchTime.now().uptimeNanoseconds
+        let downTimestamp = down.timestamp, downEventNumber = down.getIntegerValueField(.mouseEventNumber)
+        let beforeDownUTC = Date().timeIntervalSince1970 * 1000
+        let downPostUptime = DispatchTime.now().uptimeNanoseconds
         down.post(tap: .cghidEventTap)
-        defer { up.post(tap: .cghidEventTap) }
+        var released = false
+        defer {
+            if !released {
+                // This is exclusively the release for the Down just emitted.
+                // Keep all CGEvent fields at the same defaults as normal input.
+                // Never synthesize an event timestamp from a different clock.
+                emergencyUp.post(tap: .cghidEventTap)
+            }
+        }
         try await Task.sleep(nanoseconds: 35_000_000)
-        return ["clicked": true, "x": point.x, "y": point.y, "hitWindowId": binding.previewWindowId, "hitPid": hitPid,
+        guard let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { throw fail("fixture-cgevent-release-unavailable") }
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        let upCreatedUptime = DispatchTime.now().uptimeNanoseconds
+        let upTimestamp = up.timestamp, upEventNumber = up.getIntegerValueField(.mouseEventNumber)
+        let beforeUpUTC = Date().timeIntervalSince1970 * 1000
+        let upPostUptime = DispatchTime.now().uptimeNanoseconds
+        up.post(tap: .cghidEventTap); released = true
+        // Read-only diagnostics start after releasing the original 35ms Down,
+        // so code/AX queries cannot prolong the hold or authorize another input.
+        let upRoute = try? physicalHit(point, expected: expected, roles: roles, label: label, subrole: subrole)
+        let enabledAfterUp = attribute(expected, kAXEnabledAttribute) as? Bool
+        var receipt: [String: Any] = ["clicked": true, "x": point.x, "y": point.y, "hitWindowId": binding.previewWindowId, "hitPid": binding.preview.pid,
+                "routeMode": route.mode, "globalAXControlAndWindowMatched": true,
+                "routeRevalidatedBeforeDown": true, "dockIdentityRevalidated": route.dock != nil,
                 "mouseSource": "CGEvent HID tap OS-synthetic; not hardware"]
+        receipt["eventChronology"] = [
+            "creationPolicy": "Down/Up each created at post boundary; defaults preserved",
+            "events": [
+                ["type": "mouseMoved", "defaultTimestamp": String(moveTimestamp), "defaultEventNumber": String(moveEventNumber), "createdUptimeNs": String(moveCreatedUptime), "postUptimeNs": String(movePostUptime)],
+                ["type": "leftMouseDown", "defaultTimestamp": String(downTimestamp), "defaultEventNumber": String(downEventNumber), "createdUptimeNs": String(downCreatedUptime), "postUptimeNs": String(downPostUptime)],
+                ["type": "leftMouseUp", "defaultTimestamp": String(upTimestamp), "defaultEventNumber": String(upEventNumber), "createdUptimeNs": String(upCreatedUptime), "postUptimeNs": String(upPostUptime)]
+            ],
+            "cgTimestampDefaultPreserved": true, "eventNumberDefaultPreserved": true,
+            "matchingDefaultDownUpEventNumber": downEventNumber == upEventNumber,
+            "normalEventsPosted": 3, "normalDownsPosted": 1, "normalUpsPosted": 1, "upEmergencyUsed": false,
+            "point": ["x": point.x, "y": point.y],
+            "clockNote": "CGEvent timestamp defaults are observations, including zero; Dispatch uptime records only this fixture's creation/post sequence, not WindowServer receipt order"]
+        receipt["routeEvidence"] = ["global": true, "actualControlRole": route.actualRole,
+            "matchedRequestedLabel": route.matchedLabel, "ownAXWindowMappedToCGID": binding.previewWindowId,
+            "ownPID": binding.preview.pid, "ownControlCFEqual": true, "ownWindowCFEqual": true,
+            "jointChecksBeforeMoveAndBeforeDown": true,
+            "controlEnabledBeforeDown": true, "beforeDownUTC": beforeDownUTC,
+            "beforeUpUTC": beforeUpUTC, "sameRouteAfterUp": upRoute.map { sameExactRoute($0, route) } ?? false,
+            "controlEnabledAfterUp": enabledAfterUp.map { $0 as Any } ?? NSNull()]
+        if let dock = route.dock {
+            receipt["dockProof"] = ["pid": dock.process.pid, "birthMicros": dock.process.birthMicros,
+                "parentPid": dock.process.parentPid, "device": dock.device, "inode": String(dock.inode),
+                "sha256": dock.sha256, "appleCodeStatus": dock.appleCodeStatus, "protectedRegularFile": dock.protectedRegularFile]
+        }
+        return receipt
     }
     func screenshot(_ path: String) async throws -> [String] {
         guard path.hasPrefix("/"), CGPreflightScreenCaptureAccess() else { throw fail("owned-screenshot-permission-or-path") }
@@ -339,7 +632,7 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             if preview == nil { return ["closed": true, "alreadyClosed": true, "binding": try encoded(binding)] }
             let window = try axWindow(binding.preview, preview!)
             guard let close = attribute(window, kAXCloseButtonAttribute), CFGetTypeID(close) == AXUIElementGetTypeID(), let rect = rectangle(close as! AXUIElement) else { throw fail("owned-preview-close-button-unavailable") }
-            let receipt = try await click(CGPoint(x: rect.midX, y: rect.midY))
+            let receipt = try await click(CGPoint(x: rect.midX, y: rect.midY), expected: close as! AXUIElement, roles: ["AXButton"], subrole: "AXCloseButton")
             for _ in 0..<100 { if row(binding.previewWindowId, binding.preview.pid) == nil { return ["closed": true, "alreadyClosed": false, "elapsedMs": Date().timeIntervalSince(start) * 1000, "click": receipt] }; try await Task.sleep(nanoseconds: 20_000_000) }
             throw fail("owned-preview-did-not-retire")
         }
@@ -350,9 +643,10 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             result["labels"] = elements.flatMap { node in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute(node, $0) as? String }.filter { !$0.isEmpty }.map { String($0.prefix(200)) } }
             if let canvas = try? one(elements, roles: ["AXImage"], label: "实时电脑画面"), let rect = rectangle(canvas) { result["canvas"] = jsonRect(rect) }
         case "button":
-            guard let label = command["label"] as? String, ["暂停", "接管", "继续", "停止", "输入", "Enter"].contains(label),
-                  let rect = rectangle(try one(elements, roles: ["AXButton"], label: label)) else { throw fail("invalid-preview-button") }
-            result["click"] = try await click(CGPoint(x: rect.midX, y: rect.midY)); result["pressed"] = true; result["label"] = label
+            guard let label = command["label"] as? String, ["暂停", "接管", "继续", "停止", "输入", "Enter"].contains(label) else { throw fail("invalid-preview-button") }
+            let button = try one(elements, roles: ["AXButton"], label: label)
+            guard let rect = rectangle(button) else { throw fail("invalid-preview-button") }
+            result["click"] = try await click(CGPoint(x: rect.midX, y: rect.midY), expected: button, roles: ["AXButton"], label: label); result["pressed"] = true; result["label"] = label
         case "click-composer":
             let (_, targetFrame) = try validate()
             let targets = visit(try axWindow(binding.target, targetFrame)).filter { node in
@@ -363,12 +657,12 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             guard targets.count == 1, let composer = rectangle(targets[0]), let canvas = rectangle(try one(elements, roles: ["AXImage"], label: "实时电脑画面")) else { throw fail("owned-composer-or-canvas-not-unique") }
             let point = try project(CGPoint(x: composer.midX, y: composer.midY), from: targetFrame, into: canvas)
             result["targetFrame"] = jsonRect(targetFrame); result["targetComposer"] = jsonRect(composer); result["canvas"] = jsonRect(canvas)
-            result["click"] = try await click(point)
+            result["click"] = try await click(point, expected: try one(elements, roles: ["AXImage"], label: "实时电脑画面"), roles: ["AXImage"], label: "实时电脑画面")
         case "type-footer":
             guard let text = command["text"] as? String, !text.isEmpty, text.utf16.count <= 256 else { throw fail("invalid-fixture-text") }
             let input = try one(elements, roles: ["AXTextField", "AXTextArea"], label: "接管后输入文字")
             guard let rect = rectangle(input), (attribute(input, kAXValueAttribute) as? String ?? "").isEmpty else { throw fail("fixture-footer-not-empty") }
-            result["click"] = try await click(CGPoint(x: rect.midX, y: rect.midY))
+            result["click"] = try await click(CGPoint(x: rect.midX, y: rect.midY), expected: input, roles: ["AXTextField", "AXTextArea"], label: "接管后输入文字")
             func focused() -> Bool {
                 guard let value = attribute(AXUIElementCreateApplication(binding.preview.pid), kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
                 return CFEqual(value, input)
@@ -407,6 +701,11 @@ private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerializa
     static func main() async {
         var diagnosticOutput: String?
         do {
+            if CommandLine.arguments.dropFirst() == ["--self-test-exact-route"] {
+                let cases = try pureExactRouteTests()
+                try emit(["ok": true, "result": ["cases": cases, "passed": true, "actualAXCalls": 0,
+                    "actualCGWindowQueries": 0, "actualDockQueries": 0, "inputEventsPosted": 0, "signalsSent": 0]]); return
+            }
             if CommandLine.arguments.dropFirst() == ["--self-test"] {
                 let p = try project(CGPoint(x: -50, y: 250), from: CGRect(x: -250, y: 50, width: 400, height: 400), into: CGRect(x: 100, y: 500, width: 200, height: 200))
                 guard p == CGPoint(x: 200, y: 600) else { throw fail("projection-self-test-failed") }

@@ -11,9 +11,9 @@ test('Mac owned-target fixture compiles and checks ancestry, offscreen stability
   const directory = await mkdtemp(join(tmpdir(), 'qiuya-mac-target-static-')), run = promisify(execFile)
   try {
     const executable = join(directory, 'target-fixture')
-    await run('/usr/bin/swiftc', ['-parse-as-library', '-framework', 'AppKit', '-framework', 'ApplicationServices', fileURLToPath(new URL('fixtures/harness-target-macos.swift', import.meta.url)), '-o', executable], { timeout: 60_000 })
+    await run('/usr/bin/swiftc', ['-parse-as-library', '-module-cache-path', join(directory, 'module-cache'), '-framework', 'AppKit', '-framework', 'ApplicationServices', fileURLToPath(new URL('fixtures/harness-target-macos.swift', import.meta.url)), '-o', executable], { timeout: 60_000 })
     const response = JSON.parse((await run(executable, ['--self-test'], { timeout: 5000 })).stdout)
-    assert.deepEqual(response, { ok: true, result: { ownership: true, stableOffscreenTransition: true, duplicateAndWrongFrontRejected: true, metadataOnly: true, inputEventsPosted: 0, activationCalls: 0, raiseCalls: 0 } })
+    assert.deepEqual(response, { ok: true, result: { ownership: true, stableOffscreenTransition: true, duplicateAndWrongRouteRejected: true, exactCenterPointerAndFocusedRoot: true, normalComponentDoesNotOverrideExactRoute: true, metadataOnly: true, inputEventsPosted: 0, activationCalls: 0, raiseCalls: 0 } })
     for (const request of ['{}', '{"op":"activate","label":"other-window"}', 'not JSON']) {
       const invalid = JSON.parse((await run(executable, ['--request', request], { timeout: 5000 })).stdout)
       assert.equal(invalid.ok, false); assert.deepEqual(invalid.diagnostic, { inputEventsPosted: 0, activationCalls: 0, raiseCalls: 0 })
@@ -24,8 +24,11 @@ test('Mac owned-target fixture compiles and checks ancestry, offscreen stability
 test('Mac E2E fixture setup precedes model authorization and repeat-open uses bound stable readiness', async () => {
   const source = await readFile(new URL('../scripts/e2e-harness.mjs', import.meta.url), 'utf8')
   const setup = source.indexOf("activation = await ownMacTarget('activate', alpha)")
-  const request = source.indexOf('const approval = inlinePreview.getByRole')
+  const request = source.indexOf('const ownerApprovalBinding = bindHarnessNativeApproval')
   assert.ok(setup > 0 && request > setup)
+  assert.match(source, /let approval = workbenchChat\.getByRole/u)
+  assert.match(source, /await approval\.getByRole\('button', \{ name: '允许一次', exact: true \}\)\.click\(\)/u)
+  assert.match(source, /harness-workbench-ui-evidence\.mjs/u)
   assert.match(source, /if \(process\.platform === 'darwin' && macTargetBinding\) await ownMacTarget\('wait', alpha\)/u)
   assert.match(source, /host\.exitCode === null/u)
   assert.match(source, /authorizationStarted: false, inputEventsPosted: 0/u)

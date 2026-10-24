@@ -1,6 +1,10 @@
 /** Local-only deterministic provider for the installed Harness UI E2E runner. */
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, realpathSync, writeFileSync, constants } from 'node:fs'
 import { join } from 'node:path'
+import {createHash} from 'node:crypto'
+import {threadId} from 'node:worker_threads'
+import {OwnedMacInputSourceTrace} from './harness-passive-input-source.mjs'
+import {installOwnedPreviewRPCTrace} from './owned-preview-rpc-trace.mjs'
 import { readOwnedHarnessFeatureEvidence } from '../../scripts/harness-feature-evidence.mjs'
 export const name = 'qiuya-harness-e2e-provider'
 export const inject = ['llm', 'agents', 'connection', 'workspaceRegistry', 'sessionQuery']
@@ -76,8 +80,23 @@ const delay = (milliseconds, signal) => new Promise((resolve, reject) => {
   function abort() { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(signal.reason ?? new Error('Aborted')) }
   if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true })
 })
+/** Test-only same actual provider realm; NODE_OPTIONS alone is not proof of Host hook installation. */
+export function installProviderOwnedPreviewTrace(ctx) {
+  if(process.platform!=='darwin'||process.env.QIUYA_OWNED_PREVIEW_TRACE!=='1')return
+  if(process.env.QIUYA_HARNESS_E2E!=='1')throw Error('TRACE_E2E_SCOPE_REQUIRED')
+  const profileRoot=realpathSync(process.env.DSH_HOME)
+  ctx.effect(()=>{
+    const trace=installOwnedPreviewRPCTrace({profileRoot})
+    const receipt={version:1,pid:process.pid,threadId,profileSHA256:createHash('sha256').update(profileRoot).digest('hex'),inputEventsPosted:0,networkRequests:0}
+    writeFileSync(join(profileRoot,'owned-preview-rpc-installed.json'),JSON.stringify(receipt)+'\n',{flag:constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,mode:0o600})
+    return ()=>trace.stop()
+  })
+}
 export function apply(ctx) {
   if (process.env.QIUYA_HARNESS_E2E !== '1' || !process.env.DSH_HOME?.includes('qiuya-harness-')) throw new Error('The E2E provider requires a dedicated temporary DSH_HOME')
+  installProviderOwnedPreviewTrace(ctx)
+  const passiveInputSource=process.platform==='darwin'&&process.env.QIUYA_PASSIVE_INPUT_SOURCE==='1'?new OwnedMacInputSourceTrace(process.env.DSH_HOME):null
+  ctx.effect(()=>()=>passiveInputSource?.close())
   // Test-only, owner-only finite readback. The exact Session is bound by the
   // runner before its synthetic computer prompt; no other Agent is readable.
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/qiuya-e2e-owned-agent', methods: ['POST'], requestBody: 'buffered', async fetch(request) {
@@ -151,6 +170,7 @@ export function apply(ctx) {
         }
         if (stage === 0) {
           if (tools.some(tool => tool.name === 'run_code')) {
+            if(passiveInputSource)throw Error('PASSIVE_SOURCE_NATIVE_TOOLS_REQUIRED')
             submittedComputers.set(key, 7)
             const code = `const found = await tools.qiuya_computer_discover({query:${JSON.stringify(fixtureTarget.query)}}); const candidate = found.applications.find(app => app.appName === ${JSON.stringify(fixtureTarget.query)}); if (!candidate) throw new Error('E2E_APPLICATION_NOT_DISCOVERED'); const granted = await tools.qiuya_computer_request_control({candidateId:candidate.candidateId,reason:'在当前测试聊天操作本次专用测试窗口，验证图片与鼠标工具链'}); const windows = await tools.qiuya_computer_targets({}); if (!windows.targets.some(target => target.id === ${JSON.stringify(fixtureTarget.targetId)})) throw new Error('E2E_FIXTURE_TARGET_NOT_PERMITTED'); await tools.qiuya_computer_select({targetId:${JSON.stringify(fixtureTarget.targetId)}}); const before = await tools.qiuya_computer_observe({}); const action = await tools.qiuya_computer_act({frameId:before.frameId,actionId:'fixture-agent-move',action:{kind:'move',x:Math.floor(before.width/2),y:Math.floor(before.height/2)}}); const after = await tools.qiuya_computer_observe({}); return {granted,action,after};`
             yield *call('run_code', { code, description: '从当前聊天发现测试应用，等待用户授权，再观察、操作和验证' }); return
@@ -168,17 +188,20 @@ export function apply(ctx) {
           if (!targets.some(target => target.id === fixtureTarget.targetId)) { yield { type: 'text-delta', index: 0, text: 'E2E_FIXTURE_TARGET_NOT_PERMITTED' } }
           else { submittedComputers.set(key, 4); yield *call('qiuya_computer_select', { targetId: fixtureTarget.targetId }); return }
         } else if (stage === 4) {
+          if(passiveInputSource&&!await passiveInputSource.prepare(fixtureTarget.targetId,fixtureTarget.targetPid)){yield {type:'text-delta',index:0,text:'E2E_PASSIVE_SOURCE_DIAGNOSTIC_UNAVAILABLE'};yield {type:'finish',reason:{kind:'stop'}};return}
           submittedComputers.set(key, 5); yield *call('qiuya_computer_observe', {}); return
         } else if (stage === 5) {
           const observationText = [...messages].reverse().filter(message => message.role === 'tool').map(textOf).join('\n')
           const frameId = observationText.match(/"frameId"\s*:\s*"([^"\\]+)"/u)?.[1]
           const image = images.at(-1)
           if (frameId && image && tools.some(tool => tool.name === 'qiuya_computer_act')) {
+            if(passiveInputSource&&!await passiveInputSource.start({frameId,targetId:fixtureTarget.targetId})){yield {type:'text-delta',index:0,text:'E2E_PASSIVE_SOURCE_DIAGNOSTIC_UNAVAILABLE'};yield {type:'finish',reason:{kind:'stop'}};return}
             submittedComputers.set(key, 6)
             yield *call('qiuya_computer_act', { frameId, actionId: 'fixture-agent-move', action: { kind: 'move', x: Math.floor(image.width / 2), y: Math.floor(image.height / 2) } }); return
           }
           yield { type: 'text-delta', index: 0, text: 'E2E_COMPUTER_FRAME_MISSING' }
         } else if (stage === 6) {
+          if(passiveInputSource&&!await passiveInputSource.finish()){yield {type:'text-delta',index:0,text:'E2E_PASSIVE_SOURCE_DIAGNOSTIC_UNAVAILABLE'};yield {type:'finish',reason:{kind:'stop'}};return}
           if (!actionResults.some(result => result.performed)) { yield { type: 'text-delta', index: 0, text: 'E2E_COMPUTER_ACTION_FAILED' }; yield { type: 'finish', reason: { kind: 'stop' } }; return }
           submittedComputers.set(key, 7); yield *call('qiuya_computer_observe', {}); return
         } else {

@@ -55,7 +55,10 @@ export function makeWindowsUIStateSource(source) {
 }
 
 export function makeWindowsUIProviderSource(source) {
-  source = replaceOnce(source, "import { appendFileSync, readFileSync } from 'node:fs'", "import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'")
+  // The shared provider now carries the passive Mac evidence imports too.
+  // Bind that exact reviewed import; writeFileSync is already available.
+  const fsImport = "import { appendFileSync, readFileSync, realpathSync, writeFileSync, constants } from 'node:fs'"
+  assert.equal(source.split(fsImport).length, 2, 'Unique UI supplement provider import changed')
   const anchor = "  if (process.env.QIUYA_HARNESS_E2E !== '1' || !process.env.DSH_HOME?.includes('qiuya-harness-')) throw new Error('The E2E provider requires a dedicated temporary DSH_HOME')"
   return replaceOnce(source, anchor, anchor + `
   // Frozen UI-only test adapter. stdin EOF invokes the already registered

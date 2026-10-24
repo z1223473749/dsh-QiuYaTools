@@ -1,0 +1,92 @@
+{
+  "before": {
+    "conversations": [
+      {
+        "sessionId": null,
+        "phase": "hero",
+        "visible": true,
+        "composers": [
+          {
+            "editable": "false",
+            "phase": "inert",
+            "visible": true,
+            "textLength": 0,
+            "placeholder": "选择一个工作区开始"
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "key": "workspace:9ce12395-fda2-53f3-818e-eebcf6b1a730",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "session:session-1fa42233-bd1e-5908-9d99-a2cbde6589f9",
+        "selected": "false",
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "workspace:b1ad5407-22c8-53e4-a73f-bccce4253abc",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      }
+    ],
+    "workspaceChips": [
+      {
+        "text": "选择工作区",
+        "visible": true,
+        "expanded": "false"
+      }
+    ]
+  },
+  "after": {
+    "conversations": [
+      {
+        "sessionId": null,
+        "phase": "hero",
+        "visible": true,
+        "composers": [
+          {
+            "editable": "false",
+            "phase": "inert",
+            "visible": true,
+            "textLength": 0,
+            "placeholder": "选择一个工作区开始"
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "key": "workspace:9ce12395-fda2-53f3-818e-eebcf6b1a730",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "session:session-1fa42233-bd1e-5908-9d99-a2cbde6589f9",
+        "selected": "false",
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "workspace:b1ad5407-22c8-53e4-a73f-bccce4253abc",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      }
+    ],
+    "workspaceChips": [
+      {
+        "text": "选择工作区",
+        "visible": true,
+        "expanded": "false"
+      }
+    ]
+  }
+}

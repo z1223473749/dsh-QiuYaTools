@@ -70,7 +70,8 @@ export function selectedHarnessWorkspaceSession(snapshot, workspace) {
 }
 
 /** Wait for one public new-session transition before any keyboard input. */
-export async function waitForHarnessNewBlankSession(read, before, { now = Date.now, sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds)) } = {}) {
+export async function waitForHarnessNewBlankSession(read, before, { now = Date.now, sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds)), budgetMs = 15000 } = {}) {
+  if(!Number.isFinite(budgetMs)||budgetMs<=0||budgetMs>15000)throw Error('Invalid original blank-session time budget')
   // The new-session click is asynchronous. An existing empty hero can remain
   // stable for longer than 750 ms while Windows is still creating its successor.
   // Its empty composer is therefore never evidence that this click completed.
@@ -78,7 +79,7 @@ export async function waitForHarnessNewBlankSession(read, before, { now = Date.n
     ...before.conversations.map(item => item.sessionId),
     ...before.rows.filter(item => item.key?.startsWith('session:')).map(item => item.key.slice('session:'.length)),
   ].filter(Boolean))
-  const deadline = now() + 15000
+  const deadline = now() + budgetMs
   let candidate, stableAt = now()
   while (now() < deadline) {
     const snapshot = await read()

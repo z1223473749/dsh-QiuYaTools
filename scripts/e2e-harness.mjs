@@ -1,3 +1,6 @@
+import {bindHarnessNativeApproval,collectWorkbenchPreviewResponses,captureWorkbenchPaint,matchWorkbenchPaint,locateHarnessWorkbenchChat,captureHarnessWorkbenchScope} from './harness-workbench-ui-evidence.mjs'
+import {waitFirstOwnedHarnessBlank,waitCurrentOwnedHarnessBlank,committedOwnSessionReady,restorePreservedOwnSession} from '../tests/fixtures/harness-initial-owned-session.mjs'
+import {preserveOwnedMacInputSource,ownedMacInputSourceFailure} from '../tests/fixtures/harness-passive-input-source.mjs'
 /** Real installed Harness + isolated profile + deterministic local model + Chrome. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -8,13 +11,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
 import { build } from 'esbuild'
+import { waitFinalNativeSession,readFinalOwnUploadedFile } from './harness-final-frame-evidence.mjs'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
 import { captureSettingsTabs, createHarnessImageLayout } from './harness-settings-acceptance.mjs'
 import { waitForHarnessComputerPipeline, matchesHarnessPreviewControlState, harnessFailedComputerDrained, finalizeHarnessOwnedResources } from './harness-computer-pipeline.mjs'
+import { preserveOwnedPreviewTrace, stoppedPreviewLabels, stoppedPreviewAcknowledged, waitPreviewControlSharedBudget } from './harness-passive-owned-evidence.mjs'
+import { createOwnSessionBodyOracle } from './harness-session-body-oracle.mjs'
 import { fixturePlanRevisionText, archiveCollectionEvidence, planRevisionEvidence, waitForInlinePaint } from './harness-feature-evidence.mjs'
 import { readOwnHarnessPastedText } from './harness-pasted-text-evidence.mjs'
 import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, waitForHarnessNewBlankSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
+import { assertHarnessMacEntryPrepared } from './harness-macos-entry-preflight.mjs'
+import { stagePassiveObserverForProvider } from './harness-passive-observer-artifact.mjs'
+import { HARNESS_PASSIVE_OBSERVER_SHA256 } from '../tests/fixtures/harness-passive-input-source.mjs'
 
+assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: false })
 const root = fileURLToPath(new URL('../', import.meta.url))
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1] }
 const output = resolve(arg('--output', 'artifacts/harness-e2e'))
@@ -36,11 +46,12 @@ await mkdir(imageLayout.directory, { recursive: true })
 const candidateSHA256 = candidate ? createHash('sha256').update(await readFile(resolve(candidate))).digest('hex') : null
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
-const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1' }
+const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1', ...(process.platform === 'darwin' ? { QIUYA_OWNED_PREVIEW_TRACE: '1', QIUYA_PASSIVE_INPUT_SOURCE: '1', NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + pathToFileURL(join(root, 'tests/fixtures/owned-preview-rpc-preload.mjs')).href].filter(Boolean).join(' ') } : {}) }
 const tests = [], errors = [], screenshots = [], windowRpc = []
 let host, browser, page, driver, macPreviewRetirement, diagnosticComplete = false
 let macTargetFixture, macTargetBinding, macTargetEvidenceSequence = 0
-let blankSessionSequence = 0
+let blankSessionSequence = 0, ownSessionBodyOracle
+const readOwnSessionBody = input => { ownSessionBodyOracle ??= createOwnSessionBodyOracle({ root, temporary, profileRoot: profileHome, host, runnerPID: process.pid, run: nativeCommand }); return ownSessionBodyOracle(input) }
 class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
@@ -49,10 +60,10 @@ const execute = (args, timeoutMs = 120000) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => { child.kill(); reject(new Error('Isolated Harness command timed out')) }, timeoutMs)
   child.once('error', error => { clearTimeout(timer); reject(error) }); child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error(sanitizeHarnessDiagnostic(output).slice(-12000))) })
 })
-const nativeCommand = (command, args) => new Promise((resolve, reject) => {
+const nativeCommand = (command, args, timeoutMs = 30000) => new Promise((resolve, reject) => {
   const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
   let out = '', err = ''; child.stdout.on('data', chunk => { out += chunk }); child.stderr.on('data', chunk => { err += chunk })
-  const timeout = setTimeout(() => { child.kill(); reject(new Error('Native evidence command timed out')) }, 30000)
+  const timeout = setTimeout(() => { child.kill(); reject(new Error('Native evidence command timed out')) }, Math.max(1, Math.min(30000, timeoutMs)))
   child.once('error', error => { clearTimeout(timeout); reject(error) })
   child.once('exit', code => { clearTimeout(timeout); code === 0 ? resolve(out) : reject(new Error(err || `${command} exited ${code}`)) })
 })
@@ -112,13 +123,23 @@ async function openSettings() {
   await page.getByRole('menuitem', { name: 'QiuYaTools', exact: true }).click()
   await page.getByRole('heading', { name: 'QiuYa 增强工具箱', exact: true }).waitFor()
 }
-async function blankSession() {
-  const sequence = ++blankSessionSequence
-  const before = await page.evaluate(captureHarnessWorkspaceDom)
-  await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
-  let sessionId
-  try { sessionId = await waitForHarnessNewBlankSession(() => page.evaluate(captureHarnessWorkspaceDom), before) }
-  finally { await writeFile(join(output, 'blank-session-dom-' + String(sequence).padStart(3, '0') + '.json'), JSON.stringify({ before, after: await page.evaluate(captureHarnessWorkspaceDom), readySessionId: sessionId }, null, 2)) }
+let sessionOwnedWorkspace,initialBlankClaimed=false
+const committedOwnSessionIds=new Set()
+async function blankSession({restorePreservedSessionId}={}) {
+  const sequence=++blankSessionSequence,began=Date.now(),deadline=began+15000,left=()=>{const value=deadline-Date.now();assert(value>0,'Original15000ms blank-session budget expired; no input sent');return value}
+  let before=await page.evaluate(captureHarnessWorkspaceDom);const originalBefore=before;let sessionId,newSessionButtonIssued=false,restoredPreservedOwnSession=false
+  try{
+    if(!initialBlankClaimed){
+      initialBlankClaimed=true
+      sessionId=await waitCurrentOwnedHarnessBlank(()=>page.evaluate(captureHarnessWorkspaceDom),sessionOwnedWorkspace,{budgetMs:left()})
+    }else{
+      if(restorePreservedSessionId){before=await restorePreservedOwnSession(()=>page.evaluate(captureHarnessWorkspaceDom),async(id,timeout)=>{const own=page.locator('[data-row-key="session:'+id+'"]');assert.equal(await own.count(),1);await own.click({timeout})},sessionOwnedWorkspace,restorePreservedSessionId,committedOwnSessionIds,{budgetMs:left()});restoredPreservedOwnSession=true}
+      assert([...committedOwnSessionIds].some(id=>committedOwnSessionReady(before,id)),'A selected committed own Session is required before a new-session transition; no input sent')
+      await page.getByRole('button',{name:'新建会话',exact:true}).first().click({timeout:left()});newSessionButtonIssued=true
+      sessionId=await waitForHarnessNewBlankSession(()=>page.evaluate(captureHarnessWorkspaceDom),before,{budgetMs:left()})
+    }
+    left()
+  }finally{await writeFile(join(output,'blank-session-dom-'+String(sequence).padStart(3,'0')+'.json'),JSON.stringify({before,originalBefore,restoredPreservedOwnSession,after:await page.evaluate(captureHarnessWorkspaceDom),readySessionId:sessionId,newSessionButtonIssued,originalBudgetMs:15000,elapsedMs:Date.now()-began},null,2))}
   return sessionId
 }
 async function newSession(label) {
@@ -133,6 +154,7 @@ async function newSession(label) {
   await row(label).waitFor()
   const id = (await row(label).getAttribute('data-row-key')).slice('session:'.length)
   assert.equal(id, blank, 'The first prompt must enter the exact settled blank Session')
+  committedOwnSessionIds.add(id)
   return id
 }
 async function menu(label) { await row(label).click({ button: 'right' }); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).waitFor() }
@@ -154,7 +176,11 @@ try {
     await execute(['plugin', '--profile', 'web', 'add', resolve(candidate)])
     assert.equal(createHash('sha256').update(await readFile(resolve(candidate))).digest('hex'), candidateSHA256, 'The candidate changed while Harness was installing it')
     const fixture = join(temporary, 'provider'); await mkdir(fixture)
-    await build({ entryPoints: [join(root, 'tests/fixtures/harness-e2e-provider.mjs')], outfile: join(fixture, 'index.mjs'), bundle: true, platform: 'node', format: 'esm' })
+    const providerBundle = await build({ entryPoints: [join(root, 'tests/fixtures/harness-e2e-provider.mjs')], outfile: join(fixture, 'index.mjs'), absWorkingDir: root, write: false, bundle: true, platform: 'node', format: 'esm' }); assert.ok(join(fixture, 'index.mjs').startsWith(temporary + '/')); await writeFile(join(fixture, 'index.mjs'), providerBundle.outputFiles[0].contents)
+    if (process.platform === 'darwin' && (!featureEvidenceOnly || featureEvidenceCases.has('computer-main-agent-tools-and-image-adapter-pipeline'))) {
+      const observerDeployment = await stagePassiveObserverForProvider({ sourceDirectory: join(root, 'tests/fixtures'), providerDirectory: fixture, expectedSHA256: HARNESS_PASSIVE_OBSERVER_SHA256 })
+      await writeFile(join(output, 'passive-observer-runtime-binding.json'), JSON.stringify(observerDeployment, null, 2), { flag: 'wx' })
+    }
     await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'qiuya-harness-e2e-fixture', version: '1.0.0', type: 'module' }))
     const overlay = join(temporary, 'overlay.yml')
     await writeFile(overlay, JSON.stringify([
@@ -202,6 +228,7 @@ try {
     await page.getByRole('button', { name: '选择工作区', exact: true }).click()
     await page.getByRole('menuitem', { name: ownedWorkspace.title, exact: true }).click()
     workspaceSessionId = await waitFor(async () => selectedHarnessWorkspaceSession(await page.evaluate(captureHarnessWorkspaceDom), ownedWorkspace), 'The explicitly selected own workspace did not expose its ready blank Session')
+    sessionOwnedWorkspace=ownedWorkspace
   } finally {
     await writeFile(join(output, 'workspace-prerequisite.json'), JSON.stringify({ ownedWorkspace, workspaceSessionId, before: workspaceBefore, after: await page.evaluate(captureHarnessWorkspaceDom), boundary: 'One documented owner workspace/create RPC for a fresh test-owned directory, then an actual public workspace menu selection. No user workspace is adopted or read; no prompt is sent during setup.' }, null, 2))
   }
@@ -285,12 +312,13 @@ try {
   })
   let independentTarget
   await test('native-independent-window-and-reuse', async () => {
-    const compiled = await build({ stdin: { contents: "export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm' })
+    const compiled = await build({ stdin: { contents: "export {NativeCompanionDriver} from './src/features/computer-use/native.ts'", resolveDir: root }, absWorkingDir: root, bundle: true, write: false, platform: 'node', format: 'esm' })
     const { NativeCompanionDriver } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
     const macCandidateHelper = candidate && process.argv.includes('--manual-preview-e2e') ? join(profileHome, 'profiles/web/node_modules/dsh-qiuya-tools/lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer') : join(root, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')
     const executable = arg('--native', process.platform === 'darwin' ? macCandidateHelper : join(root, `lib/native/win32-${process.arch}/qiuya-windows.exe`))
     driver = new NativeCompanionDriver({ executable, args: process.platform === 'win32' ? ['--computer'] : [] })
     await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
+    const finalNativeDeadline = Date.now() + 35000
     let ownedTargets = []
     let target
     try {
@@ -298,7 +326,7 @@ try {
         const targets = await driver.targets()
         ownedTargets = targets.filter(target => target.title.includes(alpha) || process.platform === 'win32' && target.appId.toLowerCase().startsWith(profileHome.toLowerCase() + '\\'))
         return targets.find(target => target.title.includes(alpha))
-      }, 'Native session window did not appear', 35000)
+      }, 'Native session window did not appear', Math.max(1, finalNativeDeadline - Date.now()))
     } finally {
       await writeFile(join(output, 'independent-window-targets.json'), JSON.stringify({ alpha, targets: ownedTargets }, null, 2))
       if (process.platform === 'win32') {
@@ -314,7 +342,7 @@ try {
     }
     independentTarget = target
     if (process.platform === 'darwin' && candidate) await ownMacTarget('bind', alpha, { targetPid: target.pid, targetWindowId: Number(target.id.replace('mac-window:', '')) })
-    const observation = await driver.observe(target.id)
+    const observation = process.platform === 'darwin' ? await waitFinalNativeSession({ driver, target, title: alpha, sessionId: alphaId, deadline: finalNativeDeadline, acknowledged: () => windowRpc.some(row => row.request?.sessionId === alphaId && row.result?.ok && row.result?.value?.opened), record: evidence => writeFile(join(output, 'independent-window-final-body.json'), JSON.stringify(evidence, null, 2)), readBody: readOwnSessionBody, recordFailureRaster: async observation => { const bytes = Buffer.from(observation.imageBase64, 'base64'); await writeFile(imagePath('independent-window-final-failed-diagnostic.jpg'), bytes); return { status: 'failed-diagnostic-only', file: imageReference('independent-window-final-failed-diagnostic.jpg'), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') } } }) : await driver.observe(target.id)
     await writeFile(imagePath('independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
     assert.ok(observation.elements.includes(alpha), 'The independent WebKit/Windows window should expose the exact target session')
     await menu(alpha); await page.getByRole('menuitem', { name: '新窗口打开', exact: true }).click()
@@ -344,23 +372,26 @@ try {
     await sleep(250); await page.mouse.up()
     const facts = await page.evaluate(() => window.__e2eDragFacts)
     await writeFile(join(output, 'drag-browser-events.json'), JSON.stringify(facts, null, 2))
-    const target = await waitFor(async () => (await driver.targets()).find(target => target.title.includes(beta)), 'The real browser drag did not reveal its native session window', 35000)
+    const finalDragDeadline = Date.now() + 35000
+    const target = await waitFor(async () => (await driver.targets()).find(target => target.title.includes(beta)), 'The real browser drag did not reveal its native session window', Math.max(1, finalDragDeadline - Date.now()))
     assert.ok(facts.some(event => event.kind === 'dragstart' && event.isTrusted), 'The browser must generate an actual trusted dragstart')
     assert.ok(facts.some(event => event.kind === 'drop' && event.isTrusted), 'The browser must generate an actual trusted drop')
-    await waitFor(() => windowRpc.some(request => request.request?.sessionId === betaId && request.request.source === 'drag' && request.result?.value?.opened), 'The dragged native window did not acknowledge its exact session', 35000)
+    await waitFor(() => windowRpc.some(request => request.request?.sessionId === betaId && request.request.source === 'drag' && request.result?.value?.opened), 'The dragged native window did not acknowledge its exact session', Math.max(1, finalDragDeadline - Date.now()))
     const rpc = windowRpc.filter(request => request.request?.sessionId === betaId && request.request.source === 'drag')
     assert.ok(rpc.some(request => request.request.action === 'prepare' && request.result?.ok))
     assert.ok(rpc.some(request => request.request.action !== 'prepare' && request.result?.value?.opened))
-    const observation = await driver.observe(target.id)
+    const observation = process.platform === 'darwin' ? await waitFinalNativeSession({ driver, target, title: beta, sessionId: betaId, deadline: finalDragDeadline, acknowledged: () => windowRpc.some(row => row.request?.sessionId === betaId && row.request.source === 'drag' && row.result?.ok && row.result?.value?.opened), record: evidence => writeFile(join(output, 'drag-native-window-final-body.json'), JSON.stringify(evidence, null, 2)), readBody: readOwnSessionBody, recordFailureRaster: async observation => { const bytes = Buffer.from(observation.imageBase64, 'base64'); await writeFile(imagePath('drag-native-window-final-failed-diagnostic.jpg'), bytes); return { status: 'failed-diagnostic-only', file: imageReference('drag-native-window-final-failed-diagnostic.jpg'), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') } } }) : await driver.observe(target.id)
     await writeFile(imagePath('drag-native-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
     await writeFile(join(output, 'drag-native-window-evidence.json'), JSON.stringify({ kind: 'real browser drag outside sidebar; not OS desktop HID drag', facts, rpc, target }, null, 2))
     return { targetId: target.id, trustedDrag: true, boundary: 'client outside sidebar, not physical desktop drop' }
   })
   const computerPipelinePassed = await test('computer-main-agent-tools-and-image-adapter-pipeline', async () => {
+    let workbenchPreviewEvidence
+    try {
     // Bind the exact own Agent before the native prerequisite can fail. This
     // authorizes only the finite cleanup oracle, never target input.
     assert.ok(alphaId, 'The own Alpha session must exist before computer control')
-    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, ...independentTarget ? { targetId: independentTarget.id } : {} }), { mode: 0o600 })
+    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, ...independentTarget ? { targetId: independentTarget.id, targetPid: independentTarget.pid } : {} }), { mode: 0o600 })
     await waitForInputWindow()
     assert.ok(independentTarget && alphaId, 'The fixture session window must exist before computer control')
     await row(alpha).click(); await sleep(300)
@@ -384,7 +415,7 @@ try {
     }
     const application = (await driver.applications()).find(app => app.appId === independentTarget.appId)
     assert.ok(application, 'The own synthetic fixture must be discoverable without window contents')
-    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, query: application.name, targetId: independentTarget.id }), { mode: 0o600 })
+    await writeFile(join(profileHome, 'e2e-computer-target.json'), JSON.stringify({ sessionId: alphaId, query: application.name, targetId: independentTarget.id, targetPid: independentTarget.pid }), { mode: 0o600 })
     await openSettings()
     await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
     const enable = page.getByRole('switch', { name: '启用电脑操控', exact: true })
@@ -413,23 +444,36 @@ try {
         if (!send || send.disabled) throw new Error('Fixture composer send button was not ready')
         send.click()
     })
-    const inlinePreview = page.locator(`[data-qyt-computer-inline="${alphaId}"]`)
-    const approval = inlinePreview.getByRole('region', { name: '电脑操作授权', exact: true })
+    const workbenchOwner = locateHarnessWorkbenchChat(page, alphaId)
+    const workbenchChat = workbenchOwner.anchor
+    const inlinePreview = workbenchChat.locator('.qyt-workbench-small')
+    let approval = workbenchChat.getByRole('region', { name: '电脑操作授权', exact: true })
     await approval.waitFor({ timeout: 25000 })
     await screenshot('chat-application-approval')
     const beforeApproval = await page.evaluate(async sessionId => {
       const response = await fetch('/api/qiuya-tools.computer.control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'qiuya-tools.computer.control', payload: { op: 'status', sessionId } }) })
       const result = (await response.json()).result
       if (!response.ok || !result.ok) throw new Error('Pre-approval status failed')
-      return { sessions: result.value.sessions.filter(row => row.sessionId === sessionId), pending: result.value.pendingRequests.map(row => ({ requestId: row.requestId, sessionId: row.sessionId, appName: row.appName })) }
+      return { sessions: result.value.sessions.filter(row => row.sessionId === sessionId), pending: result.value.pendingRequests.map(row => ({ requestId: row.requestId, requestVersion: row.requestVersion, sessionId: row.sessionId, appId: row.appId, appName: row.appName, state: row.state, createdAt: row.createdAt, expiresAt: row.expiresAt })) }
     }, alphaId)
-    assert.deepEqual(beforeApproval.sessions, [], 'No control session may start before the owner approves')
-    assert.equal(beforeApproval.pending.length, 1); assert.equal(beforeApproval.pending[0].sessionId, alphaId)
+    const expectedWorkbench = { sessionId: alphaId, targetId: independentTarget.id, targetPid: independentTarget.pid, appId: independentTarget.appId, appName: application.name }
+    const ownerApprovalBinding = bindHarnessNativeApproval(beforeApproval, expectedWorkbench)
+    assert.equal(await workbenchOwner.owner.count(), 1, 'Exactly one visible official panel owns current chat and workbench anchor')
+    const workbenchScope = await workbenchChat.evaluate(captureHarnessWorkbenchScope, { sessionId: alphaId })
+    await writeFile(join(output, 'chat-workbench-panel-scope.json'), JSON.stringify(workbenchScope, null, 2))
+    assert.equal(await workbenchChat.count(), 1, 'Exactly one visible own-chat workbench')
+    approval = workbenchChat.locator(`section[data-qyt-computer-request=${JSON.stringify(ownerApprovalBinding.requestId)}][aria-label="电脑操作授权"]`)
+    assert.equal(await approval.count(), 1, 'Exactly one native card with this actual Host request ID')
+    assert.equal(await approval.locator('strong').innerText(), ownerApprovalBinding.appName)
+    await writeFile(join(output, 'chat-authorization-exact-request.json'), JSON.stringify(ownerApprovalBinding, null, 2))
+    workbenchPreviewEvidence = collectWorkbenchPreviewResponses(page, expectedWorkbench)
     await writeFile(join(output, 'chat-authorization-before-owner.json'), JSON.stringify(beforeApproval, null, 2))
     await approval.getByRole('button', { name: '允许一次', exact: true }).click()
     const pipelineProgress = []
     try {
       await waitForHarnessComputerPipeline(async remainingMs => {
+        const sourceFailure=ownedMacInputSourceFailure(profileHome,host.pid)
+        if(sourceFailure)throw new Error('PASSIVE_SOURCE_DIAGNOSTIC_UNAVAILABLE:'+sourceFailure.stage+':'+sourceFailure.code+'; original input not replayed')
         const raw = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')
         // The provider appends complete JSONL rows synchronously. A concurrent
         // read may see only the unfinished tail, never treat that as a row.
@@ -464,18 +508,25 @@ try {
     assert.ok(images.flatMap(request => request.actionResults).some(result => result?.performed), 'The main Agent must receive a successful native move-action receipt')
     await writeFile(join(output, 'agent-image-adapter-evidence.json'), JSON.stringify(images, null, 2))
     await screenshot('agent-computer-image')
-    const smallFrame = inlinePreview.locator('iframe')
-    assert.equal(await smallFrame.getAttribute('src'), `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(alphaId)}&view=inline`)
-    await smallFrame.contentFrame().getByRole('img', { name: '实时电脑画面', exact: true }).waitFor()
-    const inlinePaint = await smallFrame.contentFrame().locator('#screen').evaluate(waitForInlinePaint, { timeoutMs: 10000 })
-    assert.equal(inlinePaint.painted, true); assert.ok(inlinePaint.frameId && inlinePaint.width > 1 && inlinePaint.height > 1)
-    await writeFile(join(output, 'inline-preview-painted-frame.json'), JSON.stringify(inlinePaint, null, 2))
+    const smallImage = inlinePreview.getByRole('img', { name: '当前授权目标的实时画面', exact: true })
+    await smallImage.waitFor()
+    const paintDeadline = Date.now() + 10000
+    let inlinePaint
+    await waitFor(async () => {
+      const paint = await smallImage.evaluate(captureWorkbenchPaint, { sessionId: alphaId })
+      if (!paint || Date.now() >= paintDeadline) return false
+      inlinePaint = matchWorkbenchPaint(paint, workbenchPreviewEvidence.records, expectedWorkbench)
+      return !!inlinePaint
+    }, 'Actual own workbench img must match the bytes of its real UI preview RPC', Math.max(1, paintDeadline - Date.now()))
+    assert(Date.now() < paintDeadline, 'Original10000ms small-image paint budget cannot be renewed')
+    await writeFile(join(output, 'inline-preview-painted-frame.json'), JSON.stringify({ ...inlinePaint, actualUIResponseEvidence: workbenchPreviewEvidence.summary }, null, 2))
+    workbenchPreviewEvidence.dispose()
     await page.mouse.move(300, 950)
-    await waitFor(() => inlinePreview.locator('.qyt-computer-inline-actions').evaluate(node => getComputedStyle(node).opacity === '0'), 'Inline controls must hide when the mouse leaves')
-    assert.equal(await inlinePreview.locator('.qyt-computer-inline-title,.qyt-computer-inline-settings').count(), 0, 'The default small preview must contain the image without persistent title/settings text')
+    await waitFor(() => inlinePreview.locator('.qyt-workbench-small-overlay').evaluate(node => getComputedStyle(node).opacity === '0'), 'Inline controls must hide when the mouse leaves')
+    assert.equal(await inlinePreview.locator('.qyt-workbench-heading,.qyt-workbench-input').count(), 0, 'The default small preview must contain the image without persistent heading or text-entry controls')
     await screenshot('chat-inline-preview')
     await inlinePreview.hover()
-    await waitFor(() => inlinePreview.locator('.qyt-computer-inline-actions').evaluate(node => getComputedStyle(node).opacity === '1'), 'Inline controls must appear on hover')
+    await waitFor(() => inlinePreview.locator('.qyt-workbench-small-overlay').evaluate(node => getComputedStyle(node).opacity === '1'), 'Inline controls must appear on hover')
     await screenshot('chat-inline-preview-hover')
     await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
     let previewTimeline
@@ -609,7 +660,8 @@ try {
         await writeFile(join(output, `preview-control-${state}.json`), JSON.stringify(receipt, null, 2))
       }
       try {
-        await waitFor(async () => {
+        const controlStepDeadline = Date.now() + 15000; let stoppedVisible
+        await waitPreviewControlSharedBudget(async () => {
           const backend = await computerSnapshot()
           // A successful Stop removes this terminal task from Settings. Read
           // the public DOM without an element auto-wait, then require both the
@@ -618,14 +670,18 @@ try {
           const current = { step, button, expectedState: state, settingsVisible: await page.getByRole('heading', { name: 'QiuYa 增强工具箱', exact: true }).isVisible(), backendState: backend.session?.state ?? null, taskCount: tasks.length, taskState: tasks.length === 1 ? tasks[0] : null }
           const previous = controlStateEvidence.at(-1)
           if (JSON.stringify(previous) !== JSON.stringify(current)) controlStateEvidence.push(current)
-          return matchesHarnessPreviewControlState(current, state)
-        }, `Computer ${button} did not enter ${state} with the expected public task lifecycle`)
+          if (!matchesHarnessPreviewControlState(current, state)) return false
+          if (state !== 'stopped') return true
+          // Share the original 15s state-wait budget with the actual native acknowledgment.
+          // No button is clicked again; AX and pixels may settle at different instants.
+          const native = windowsPreview ? JSON.parse(await windowsPreview()) : macPreview ? await macPreview('observe', { output: imagePath(`preview-control-${step}-stopped.jpg`) }) : JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', imagePath(`preview-control-${step}-stopped.jpg`)]))
+          stoppedVisible = { labels: stoppedPreviewLabels(native), backendState: 'stopped', taskRemoved: true, observedAt: Date.now(), sharedDeadline: controlStepDeadline }
+          return Date.now() <= controlStepDeadline && stoppedPreviewAcknowledged(native)
+        }, `Computer ${button} did not enter ${state} with the expected public task lifecycle`, controlStepDeadline)
         await writeFile(join(output, 'preview-control-state-lifecycle.json'), JSON.stringify(controlStateEvidence, null, 2))
         if (state === 'stopped') {
-          const native = windowsPreview ? JSON.parse(await windowsPreview()) : macPreview ? await macPreview('observe', { output: imagePath(`preview-control-${step}-stopped.jpg`) }) : JSON.parse(await nativeCommand(observer, ['QiuYaTools · 电脑操控', imagePath(`preview-control-${step}-stopped.jpg`)]))
-          const labels = [...(native.labels ?? []), ...(native.accessibility ?? []), ...(native.recognizedText ?? [])]
-          assert.ok(labels.join('\n').includes('已停止'), 'The owned native preview must visibly acknowledge Stop')
-          await writeFile(join(output, `preview-control-${step}-stopped-visible.json`), JSON.stringify({ labels, backendState: 'stopped', taskRemoved: true }, null, 2))
+          assert.ok(stoppedVisible?.labels.join('\n').includes('已停止'), 'The owned native preview must visibly acknowledge Stop')
+          await writeFile(join(output, `preview-control-${step}-stopped-visible.json`), JSON.stringify(stoppedVisible, null, 2))
         }
       } catch (error) {
         // Preserve the actual backend state and native error before case cleanup
@@ -719,6 +775,7 @@ try {
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     return { preview, adapterRequestsWithImages: images.length, imageBlocks: images.flatMap(request => request.imageBlocks).length,
       model: 'Local deterministic adapter verifies actual main-Agent image transport, not external vision reasoning' }
+    } finally { workbenchPreviewEvidence?.dispose() }
   })
   if (!computerPipelinePassed) {
     // Preserve the original failed result. Cancel only its own main Agent and
@@ -783,7 +840,7 @@ try {
     } finally { await writeFile(join(output, 'archive-exact-collection-evidence.json'), JSON.stringify({ before, after, result: archiveCollectionEvidence(before, after) }, null, 2)) }
   })
   await test('plan-review-comment-and-draft-preservation', async () => {
-    const planSessionId = await blankSession()
+    const planSessionId = await blankSession({restorePreservedSessionId:alphaId})
     await editor().fill('/plan on'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
     await waitFor(async () => (await page.locator('body').innerText()).includes('计划模式已开启') || (await page.getByRole('button', { name: /计划模式已开启/u }).count()) > 0, 'Plan mode did not activate')
     await editor().fill('E2E:plan'); await page.getByRole('button', { name: '发送消息', exact: true }).click()
@@ -917,8 +974,12 @@ finally {
     if (forcedHostTermination) errors.push('The owned Mac Host required SIGKILL instead of graceful retirement')
     await writeFile(join(output, 'mac-preview-process-retirement.json'), JSON.stringify({ elapsedMs: Date.now() - start, last, failure, forcedHostTermination, source: 'read-only proc_pidinfo exact PID + birth + executable; no signal or kill by this observer', boundary: 'Host receives the runner’s existing normal SIGTERM shutdown; helper processes are not directly killed by this oracle.' }, null, 2))
   }
+  const passiveInputSourceEvidence = process.platform === 'darwin' ? await preserveOwnedMacInputSource({profileRoot:profileHome,output:await realpath(output),host:{pid:host?.pid,retired:Boolean(host&&(host.exitCode!==null||host.signalCode!==null)),exitCode:host?.exitCode??null,signal:host?.signalCode??null,forced:forcedHostTermination}}) : {status:'unavailable',code:'NOT_MAC'}
+  await writeFile(join(output,'owned-mac-input-source-preservation.json'),JSON.stringify(passiveInputSourceEvidence,null,2))
+  const passiveTraceEvidence = process.platform === 'darwin' ? await preserveOwnedPreviewTrace({ profileRoot: await realpath(profileHome).catch(() => profileHome), output: await realpath(output), host: { pid: host?.pid, retired: Boolean(host && (host.exitCode !== null || host.signalCode !== null)), exitCode: host?.exitCode ?? null, signal: host?.signalCode ?? null, forced: forcedHostTermination } }) : { status: 'unavailable', code: 'NOT_MAC_SCOPE', noRPCInferencePermitted: false }
+  await writeFile(join(output, 'owned-preview-rpc-diagnostic-preservation.json'), JSON.stringify(passiveTraceEvidence, null, 2))
   const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length && !ownedCleanupErrors.length
-  const report = { status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length && !ownedCleanupErrors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : featureEvidenceOnly ? 'official-Harness-feature-evidence-subset' : 'official-Harness-isolated-profile-real-browser', selection: featureEvidenceOnly ? { scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence', selectedCases: [...featureEvidenceCases], fullUIAcceptance: false } : { scope: 'complete-configured-suite' }, platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, ownedCleanup: { passed: !ownedCleanupErrors.length, errors: ownedCleanupErrors }, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
+  const report = { passiveInputSourceEvidence, passiveTraceEvidence, status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length && !ownedCleanupErrors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : featureEvidenceOnly ? 'official-Harness-feature-evidence-subset' : 'official-Harness-isolated-profile-real-browser', selection: featureEvidenceOnly ? { scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence', selectedCases: [...featureEvidenceCases], fullUIAcceptance: false } : { scope: 'complete-configured-suite' }, platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, ownedCleanup: { passed: !ownedCleanupErrors.length, errors: ownedCleanupErrors }, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   if (!process.argv.includes('--keep-profile')) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ status: report.status, tests: tests.map(({ name, status }) => ({ name, status })), report: join(output, 'report.json') }, null, 2))

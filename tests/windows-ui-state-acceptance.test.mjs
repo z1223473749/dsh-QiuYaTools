@@ -48,7 +48,8 @@ test('test-only EOF adapter calls existing official lifecycle event, records fin
   const source = makeWindowsUIProviderSource(await readFile(new URL('fixtures/harness-e2e-provider.mjs', import.meta.url), 'utf8'))
   assert(source.includes("process.emit('SIGTERM')"))
   assert(!source.includes('process.kill('))
-  const start = source.indexOf("  if (process.platform === 'win32') ctx.effect(() => {"), end = source.indexOf('\n  // Test-only, owner-only finite readback.', start)
+  const start = source.indexOf("  if (process.platform === 'win32') ctx.effect(() => {")
+  const close = '\n  })', end = source.indexOf(close, start) + close.length
   assert(start > 0 && end > start)
   const block = source.slice(start, end)
   const processFixture = new EventEmitter(); processFixture.platform = 'win32'; processFixture.env = { DSH_HOME: '/own-temporary/qiuya-harness-home' }

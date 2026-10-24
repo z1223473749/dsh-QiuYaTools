@@ -62,25 +62,90 @@ private struct Window: Equatable {
     var visible: Bool { layer == 0 && onscreen && alpha > 0 }
     var json: [String: Any] { ["id": id, "pid": pid, "bounds": jsonRect(frame), "layer": layer, "alpha": alpha, "onscreen": onscreen, "labelMatches": labelMatches] }
 }
+private func sameGeometry(_ a: CGRect, _ b: CGRect) -> Bool {
+    [a.minX, a.minY, a.width, a.height, b.minX, b.minY, b.width, b.height].allSatisfy(\.isFinite) &&
+    a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0 &&
+    abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+}
+private struct FocusMetadata: Equatable {
+    let pid: Int32
+    let frame: CGRect
+    let isWindowRole: Bool
+    func matches(_ selected: Window) -> Bool { pid == selected.pid && isWindowRole && sameGeometry(frame, selected.frame) }
+}
+private struct RoutingProof {
+    let pointerBefore: UInt32?
+    let pointerAfter: UInt32?
+    let focusBefore: FocusMetadata?
+    let focusAfter: FocusMetadata?
+    let sameRoot: Bool
+    var metadataRechecked = false
+    func accepts(_ selected: Window) -> Bool {
+        pointerBefore == selected.id && pointerAfter == selected.id && sameRoot && metadataRechecked &&
+        focusBefore?.matches(selected) == true && focusAfter?.matches(selected) == true && focusBefore == focusAfter
+    }
+    var json: [String: Any] { ["pointerBefore": pointerBefore as Any? ?? NSNull(), "pointerAfter": pointerAfter as Any? ?? NSNull(),
+                             "focusedRootRead": focusBefore != nil, "focusedRootRechecked": sameRoot && focusAfter != nil,
+                             "metadataRechecked": metadataRechecked] }
+}
 private struct Snapshot {
     let selected: Window?
     let matchingCount: Int
     let owned: [Window]
     let foregroundPid: Int32?
     let frontNormalWindowId: UInt32?
+    var normalPrefix: [Window] = []
+    var routing: RoutingProof?
+    var uniqueGeometry: Bool { guard let selected else { return false }; return owned.filter { $0.visible && sameGeometry($0.frame, selected.frame) }.count == 1 }
     func ready(_ binding: Binding, foreground: Bool) -> Bool {
         guard let selected, selected.id == binding.targetWindowId, selected.pid == binding.target.pid, selected.labelMatches,
-              selected.visible, matchingCount == 1 else { return false }
-        return !foreground || foregroundPid == binding.target.pid && frontNormalWindowId == binding.targetWindowId
+              selected.visible, matchingCount == 1, uniqueGeometry else { return false }
+        return !foreground || foregroundPid == binding.target.pid && routing?.accepts(selected) == true
     }
     var json: [String: Any] { ["selected": selected?.json as Any? ?? NSNull(), "matchingCount": matchingCount,
                              "ownedWindows": owned.prefix(16).map(\.json), "ownedWindowCount": owned.count,
-                             "foregroundPid": foregroundPid as Any? ?? NSNull(), "frontNormalWindowId": frontNormalWindowId as Any? ?? NSNull()] }
+                             "foregroundPid": foregroundPid as Any? ?? NSNull(), "frontNormalWindowId": frontNormalWindowId as Any? ?? NSNull(),
+                             "uniqueGeometry": uniqueGeometry, "normalPrefixCount": normalPrefix.count, "routing": routing?.json as Any? ?? NSNull()] }
 }
-private func inspect(_ binding: Binding, label: String) throws -> Snapshot {
+private func pointerWindow(at point: CGPoint) -> UInt32? {
+    guard let primary = NSScreen.screens.first else { return nil }
+    let number = NSWindow.windowNumber(at: NSPoint(x: point.x, y: primary.frame.maxY - point.y), belowWindowWithWindowNumber: 0)
+    return number > 0 && number <= Int(UInt32.max) ? UInt32(number) : nil
+}
+private func routingProof(_ binding: Binding, selected: Window) -> RoutingProof {
+    let center = CGPoint(x: selected.frame.midX, y: selected.frame.midY), before = pointerWindow(at: center)
+    let app = AXUIElementCreateApplication(binding.target.pid), deadline = ProcessInfo.processInfo.systemUptime + 0.15
+    AXUIElementSetMessagingTimeout(app, 0.01)
+    func attribute(_ node: AXUIElement, _ name: String) -> CFTypeRef? {
+        guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success,
+              ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        return value
+    }
+    func focusedRoot() -> AXUIElement? {
+        guard let value = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+    func metadata(_ root: AXUIElement?) -> FocusMetadata? {
+        guard let root else { return nil }; AXUIElementSetMessagingTimeout(root, 0.01)
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(root, &pid) == .success,
+              let position = attribute(root, kAXPositionAttribute), let dimensions = attribute(root, kAXSizeAttribute),
+              let role = attribute(root, kAXRoleAttribute) as? String,
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(dimensions) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(dimensions as! AXValue, .cgSize, &size) else { return nil }
+        return FocusMetadata(pid: pid, frame: CGRect(origin: point, size: size), isWindowRole: role == kAXWindowRole)
+    }
+    let root = focusedRoot(), first = metadata(root), repeated = focusedRoot(), second = metadata(repeated)
+    let same = root != nil && repeated != nil && CFEqual(root, repeated) && ProcessInfo.processInfo.systemUptime < deadline
+    return RoutingProof(pointerBefore: before, pointerAfter: pointerWindow(at: center), focusBefore: first, focusAfter: second, sameRoot: same)
+}
+private func inspect(_ binding: Binding, label: String, proveInputRoute: Bool = false) throws -> Snapshot {
     try validate(binding)
     guard let rows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { throw fail("owned-window-list-unavailable") }
-    var owned = [Window](), firstNormal: UInt32?
+    var owned = [Window](), firstNormal: UInt32?, prefix = [Window](), selectedSeen = false
     for value in rows {
         guard let id = (value[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
               let pid = (value[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
@@ -88,15 +153,28 @@ private func inspect(_ binding: Binding, label: String) throws -> Snapshot {
               let alpha = (value[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
               let onscreen = value[kCGWindowIsOnscreen as String] as? Bool else { continue }
         if firstNormal == nil && layer == 0 && onscreen && alpha > 0 { firstNormal = id }
-        guard pid == binding.target.pid else { continue }
+        guard pid == binding.target.pid || !selectedSeen && layer == 0 && onscreen && alpha > 0 else { continue }
         guard let bounds = value[kCGWindowBounds as String] as? [String: Any], let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               [frame.minX, frame.minY, frame.width, frame.height, alpha].allSatisfy(\.isFinite), frame.width > 0, frame.height > 0 else { throw fail("owned-window-geometry-unavailable") }
-        owned.append(Window(id: id, pid: pid, frame: frame, layer: layer, alpha: alpha, onscreen: onscreen,
-                            labelMatches: (value[kCGWindowName as String] as? String)?.contains(label) == true))
+        let window = Window(id: id, pid: pid, frame: frame, layer: layer, alpha: alpha, onscreen: onscreen,
+                            labelMatches: pid == binding.target.pid && (value[kCGWindowName as String] as? String)?.contains(label) == true)
+        if !selectedSeen && window.visible { prefix.append(window) }
+        if id == binding.targetWindowId && pid == binding.target.pid { selectedSeen = true }
+        if pid == binding.target.pid { owned.append(window) }
     }
     try validate(binding)
-    return Snapshot(selected: owned.first { $0.id == binding.targetWindowId }, matchingCount: owned.filter { $0.layer == 0 && $0.labelMatches }.count,
-                    owned: owned, foregroundPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, frontNormalWindowId: firstNormal)
+    var snapshot = Snapshot(selected: owned.first { $0.id == binding.targetWindowId }, matchingCount: owned.filter { $0.layer == 0 && $0.labelMatches }.count,
+                            owned: owned, foregroundPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, frontNormalWindowId: firstNormal,
+                            normalPrefix: selectedSeen ? prefix : [])
+    if proveInputRoute, let selected = snapshot.selected, snapshot.uniqueGeometry, selected.visible, snapshot.foregroundPid == binding.target.pid {
+        var proof = routingProof(binding, selected: selected)
+        let after = try inspect(binding, label: label)
+        proof.metadataRechecked = snapshot.selected == after.selected && snapshot.matchingCount == after.matchingCount &&
+            snapshot.normalPrefix == after.normalPrefix && !snapshot.normalPrefix.isEmpty &&
+            after.uniqueGeometry && after.foregroundPid == binding.target.pid
+        snapshot.routing = proof
+    }
+    return snapshot
 }
 private func stableWindow(_ binding: Binding, foreground: Bool, timeout: Double = 8,
                           now: () -> Double = { ProcessInfo.processInfo.systemUptime },
@@ -127,9 +205,10 @@ private func selectedAXWindow(_ binding: Binding, frame: CGRect) throws -> AXUIE
         AXUIElementSetMessagingTimeout(window, 0.05)
         var windowPid: pid_t = 0
         guard AXUIElementGetPid(window, &windowPid) == .success, windowPid == binding.target.pid else { continue }
-        var position: CFTypeRef?, dimensions: CFTypeRef?
+        var position: CFTypeRef?, dimensions: CFTypeRef?, role: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
               AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &dimensions) == .success,
+              AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &role) == .success, role as? String == kAXWindowRole,
               let position, let dimensions, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(dimensions) == AXValueGetTypeID() else { continue }
         var point = CGPoint.zero, size = CGSize.zero
         guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(dimensions as! AXValue, .cgSize, &size) else { continue }
@@ -159,17 +238,35 @@ private func emit(_ value: [String: Any]) throws { FileHandle.standardOutput.wri
                 let visible = Window(id: 11, pid: 81, frame: hidden.frame, layer: 0, alpha: 1, onscreen: true, labelMatches: true)
                 var clock = 0.0, reads = 0
                 let result = try stableWindow(binding, foreground: false, timeout: 1, now: { clock }, sleep: { clock += 0.1 }, read: {
-                    reads += 1; return Snapshot(selected: reads < 3 ? hidden : visible, matchingCount: 1, owned: [], foregroundPid: nil, frontNormalWindowId: nil)
+                    reads += 1; let current = reads < 3 ? hidden : visible; return Snapshot(selected: current, matchingCount: 1, owned: [current], foregroundPid: nil, frontNormalWindowId: nil)
                 }, onSample: { _ in })
                 guard result.selected == visible, reads >= 5 else { throw fail("selftest-offscreen-to-stable") }
                 clock = 0; var rejected = false
                 do { _ = try stableWindow(binding, foreground: false, timeout: 0.5, now: { clock }, sleep: { clock += 0.1 }, read: {
-                    Snapshot(selected: visible, matchingCount: 2, owned: [], foregroundPid: 81, frontNormalWindowId: 11)
+                    Snapshot(selected: visible, matchingCount: 2, owned: [visible], foregroundPid: 81, frontNormalWindowId: 11)
                 }, onSample: { _ in }) } catch { rejected = true }
-                guard rejected, !Snapshot(selected: visible, matchingCount: 1, owned: [], foregroundPid: 81, frontNormalWindowId: 22).ready(binding, foreground: true) else { throw fail("selftest-duplicate-or-wrong-front") }
+                let focus = FocusMetadata(pid: 81, frame: visible.frame, isWindowRole: true)
+                let proof = RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: focus, focusAfter: focus, sameRoot: true, metadataRechecked: true)
+                let component = Window(id: 22, pid: 81, frame: CGRect(x: 0, y: 0, width: 66, height: 20), layer: 0, alpha: 1, onscreen: true, labelMatches: false)
+                let actualRoute = Snapshot(selected: visible, matchingCount: 1, owned: [component, visible], foregroundPid: 81, frontNormalWindowId: 22, normalPrefix: [component, visible], routing: proof)
+                guard rejected, actualRoute.ready(binding, foreground: true) else { throw fail("selftest-normal-component-exact-route") }
+                let sibling = Window(id: 23, pid: 81, frame: CGRect(x: 700, y: 0, width: 600, height: 400), layer: 0, alpha: 1, onscreen: true, labelMatches: false)
+                let siblingFocus = FocusMetadata(pid: 81, frame: sibling.frame, isWindowRole: true)
+                let rejectedProofs = [
+                    RoutingProof(pointerBefore: nil, pointerAfter: nil, focusBefore: focus, focusAfter: focus, sameRoot: true, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 23, pointerAfter: 23, focusBefore: focus, focusAfter: focus, sameRoot: true, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 23, focusBefore: focus, focusAfter: focus, sameRoot: true, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: siblingFocus, focusAfter: siblingFocus, sameRoot: true, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: focus, focusAfter: nil, sameRoot: false, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: focus, focusAfter: focus, sameRoot: true, metadataRechecked: false),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: focus, focusAfter: FocusMetadata(pid: 99, frame: visible.frame, isWindowRole: true), sameRoot: true, metadataRechecked: true),
+                    RoutingProof(pointerBefore: 11, pointerAfter: 11, focusBefore: FocusMetadata(pid: 81, frame: visible.frame, isWindowRole: false), focusAfter: focus, sameRoot: true, metadataRechecked: true),
+                ]
+                guard rejectedProofs.allSatisfy({ !$0.accepts(visible) }),
+                      !Snapshot(selected: visible, matchingCount: 1, owned: [visible, Window(id: 24, pid: 81, frame: visible.frame, layer: 0, alpha: 1, onscreen: true, labelMatches: false)], foregroundPid: 81, frontNormalWindowId: 11, routing: proof).ready(binding, foreground: true) else { throw fail("selftest-duplicate-or-wrong-route") }
                 let projection = try JSONSerialization.data(withJSONObject: result.json)
                 guard !String(decoding: projection, as: UTF8.self).contains("executable") else { throw fail("selftest-content-projection") }
-                try emit(["ok": true, "result": ["ownership": true, "stableOffscreenTransition": true, "duplicateAndWrongFrontRejected": true, "metadataOnly": true,
+                try emit(["ok": true, "result": ["ownership": true, "stableOffscreenTransition": true, "duplicateAndWrongRouteRejected": true, "exactCenterPointerAndFocusedRoot": true, "normalComponentDoesNotOverrideExactRoute": true, "metadataOnly": true,
                                                    "inputEventsPosted": 0, "activationCalls": 0, "raiseCalls": 0]]); return
             }
             guard CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--request", let data = CommandLine.arguments[2].data(using: .utf8),
@@ -187,13 +284,14 @@ private func emit(_ value: [String: Any]) throws { FileHandle.standardOutput.wri
                 guard let value = request["binding"] else { throw fail("missing-owned-target-binding") }
                 binding = try JSONDecoder().decode(Binding.self, from: JSONSerialization.data(withJSONObject: value))
             }
+            _ = NSApplication.shared
             let initial = try inspect(binding, label: label); diagnostic["before"] = initial.json; diagnostic["binding"] = try encoded(binding)
             if op == "bind" {
                 guard initial.selected?.labelMatches == true, initial.matchingCount == 1 else { throw fail("owned-target-not-unique") }
                 try emit(["ok": true, "result": diagnostic]); return
             }
             if op == "activate" {
-                guard AXIsProcessTrusted(), let selected = initial.selected, selected.layer == 0, selected.labelMatches, initial.matchingCount == 1 else { throw fail("owned-target-activation-preflight") }
+                guard AXIsProcessTrusted(), let selected = initial.selected, selected.layer == 0, selected.labelMatches, initial.matchingCount == 1, initial.uniqueGeometry else { throw fail("owned-target-activation-preflight") }
                 let window = try selectedAXWindow(binding, frame: selected.frame)
                 let current = try inspect(binding, label: label)
                 guard current.selected == initial.selected else { throw fail("owned-target-changed-before-activation") }
@@ -204,7 +302,7 @@ private func emit(_ value: [String: Any]) throws { FileHandle.standardOutput.wri
             }
             var samples = [[String: Any]]()
             defer { diagnostic["samples"] = samples }
-            let final = try stableWindow(binding, foreground: op == "activate", read: { try inspect(binding, label: label) }, onSample: { if samples.count < 85 { samples.append($0.json) }; diagnostic["samples"] = samples })
+            let final = try stableWindow(binding, foreground: op == "activate", read: { try inspect(binding, label: label, proveInputRoute: op == "activate") }, onSample: { if samples.count < 85 { samples.append($0.json) }; diagnostic["samples"] = samples })
             diagnostic["after"] = final.json; diagnostic["stableOnscreen"] = true
             try emit(["ok": true, "result": diagnostic])
         } catch {

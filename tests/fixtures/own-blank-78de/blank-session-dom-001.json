@@ -1,0 +1,92 @@
+{
+  "before": {
+    "conversations": [
+      {
+        "sessionId": "session-cce93f20-c443-5d4d-a153-8be26d4e9d26",
+        "phase": "hero",
+        "visible": true,
+        "composers": [
+          {
+            "editable": "true",
+            "phase": "plain",
+            "visible": true,
+            "textLength": 0,
+            "placeholder": "描述你想要构建的内容, / 调用指令, @ 文件或对话"
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "key": "workspace:681c29c3-1aeb-5a41-a00e-8277a348c55f",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "session:session-cce93f20-c443-5d4d-a153-8be26d4e9d26",
+        "selected": "true",
+        "draggable": false,
+        "visible": true
+      },
+      {
+        "key": "workspace:e19307b2-d98d-5f9f-ba39-0815c8e68215",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      }
+    ],
+    "workspaceChips": [
+      {
+        "text": "workspace-1438d901-db9f-512f-be8d-b6682a1c83c1",
+        "visible": true,
+        "expanded": "false"
+      }
+    ]
+  },
+  "after": {
+    "conversations": [
+      {
+        "sessionId": "session-cce93f20-c443-5d4d-a153-8be26d4e9d26",
+        "phase": "hero",
+        "visible": true,
+        "composers": [
+          {
+            "editable": "true",
+            "phase": "plain",
+            "visible": true,
+            "textLength": 0,
+            "placeholder": "描述你想要构建的内容, / 调用指令, @ 文件或对话"
+          }
+        ]
+      }
+    ],
+    "rows": [
+      {
+        "key": "workspace:681c29c3-1aeb-5a41-a00e-8277a348c55f",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      },
+      {
+        "key": "session:session-cce93f20-c443-5d4d-a153-8be26d4e9d26",
+        "selected": "true",
+        "draggable": false,
+        "visible": true
+      },
+      {
+        "key": "workspace:e19307b2-d98d-5f9f-ba39-0815c8e68215",
+        "selected": null,
+        "draggable": true,
+        "visible": true
+      }
+    ],
+    "workspaceChips": [
+      {
+        "text": "workspace-1438d901-db9f-512f-be8d-b6682a1c83c1",
+        "visible": true,
+        "expanded": "false"
+      }
+    ]
+  }
+}
