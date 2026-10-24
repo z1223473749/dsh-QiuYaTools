@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2022",
+      "DOM",
+      "ESNext.Disposable"
+    ],
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": false,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/features/annotations/host.ts",
+    "src/features/annotations/integration.ts",
+    "src/features/workbench/annotation-source.ts",
+    "src/features/computer-use/browser-annotation.ts",
+    "tests/types/annotations-host-sdk.ts"
+  ]
+}

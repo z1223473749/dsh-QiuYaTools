@@ -11,7 +11,7 @@ import type { WorkbenchTarget } from './contract.ts'
 import { website, uuid } from './contract.ts'
 
 type BrowserKind = 'chrome' | 'edge'
-type Runtime = Pick<BrowserSession, 'deviceId' | 'profileDir' | 'launch' | 'list' | 'open' | 'closeTab' | 'closeOwnedTab' | 'close' | 'setAllowedOrigins' | 'allowedOrigins' | 'preview' | 'navigationState' | 'hasOwnedRuntime'>
+type Runtime = Pick<BrowserSession, 'deviceId' | 'profileDir' | 'launch' | 'list' | 'open' | 'closeTab' | 'closeOwnedTab' | 'close' | 'setAllowedOrigins' | 'allowedOrigins' | 'preview' | 'navigationState' | 'hasOwnedRuntime'> & Partial<Pick<BrowserSession, 'annotationView'>>
 export interface BrowserRegistryOptions {
   directory: string; enabled(): boolean
   isAllowed(chat: string, browser: BrowserKind, origin: string): boolean
@@ -205,6 +205,17 @@ export class BrowserWorkbenchRegistry implements BrowserPermissionBackend {
     if (!after || after.appId !== before.appId || after.pid !== before.pid) throw error('VIEW_CHANGED', '网页来源已变化，请刷新工作台。')
     observation.aiCursor = workbenchCursor(observation, entry.service.get(chat))
     return { target: { ...view, state: active ? entry.service.get(chat)!.state : 'background', epoch: active ? entry.service.get(chat)!.epoch : 0 }, observation, viewOnly: !active || entry.service.get(chat)?.state !== 'humanControl' }
+  }
+  /** Real existing-runtime seam for owner-only annotation reads. It cannot start/grant/select a browser. */
+  annotationSource(chat: string, environmentId: string, tabId: string) {
+    const { entry, view } = this.find(chat, environmentId, tabId)
+    if (!view?.origin) throw error('VIEW_CHANGED', '网页视图已失效。')
+    const annotationView = entry.browser.annotationView
+    if (!annotationView) throw error('ANNOTATION_UNAVAILABLE', '此浏览器暂不支持画面批注。')
+    const actual = this.views(chat).find(value => value.workbenchTabId === tabId && value.environmentId === environmentId)
+    if (!actual) throw error('VIEW_CHANGED', '网页视图已失效。')
+    const assertCurrent = () => { const now = this.find(chat, environmentId, tabId); if (now.entry !== entry || now.view !== view) throw error('VIEW_CHANGED', '网页内容版本已变化。'); const current = this.views(chat).find(value => value.workbenchTabId === tabId && value.environmentId === environmentId); if (!current || current.targetId !== actual.targetId || current.appId !== actual.appId || current.epoch !== actual.epoch) throw error('CONTROL_CHANGED', '网页或控制周期已变化。') }
+    assertCurrent(); return { browser: { annotationView: annotationView.bind(entry.browser) }, target: Object.freeze({ ...actual }), origin: view.origin, assertCurrent }
   }
   async control(chat: string, environmentId: string, tabId: string, operation: 'pause' | 'takeover' | 'resume' | 'stop', owner: SiteOwnerScope) {
     owner.signal.throwIfAborted(); owner.assertCurrent(); const { entry, view } = this.find(chat, environmentId, tabId)

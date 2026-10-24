@@ -4,6 +4,8 @@ import { access, mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { createBrowserAnnotationView } from './browser-annotation.ts'
+import type { BrowserAnnotationView } from './browser-annotation.ts'
 import { ComputerError, parseComputerAction, requireIdentity } from './contract.ts'
 import type { ComputerAction, ComputerGeometry, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
 
@@ -131,6 +133,7 @@ export class BrowserSession {
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
   private readonly ownedInput = new Map<number, OwnedBrowserInput>()
   private readonly inputReleases = new Map<number, Promise<void>>()
+  private readonly annotationPins = new Set<{ sessionId?: string; view?: BrowserAnnotationView }>()
   private inputSequence = 0
   private frameId = 0
   private closing = false
@@ -307,6 +310,22 @@ export class BrowserSession {
   }
   async observe(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, false) }
   async preview(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, true) }
+  /** Host-only independent read channel; never selects a tab or registers an input frame. */
+  async annotationView(tabId: string, expectedOrigin: string, signal: AbortSignal, guard: () => void): Promise<BrowserAnnotationView> {
+    signal.throwIfAborted(); guard(); const connection = this.cdp()
+    const assertConnection = () => { if (this.connection !== connection || this.closing) throw new ComputerError('ANNOTATION_STALE', '浏览器只读通道已变化。') }
+    const permission = async (readSignal: AbortSignal) => { assertConnection(); const tab = await this.permission(tabId, readSignal); assertConnection(); if (originOf(tab.url) !== expectedOrigin) throw new ComputerError('SITE_REVOKED', '网页来源已变化。') }
+    await permission(signal); signal.throwIfAborted(); guard()
+    if (this.annotationPins.size >= 8) throw new ComputerError('ANNOTATION_LIMIT', '请关闭其他画面批注后重试。')
+    const pin: { sessionId?: string; view?: BrowserAnnotationView } = {}; this.annotationPins.add(pin)
+    // An unknown attach ACK retains its exact capacity pin until full browser retirement; never replay it.
+    const attached = await connection.send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true }, undefined, signal)
+    pin.sessionId = requireIdentity(attached.sessionId)
+    const child = this.child
+    const view = await createBrowserAnnotationView({ cdp: connection, sessionId: pin.sessionId, tabId, signal, guard, permission, assertConnection, onClosed: () => { this.annotationPins.delete(pin) }, runtimeRetired: () => !!child && (child.exitCode !== null || child.signalCode !== null) })
+    pin.view = view
+    try { signal.throwIfAborted(); guard(); assertConnection(); return view } catch (failure) { try { await view.close() } catch (cleanup) { throw new AggregateError([failure, cleanup], '只读批注初始化与清理未确认。') }; throw failure }
+  }
   private releaseInput(id: number): Promise<void> {
     const pending = this.inputReleases.get(id); if (pending) return pending
     const input = this.ownedInput.get(id); if (!input) return Promise.resolve()
@@ -449,6 +468,8 @@ export class BrowserSession {
     this.closing = true
     let cleanupError: unknown
     try { await this.releaseInputs() } catch (error) { cleanupError = error }
+    const annotationCleanup = await Promise.allSettled([...this.annotationPins].map(pin => pin.view ? pin.view.close() : Promise.reject(new ComputerError('ANNOTATION_CLEANUP_UNCONFIRMED', '上次只读批注通道退出尚未确认。'))))
+    const annotationFailure = annotationCleanup.find((result): result is PromiseRejectedResult => result.status === 'rejected'); if (annotationFailure) cleanupError ??= annotationFailure.reason
     let connection = this.connection
     if (!this.child && cleanupError) throw cleanupError
     if (this.child) {
@@ -474,7 +495,7 @@ export class BrowserSession {
       this.ownedInput.clear()
     }
     this.connection = undefined; this.sessions.clear(); this.ownedTabs.clear(); this.invalidateObservations()
-    connection?.close(); this.listeners.clear()
+    connection?.close(); this.annotationPins.clear(); this.listeners.clear()
   }
 }
 

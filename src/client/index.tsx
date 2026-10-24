@@ -267,7 +267,7 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))
-  ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installWorkbenchClient(child, form)) })
+  ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'], child => { child.effect(() => installWorkbenchClient(child, form)) })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: SETTINGS_ID,
