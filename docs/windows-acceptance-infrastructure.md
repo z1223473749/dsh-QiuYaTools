@@ -72,10 +72,24 @@ dotnet build scripts/windows-acceptance/process-reader.csproj -c Release --outpu
 
 `staleStyleSurfaceFacts()` 只读取调用方已经定位的当前自有批注父面板。导航或滚动使 anchor 失效后，生产组件会删除“临时样式反馈”子面板，在父面板显示失效提醒；验收应读这个真实父状态。多个父面板、外部聊天的文本、仍存在的加入按钮或残留样式子面板都会拒绝。它不修改 DOM、样式或输入，也不能代替 Host 的 anchor/epoch 授权。
 
+## 原子命令回执与未知状态的迟到退出
+
+`command-receipt.mjs` 提供验收工具可复用的 `retainedCommand()`、`coordinatorFailure()` 和 `readCoordinatorResponse()`，不注册生产能力、启动环境或自动发送输入。调用方显式传入本轮命令、固定预算、记录数组和回调；物理调用继续使用原有 10000ms，不因环境迟滞增加预算。
+
+`retainedCommand()` 的 stdout 是原始输出，不假定它是 JSON。自然退出回执保存原 Node ChildProcess 对象对应的随机 spawnNonce、实际 PID/父 PID、可执行路径、argv SHA、退出和管道关闭时间，以及原字节输出摘要。这里不声称额外读取过操作系统的进程出生时间；需要 OS birth pin 的调用方仍须另行核验。stdout 最多保留 32MiB、stderr 最多保留 8192 字节供诊断；SHA 和总字节数则持续覆盖完整原始管道字节，并显式记录截断。正常回执要求同一 child 的 exit 与 stdio close 都已发生，不能在 exit 时就声称管道已经排空。正常退出只是传输结果，调用方还要检查 code/signal、精确业务 nonce 和独立物理观察。
+
+绝对 deadline 从 spawn 起计算，真实 child 的 error/exit/close 和 timer 先绑定，再执行 onStart 记录回调。onStart 慢、失败或 child 先退出都不会丢失终态，也不能在预算外补 ACK；回调成功、原 child exit 与管道 close 必须共同在原期限内满足。start/stdio 错误保留 unknown。
+
+超时时先保留 unknown，再 unref 同一 child 和两个管道引用，不关闭管道或发送信号。`onTimeout` 记录该时刻未确认的结果；同一原 child 日后 exit 且管道 close 后只触发一次 `onLateExit`，不能调用正常 `onExit`、清除 unknown、重发命令或把之前失败改为通过。调用方必须继续保持自己的未知操作禁重放门；本工具不创建重试队列，也不代替完整进程/Task 自然退休检查。迟到证据落盘失败会保留有限 `lateExitEvidenceError`，不会生成成功 ACK。
+
+HTTP 协调器遇到错误时通过 `coordinatorFailure()` 返回有限 JSON 与 `noAcknowledgement:true`；`readCoordinatorResponse()` 只接受 HTTP 成功、明确 `ok:true` 且真实存在 `result` 的响应。HTTP 409 的原始超时原因得以保留，空响应、损坏 JSON、缺字段和超 65536 字节响应都拒绝，不再用通用 JSON 解析异常掩盖原错误。错误正文最多 2048 字符。该 HTTP 结果仍需由调用方按精确业务身份验证；它不是 Windows LL hook 或真实模型运行的替代证明。
+
+此公共模块只提取可维护的命令与回执合同。隔离原生 IME 观察器、实际 guest runner、每轮 nonce、C# 编译产物和个人 PD 日志保留在项目外冻结载体，不作为虚构的公共运行路径加入仓库。旧实验入口也不因此自动成为本轮严格验收入口。
+
 ## 离线验证与实机证据边界
 
 ```text
-node --test tests/windows-acceptance*.test.mjs tests/harness-workbench-acceptance-evidence.test.mjs tests/harness-annotation-stale-surface.test.mjs
+node --test tests/windows-acceptance*.test.mjs tests/windows-command-receipt.test.mjs tests/harness-workbench-acceptance-evidence.test.mjs tests/harness-annotation-stale-surface.test.mjs
 ```
 
-回归运行真实 Node 子进程/stdio、真实流式回调、固定 5 秒超时与迟到回执，以及当前生产 AnnotationEditor 的 React DOM。浏览器作者回调在隔离 JSDOM 中执行，明确不声称合成对象等于真实 trusted 浏览器输入。测试不启动 Harness、浏览器、PD 或 Windows API。实际 Mac/Windows 逐功能验收、真实 DeepSeek、截图和可安装包的结论仍以项目外的独立实测报告为准。
+回归运行真实 Node 子进程/stdio、真实流式回调、固定 5 秒超时与迟到回执，以及当前生产 AnnotationEditor 的 React DOM。浏览器作者回调在隔离 JSDOM 中执行，明确不声称合成对象等于真实 trusted 浏览器输入。测试不启动 Harness、浏览器、PD 或 Windows API。命令回执回归另行覆盖真实 Node 子进程空 stdout、慢/失败 onStart、child 先退出、迟到零退出、exit 后管道尾部和 HTTP 409/空响应。5ms 预算与 30ms 回调的旧红新绿复现属于纯载体测试，不是对旧实机结果改判。实际 Mac/Windows 逐功能验收、真实 DeepSeek、截图和可安装包的结论仍以项目外的独立实测报告为准。
