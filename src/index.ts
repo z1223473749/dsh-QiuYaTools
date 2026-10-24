@@ -8,6 +8,8 @@ import { PROJECT_REPOSITORY } from './project.ts'
 import { installComputerHost } from './features/computer-use/host.ts'
 import { installComputerTools, type ComputerToolsRecorder } from './features/computer-use/tools.ts'
 import { installComputerAcceptanceRuns } from './features/acceptance-runs/integration.ts'
+import { installWorkbench } from './features/workbench/integration.ts'
+import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 
 /** Preferences persisted by Harness in the active profile. */
@@ -53,17 +55,26 @@ export function apply(ctx: Context, config: Config): void {
         child.inject(['tools', 'attachments'], tools => {
           tools.effect(() => {
             const enabled = () => config.enabled.get() && config.computerUseEnabled.get()
-            let recorder: ComputerToolsRecorder | undefined
-            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, recorder: {
+            let recorder: ComputerToolsRecorder | undefined, modelTarget: ModelTargetRegistry | undefined
+            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, onSelected: exec => modelTarget?.selectDesktop(exec), recorder: {
               observed: (...args) => recorder?.observed(...args) ?? Promise.resolve(undefined),
               issuing: (...args) => recorder?.issuing(...args) ?? Promise.resolve(undefined),
             } })
             const integration = tools.inject(['agents', 'sessionQuery', 'profileContext'], runsContext => {
               runsContext.effect(() => {
                 if (!host.manager) return () => {}
-                const runs = installComputerAcceptanceRuns(runsContext, host.manager, { enabled, version: pkg.version })
+                const nativeManager = host.manager, runEnvironments = { runEnvironment(id: string) { return modelTarget ? modelTarget.runEnvironment(id) : nativeManager.runEnvironment(id) } }
+                const runs = installComputerAcceptanceRuns(runsContext, runEnvironments, { enabled, version: pkg.version })
                 recorder = runs.computer
-                return async () => { if (recorder === runs.computer) recorder = undefined; await runs.dispose() }
+                let stopped = false, workbench: Awaited<ReturnType<typeof installWorkbench>> | undefined
+                const preparing = installWorkbench(runsContext, nativeManager, { enabled, recorder: () => recorder }).then(async value => { if (stopped) { await value.dispose(); return } workbench = value; modelTarget = value.modelTarget }).catch(() => runsContext.logger.error('电脑工作台初始化失败，请检查当前宿主版本与插件连接。'))
+                return async () => {
+                  stopped = true; if (recorder === runs.computer) recorder = undefined
+                  if (modelTarget === workbench?.modelTarget) modelTarget = undefined
+                  await preparing
+                  const results = await Promise.allSettled([runs.dispose(), workbench?.dispose()]), failed = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
+                  if (failed.length) throw new AggregateError(failed.map(value => value.reason), '工作台清理尚未确认。')
+                }
               })
             })
             return async () => { recorder = undefined; unregister(); await integration.dispose() }

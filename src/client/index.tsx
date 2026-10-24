@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
 import { installAcceptanceRunClient } from '../features/acceptance-runs/client.tsx'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -17,7 +17,9 @@ import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { ComputerPanel } from '../features/computer-use/panel.tsx'
-import { installInlineComputerPreview } from '../features/computer-use/inline-preview.tsx'
+import { installWorkbenchClient } from '../features/workbench/client.tsx'
+import { createWorkbenchAPI, type WorkbenchConnection } from '../features/workbench/client-api.ts'
+import { SitePermissions } from '../features/workbench/Views.tsx'
 import { ComputerIcon } from '../features/computer-use/presentation.tsx'
 import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
@@ -77,6 +79,7 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
 }
 
 export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
+  const workbenchAPI = useMemo(() => createWorkbenchAPI(() => ctx.get('connection') as WorkbenchConnection | undefined), [ctx])
   const snapshot = useSyncExternalStore(
     listener => form.subscribe(listener),
     () => form.getSnapshot(),
@@ -195,7 +198,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
-        {tab.id === 'computer' ? activeTab === 'computer' && <ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/>
+        {tab.id === 'computer' ? activeTab === 'computer' && <><ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/><SitePermissions api={workbenchAPI}/></>
           : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
           : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} />
             : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
@@ -263,7 +266,7 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))
-  ctx.effect(() => installInlineComputerPreview(ctx, form))
+  ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installWorkbenchClient(child, form)) })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: SETTINGS_ID,

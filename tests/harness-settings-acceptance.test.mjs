@@ -30,6 +30,13 @@ const compiled = (await build({
 const client = { exports: {} }
 new Function('require', 'module', 'exports', compiled)(id => id === '@deepseek-ai/dsh-client-ui-primitives' ? { Switch: ({ checked, disabled, label, onChange }) => React.createElement('button', { role: 'switch', 'aria-label': label, 'aria-checked': checked, disabled, onClick: () => onChange(!checked) }) } : require(id), client, client.exports)
 
+function isReadOnlySettingsCall(row) {
+  return row.channel === '/api' && (
+    (row.endpoint === 'qiuya-tools.computer.control' && ['status', 'applications'].includes(row.input?.op)) ||
+    (row.endpoint === 'qiuya-tools.workbench' && row.input?.op === 'permissions')
+  )
+}
+
 async function settings(t) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://127.0.0.1/' })
   const saved = new Map(['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
@@ -37,7 +44,7 @@ async function settings(t) {
   const writes = [], calls = [], snapshot = { status: 'ready', writable: true, value: {} }
   const support = { status: 'ready', harnessVersion: '0.2.1-rc.2', versionSupported: true }
   const ctx = { support: { subscribe: () => () => {}, getSnapshot: () => support }, get(name) {
-    if (name === 'connection') return { rpc: { async call(channel, endpoint, input) { calls.push({ channel, endpoint, input }); return { ok: true, value: { sessions: [], environments: [], allowedApps: [], pendingRequests: [], native: { platform: 'win32', available: true } } } } } }
+    if (name === 'connection') return { rpc: { async call(channel, endpoint, input) { calls.push({ channel, endpoint, input }); if (endpoint === 'qiuya-tools.workbench' && input?.op === 'permissions') return { ok: true, value: { allowedOrigins: [] } }; return { ok: true, value: { sessions: [], environments: [], allowedApps: [], pendingRequests: [], native: { platform: 'win32', available: true } } } } } }
   } }
   const form = { subscribe: () => () => {}, getSnapshot: () => snapshot, async mutate(input) { writes.push(input); return true } }
   const root = createRoot(dom.window.document.querySelector('#root'))
@@ -97,7 +104,18 @@ test('all ten real React settings pages satisfy their own public semantics witho
   assert.equal(pages.find(row => row.id === 'computer').checked, false, 'computer access is not enabled just to capture settings')
   assert.equal(pages.find(row => row.id === 'qTheme').checked, false, 'a saved false value is legitimate page state')
   assert.deepEqual(f.writes, [])
-  assert.ok(f.calls.every(row => row.endpoint === 'qiuya-tools.computer.control' && ['status', 'applications'].includes(row.input.op)), 'the visual tour must not check/install updates or perform input')
+  assert.ok(f.calls.some(row => row.endpoint === 'qiuya-tools.workbench' && row.input?.op === 'permissions'), 'computer settings must read the current site-permission list')
+  assert.ok(f.calls.every(isReadOnlySettingsCall), 'the visual tour must not check/install updates or perform input')
+})
+
+test('the settings tour permits only exact readonly computer and site-permission queries', () => {
+  const call = (endpoint, op, channel = '/api') => ({ channel, endpoint, input: { op } })
+  for (const op of ['status', 'applications']) assert.equal(isReadOnlySettingsCall(call('qiuya-tools.computer.control', op)), true)
+  assert.equal(isReadOnlySettingsCall(call('qiuya-tools.workbench', 'permissions')), true)
+  for (const op of ['open', 'decide', 'revoke', 'control', 'close', 'humanAct']) assert.equal(isReadOnlySettingsCall(call('qiuya-tools.workbench', op)), false)
+  for (const op of ['request', 'act', 'stop']) assert.equal(isReadOnlySettingsCall(call('qiuya-tools.computer.control', op)), false)
+  assert.equal(isReadOnlySettingsCall(call('qiuya-tools.updates', 'check')), false)
+  assert.equal(isReadOnlySettingsCall(call('qiuya-tools.workbench', 'permissions', 'other')), false)
 })
 
 test('a correct selected tab and heading cannot hide missing feature instructions or invalid persisted thresholds', async t => {

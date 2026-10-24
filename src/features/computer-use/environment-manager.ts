@@ -162,6 +162,15 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     for (const entry of this.all()) for (const row of entry.service.list()) values.set(row.sessionId, row)
     return [...values.values()].map(row => structuredClone(row))
   }
+  /** Read-only workbench view identity, including an owner-paused environment. No router/OS query is created. */
+  workbenchEnvironment(sessionId: string) {
+    if (this.disposed || this.options.enabled?.() === false) return undefined
+    const entry = this.entries.get(sessionId) ?? (this.legacy?.service.get(sessionId) ? this.legacy : undefined)
+    if (!entry || entry.retiring || entry.switching) return undefined
+    const snapshot = entry.service.get(sessionId)
+    if (!snapshot?.target || !['ready', 'running', 'paused', 'humanControl'].includes(snapshot.state)) return undefined
+    return { environmentId: entry.environmentId, mode: entry.driver.mode, snapshot: structuredClone(snapshot) }
+  }
   /** Read existing runtime identity only. Never creates a router, queries the OS or revives history. */
   runEnvironment(sessionId: string) {
     if (this.disposed || this.options.enabled?.() === false) return undefined

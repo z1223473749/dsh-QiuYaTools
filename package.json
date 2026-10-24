@@ -70,7 +70,9 @@
     "test:computer:preflight": "node scripts/computer-preflight.mjs",
     "test:computer:browser": "node scripts/test-computer-browser.mjs",
     "typecheck:acceptance:host": "tsc -p tsconfig.h1-integration.json",
-    "test:acceptance": "node --test tests/acceptance-runs*.test.mjs"
+    "test:acceptance": "node --test tests/acceptance-runs*.test.mjs",
+    "typecheck:workbench:host": "tsc -p tsconfig.workbench-host.json",
+    "test:workbench": "node --test tests/workbench*.test.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"

@@ -24,7 +24,7 @@ export interface ComputerToolsRecorder {
   /** Persist issued before dispatch; returning a closure never grants control. */
   issuing(exec: ComputerToolRunContext, request: Readonly<ComputerActionRequest>): Promise<((result: ComputerActionResult | undefined) => Promise<unknown>) | undefined>
 }
-export interface ComputerToolsOptions { recorder?: ComputerToolsRecorder; sessionId?: (exec: ComputerToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator }
+export interface ComputerToolsOptions { onSelected?(exec: ComputerToolRunContext): void; recorder?: ComputerToolsRecorder; sessionId?: (exec: ComputerToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator }
 const noParameters = { type: 'object', properties: {}, additionalProperties: false }
 // The public SDK retains structured codes only for its own HarnessError class;
 // PTC forwards just the message. Every tool boundary uses a finite vocabulary
@@ -99,7 +99,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       register({
         name: 'qiuya_computer_request_control', description: 'Request control of a discovered application for this chat. Supply its candidateId and a short explanation of the user’s task. The owner chooses allow once, always allow, or deny in the UI; this tool waits for that decision. Existing owner grants may start directly. Cannot self-authorize, resume a paused/human-controlled session, choose another chat, or alter OS permissions.',
         parameters: { type: 'object', additionalProperties: false, required: ['candidateId', 'reason'], properties: { candidateId: { type: 'string' }, reason: { type: 'string', maxLength: 600 } } }, output,
-        async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['candidateId', 'reason']); session(exec); return JSON.parse(JSON.stringify(await options.entry!.requestControl(exec, requireIdentity(input.candidateId, '应用候选'), input.reason as string))) }) },
+        async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['candidateId', 'reason']); session(exec); const result = await options.entry!.requestControl(exec, requireIdentity(input.candidateId, '应用候选'), input.reason as string); exec.signal.throwIfAborted(); options.onSelected?.(exec); return JSON.parse(JSON.stringify(result)) }) },
       }),
     ] : []),
     register({
@@ -109,7 +109,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
     register({
       name: 'qiuya_computer_select', description: 'Switch the active computer session to an already-authorized application window. Cannot resume a paused or human-controlled session and cannot grant new application access.',
       parameters: { type: 'object', additionalProperties: false, required: ['targetId'], properties: { targetId: { type: 'string' } } }, output,
-      async execute(args, exec) { const input = parameters(args, ['targetId']); return JSON.parse(JSON.stringify(await service.selectTarget(session(exec), requireIdentity(input.targetId, '目标'), exec.signal))) },
+      async execute(args, exec) { const input = parameters(args, ['targetId']); const result = await service.selectTarget(session(exec), requireIdentity(input.targetId, '目标'), exec.signal); exec.signal.throwIfAborted(); options.onSelected?.(exec); return JSON.parse(JSON.stringify(result)) },
     }),
     register({
       name: 'qiuya_computer_status', description: 'Read this chat’s computer-control session. When idle, discover applications and request control; application authorization remains an owner decision.', parameters: noParameters, output,
@@ -131,6 +131,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       },
       async execute(args, exec) {
         parameters(args, [])
+        options.onSelected?.(exec)
         const observation = await service.observe(session(exec), exec.signal)
         const capturedAt = Date.now()
         exec.signal.throwIfAborted()
@@ -154,6 +155,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       async execute(args, exec) {
         const input = parameters(args, ['actionId', 'frameId', 'action']), id = session(exec)
         const request = { actionId: input.actionId === undefined ? String(exec.callId) : requireIdentity(input.actionId, '操作'), frameId: requireIdentity(input.frameId, '帧'), action: parseComputerAction(input.action) }
+        options.onSelected?.(exec)
         const completed = await options.recorder?.issuing(exec, request)
         let result: ComputerActionResult
         try { exec.signal.throwIfAborted(); result = await service.act(id, request, exec.signal) }

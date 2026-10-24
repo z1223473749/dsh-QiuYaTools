@@ -105,6 +105,7 @@ export class BrowserSession {
   private connection?: CdpConnection
   private child?: ChildProcess
   private readonly sessions = new Map<string, string>()
+  private readonly ownedTabs = new Set<string>()
   private readonly observations = new Map<string, ComputerObservation>()
   private readonly previewObservations = new Map<string, ComputerObservation>()
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
@@ -119,6 +120,7 @@ export class BrowserSession {
     if (options.cdpEndpoint) debugEndpoint(options.cdpEndpoint)
     this.deviceId = `browser:${createHash('sha256').update(options.cdpEndpoint ?? this.profileDir).digest('hex').slice(0, 20)}`
   }
+  hasOwnedRuntime(): boolean { return this.child !== undefined || this.connection !== undefined }
   allowedOrigins(): string[] { return [...this.origins].sort() }
   setAllowedOrigins(origins: readonly string[]): void {
     const next = origins.map(value => { const origin = originOf(value); if (!origin) throw new ComputerError('INVALID_ORIGIN', '网站来源无效'); return origin })
@@ -130,6 +132,7 @@ export class BrowserSession {
   private cdp(): CdpConnection { if (!this.connection) throw new ComputerError('BROWSER_NOT_CONNECTED', '请先连接浏览器'); return this.connection }
   async launch(signal?: AbortSignal): Promise<void> {
     if (this.connection) return
+    if (this.child) throw new ComputerError('BROWSER_CLEANUP_FAILED', '上一次浏览器启动的退出尚未确认，请先结束该浏览器环境。')
     if (this.options.cdpEndpoint) { await this.connect(signal); return }
     signal?.throwIfAborted(); this.closing = false
     const candidates = this.options.executable ? [this.options.executable] : browserExecutableCandidates(this.options.browser ?? 'chrome')
@@ -155,7 +158,12 @@ export class BrowserSession {
         await new Promise(resolve => setTimeout(resolve, 50))
       }
       throw new ComputerError('BROWSER_LAUNCH_TIMEOUT', '等待浏览器调试接口超时')
-    } catch (error) { child.kill(); if (this.child === child) this.child = undefined; throw error }
+    } catch (error) {
+      // Keep an unconfirmed own child pinned. A failed/aborted launch never authorizes
+      // terminating it or spawning a replacement while its retirement is unknown.
+      if (this.child === child && (child.exitCode !== null || child.signalCode !== null || startupError && child.pid === undefined)) this.child = undefined
+      throw error
+    }
   }
   async connect(signal?: AbortSignal): Promise<void> {
     if (this.connection) return
@@ -210,36 +218,71 @@ export class BrowserSession {
     const result = await this.cdp().send<{ errorText?: string; loaderId?: string }>('Page.navigate', { url }, session)
     signal?.throwIfAborted(); beforeInput?.()
     if (result.errorText) throw new ComputerError('BROWSER_NAVIGATION_FAILED', result.errorText)
+    await this.waitNavigation(tabId, session, result.loaderId, signal, beforeInput)
+  }
+  private async waitNavigation(tabId: string, session: string, loaderId?: string, signal?: AbortSignal, guard?: () => void): Promise<void> {
     const deadline = Date.now() + (this.options.timeoutMs ?? 15_000)
     while (Date.now() < deadline) {
-      signal?.throwIfAborted()
-      // Target URL can remain about:blank while the first navigation commits.
-      // Inspect frame metadata only; no page content or input is allowed yet.
+      signal?.throwIfAborted(); guard?.()
       const tree = await this.cdp().send<{ frameTree: { frame: { url: string; loaderId: string } } }>('Page.getFrameTree', {}, session, signal)
+      signal?.throwIfAborted(); guard?.()
       const frame = tree.frameTree.frame
       if (frame.url !== 'about:blank') {
         if (!this.origins.has(originOf(frame.url) ?? '')) throw new ComputerError('SITE_NOT_ALLOWED', '页面跳转到了未经授权的网站')
-        if (result.loaderId && frame.loaderId !== result.loaderId) { await new Promise(resolve => setTimeout(resolve, 25)); continue }
+        if (loaderId && frame.loaderId !== loaderId) { await new Promise(resolve => setTimeout(resolve, 25)); continue }
         const ready = await this.cdp().send<{ result: { value?: string } }>('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true }, session, signal)
-        if (ready.result.value === 'complete') { await this.permission(tabId, signal); return }
+        signal?.throwIfAborted(); guard?.()
+        if (ready.result.value === 'complete') { await this.permission(tabId, signal); signal?.throwIfAborted(); guard?.(); return }
       }
       await new Promise(resolve => setTimeout(resolve, 25))
     }
     throw new ComputerError('BROWSER_NAVIGATION_TIMEOUT', '等待页面加载超时')
   }
+  async navigationState(tabId: string, signal?: AbortSignal): Promise<{ canGoBack: boolean; canGoForward: boolean; url: string }> {
+    await this.permission(tabId, signal)
+    const session = await this.tabSession(tabId, signal), history = await this.cdp().send<{ currentIndex: number; entries: { id: number; url: string }[] }>('Page.getNavigationHistory', {}, session, signal)
+    const current = await this.permission(tabId, signal); signal?.throwIfAborted()
+    const address = new URL(current.url); address.username = ''; address.password = ''
+    const allowed = (index: number) => !!history.entries[index] && this.origins.has(originOf(history.entries[index]!.url) ?? '')
+    return { canGoBack: allowed(history.currentIndex - 1), canGoForward: allowed(history.currentIndex + 1), url: address.href }
+  }
+  async history(tabId: string, operation: 'goBack' | 'goForward' | 'reload', signal?: AbortSignal, beforeInput?: () => void): Promise<void> {
+    await this.permission(tabId, signal)
+    const session = await this.tabSession(tabId, signal)
+    if (operation === 'reload') {
+      signal?.throwIfAborted(); await this.permission(tabId, signal); beforeInput?.()
+      await this.cdp().send('Page.reload', { ignoreCache: false }, session)
+    } else {
+      const history = await this.cdp().send<{ currentIndex: number; entries: { id: number; url: string }[] }>('Page.getNavigationHistory', {}, session, signal)
+      const target = history.entries[history.currentIndex + (operation === 'goBack' ? -1 : 1)]
+      if (!target || !Number.isSafeInteger(target.id)) throw new ComputerError('BROWSER_HISTORY_UNAVAILABLE', '没有可以前往的页面')
+      if (!this.origins.has(originOf(target.url) ?? '')) throw new ComputerError('SITE_NOT_ALLOWED', '历史页面的网站尚未获得授权')
+      await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.()
+      await this.cdp().send('Page.navigateToHistoryEntry', { entryId: target.id }, session)
+    }
+    signal?.throwIfAborted(); beforeInput?.(); this.observations.delete(tabId); this.previewObservations.delete(tabId)
+    await this.waitNavigation(tabId, session, undefined, signal, beforeInput)
+  }
   async open(url: string, signal?: AbortSignal, beforeInput?: () => void): Promise<BrowserTab> {
     if (!this.origins.has(originOf(url) ?? '')) throw new ComputerError('SITE_NOT_ALLOWED', '目标网站尚未获得用户授权')
     signal?.throwIfAborted(); beforeInput?.()
-    const result = await this.cdp().send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })
+    const result = await this.cdp().send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' }); this.ownedTabs.add(result.targetId)
     try { signal?.throwIfAborted(); beforeInput?.(); await this.navigate(result.targetId, url, signal, beforeInput); return await this.permission(result.targetId, signal) }
-    catch (error) { await this.cdp().send('Target.closeTarget', { targetId: result.targetId }).catch(() => {}); throw error }
+    catch (error) { await this.closeOwnedTab(result.targetId).catch(() => {}); throw error }
   }
   async closeTab(tabId: string, signal?: AbortSignal, beforeInput?: () => void): Promise<void> {
-    await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.()
+    await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.(); await this.closeTarget(tabId)
+  }
+  /** Cleanup only: Host may close a target this instance actually created even after site revocation. */
+  async closeOwnedTab(tabId: string): Promise<void> {
+    if (!this.ownedTabs.has(tabId)) throw new ComputerError('TARGET_NOT_OWNED', '不能清理不属于本次浏览器的标签页')
+    await this.closeTarget(tabId)
+  }
+  private async closeTarget(tabId: string): Promise<void> {
     const result = await this.cdp().send<{ success: boolean }>('Target.closeTarget', { targetId: tabId })
     if (!result.success) throw new ComputerError('BROWSER_CLOSE_FAILED', '无法关闭标签页')
     for (const [id, input] of this.ownedInput) if (input.tabId === tabId) this.ownedInput.delete(id)
-    this.sessions.delete(tabId); this.observations.delete(tabId); this.previewObservations.delete(tabId)
+    this.sessions.delete(tabId); this.observations.delete(tabId); this.previewObservations.delete(tabId); this.ownedTabs.delete(tabId)
   }
   async observe(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, false) }
   async preview(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, true) }
@@ -274,7 +317,7 @@ export class BrowserSession {
     return observation
   }
   async act(tabId: string, input: ComputerAction | BrowserSelectorAction, signal?: AbortSignal, beforeInput?: () => void): Promise<unknown> {
-    if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(input.kind)) throw new ComputerError('BROWSER_DRIVER_REQUIRED', '此操作须通过电脑会话控制层执行')
+    if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(input.kind)) throw new ComputerError('BROWSER_DRIVER_REQUIRED', '此操作须通过电脑会话控制层执行')
     await this.permission(tabId, signal)
     const session = await this.tabSession(tabId, signal)
     const perform = async (method: string, params: object, beforeDispatch?: () => void) => {
@@ -337,8 +380,11 @@ export class BrowserSession {
       const codes: Record<string, number> = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32 }
       const code = codes[actual] ?? (actual.length === 1 ? actual.toUpperCase().charCodeAt(0) : undefined)
       if (code === undefined) throw new ComputerError('INVALID_KEY', '不支持的按键')
+      // Enter needs Chromium's character-capable keyDown to run its default
+      // form/newline behavior. Shortcut modifiers suppress text, as in Chromium.
+      const text = actual === 'Enter' && (modifiers & 7) === 0 ? '\r' : ''
       let owned: number | undefined
-      try { await perform('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers }, () => {
+      try { await perform('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers, ...(text ? { text, unmodifiedText: text } : {}) }, () => {
         owned = ++this.inputSequence
         this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers } })
       }) }
@@ -357,15 +403,15 @@ export class BrowserSession {
       const child = this.child
       await connection?.send('Browser.close').catch(() => {})
       if (child.exitCode === null && child.signalCode === null) await new Promise<void>((resolve, reject) => {
-        const kill = setTimeout(() => { child.kill('SIGKILL') }, 3000)
         const timeout = setTimeout(() => { clean(); reject(new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器进程未确认退出。')) }, 5000)
-        const clean = () => { clearTimeout(kill); clearTimeout(timeout) }
-        child.once('exit', () => { clean(); resolve() })
+        const clean = () => { clearTimeout(timeout); child.off('exit', onExit) }
+        const onExit = () => { clean(); resolve() }
+        child.once('exit', onExit)
       })
       this.child = undefined
       this.ownedInput.clear()
     }
-    this.connection = undefined; this.sessions.clear(); this.invalidateObservations()
+    this.connection = undefined; this.sessions.clear(); this.ownedTabs.clear(); this.invalidateObservations()
     connection?.close(); this.listeners.clear()
   }
 }
@@ -417,6 +463,7 @@ export class BrowserDeviceDriver implements DeviceDriver {
     if (signal?.aborted) abort()
     const operation = (async () => {
       if (action.kind === 'navigate') { await this.browser.navigate(targetId, action.url!, controller.signal, guard); return { applied: true, targetId } }
+      if (action.kind === 'goBack' || action.kind === 'goForward' || action.kind === 'reload') { await this.browser.history(targetId, action.kind, controller.signal, guard); return { applied: true, targetId } }
       if (action.kind === 'openTab') { const tab = await this.browser.open(action.url!, controller.signal, guard); return { applied: true, targetId: tab.id } }
       if (action.kind === 'closeTab') { await this.browser.closeTab(targetId, controller.signal, guard); return { applied: true, closed: true } }
       if (action.kind === 'selectorClick') return this.browser.act(targetId, { kind: 'click', selector: action.selector! }, controller.signal, guard)

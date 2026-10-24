@@ -50,7 +50,7 @@ const compiled = await build({
 })
 const module = { exports: {} }
 vm.runInNewContext(compiled.outputFiles[0].text, {
-  module, exports: module.exports,
+  module, exports: module.exports, AbortController,
   require(id) {
     if (id === '@deepseek-ai/dsh-client-ui-primitives') return {
       Switch: ({ checked, disabled, label, onChange, className }) => React.createElement('button', {

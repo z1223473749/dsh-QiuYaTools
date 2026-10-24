@@ -169,7 +169,7 @@ export function createComputerRunBridge(deps: ComputerRunDependencies) {
 }
 
 /** Actual owner/profile services only. No personal model configuration or extra Agent is created. */
-export function installComputerAcceptanceRuns(ctx: Context, manager: ComputerEnvironmentManager, options: { enabled(): boolean; version: string }) {
+export function installComputerAcceptanceRuns(ctx: Context, manager: Pick<ComputerEnvironmentManager, 'runEnvironment'>, options: { enabled(): boolean; version: string }) {
   const profile = ctx.get('profileContext') as RunProfile | undefined
   const agents = ctx.get('agents') as RootAgentRegistry | undefined
   const attachments = ctx.get('attachments') as RunAttachmentStore | undefined

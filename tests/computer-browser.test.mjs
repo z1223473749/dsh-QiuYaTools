@@ -67,7 +67,7 @@ function cdpFixture() {
       if (method === 'Target.getTargetInfo') return { targetInfo: { type: 'page', targetId: 'tab', title: 'Fixture', url: 'https://fixture.example' } }
       if (method === 'Target.attachToTarget') return { sessionId: 'session-tab' }
       if (method === 'Runtime.evaluate') return { result: { value: { x: 40, y: 30, width: 80, height: 60 } } }
-      if (method === 'Input.dispatchKeyEvent' && params.type === 'rawKeyDown') { state.keyHeld = true; state.downs++ }
+      if (method === 'Input.dispatchKeyEvent' && ['rawKeyDown', 'keyDown'].includes(params.type)) { state.keyHeld = true; state.downs++ }
       if (method === 'Input.dispatchMouseEvent' && params.type === 'mousePressed') { state.mouseHeld = true; state.downs++ }
       if (params.type === 'keyUp' || params.type === 'mouseReleased') {
         state.releases++

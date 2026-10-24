@@ -243,7 +243,7 @@ export class ComputerSessionService {
     const record = this.record(sessionId), epoch = record.snapshot.epoch
     requireIdentity(request?.actionId, '操作'); requireIdentity(request?.frameId, '帧')
     const action = parseComputerAction(request.action)
-    if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(action.kind) && !this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器专用操作')
+    if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(action.kind) && !this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器专用操作')
     const fingerprint = JSON.stringify({ epoch, frameId: request.frameId, action, human })
     const old = record.actions.get(request.actionId)
     if (old) {
@@ -276,7 +276,7 @@ export class ComputerSessionService {
           return this.driver.act(epoch, target.id, action, operationSignal)
         })
         this.fence(record, epoch, human)
-        if (['navigate', 'openTab', 'closeTab'].includes(action.kind)) {
+        if (['navigate', 'openTab', 'closeTab', 'goBack', 'goForward', 'reload'].includes(action.kind)) {
           if (!this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器标签页操作')
           const next = await this.driver.resolveActionTarget(target, action, result, signal)
           this.fence(record, epoch, human)

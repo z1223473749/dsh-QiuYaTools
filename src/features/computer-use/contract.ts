@@ -12,7 +12,7 @@ export interface ComputerObservation {
   aiCursor?: { x: number; y: number; visible: boolean; actor: 'ai'; epoch?: number; phase?: string }
 }
 export interface ComputerAction {
-  kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType'
+  kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType' | 'goBack' | 'goForward' | 'reload'
   x?: number; y?: number; toX?: number; toY?: number; text?: string; key?: string
   deltaX?: number; deltaY?: number; button?: 'left' | 'right' | 'middle'
   url?: string; selector?: string
@@ -66,9 +66,9 @@ export function parseComputerAction(value: unknown): ComputerAction {
   const input = value as Record<string, unknown>
   const fields = new Set(['kind', 'x', 'y', 'toX', 'toY', 'text', 'key', 'deltaX', 'deltaY', 'button', 'url', 'selector'])
   if (Object.keys(input).some(key => !fields.has(key))) throw new ComputerError('INVALID_ACTION', '操作包含不支持的参数')
-  if (!['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
+  if (typeof input.kind !== 'string' || !['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
   for (const field of ['x', 'y', 'toX', 'toY', 'deltaX', 'deltaY']) if (input[field] !== undefined && (typeof input[field] !== 'number' || !Number.isFinite(input[field]) || Math.abs(input[field] as number) > 1_000_000)) throw new ComputerError('INVALID_ACTION', `${field} 无效`)
-  if (input.button !== undefined && !['left', 'right', 'middle'].includes(String(input.button))) throw new ComputerError('INVALID_ACTION', '鼠标按键无效')
+  if (input.button !== undefined && (typeof input.button !== 'string' || !['left', 'right', 'middle'].includes(input.button))) throw new ComputerError('INVALID_ACTION', '鼠标按键无效')
   if (['click', 'move', 'drag', 'scroll'].includes(String(input.kind)) && (input.x === undefined || input.y === undefined)) throw new ComputerError('INVALID_ACTION', '操作需要 x 和 y')
   if (input.kind === 'drag' && (input.toX === undefined || input.toY === undefined)) throw new ComputerError('INVALID_ACTION', '拖动需要终点')
   if (input.kind === 'scroll' && input.deltaX === undefined && input.deltaY === undefined) throw new ComputerError('INVALID_ACTION', '滚动需要距离')
