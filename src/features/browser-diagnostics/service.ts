@@ -56,7 +56,7 @@ export class BrowserDiagnosticsService {
       const captured = a, current = () => { scope.assertGrantCurrent(); signal.throwIfAborted(); this.guard(p.exec, p.context); if (captured.snapshot.state !== 'collecting') throw fail('DIAGNOSTICS_STOPPED') }
       a.guard = current
       this.active.set(diagnosticId, a)
-      const remove = await p.source.subscribe(current, event => { current(); a!.collector.ingest(event) }, () => { void this.stopActive(captured, 'page-or-authority-changed').catch(() => {}) }, signal)
+      const remove = await p.source.subscribe(current, event => { current(); a!.collector.ingest(event) }, () => { if (captured.snapshot.state === 'collecting') void this.stopActive(captured, 'page-or-authority-changed', true).catch(() => {}) }, signal)
       a.remove = remove
       if (a.snapshot.state !== 'collecting') await remove()
       try { this.owner(scope); current() } catch (failure) { await this.stopActive(a, 'permission-unconfirmed', true); throw failure }

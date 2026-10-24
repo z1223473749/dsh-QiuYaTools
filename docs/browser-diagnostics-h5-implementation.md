@@ -19,3 +19,12 @@ Mac实际Harness七项闭环通过：网站允许不代替独立诊断许可；�
 实际窄聊天复验暴露的小预览越界已修正：按当前会话容器与视口交集限制位置，并响应分栏及容器平移；保持300×180满幅、悬停控件与独立浮窗。诊断许可卡始终完整显示在预览上方；未知授权结果的错误不会被后续成功轮询清除。最终授权卡、诊断摘要与撤销状态三张截图均经肉眼复核，保存在项目外。验收证据位于`/Users/qiuya/QiuYaTools-验收/2026-10-22/报告/H5-网页诊断与会话预览-20261024/`，成功截图位于同根目录的`成功截图/Mac-H5-网页诊断与会话预览-20261024/`。最终候选Mac SHA-256为`267f76709c648d120d2cd53d5e92d6286a2656e841aa19b416dcd71a87676231`；Windows包仅完成构建校验，未继承本轮Mac结果。真实模型仍沿用原每任务12轮／180秒，不重放未知动作。
 
 CDP 参考为官方 [Runtime](https://chromedevtools.github.io/devtools-protocol/tot/Runtime/)、[Network](https://chromedevtools.github.io/devtools-protocol/tot/Network/)、[Target](https://chromedevtools.github.io/devtools-protocol/tot/Target/) 和 [Page](https://chromedevtools.github.io/devtools-protocol/tot/Page/) 协议。H4 负责只读元素与画面批注，H5 此阶段只完成 DBG-01/DBG-02 的有限诊断，DBG-03 的进一步 CSS/性能分析没有虚构为已交付。
+
+
+## 来源失效时清空诊断元数据
+
+网站授权撤销、页面导航或诊断来源失效先到达浏览器订阅回调时，仍在采集的诊断应停止并清空已有元数据。该回调必须与定时scope检查采用相同的清空边界，避免先变为stopped后再也不被scope检查清理。
+
+仅对回调触发时仍为collecting的诊断执行清空。模型正常停止会保留本轮有界元数据；其内部AbortSignal触发同一个来源回调时已是stopped，不能再次清空历史。用户“停止并清空”继续按原入口清空并精确退订一次。
+
+对应回归使用真实BrowserSession.subscribeDiagnostics与BrowserDiagnosticsService，CDP仅由有限内存传输提供，不启动浏览器或发送输入；覆盖来源回调先到、scope sweep先到、导航、主动模型停止及用户清空的顺序。Windows原H5网站撤销后的entries.length===0业务门不变，旧失败证据保留。
