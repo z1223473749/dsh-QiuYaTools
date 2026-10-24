@@ -28,18 +28,29 @@ async function writeDiagnosticReceipt(path, value) {
  } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
 }
 
+
+/** Decode only finite PowerShell Error strings for enum projection, never persist text. */
+export function projectPowerShellFailure(stderr) {
+ const original=Buffer.isBuffer(stderr)?stderr.toString('utf8'):typeof stderr==='string'?stderr:'';
+ const clipped=original.slice(0,65536);
+ const text=clipped.replace(/_x([a-f\d]{4})_/giu,(_,hex)=>String.fromCharCode(parseInt(hex,16))).replace(/&lt;/gu,'<').replace(/&gt;/gu,'>').replace(/&quot;/gu,'"').replace(/&apos;/gu,"'").replace(/&amp;/gu,'&').replace(/<[^>]{0,4096}>/gu,' ');
+ const reasons=[['fresh-own-root-exists','Fresh own root exists'],['node-sha-mismatch','Node SHA mismatch'],['own-command-sha-mismatch','Own command SHA mismatch'],['transfer-integrity-failed','Transfer integrity failed'],['node-archive-sha-mismatch','Node archive SHA mismatch'],['node-executable-sha-mismatch','Node executable SHA mismatch'],['fresh-own-node-folder-exists','Fresh own Node folder exists'],['node-archive-entry-limit','Node archive entry limit'],['node-archive-path-binding','Node archive path binding'],['own-task-principal-changed','Own task principal changed'],['own-task-action-changed','Own task action changed'],['own-task-not-natural','Own task did not finish naturally'],['own-task-changed-before-unregister','Own task changed before unregister'],['own-task-still-registered','Own task still registered'],['own-cleanup-source-changed','Own cleanup source changed'],['own-task-terminal-unknown','Own task terminal state unknown']];
+ const staticReason=reasons.find(([,message])=>text.includes(message))?.[0]??null;
+ const kinds=[['parser',/ParserError|ParseException|UnexpectedToken|MissingEndCurlyBrace|MissingEndParenthesis/iu],['command-not-found',/CommandNotFoundException|CommandNotFound/iu],['access-denied',/UnauthorizedAccessException|PermissionDenied|AccessDenied/iu],['item-not-found',/ItemNotFoundException|PathNotFound|FileNotFoundException|DirectoryNotFoundException|DriveNotFoundException/iu],['download-or-network',/WebException|DownloadFile|ConnectFailure|NameResolutionFailure/iu]];
+ const category=kinds.find(([,pattern])=>pattern.test(text))?.[0]??null;
+ const position=/At line:(\d{1,7}) char:(\d{1,7})/u.exec(text);
+ const types=['ParseException','CommandNotFoundException','UnauthorizedAccessException','ItemNotFoundException','FileNotFoundException','DirectoryNotFoundException','DriveNotFoundException','WebException'];
+ return {category,staticReason,exceptionType:types.find(type=>text.includes(type))??null,position:position?{line:Number(position[1]),column:Number(position[2])}:null,projectionInputTruncated:original.length>clipped.length};
+}
+
 export function projectWindowsCarrierError(error) {
  const code = safeCode(error?.code), exitCode = Number.isSafeInteger(error?.code) ? error.code : null
  const signal = typeof error?.signal === 'string' && /^SIG[A-Z0-9]{1,12}$/u.test(error.signal) ? error.signal : null
  const stderr = typeof error?.stderr === 'string' ? error.stderr : Buffer.isBuffer(error?.stderr) ? error.stderr.toString('utf8') : ''
- let powershellCategory = null
- if (/ParserError|ParseException|UnexpectedToken|MissingEndCurlyBrace|MissingEndParenthesis/iu.test(stderr)) powershellCategory = 'parser'
- else if (/CommandNotFoundException|CommandNotFound/iu.test(stderr)) powershellCategory = 'command-not-found'
- else if (/UnauthorizedAccessException|PermissionDenied|AccessDenied/iu.test(stderr)) powershellCategory = 'access-denied'
- else if (/WebException|DownloadFile|ConnectFailure|NameResolutionFailure/iu.test(stderr)) powershellCategory = 'download-or-network'
+ const powershell=projectPowerShellFailure(stderr),powershellCategory=powershell.category
  return {
   category: exitCode !== null ? 'process-exit' : code?.startsWith('VISION_') ? 'policy' : code ? 'node-system' : signal ? 'process-signal' : 'unclassified',
-  code, exitCode, signal, killed: error?.killed === true, powershellCategory,
+  code, exitCode, signal, killed: error?.killed === true, powershellCategory, powershell,
   unknownCode: code === null && typeof error?.code === 'string' ? digest(error.code) : null,
   message: digest(error?.message), stdout: digest(error?.stdout), stderr: digest(error?.stderr)
  }

@@ -1,6 +1,6 @@
 /** Build and import-smoke complete test-only relay bundles. No VM, GUI or network. */
 import { build } from 'esbuild'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, realpath } from 'node:fs/promises'
 import { resolve, join, relative, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
@@ -8,8 +8,9 @@ import { builtinModules } from 'node:module'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 const sha=b=>createHash('sha256').update(b).digest('hex'),exec=promisify(execFile)
-const repository=fileURLToPath(new URL('../',import.meta.url)),builtins=new Set(builtinModules.flatMap(x=>[x,'node:'+x]))
-export async function prepareWindowsVisionCarrier({output}){
+const defaultRepository=fileURLToPath(new URL('../',import.meta.url)),builtins=new Set(builtinModules.flatMap(x=>[x,'node:'+x]))
+export async function prepareWindowsVisionCarrier({output,repository=defaultRepository}){
+ repository=await realpath(repository)
  const directory=resolve(output);await mkdir(directory,{recursive:false})
  const sourceBytes=new Map(),sources={},results={},smoke=[]
  const auditSource='tests/fixtures/windows-remote-audit.cs',auditBytes=await readFile(join(repository,auditSource)),auditSha256=sha(auditBytes)
