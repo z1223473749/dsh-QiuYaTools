@@ -1,0 +1,10 @@
+{
+  "name": "clsx",
+  "version": "2.1.1",
+  "source": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz",
+  "integrity": "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==",
+  "file": "package/dist/clsx.js",
+  "sha256": "a2ba9f4c5fe36617aa930a5269bd910a2cafc7066398835d63cf3733f5c0651a",
+  "license": "MIT",
+  "scope": "Exact official 397B dependency used only to run actual public SDK Modal offline; no product dependency or layer shim"
+}

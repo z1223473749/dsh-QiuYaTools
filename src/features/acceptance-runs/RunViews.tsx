@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Modal } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { PropsStore } from '@deepseek-ai/dsh-client-store';
 import type { EvidenceRef, RunView } from './contract.ts';
 import { RUN_STATES } from './contract.ts';
@@ -16,8 +17,8 @@ export function EvidenceThumbnail({ refValue, chatSessionId, api, onUnavailable 
     api: RunReadAPI;
     onUnavailable?(): void;
 }) {
-    const [url, setURL] = useState(''), [failed, setFailed] = useState(false), [expanded, setExpanded] = useState(false), trigger = useRef<HTMLButtonElement>(null);
-    const close = () => { setExpanded(false); trigger.current?.focus(); };
+    const [url, setURL] = useState(''), [failed, setFailed] = useState(false), [expanded, setExpanded] = useState(false);
+    const close = () => setExpanded(false);
     useEffect(() => {
         const controller = new AbortController();
         let active = true, objectURL: string | undefined;
@@ -36,17 +37,10 @@ export function EvidenceThumbnail({ refValue, chatSessionId, api, onUnavailable 
         return () => { active = false; controller.abort(); if (objectURL)
             URL.revokeObjectURL(objectURL); };
     }, [api, chatSessionId, refValue.runId, refValue.evidenceId, refValue.sha256, refValue.bytes, refValue.mediaType, refValue.width, refValue.height]);
-    return <div className="qyt-run-evidence">{failed ? <span role="status">证据暂不可用</span> : url ? <button type="button" ref={trigger} aria-label="查看检查点截图" onClick={() => setExpanded(true)}><img src={url} alt="任务检查点截图" onLoad={event => { if (event.currentTarget.naturalWidth !== refValue.width || event.currentTarget.naturalHeight !== refValue.height) {
+    return <div className="qyt-run-evidence">{failed ? <span role="status">证据暂不可用</span> : url ? <button type="button" aria-label="查看检查点截图" onClick={() => setExpanded(true)}><img src={url} alt="任务检查点截图" onLoad={event => { if (event.currentTarget.naturalWidth !== refValue.width || event.currentTarget.naturalHeight !== refValue.height) {
         setFailed(true);
         onUnavailable?.();
-    } }} onError={() => { setFailed(true); onUnavailable?.(); }}/></button> : <span>正在核验证据…</span>}{expanded && url && !failed && <div className="qyt-run-image-dialog" role="dialog" aria-modal="true" aria-label="检查点截图" onKeyDown={e => { if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-    }
-    else if (e.key === 'Tab') {
-        e.preventDefault();
-        e.currentTarget.querySelector('button')?.focus();
-    } }}><button type="button" autoFocus onClick={close}>关闭截图</button><img src={url} alt="检查点原图"/></div>}</div>;
+    } }} onError={() => { setFailed(true); onUnavailable?.(); }}/></button> : <span>正在核验证据…</span>}{expanded && url && !failed && <Modal open headless title="检查点截图" onClose={close} className="qyt-run qyt-run-image-dialog"><button type="button" data-modal-autofocus onClick={close}>关闭截图</button><img src={url} alt="检查点原图"/></Modal>}</div>;
 }
 export function RunResultCard({ summary, sessionId, api, onOpen }: {
     summary: RunSummary;
