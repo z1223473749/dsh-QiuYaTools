@@ -15,6 +15,25 @@ export interface BrowserTab { id: string; title: string; url: string; allowed: b
 export type BrowserSelectorAction = { kind: 'click' | 'type' | 'scroll'; selector: string; text?: string; deltaX?: number; deltaY?: number }
 interface Pending { resolve(value: unknown): void; reject(error: unknown): void; clean(): void }
 interface OwnedBrowserInput { sessionId: string; tabId: string; method: string; params: Record<string, unknown> }
+interface OwnedBrowserLaunch { child: ChildProcess; activePort: string; endpoint?: string; ambiguous: boolean; stop(): void }
+/** Only this exact spawned child's complete stderr line can identify a late endpoint. */
+function trackOwnedBrowserLaunch(child: ChildProcess, activePort: string): OwnedBrowserLaunch {
+  let tail = ''
+  const launch: OwnedBrowserLaunch = { child, activePort, ambiguous: false, stop: () => { child.stderr?.off('data', onData); tail = '' } }
+  const onData = (chunk: Buffer | string) => {
+    tail = (tail + chunk.toString()).slice(-16_384)
+    let newline: number
+    while ((newline = tail.indexOf('\n')) >= 0) {
+      const line = tail.slice(0, newline).replace(/\r$/u, ''); tail = tail.slice(newline + 1)
+      const match = /^DevTools listening on (ws:\/\/127\.0\.0\.1:([0-9]{1,5})\/devtools\/browser\/[a-zA-Z0-9-]+)$/u.exec(line)
+      if (!match) continue
+      if (Number(match[2]) < 1 || Number(match[2]) > 65535 || launch.endpoint && launch.endpoint !== match[1]) launch.ambiguous = true
+      else launch.endpoint = match[1]
+    }
+  }
+  child.stderr?.on('data', onData)
+  return launch
+}
 type CdpEvent = { method: string; sessionId?: string; params?: Record<string, unknown> }
 /** Minimal public CDP transport. No arbitrary model-provided evaluate endpoint. */
 class CdpConnection {
@@ -104,6 +123,7 @@ export class BrowserSession {
   private readonly origins: Set<string>
   private connection?: CdpConnection
   private child?: ChildProcess
+  private ownedLaunch?: OwnedBrowserLaunch
   private readonly sessions = new Map<string, string>()
   private readonly ownedTabs = new Set<string>()
   private readonly observations = new Map<string, ComputerObservation>()
@@ -143,9 +163,10 @@ export class BrowserSession {
     const activePort = join(this.profileDir, 'DevToolsActivePort'); await rm(activePort, { force: true })
     const args = ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${this.profileDir}`, '--no-first-run', '--no-default-browser-check', '--disable-background-networking', ...(this.options.headless ? ['--headless=new', '--disable-gpu'] : []), 'about:blank']
     const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: false }); this.child = child
+    const ownedLaunch = trackOwnedBrowserLaunch(child, activePort); this.ownedLaunch = ownedLaunch
     let startupError: unknown
     child.once('error', error => { startupError = error }); child.stderr?.resume()
-    child.once('exit', () => { if (this.child === child) { this.child = undefined; if (!this.closing) this.emit({ event: 'disconnected' }) } })
+    child.once('exit', () => { ownedLaunch.stop(); if (this.ownedLaunch === ownedLaunch) this.ownedLaunch = undefined; if (this.child === child) { this.child = undefined; if (!this.closing) this.emit({ event: 'disconnected' }) } })
     const deadline = Date.now() + (this.options.timeoutMs ?? 15_000)
     try {
       while (Date.now() < deadline) {
@@ -161,7 +182,7 @@ export class BrowserSession {
     } catch (error) {
       // Keep an unconfirmed own child pinned. A failed/aborted launch never authorizes
       // terminating it or spawning a replacement while its retirement is unknown.
-      if (this.child === child && (child.exitCode !== null || child.signalCode !== null || startupError && child.pid === undefined)) this.child = undefined
+      if (this.child === child && (child.exitCode !== null || child.signalCode !== null || startupError && child.pid === undefined)) { this.child = undefined; ownedLaunch.stop(); if (this.ownedLaunch === ownedLaunch) this.ownedLaunch = undefined }
       throw error
     }
   }
@@ -393,21 +414,62 @@ export class BrowserSession {
     this.observations.delete(tabId); this.previewObservations.delete(tabId)
     return { applied: true }
   }
+  private async recoverOwnedLaunchConnection(child: ChildProcess, deadline: number): Promise<CdpConnection | undefined> {
+    const launch = this.ownedLaunch
+    const failed = () => new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器的启动身份或自然退出尚未确认。')
+    const stillOwned = () => { if (this.child !== child || this.ownedLaunch !== launch || !launch || launch.child !== child || launch.ambiguous) throw failed() }
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.signalCode !== null) return undefined
+      stillOwned()
+      if (launch?.endpoint) {
+        let text: string | undefined
+        try { text = await readFile(launch.activePort, { encoding: 'utf8', signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw failed() }
+        if (child.exitCode !== null || child.signalCode !== null) return undefined
+        stillOwned()
+        if (text !== undefined) {
+          const lines = text.trim().split('\n'), port = lines[0], path = lines[1]
+          if (text.length > 1024 || lines.length !== 2 || !/^[0-9]{1,5}$/u.test(port ?? '') || !/^\/devtools\/browser\/[a-zA-Z0-9-]+$/u.test(path ?? '') || `ws://127.0.0.1:${port}${path}` !== launch.endpoint) throw failed()
+          const remaining = Math.min(this.options.timeoutMs ?? 15_000, deadline - Date.now())
+          if (remaining <= 0) throw failed()
+          let connection: CdpConnection
+          try { connection = await CdpConnection.open(launch.endpoint, remaining, AbortSignal.timeout(remaining)) } catch { if (child.exitCode !== null || child.signalCode !== null) return undefined; throw failed() }
+          if (child.exitCode !== null || child.signalCode !== null) { connection.close(); return undefined }
+          try { stillOwned() } catch (error) { connection.close(); throw error }
+          this.connection = connection
+          connection.subscribe(event => { if (event.method === 'QiuYa.disconnected') { this.sessions.clear(); this.invalidateObservations(); this.emit({ event: 'disconnected' }) } })
+          return connection
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(50, Math.max(0, deadline - Date.now()))))
+    }
+    if (child.exitCode !== null || child.signalCode !== null) return undefined
+    throw failed()
+  }
   async close(): Promise<void> {
     this.closing = true
     let cleanupError: unknown
     try { await this.releaseInputs() } catch (error) { cleanupError = error }
-    const connection = this.connection
+    let connection = this.connection
     if (!this.child && cleanupError) throw cleanupError
     if (this.child) {
       const child = this.child
-      await connection?.send('Browser.close').catch(() => {})
+      // A canceled launch may publish its own endpoint after launch() returned.
+      // Recovery, one Browser.close and retirement share the original 5 s budget.
+      const deadline = connection ? undefined : Date.now() + 5000
+      if (!connection) connection = await this.recoverOwnedLaunchConnection(child, deadline!)
+      if (child.exitCode === null && child.signalCode === null && this.child !== child) throw new ComputerError('BROWSER_CLEANUP_FAILED', '浏览器进程身份已变化，不能清理其他运行实例。')
+      if (deadline !== undefined && connection && (this.ownedLaunch?.child !== child || this.ownedLaunch.ambiguous || Date.now() >= deadline)) throw new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器的启动身份或自然退出尚未确认。')
+      const closeSignal = deadline === undefined ? undefined : AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+      await connection?.send('Browser.close', {}, undefined, closeSignal).catch(() => {})
       if (child.exitCode === null && child.signalCode === null) await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => { clean(); reject(new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器进程未确认退出。')) }, 5000)
+        const timeout = setTimeout(() => { clean(); reject(new ComputerError('BROWSER_CLEANUP_FAILED', '专用浏览器进程未确认退出。')) }, deadline === undefined ? 5000 : Math.max(0, deadline - Date.now()))
         const clean = () => { clearTimeout(timeout); child.off('exit', onExit) }
         const onExit = () => { clean(); resolve() }
         child.once('exit', onExit)
+        if (child.exitCode !== null || child.signalCode !== null) onExit()
       })
+      if (this.child !== undefined && this.child !== child) throw new ComputerError('BROWSER_CLEANUP_FAILED', '浏览器进程身份已变化，不能清理其他运行实例。')
+      if (this.ownedLaunch?.child === child) { this.ownedLaunch.stop(); this.ownedLaunch = undefined }
       this.child = undefined
       this.ownedInput.clear()
     }
