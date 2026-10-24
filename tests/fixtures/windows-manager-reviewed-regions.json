@@ -1,0 +1,10 @@
+{
+  "businessRegionSHA256": "86165f4a263d9091d1bad46c615510fdf636244df06d181aa8a893cccacea0df",
+  "cleanupVerdictRegionSHA256": "cfaa1c71dc4563a7f4c48644cd3f891a2d67e47d6278c438a4f209abfc839fb4",
+  "methods": {
+    "CleanupAlive": "34fa83d458d4575cfc4639014cfe3a45e1fe3b7f6c6ad50d897471bb9f8cdbca",
+    "Retired": "6da10fe09571daff80ef8ecf9e62d9ec3e69e9b92527c51dbabc31dfd990d025",
+    "AliveLocked": "a7da91a567ba8a30fa76449e77692f846810ace518d5a3c982a73ebf047a9521"
+  },
+  "scope": "Reviewed original actual11 business region and cleanup predicates before observer-only finite diagnostics. Original failures retained externally; no fixture identity or private path is stored."
+}
