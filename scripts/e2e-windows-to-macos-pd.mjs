@@ -5,13 +5,17 @@ import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createInterface } from 'node:readline'
 import { mkdir, readFile, writeFile, stat, realpath } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { build } from 'esbuild'
 import { windowsPinnedProcessCommand } from './computer-webview2-soak-evidence.mjs'
+import { reverseRemoteDeliveryPassed } from './reverse-remote-delivery.mjs'
+import {pinReverseExecutable,verifyReverseProcessExecutable} from './reverse-executable-pin.mjs'
+import {reverseOwnedDirectoryAclCommand,assertReverseOwnedDirectoryAclProof} from './reverse-owned-directory-acl.mjs'
+import {createReverseCheckpointCoordinator,reverseClientReportEntry} from './reverse-checkpoint-coordinator.mjs'
 
 const run = promisify(execFile), vm = process.env.QIUYA_PD_VM, host = process.env.QIUYA_PD_HOST_IP
 if (process.platform !== 'darwin') throw new Error('The reverse runner requires the authorized Mac host')
@@ -24,10 +28,13 @@ for (const name of ['report.json', 'client-report.json', 'delivery-verdict.json'
 const key = randomUUID(), token = randomBytes(32).toString('hex'), gate = join(output, 'begin-input')
 const repo = fileURLToPath(new URL('../', import.meta.url)), bundle = join(output, 'remote.mjs')
 const helper = await realpath(join(repo, 'lib/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'))
-const fixtureSource = join(repo, 'src/native/macos/fixtures/ComputerFixture.swift'), oracleSource = join(repo, 'src/native/macos/fixtures/LeaseOracle.swift')
-const fixtureContents = join(output, 'QiuYaTools Reverse Fixture.app', 'Contents'), executable = join(fixtureContents, 'MacOS', 'fixture'), oracleBinary = join(output, 'reverse-oracle')
+const helperExecutablePin = await pinReverseExecutable(helper, createHash('sha256').update(await readFile(helper)).digest('hex'))
+const fixtureSource = join(repo, 'src/native/macos/fixtures/ComputerFixture.swift'), oracleSource = join(repo, 'src/native/macos/fixtures/LeaseOracle.swift'), leaseAuditSource = join(repo, 'src/native/macos/fixtures/ReverseLeaseAudit.swift')
+const fixtureContents = join(output, 'QiuYaTools Reverse Fixture.app', 'Contents'), executable = join(fixtureContents, 'MacOS', 'fixture'), oracleBinary = join(output, 'reverse-oracle'), leaseAuditBinary = join(output, 'reverse-lease-audit')
 const fixtureBundleId = `com.qiuya.tools.reverse-remote.fixture.${key.replaceAll('-', '')}`
-const guestBase = process.env.QIUYA_WINDOWS_NODE_ROOT, guestRoot = `${guestBase}\\reverse-${key}`
+const guestBase = process.env.QIUYA_WINDOWS_NODE_ROOT
+assert.match(guestBase, /^[a-z]:\\/iu, 'Verified guest Node root must be an absolute Windows directory')
+const guestRoot = `${win32.dirname(guestBase)}\\QiuYaTools-reverse-${key}`
 const nodeArch = process.env.QIUYA_WINDOWS_NODE_ARCH || 'arm64'
 if (!['arm64', 'x64'].includes(nodeArch)) throw new Error('Guest Node architecture must be arm64 or x64')
 const node = `${guestBase}\\node-v22.23.3-win-${nodeArch}\\node.exe`, quote = value => `'${value.replaceAll("'", "''")}'`
@@ -37,9 +44,9 @@ const sameIdentity = (a, b) => a && b && birthKey(a) === birthKey(b) && a.execut
 const emptyOs = value => value.leftButtonDown === false && value.rightButtonDown === false && value.middleButtonDown === false && Array.isArray(value.keysDown) && value.keysDown.length === 0
 const cleanup = { passed: false, errors: [], forced: [], trackedMac: [], remainingMac: [], windowsTask: null, guestTokenConfigDeleted: false, inMemoryConfigRemoved: false }
 const files = new Map(), transport = [], macIdentities = new Map(), oracleInvocations = []
-const trackedWindows = []
-let server, serverListening = false, base, task, guestCreated = false, fixture, fixtureExit, fixtureLines, driver, nativeChild, nativeExit, agent, clientReport, naturalTaskExit, setupError, preflight, environment, checkpoint = false, guestIdentityRecorded = false, snapshot
-const bounded = error => ({ code: error.code ?? null, message: String(error.message).split('\n')[0].replace(/ -EncodedCommand .*/u, ' [command omitted]').slice(0, 500), stdout: String(error.stdout ?? '').slice(0, 2500), stderr: String(error.stderr ?? '').slice(0, 2500) })
+const trackedWindows = [], executableProofs = []
+let server, serverListening = false, base, task, guestCreated = false, fixture, fixtureExit, fixtureLines, driver, nativeChild, nativeExit, agent, clientReport, naturalTaskExit, setupError, preflight, environment, guestIdentityRecorded = false, snapshot
+const bounded = error => ({ code: error.code ?? null, message: String(error.message).split('\n')[0].replace(/ -EncodedCommand .*/u, ' [command omitted]').slice(0, 500), stdout: String(error.stdout ?? '').slice(0, 2500), stderr: String(error.stderr ?? '').slice(0, 2500), ...(error.reverseExecutableFact ? {executableFact:error.reverseExecutableFact} : {}) })
 async function wait(promise, milliseconds, reason) { let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(reason)), milliseconds) })]) } finally { clearTimeout(timer) } }
 async function eventually(fn, reason, milliseconds = 5000) { const deadline = performance.now() + milliseconds; while (performance.now() < deadline) { if (await fn()) return; await delay(20) } throw new Error(reason) }
 async function oracle(op, args = {}) {
@@ -57,7 +64,9 @@ async function checkpointNative() {
     nativeChild = driver.child
     nativeExit = new Promise(done => { nativeChild.once('exit', (code, signal) => done({ code, signal })); nativeChild.once('error', error => done({ error: error.message })) })
     const own = remember(await identity(nativeChild.pid), 'native')
-    assert.equal(own.executablePath, helper); assert.equal(own.parentPid, process.pid)
+    executableProofs.push(await verifyReverseProcessExecutable(own,helperExecutablePin,{pid:nativeChild.pid,parentPid:process.pid,phase:'native-image-pin'}))
+    const confirmed=await identity(nativeChild.pid);assert.ok(sameIdentity(confirmed,own),'Native PID/birth/path changed during executable proof');assert.equal(confirmed.parentPid,process.pid)
+    executableProofs.push(await verifyReverseProcessExecutable(confirmed,helperExecutablePin,{pid:nativeChild.pid,parentPid:process.pid,phase:'native-image-recheck'}))
   }
   const parent = [...macIdentities.values()].find(value => value.role === 'native')
   if (!parent || !sameIdentity(await identity(parent.pid), parent)) return
@@ -66,7 +75,9 @@ async function checkpointNative() {
     const match = /^\s*(\d+)\s+(\d+)\s*$/u.exec(line)
     if (!match || Number(match[2]) !== parent.pid) continue
     const child = await identity(Number(match[1]))
-    if (!child || child.parentPid !== parent.pid || child.executablePath !== helper) continue
+    if (!child || child.parentPid !== parent.pid) continue
+    if (await realpath(child.executablePath) !== helperExecutablePin.canonical) continue
+    executableProofs.push(await verifyReverseProcessExecutable(child,helperExecutablePin,{pid:child.pid,parentPid:parent.pid,phase:'guardian-image-pin'}))
     const childBorn = BigInt(child.startSeconds) * 1_000_000n + BigInt(child.startMicroseconds), parentBorn = BigInt(parent.startSeconds) * 1_000_000n + BigInt(parent.startMicroseconds)
     assert.ok(childBorn >= parentBorn)
     assert.match((await run('/bin/ps', ['-p', String(child.pid), '-o', 'command='])).stdout, /(?:^|\s)--input-guardian(?:\s|$)/u)
@@ -95,8 +106,11 @@ async function ps(code, timeout = 30000) {
     catch (error) { cleanup.errors.push(`Owned command-file removal: ${JSON.stringify(bounded(error))}`) }
   }
 }
+const checkpointScript = Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),Buffer.from(`param([Parameter(Mandatory=$true)][string]$ExpectedSHA256)
+$ErrorActionPreference='Stop';if(((Get-Item -LiteralPath $PSCommandPath).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedSHA256){throw 'Owned checkpoint source SHA changed'};
+$ErrorActionPreference='Stop';$i=Get-Content -LiteralPath ${quote(guestRoot + '\\client-identity.json')} -Raw|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById([int]$i.pid);try{$null=$p.SafeHandle;$born=$p.StartTime.ToUniversalTime().Ticks;$path=$p.MainModule.FileName;if($path -ine ${quote(node)} -or $p.SessionId -le 0){throw 'Client process path/session changed'};$r=Get-CimInstance Win32_Process -Filter ('ProcessId='+$p.Id);if(!$r -or $r.CommandLine.IndexOf(${quote(guestRoot + '\\client.mjs')},[StringComparison]::OrdinalIgnoreCase) -lt 0){throw 'Client command ownership changed'};$owned=@(@{pid=$p.Id;createdAtTicks=$born.ToString();expectedExecutablePath=$path;role='client'});$console=Join-Path ([Environment]::SystemDirectory) 'conhost.exe';foreach($c in @(Get-CimInstance Win32_Process -Filter ('ParentProcessId='+$p.Id))){$child=$null;try{$child=[Diagnostics.Process]::GetProcessById([int]$c.ProcessId);$null=$child.SafeHandle;$childBorn=$child.StartTime.ToUniversalTime().Ticks;$live=Get-CimInstance Win32_Process -Filter ('ProcessId='+$child.Id);if(!$live -or [int]$live.ParentProcessId -ne $p.Id -or $live.CreationDate.ToUniversalTime().Ticks -ne ($childBorn-($childBorn%10))){continue};if($childBorn -lt $born -or $child.MainModule.FileName -ine $console){throw 'Unexpected direct client child'};$owned+=@{pid=$child.Id;createdAtTicks=$childBorn.ToString();expectedExecutablePath=$console;role='console'}}finally{if($child){$child.Dispose()}}};if($p.HasExited -or $p.StartTime.ToUniversalTime().Ticks -ne $born){throw 'Client exited during ownership checkpoint'};@{identity=$i;owned=$owned}|ConvertTo-Json -Depth 6 -Compress}finally{$p.Dispose()}`)])
 async function checkpointGuest() {
-  const value = JSON.parse(await ps(`$ErrorActionPreference='Stop';$i=Get-Content -LiteralPath ${quote(guestRoot + '\\client-identity.json')} -Raw|ConvertFrom-Json;$p=[Diagnostics.Process]::GetProcessById([int]$i.pid);try{$null=$p.SafeHandle;$born=$p.StartTime.ToUniversalTime().Ticks;$path=$p.MainModule.FileName;if($path -ine ${quote(node)} -or $p.SessionId -le 0){throw 'Client process path/session changed'};$r=Get-CimInstance Win32_Process -Filter ('ProcessId='+$p.Id);if(!$r -or $r.CommandLine.IndexOf(${quote(guestRoot + '\\client.mjs')},[StringComparison]::OrdinalIgnoreCase) -lt 0){throw 'Client command ownership changed'};$owned=@(@{pid=$p.Id;createdAtTicks=$born.ToString();expectedExecutablePath=$path;role='client'});$console=Join-Path ([Environment]::SystemDirectory) 'conhost.exe';foreach($c in @(Get-CimInstance Win32_Process -Filter ('ParentProcessId='+$p.Id))){$child=$null;try{$child=[Diagnostics.Process]::GetProcessById([int]$c.ProcessId);$null=$child.SafeHandle;$childBorn=$child.StartTime.ToUniversalTime().Ticks;$live=Get-CimInstance Win32_Process -Filter ('ProcessId='+$child.Id);if(!$live -or [int]$live.ParentProcessId -ne $p.Id -or $live.CreationDate.ToUniversalTime().Ticks -ne ($childBorn-($childBorn%10))){continue};if($childBorn -lt $born -or $child.MainModule.FileName -ine $console){throw 'Unexpected direct client child'};$owned+=@{pid=$child.Id;createdAtTicks=$childBorn.ToString();expectedExecutablePath=$console;role='console'}}finally{if($child){$child.Dispose()}}};if($p.HasExited -or $p.StartTime.ToUniversalTime().Ticks -ne $born){throw 'Client exited during ownership checkpoint'};@{identity=$i;owned=$owned}|ConvertTo-Json -Depth 6 -Compress}finally{$p.Dispose()}`))
+  const value = JSON.parse((await run(prlctl,['exec',vm,'powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',guestRoot+'\\checkpoint.ps1','-ExpectedSHA256',sha(checkpointScript)],{timeout:30000,killSignal:'SIGKILL',maxBuffer:1024*1024})).stdout.trim())
   assert.equal(value.identity.platform, 'win32'); assert.equal(value.identity.architecture, nodeArch)
   assert.equal(value.identity.scriptSha256, sha(Buffer.from(client)))
   assert.ok(value.owned.some(row => row.role === 'client'))
@@ -108,6 +122,11 @@ async function checkpointGuest() {
   await writeFile(join(output, 'windows-process-checkpoint.json'), JSON.stringify(value, null, 2) + '\n')
   guestIdentityRecorded = true
 }
+let reportResolve,reportReceived=false
+const clientReportArrival=new Promise(resolve=>{reportResolve=resolve})
+const checkpointCoordinator=createReverseCheckpointCoordinator(checkpointGuest,stage=>{
+  console.log(JSON.stringify({stage:stage==='client-started'?'client-identity-pinned':'capture-only-passed-waiting-for-input-gate',gate}))
+})
 
 const client = String.raw`import assert from 'node:assert/strict';
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises';
@@ -150,8 +169,9 @@ finally{
 `
 
 try {
-  environment = { vm, guestRoot, clientNode: node, expectedArchitecture: nodeArch, runnerSourceSha256: sha(await readFile(fileURLToPath(import.meta.url))), nativeHelperSha256: sha(await readFile(helper)), fixtureSourceSha256: sha(await readFile(fixtureSource)), oracleSourceSha256: sha(await readFile(oracleSource)), pinnedWindowsOracleSourceSha256: sha(await readFile(join(repo, 'scripts/computer-webview2-soak-evidence.mjs'))), inputGate: gate, pairedPrivateNetwork: true }
+  environment = { vm, guestRoot, clientNode: node, expectedArchitecture: nodeArch, runnerSourceSha256: sha(await readFile(fileURLToPath(import.meta.url))), nativeHelperSha256: sha(await readFile(helper)), fixtureSourceSha256: sha(await readFile(fixtureSource)), oracleSourceSha256: sha(await readFile(oracleSource)), leaseAuditSourceSha256: sha(await readFile(leaseAuditSource)), pinnedWindowsOracleSourceSha256: sha(await readFile(join(repo, 'scripts/computer-webview2-soak-evidence.mjs'))), inputGate: gate, pairedPrivateNetwork: true }
   await run('/usr/bin/swiftc', ['-swift-version', '5', '-framework', 'AppKit', '-module-cache-path', '/private/tmp/qiuya-remote-swift-cache', oracleSource, '-o', oracleBinary], { timeout: 60000 })
+  await run('/usr/bin/swiftc', ['-swift-version', '5', '-module-cache-path', '/private/tmp/qiuya-remote-swift-cache', leaseAuditSource, '-o', leaseAuditBinary], { timeout: 60000 })
   preflight = await oracle('snapshot')
   assert.equal(preflight.sessionExists, true, 'The Mac graphical session is unavailable')
   if (preflight.screenLocked || preflight.foregroundBundleId === 'com.apple.loginwindow') { const error = new Error('The owner must unlock the existing Mac session'); error.code = 'SESSION_LOCKED'; throw error }
@@ -185,7 +205,12 @@ try {
       if (parts[2] === 'state' && request.method === 'GET') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(await snapshot())); return }
       if (parts[2] === 'begin' && request.method === 'GET') { response.end(guestIdentityRecorded ? await stat(gate).then(value => value.isFile() ? 'go' : 'wait', () => 'wait') : 'wait'); return }
       if (parts[2] === 'identity-ready' && request.method === 'GET') { response.end(guestIdentityRecorded ? 'go' : 'wait'); return }
-      if (parts[2] === 'checkpoint' && request.method === 'POST') { let body = ''; for await (const bytes of request) { body += bytes; if (body.length > 65536) throw new Error('Checkpoint limit') }; const value = JSON.parse(body); assert.ok(['client-started', 'capture-only-passed'].includes(value.stage)); await writeFile(join(output, value.stage === 'client-started' ? 'client-start-checkpoint.json' : 'capture-checkpoint.json'), body); checkpoint = value.stage; response.end('ok'); return }
+      if (parts[2] === 'checkpoint' && request.method === 'POST') { let body = ''; for await (const bytes of request) { body += bytes; if (body.length > 65536) throw new Error('Checkpoint limit') }; const value = JSON.parse(body); assert.ok(['client-started', 'capture-only-passed'].includes(value.stage)); await writeFile(join(output, value.stage === 'client-started' ? 'client-start-checkpoint.json' : 'capture-checkpoint.json'), body); void checkpointCoordinator.notify(value.stage).catch(()=>{}); response.end('ok'); return }
+      if(parts[2]==='client-report'&&request.method==='POST'){
+        assert.equal(reportReceived,false,'Original report callback is single-use');let body='';for await(const bytes of request){body+=bytes;if(Buffer.byteLength(body)>65536)throw new Error('Owned report bound')}
+        const value=JSON.parse(body);assert.equal(typeof value.passed,'boolean');assert.ok(Array.isArray(value.checks)&&value.checks.length<=9);reportReceived=true
+        await writeFile(join(output,'client-report.json'),body,{mode:0o600});reportResolve(value);response.end('ok');return
+      }
       const bytes = request.method === 'GET' && files.get(parts[2])
       if (!bytes) { response.writeHead(404).end(); return }
       response.writeHead(200, { 'Content-Length': bytes.length }); response.end(bytes)
@@ -194,8 +219,9 @@ try {
   await new Promise((done, reject) => { server.once('error', reject); server.listen(0, host, done) }); serverListening = true
   base = `http://${host}:${server.address().port}/${key}`
   files.set('remote.mjs', await readFile(bundle)); files.set('client.mjs', Buffer.from(client))
+  files.set('checkpoint.ps1',checkpointScript);files.set('client-entry.mjs',Buffer.from(reverseClientReportEntry()))
   files.set('config.json', Buffer.from(JSON.stringify({ endpoint: agent.endpoint, token, fixturePid: fixture.pid, fixtureBundleId, points: ready.points, fixtureBase: base, expectedArchitecture: nodeArch })))
-  environment = { ...environment, fixtureBinarySha256: sha(await readFile(executable)), oracleBinarySha256: sha(await readFile(oracleBinary)), bundleSha256: sha(await readFile(bundle)), clientSourceSha256: sha(Buffer.from(client)), bundleInputs: sources, fixtureIdentity, transfers: [] }
+  environment = { ...environment, fixtureBinarySha256: sha(await readFile(executable)), oracleBinarySha256: sha(await readFile(oracleBinary)), leaseAuditBinarySha256: sha(await readFile(leaseAuditBinary)), bundleSha256: sha(await readFile(bundle)), clientSourceSha256: sha(Buffer.from(client)), bundleInputs: sources, fixtureIdentity, transfers: [] }
   await ps(`$ErrorActionPreference='Stop';New-Item -ItemType Directory -Force ${quote(guestRoot)}|Out-Null`); guestCreated = true
   for (const [name, bytes] of [...files]) {
     const path = guestRoot + '\\' + name
@@ -203,17 +229,16 @@ try {
     environment.transfers.push({ name, sha256: sha(bytes), bytes: bytes.length })
   }
   environment.clientNodeSha256 = await ps(`$ErrorActionPreference='Stop';(Get-FileHash -LiteralPath ${quote(node)} -Algorithm SHA256).Hash.ToLowerInvariant()`)
-  const user = await ps(`$ErrorActionPreference='Stop';$u=(Get-Process explorer -IncludeUserName|Where-Object SessionId -gt 0|Select-Object -First 1).UserName;if(!$u){throw 'No interactive Windows user'};$u`)
+  const principal = JSON.parse(await ps(`$ErrorActionPreference='Stop';$u=(Get-Process explorer -IncludeUserName|Where-Object SessionId -gt 0|Select-Object -First 1).UserName;if(!$u){throw 'No interactive Windows user'};$sid=([Security.Principal.NTAccount]::new($u)).Translate([Security.Principal.SecurityIdentifier]).Value;@{user=$u;sid=$sid}|ConvertTo-Json -Compress`))
+  const directoryAcl = JSON.parse(await ps(reverseOwnedDirectoryAclCommand({directory:guestRoot,sid:principal.sid})))
+  assertReverseOwnedDirectoryAclProof({sid:principal.sid},directoryAcl)
+  await writeFile(join(output,'guest-directory-acl-proof.json'),JSON.stringify(directoryAcl,null,2)+'\n',{mode:0o600})
   task = `QiuYaTools-reverse-${key}`
-  await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute ${quote(node)} -Argument ${quote('"' + guestRoot + '\\client.mjs"')};$p=New-ScheduledTaskPrincipal -UserId ${quote(user)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 12);Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
+  await ps(`$ErrorActionPreference='Stop';$a=New-ScheduledTaskAction -Execute ${quote(node)} -Argument ${quote('"'+guestRoot+'\\client-entry.mjs" "'+guestRoot+'\\client.mjs"')};$p=New-ScheduledTaskPrincipal -UserId ${quote(principal.sid)} -LogonType Interactive -RunLevel Limited;$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 12);Register-ScheduledTask -TaskName ${quote(task)} -Action $a -Principal $p -Settings $s|Out-Null;Start-ScheduledTask -TaskName ${quote(task)}`)
   console.log(JSON.stringify({ stage: 'setup-complete', output, gate, guestRoot }))
   const reportDeadline = performance.now() + 11 * 60_000
-  while (performance.now() < reportDeadline) {
-    const value = await ps(`$p=${quote(guestRoot + '\\report.json')};if(Test-Path -LiteralPath $p){[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))}`)
-    if (value) { await writeFile(join(output, 'client-report.json'), Buffer.from(value, 'base64')); clientReport = JSON.parse(Buffer.from(value, 'base64').toString('utf8')); break }
-    if (checkpoint) { const stage = checkpoint; checkpoint = false; await checkpointGuest(); console.log(JSON.stringify({ stage: stage === 'client-started' ? 'client-identity-pinned' : 'capture-only-passed-waiting-for-input-gate', gate })) }
-    await delay(1000)
-  }
+  clientReport=await wait(clientReportArrival,Math.max(1,reportDeadline-performance.now()),'Reverse remote client did not produce a report before its deadline')
+  await checkpointCoordinator.settled()
   assert.ok(clientReport, 'Reverse remote client did not produce a report before its deadline')
   for (let index = 0; index < 30; index++) {
     const result = JSON.parse(await ps(`$ErrorActionPreference='Stop';$t=Get-ScheduledTask -TaskName ${quote(task)};$i=Get-ScheduledTaskInfo -TaskName ${quote(task)};@{state=$t.State.ToString();result=[long]$i.LastTaskResult}|ConvertTo-Json -Compress`))
@@ -276,14 +301,22 @@ try {
     catch (error) { cleanup.errors.push(`Fixture natural cleanup: ${error.message}`) }
   }
   const remaining = async () => {
-    const alive = []
-    for (const value of macIdentities.values()) { try { if (sameIdentity(await identity(value.pid), value)) alive.push(value) } catch (error) { alive.push({ ...value, identityError: error.message }) } }
-    cleanup.remainingMac = alive; return alive
+    const alive = [], audit = []
+    for (const value of macIdentities.values()) {
+      try {
+        const current = await identity(value.pid)
+        if (current && birthKey(current) === birthKey(value) && current.executablePath !== value.executablePath) throw new Error('A same-birth Mac process changed executable before natural exit')
+        const state = sameIdentity(current, value) ? 'alive' : current ? 'reused-pid-skipped' : 'already-exited'
+        audit.push({ ...value, state }); if (state === 'alive') alive.push(value)
+      } catch (error) { audit.push({ ...value, state: 'unverified', error: error.message }); alive.push({ ...value, identityError: error.message }) }
+    }
+    cleanup.macExitAudit = audit; cleanup.remainingMac = alive; return alive
   }
   if (macIdentities.size) {
     try { await eventually(async () => (await remaining()).length === 0, 'Exact Mac helper/guardian/fixture identities remained after natural cleanup') }
     catch (error) { cleanup.errors.push(error.message) }
     cleanup.naturalRemainingMac = [...cleanup.remainingMac]
+    cleanup.naturalMacExitAudit = [...(cleanup.macExitAudit ?? [])]
     for (const value of cleanup.remainingMac) { try { cleanup.forced.push(await oracle('killOwned', { identity: value })) } catch (error) { cleanup.errors.push(`Pinned Mac retirement: ${error.message}`) } }
     if (cleanup.forced.length) cleanup.errors.push('Forced Mac retirement was required; delivery cannot pass')
     try {
@@ -296,12 +329,17 @@ try {
     }
     catch (error) { cleanup.errors.push(error.message) }
   }
+  if (macIdentities.size) try {
+    const result = await run(leaseAuditBinary, [], { timeout: 5000, maxBuffer: 65536 })
+    cleanup.desktopLease = JSON.parse(result.stdout.trim()); assert.equal(cleanup.desktopLease.passed, true, 'Mac physical lease/journal did not return to empty')
+  } catch (error) { cleanup.errors.push(`Mac physical lease cleanup: ${error.message}`) }
   fixtureLines?.close()
   if (server) { server.closeAllConnections(); if (serverListening) await new Promise(done => server.close(done)); serverListening = false }
   cleanup.trackedMac = [...macIdentities.values()]
-  cleanup.passed = cleanup.errors.length === 0 && cleanup.forced.length === 0 && Boolean(!guestCreated || cleanup.guestTokenConfigDeleted) && Boolean(!task || naturalTaskExit && cleanup.windowsTask?.unregistered)
+  cleanup.trackedWindows = [...trackedWindows]
+  cleanup.passed = reverseRemoteDeliveryPassed({ clientReport, setupError, cleanup })
   const passed = clientReport?.passed === true && !setupError && cleanup.passed
-  const report = { passed, status: passed ? 'passed' : setupError?.code === 'SESSION_LOCKED' ? 'blocked' : 'failed', checks: clientReport?.checks ?? [], clientPassed: clientReport?.passed === true, orchestrationError: setupError, preflight, cleanup, testedAt: new Date().toISOString() }
+  const report = { passed, status: passed ? 'passed' : setupError?.code === 'SESSION_LOCKED' ? 'blocked' : 'failed', checks: clientReport?.checks ?? [], clientPassed: clientReport?.passed === true, orchestrationError: setupError, preflight, executableProofs, cleanup, testedAt: new Date().toISOString() }
   await writeFile(join(output, 'environment.json'), JSON.stringify(environment ?? { vm, guestRoot, clientNode: node, setupIncomplete: true }, null, 2) + '\n')
   await writeFile(join(output, 'ps-command-transport.json'), JSON.stringify(transport, null, 2) + '\n')
   await writeFile(join(output, 'oracle-invocations.json'), JSON.stringify(oracleInvocations, null, 2) + '\n')
