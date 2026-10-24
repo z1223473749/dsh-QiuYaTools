@@ -2,6 +2,8 @@
 
 ## 0.6.0-beta.1
 
+- 增加Windows双聊天执行器之间的精确前台交接，保持FIFO、物理输入中断、一次票据与未知输入不重放。218项专项、当前源码1976项回归和三平台包校验通过；ARM64最终包完成七项真实工作台流程，原生双会话、x64与真实模型继续按绑定版本验收。详见[Windows前台交接](docs/windows-foreground-handoff.md)。
+
 - 增加验收模板、不可变清单版本和会话内再次验收；新任务必须取得新的模型观察，旧失败与新结果保留对比。修复浏览器客户端加载了仅 Host 可用模块的问题。962项相关回归、三平台包校验及Mac实际SDK七项闭环通过，Windows和真实DeepSeek继续按实际候选单独验收。详见[验收模板与版本对比](docs/acceptance-template-development.md)。
 
 - 增加网页元素的临时样式反馈：读取真实计算样式，在插件本地比较字体、间距与颜色，确认后随画面批注发到当前聊天；不修改目标页面。837项相关回归、三平台归档与Mac实际SDK七项闭环通过，Windows及真实DeepSeek另验。详见[样式反馈验收](docs/annotation-style-feedback-acceptance.md)。

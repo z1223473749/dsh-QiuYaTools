@@ -42,12 +42,22 @@ internal sealed class ComputerDriver : IDisposable
     private int physicalCleanupStopping;
     private int disposeStarted;
     private readonly PhysicalInputMonitor physicalInput;
+    private readonly ForegroundHandoff? foregroundHandoff;
     internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null)
     {
         writeInputs = inputWriter ?? WriteNativeInputs; desktopLease = inputWriter == null ? new DesktopLeaseGuard() : null;
         aiCursor = new AiCursorOverlay(requested => !Volatile.Read(ref disposed) && Volatile.Read(ref epoch) == requested, inputWriter == null && Environment.UserInteractive);
-        physicalCleanupThread = new Thread(() => { while (true) { physicalWake.WaitOne(); if (Volatile.Read(ref physicalCleanupStopping) != 0) return; CleanupPhysicalInput(Interlocked.Exchange(ref pendingPhysicalEpoch, 0)); } }) { IsBackground = true, Name = "QiuYaTools owned input cleanup" };
-        physicalCleanupThread.Start(); physicalInput = new PhysicalInputMonitor(OnPhysicalInput);
+        if (inputWriter == null) {
+            try { foregroundHandoff = new ForegroundHandoff(); }
+            catch (Exception error) when (error is NativeFailure or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException) { foregroundHandoff = null; }
+        }
+        physicalCleanupThread = new Thread(() => { while (true) {
+            physicalWake.WaitOne(100);
+            if (Volatile.Read(ref physicalCleanupStopping) != 0) return;
+            if (Volatile.Read(ref physicalCleanupPending) != 0) CleanupPhysicalInput(Interlocked.Exchange(ref pendingPhysicalEpoch, 0));
+            lock (inputLock) { if (foregroundHandoff != null && (foregroundHandoff.Core.Armed || foregroundHandoff.Core.Observing)) RefreshForeground(); }
+        } }) { IsBackground = true, Name = "QiuYaTools owned input cleanup" };
+        physicalInput = new PhysicalInputMonitor(OnPhysicalInput, () => physicalWake.Set()); physicalCleanupThread.Start();
     }
     private uint WriteNativeInputs(Native.INPUT[] inputs)
     {
@@ -72,12 +82,106 @@ internal sealed class ComputerDriver : IDisposable
     {
         var cleaned = false;
         try {
-            lock (inputLock) { Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release(); cleaned = true; }
+            lock (inputLock) { Interlocked.Exchange(ref epoch, 0); RefreshForeground(true); foregroundHandoff?.Core.Invalidate(); ClearHeld(); desktopLease?.Release(); cleaned = true; }
         } catch { lock (inputLock) { inputCleanupFailed = true; Interlocked.Exchange(ref epoch, 0); } }
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available, foregroundHandoff = foregroundHandoff != null && physicalInput.Available } };
+    private ForegroundHandoff RequireForeground()
+    {
+        if (foregroundHandoff == null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
+        if (disposed || inputCleanupFailed || !physicalInput.Available || Volatile.Read(ref physicalCleanupPending) != 0) {
+            RefreshForeground(true);
+            throw new NativeFailure("foreground-context-unavailable", "Foreground handoff requires an available clean input companion");
+        }
+        RefreshForeground(true);
+        if (!foregroundHandoff.ActiveDesktop()) throw new NativeFailure("foreground-desktop-changed", "Foreground handoff requires the active interactive desktop");
+        return foregroundHandoff;
+    }
+    private void RefreshForeground(bool requireDesktop = false)
+    {
+        if (foregroundHandoff == null) return;
+        var reason = foregroundHandoff.Core.Refresh(physicalInput.Sequence, physicalInput.Available,
+            (!requireDesktop && !foregroundHandoff.Core.Armed && !foregroundHandoff.Core.Observing) || foregroundHandoff.ActiveDesktop());
+        if (reason != null) Program.Emit(new { @event = "foregroundContextInvalidated", identity = foregroundHandoff.Core.Identity, physicalSequence = ForegroundHandoffCore.Decimal(physicalInput.Sequence), reason });
+    }
+    private bool ForegroundClean() => epoch == 0 && !disposed && !inputCleanupFailed && Volatile.Read(ref physicalCleanupPending) == 0
+        && Volatile.Read(ref leaseAcquiring) == 0 && actionGate.CurrentCount == 1 && heldKeys.Count == 0 && heldMouse.Count == 0 && heldUnicode.Count == 0 && journalUnicodeSuperset.Count == 0;
+    private static long PrivateSafeInteger(JsonElement request, string name, bool allowZero = false)
+    {
+        if (!request.TryGetProperty(name, out var value) || !value.TryGetInt64(out var result) || result < (allowZero ? 0 : 1) || result > 9_007_199_254_740_991)
+            throw new NativeFailure("foreground-ticket-invalid", "Invalid foreground handoff ticket binding");
+        return result;
+    }
+    private static T ForegroundRecord<T>(JsonElement request, string name) where T : class
+    {
+        try {
+            if (!request.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object) throw new JsonException();
+            return JsonSerializer.Deserialize<T>(value.GetRawText(), Program.Json) ?? throw new JsonException();
+        } catch (JsonException) { throw new NativeFailure("foreground-ticket-invalid", "Invalid foreground handoff record"); }
+    }
+    private static string GeometryDigest(Rectangle value) => ForegroundHandoff.Hash(FormattableString.Invariant($"{value.X}:{value.Y}:{value.Width}:{value.Height}"));
+    internal object ForegroundContext()
+    {
+        lock (inputLock) { var handoff = RequireForeground(); return handoff.Core.Context(); }
+    }
+    internal object ForegroundPrepare(JsonElement request)
+    {
+        lock (inputLock) {
+            var handoff = RequireForeground();
+            if (!ForegroundClean()) throw new NativeFailure("foreground-not-released", "Release the current input before preparing a foreground handoff");
+            var requested = Epoch(request);
+            if (requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Foreground action epoch is stale");
+            var targetId = Program.Text(request, "targetId", 256); var target = Target(targetId);
+            if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
+            if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
+            ForegroundHandoff.RequireNoPhysicalHeld();
+            var ticket = handoff.Core.Prepare(requested, PrivateSafeInteger(request, "logicalEpoch", true), targetId, GeometryDigest(observed),
+                Program.Text(request, "actionSHA256", 64), PrivateSafeInteger(request, "surfaceGeneration"));
+            return new { ticket, physicalSequence = ticket.PhysicalSequence };
+        }
+    }
+    internal object ForegroundGrant(JsonElement request)
+    {
+        lock (inputLock) {
+            var handoff = RequireForeground();
+            if (!ForegroundClean()) throw new NativeFailure("foreground-not-released", "Foreground handoff requires a clean released action");
+            var release = ForegroundRecord<ForegroundReleaseToken>(request, "releaseToken");
+            var recipient = ForegroundRecord<ForegroundWorkerIdentity>(request, "recipient");
+            var ticket = ForegroundRecord<ForegroundActionTicket>(request, "ticket");
+            ForegroundHandoff.RecipientPin? pin = null; IDisposable? idleProof = null;
+            var sequence = physicalInput.Sequence;
+            try {
+                return handoff.Core.Grant(release, recipient, ticket, () => {
+                    pin = handoff.PinRecipient(recipient);
+                    idleProof = desktopLease?.RequireIdleAndJournalAbsent() ?? throw new NativeFailure("foreground-handoff-unavailable", "Foreground desktop proof is unavailable");
+                    ForegroundHandoff.RequireNoPhysicalHeld();
+                    var target = Target(release.TargetId);
+                    if (Native.GetForegroundWindow() != target.Handle) throw new NativeFailure("foreground-changed", "The donor target lost foreground ownership");
+                    if (!handoff.ActiveDesktop() || physicalInput.Sequence != sequence || !physicalInput.Available) throw new NativeFailure("foreground-context-changed", "Physical input interrupted foreground handoff");
+                    pin.RequireAlive();
+                }, pid => {
+                    // The exact recipient handle and desktop free-lock proof remain pinned
+                    // through this single call. No retry, extra input or activation is used.
+                    pin!.RequireAlive();
+                    if (physicalInput.Sequence != sequence || !physicalInput.Available) throw new NativeFailure("foreground-context-changed", "Physical input interrupted foreground handoff");
+                    return ForegroundHandoff.Grant(pid);
+                });
+            } finally { idleProof?.Dispose(); pin?.Dispose(); }
+        }
+    }
+    internal object ForegroundCancel(JsonElement request)
+    {
+        lock (inputLock) {
+            if (foregroundHandoff == null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
+            var ticket = request.TryGetProperty("ticketId", out _); var release = request.TryGetProperty("releaseTokenId", out _);
+            if (!ticket && !release) throw new NativeFailure("foreground-ticket-invalid", "Specify an exact foreground token to cancel");
+            var ticketCancelled = ticket && foregroundHandoff.Core.Cancel(Program.Text(request, "ticketId", 32));
+            var releaseCancelled = release && foregroundHandoff.Core.CancelRelease(Program.Text(request, "releaseTokenId", 32));
+            return new { cancelled = ticketCancelled || releaseCancelled, ticketCancelled, releaseCancelled };
+        }
+    }
     internal object[] Targets()
     {
         var targets = new List<object>();
@@ -205,6 +309,7 @@ internal sealed class ComputerDriver : IDisposable
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
             if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
             if (Volatile.Read(ref physicalCleanupPending) != 0) throw new NativeFailure("human-input-pending", "Wait for interrupted input to finish releasing before reconnecting");
+            RefreshForeground(true); foregroundHandoff?.Core.BeforeLease(requested);
             if (disposed || requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Lease epoch is stale");
             Volatile.Write(ref leaseAcquiring, 1);
             var generation = Volatile.Read(ref physicalGeneration);
@@ -230,13 +335,17 @@ internal sealed class ComputerDriver : IDisposable
     {
         var requested = Epoch(request);
         InputTrace.Mark("release-enter", requested);
+        ForegroundReleaseToken? foregroundRelease = null;
         lock (inputLock) {
             InputTrace.Mark("release-lock-acquired", requested);
+            var matched = epoch == requested;
             if (epoch == requested) { epoch = 0; aiCursor.Revoke(requested); ClearHeld(); desktopLease?.Release(); }
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
+            RefreshForeground(true);
+            if (matched && foregroundHandoff != null) foregroundRelease = foregroundHandoff.Core.CleanRelease(requested, ForegroundClean());
         }
         InputTrace.Mark("release-return", requested);
-        return new { epoch = requested, released = true };
+        return new { epoch = requested, released = true, foregroundRelease };
     }
     private void Check(long requested)
     {
@@ -255,7 +364,7 @@ internal sealed class ComputerDriver : IDisposable
     {
         if (!actionGate.Wait(0)) throw new NativeFailure("input-busy", "Another input action is still running");
         try { return await ActCore(request); }
-        catch { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.Hide(requested); throw; }
+        catch { lock (inputLock) { foregroundHandoff?.Core.ActionFailed(); } if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.Hide(requested); throw; }
         finally { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.OperationEnd(requested); actionGate.Release(); }
     }
     private async Task<object> ActCore(JsonElement request)
@@ -273,6 +382,12 @@ internal sealed class ComputerDriver : IDisposable
         else if (kind == "drag") {
             var from = PointOf(target.Rect, action, "x", "y"); var to = PointOf(target.Rect, action, "toX", "toY");
             for (var step = 0; step <= 20; step++) trajectory.Add(new Point(from.X + (to.X - from.X) * step / 20, from.Y + (to.Y - from.Y) * step / 20));
+        }
+        lock (inputLock) {
+            Check(requested); RefreshForeground(true);
+            var ticket = request.TryGetProperty("foregroundTicket", out _) ? ForegroundRecord<ForegroundActionTicket>(request, "foregroundTicket") : null;
+            if (foregroundHandoff == null && ticket != null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
+            foregroundHandoff?.Core.Consume(ticket, requested, targetId, GeometryDigest(observed), ForegroundHandoff.Hash(action.GetRawText()));
         }
         BrowserWindow.UncoverPointer(trajectory);
         if (Native.GetForegroundWindow() != target.Handle) {
@@ -336,6 +451,7 @@ internal sealed class ComputerDriver : IDisposable
             case "key": await Key(requested, Program.Text(action, "key", 128)); break;
             default: throw new NativeFailure("invalid-action", "Unknown input action");
         }
+        lock (inputLock) { Check(requested); RefreshForeground(true); foregroundHandoff?.Core.ActionSucceeded(requested, targetId); }
         Program.Emit(new { @event = "action", phase = "completed", targetId, epoch = requested, action });
         return new { performed = true, epoch = requested, targetId };
     }
@@ -444,6 +560,7 @@ internal sealed class ComputerDriver : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposeStarted, 1) != 0) return;
+        lock (inputLock) { foregroundHandoff?.Core.Invalidate(); }
         Volatile.Write(ref disposed, true); aiCursor.Revoke(Interlocked.Exchange(ref epoch, 0));
         try { lock (inputLock) { disposed = true; epoch = 0; ClearHeld(); desktopLease?.Release(); } }
         finally {

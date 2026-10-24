@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { ComputerError } from './contract.ts'
-import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
+import { createReadStream } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { ComputerActionCleanupError, ComputerError } from './contract.ts'
+import { foregroundContext, foregroundGrant, foregroundRelease, foregroundTicket } from './foreground-handoff.ts'
+import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, ForegroundActionTicket, ForegroundHandoffDriver, ForegroundWorkerIdentity, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 
 export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[] }
 export function computerCompanionPath(platform: NodeJS.Platform = process.platform, architecture: string = process.arch, base = new URL('./', import.meta.url)): string {
@@ -35,6 +38,11 @@ export class NativeCompanionDriver implements DeviceDriver {
   private buffer = ''
   private disposed = false
   private nextRequestId = 0
+  private backendGeneration = 0
+  private foreground?: ForegroundHandoffDriver
+  private foregroundSequence?: string
+  private updateForegroundSequence(value: string): void { if (this.foregroundSequence === undefined || BigInt(value) > BigInt(this.foregroundSequence)) this.foregroundSequence = value }
+  get foregroundHandoff() { return this.foreground }
   private protocol?: Promise<ComputerStatus>
   private retiring: Promise<void> = Promise.resolve()
   private held: NativeHeldInputs = { keys: [], mouseButtons: [] }
@@ -49,7 +57,7 @@ export class NativeCompanionDriver implements DeviceDriver {
   private fail(error: unknown, child = this.child): void {
     if (child && this.child !== child) return
     const held = this.held; this.held = { keys: [], mouseButtons: [] }
-    this.child = undefined; this.buffer = ''; this.protocol = undefined
+    this.child = undefined; this.buffer = ''; this.protocol = undefined; this.foreground = undefined; this.foregroundSequence = undefined
     if (child) { this.retiring = this.retire(child, held); void this.retiring.catch(() => {}) }
     for (const capture of this.captures) {
       capture.controller.abort(error)
@@ -91,7 +99,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     const executable = this.options.executable ?? computerCompanionPath()
     const args = this.options.args ?? (process.platform === 'win32' ? ['--computer'] : [])
     const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
-    this.child = child
+    this.child = child; this.backendGeneration++
     child.stdin.on('error', error => this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child))
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -107,7 +115,10 @@ export class NativeCompanionDriver implements DeviceDriver {
         if (!message || typeof message !== 'object') continue
         if (typeof message.event === 'string') {
           if (message.event === 'inputHeld') { const held = ownedInputs(message); if (held) this.held = held }
-          else this.emit(message as NativeComputerEvent)
+          else {
+            if (message.event === 'foregroundContextInvalidated' && typeof message.physicalSequence === 'string' && /^\d{1,20}$/u.test(message.physicalSequence)) this.updateForegroundSequence(message.physicalSequence)
+            this.emit(message as NativeComputerEvent)
+          }
           continue
         }
         if (typeof message.requestId !== 'number' || !Number.isSafeInteger(message.requestId)) continue
@@ -127,8 +138,9 @@ export class NativeCompanionDriver implements DeviceDriver {
     child.once('close', () => this.fail(new ComputerError('NATIVE_EXITED', '原生执行器已退出'), child))
     return child
   }
-  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, awaitIssuedReply = false): Promise<T> {
+  private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, awaitIssuedReply = false, expectedChild?: ChildProcessWithoutNullStreams, retainIssuedResult = false): Promise<T> {
     await this.retiring
+    if (expectedChild && this.child !== expectedChild) throw new ComputerError('CONTROL_CHANGED', '前台交接执行器已经变化')
     if (signal?.aborted) return Promise.reject(signal.reason)
     if (this.pending.size >= 128) return Promise.reject(new ComputerError('QUEUE_FULL', '执行器请求过多'))
     let child: ChildProcessWithoutNullStreams
@@ -144,8 +156,10 @@ export class NativeCompanionDriver implements DeviceDriver {
       const abort = () => { const entry = this.pending.get(requestId); if (!entry || awaitIssuedReply && issued) return; this.pending.delete(requestId); entry.clean(); reject(signal?.reason ?? new ComputerError('ABORTED', '操作已取消')) }
       const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
       this.pending.set(requestId, {
-        resolve: value => { if (awaitIssuedReply && signal?.aborted) reject(signal.reason); else resolve(value as T) }, reject, clean,
-        ...(awaitIssuedReply ? { transportFailure: (error: unknown) => reject(issued ? new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接后确认当前窗口。') : error) } : {}),
+        // Preparing allocates a native ticket. Its successful ACK remains owned even
+        // if cancellation won the race; the caller must receive and cancel that exact ID.
+        resolve: value => { if (awaitIssuedReply && signal?.aborted && !retainIssuedResult) reject(signal.reason); else resolve(value as T) }, reject, clean,
+        ...(awaitIssuedReply ? { transportFailure: (error: unknown) => reject(issued ? (op.startsWith('foreground') ? new ComputerError('FOREGROUND_HANDOFF_UNCONFIRMED', '前台交接结果未确认，执行器已停止。请重新连接并确认当前窗口。') : new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接后确认当前窗口。')) : error) } : {}),
       })
       signal?.addEventListener('abort', abort, { once: true })
       // Close the aborted-between-check-and-listener race before writing input.
@@ -158,9 +172,57 @@ export class NativeCompanionDriver implements DeviceDriver {
     if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))
     if (!this.protocol) this.protocol = this.rpc<ComputerStatus>('status').then(status => {
       if (status?.protocolVersion !== 1) throw new ComputerError('NATIVE_PROTOCOL_VERSION', '执行器协议版本不匹配，请重新安装对应版本的插件。')
+      if (status.platform === 'win32' && !Array.isArray(status.capabilities) && status.capabilities?.foregroundHandoff === true && this.child) {
+        if (typeof status.foregroundPhysicalSequence !== 'string' || !/^\d{1,20}$/u.test(status.foregroundPhysicalSequence)) throw new ComputerError('NATIVE_PROTOCOL', '前台交接的物理输入状态无效')
+        this.foregroundSequence = status.foregroundPhysicalSequence; this.foreground = this.createForegroundHandoff(this.child, this.backendGeneration)
+      }
       return status
     })
     return this.protocol
+  }
+  private createForegroundHandoff(child: ChildProcessWithoutNullStreams, generation: number): ForegroundHandoffDriver {
+    let imageSHA256: Promise<string> | undefined
+    const current = () => { if (this.child !== child || this.backendGeneration !== generation || this.disposed) throw new ComputerError('CONTROL_CHANGED', '前台交接执行器已经变化') }
+    const identity = async (value: ForegroundWorkerIdentity) => {
+      current()
+      const executable = this.options.executable ?? computerCompanionPath()
+      if (value.pid !== child.pid || value.parentPid !== process.pid || value.executablePath.toLowerCase() !== executable.toLowerCase()) throw new ComputerError('NATIVE_PROTOCOL', '前台交接执行器与当前进程不一致')
+      imageSHA256 ??= (async () => { const hash = createHash('sha256'); for await (const chunk of createReadStream(executable)) hash.update(chunk); return hash.digest('hex') })()
+      if (await imageSHA256 !== value.imageSHA256) throw new ComputerError('NATIVE_PROTOCOL', '前台交接执行器文件不一致')
+      current()
+    }
+    const request = async <T>(op: string, payload: object, signal?: AbortSignal, mutating = false): Promise<T> => {
+      current(); const value = await this.rpc<T>(op, payload, signal, mutating, child, op === 'foregroundPrepare'); current(); return value
+    }
+    const owner = this
+    return {
+      get physicalSequence() { current(); return owner.foregroundSequence },
+      context: async signal => { const value = foregroundContext(await request('foregroundContext', {}, signal)); await identity(value.identity); this.updateForegroundSequence(value.physicalSequence); return value },
+      prepare: async (input, signal) => {
+        let received = false, ticketId: string | undefined
+        try {
+          const value = await request<{ ticket: unknown; physicalSequence: unknown }>('foregroundPrepare', input, signal, true)
+          received = true
+          const raw = value?.ticket
+          if (raw && typeof raw === 'object' && 'ticketId' in raw && typeof raw.ticketId === 'string' && /^[a-f0-9]{32}$/iu.test(raw.ticketId)) ticketId = raw.ticketId
+          const ticket = foregroundTicket(raw)
+          await identity(ticket.identity)
+          if (value.physicalSequence !== ticket.physicalSequence || ticket.epoch !== input.epoch || ticket.logicalEpoch !== input.logicalEpoch || ticket.targetId !== input.targetId || ticket.actionSHA256 !== input.actionSHA256 || ticket.surfaceGeneration !== input.surfaceGeneration) throw new ComputerError('NATIVE_PROTOCOL', '前台交接票据与本次操作不一致')
+          return { ticket, physicalSequence: ticket.physicalSequence }
+        } catch (error) {
+          // A successful prepare ACK owns a native side effect before Host validation.
+          // Cancel its exact ID even on a bad binding; without an ID retire the worker.
+          if (ticketId) try {
+            const cancelled = await request<{ cancelled: unknown }>('foregroundCancel', { ticketId }, undefined, true)
+            if (typeof cancelled?.cancelled !== 'boolean') throw new ComputerError('NATIVE_PROTOCOL', '前台交接取消回执无效')
+          } catch (cleanup) { this.fail(cleanup, child); throw new ComputerActionCleanupError(error, [cleanup]) }
+          else if (received) this.fail(error, child)
+          throw error
+        }
+      },
+      grant: async (input, signal) => { const value = foregroundGrant(await request('foregroundGrant', input, signal, true)); await identity(value.donor); return value },
+      cancel: async input => { const value = await request<{ cancelled: unknown }>('foregroundCancel', input, undefined, true); if (typeof value?.cancelled !== 'boolean') throw new ComputerError('NATIVE_PROTOCOL', '前台交接取消回执无效'); return { cancelled: value.cancelled } },
+    }
   }
   private async checked<T>(op: string, payload: object = {}, signal?: AbortSignal, awaitIssuedReply = false): Promise<T> {
     signal?.throwIfAborted()
@@ -169,7 +231,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     return this.rpc<T>(op, payload, signal, awaitIssuedReply)
   }
   async status(signal?: AbortSignal): Promise<ComputerStatus> {
-    try { signal?.throwIfAborted(); await this.compatible(); return await this.rpc<ComputerStatus>('status', {}, signal) }
+    try { signal?.throwIfAborted(); await this.compatible(); const value = await this.rpc<ComputerStatus>('status', {}, signal); if (this.foreground && typeof value.foregroundPhysicalSequence === 'string' && /^\d{1,20}$/u.test(value.foregroundPhysicalSequence)) this.updateForegroundSequence(value.foregroundPhysicalSequence); return value }
     catch (error) { if (signal?.aborted) throw error; return { available: false, platform: process.platform, message: error instanceof Error ? error.message : '执行器不可用' } }
   }
   async targets(signal?: AbortSignal): Promise<NativeTarget[]> {
@@ -248,8 +310,22 @@ export class NativeCompanionDriver implements DeviceDriver {
   observe(targetId: string, signal?: AbortSignal) { return this.capture(targetId, false, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.capture(targetId, true, signal) }
   lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal) }
-  release(epoch: number, signal?: AbortSignal) { return this.rpc('release', { epoch }, signal) }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.checked('act', { epoch, targetId, action }, signal) }
+  async release(epoch: number, signal?: AbortSignal) {
+    const foreground = this.foreground, child = this.child
+    const result = await this.rpc<unknown>('release', { epoch }, signal, Boolean(foreground), child, Boolean(foreground))
+    if (!foreground || !result || typeof result !== 'object' || !('foregroundRelease' in result) || !result.foregroundRelease) return result
+    const raw = result.foregroundRelease
+    let tokenId: string | undefined
+    if (typeof raw === 'object' && 'tokenId' in raw && typeof raw.tokenId === 'string' && /^[a-f0-9]{32}$/iu.test(raw.tokenId)) tokenId = raw.tokenId
+    try { return { ...result, foregroundRelease: foregroundRelease(raw) } }
+    catch (error) {
+      if (tokenId) try { await foreground.cancel({ releaseTokenId: tokenId }) }
+      catch (cleanup) { this.fail(cleanup, child); throw new ComputerActionCleanupError(error, [cleanup]) }
+      else this.fail(error, child)
+      throw error
+    }
+  }
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }) { return this.checked('act', { epoch, targetId, action, ...(privateOptions ? { foregroundTicket: privateOptions.foregroundTicket } : {}) }, signal) }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { return this.checked('closePreview', options?.preserveSession ? { preserveSession: true } : {}, signal) }
   async dispose(): Promise<void> {

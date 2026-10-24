@@ -15,10 +15,13 @@ internal sealed class PhysicalInputMonitor : IDisposable
     private int running;
     private int disposed;
     private readonly Action<bool, bool> onInput;
+    private readonly Action onSequenceChanged;
+    private long sequence;
+    internal long Sequence => Interlocked.Read(ref sequence);
     internal bool Available => Volatile.Read(ref running) == 1 && Volatile.Read(ref disposed) == 0 && thread.IsAlive;
-    internal PhysicalInputMonitor(Action<bool, bool> onInput)
+    internal PhysicalInputMonitor(Action<bool, bool> onInput, Action? onSequenceChanged = null)
     {
-        this.onInput = onInput;
+        this.onInput = onInput; this.onSequenceChanged = onSequenceChanged ?? (() => { });
         mouseCallback = Mouse;
         keyCallback = Keyboard;
         thread = new Thread(Pump) { IsBackground = true, Name = "QiuYaTools physical input monitor" };
@@ -38,7 +41,7 @@ internal sealed class PhysicalInputMonitor : IDisposable
             Volatile.Write(ref running, 1); ready.Set();
             while (Volatile.Read(ref disposed) == 0 && GetMessage(out var message, IntPtr.Zero, 0, 0) > 0) { TranslateMessage(ref message); DispatchMessage(ref message); }
         } finally {
-            Volatile.Write(ref running, 0);
+            Volatile.Write(ref running, 0); onSequenceChanged();
             if (mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(mouseHook); mouseHook = IntPtr.Zero; }
             if (keyHook != IntPtr.Zero) { UnhookWindowsHookEx(keyHook); keyHook = IntPtr.Zero; }
             ready.Set();
@@ -60,16 +63,21 @@ internal sealed class PhysicalInputMonitor : IDisposable
             var input = Marshal.PtrToStructure<MouseData>(data);
             if (message.ToInt64() == 0x0202) InputTrace.Mark("mouse-hook-up", 0, input.Flags);
             if ((input.Flags & 1) == 0) InputTrace.Mark("physical-hook-enter", 0, message.ToInt64());
-            if ((input.Flags & 1) == 0) onInput(OwnWindow(WindowFromPoint(input.Point)), false);
+            if ((input.Flags & 1) == 0) { Interlocked.Increment(ref sequence); onSequenceChanged(); onInput(OwnWindow(WindowFromPoint(input.Point)), false); }
             if ((input.Flags & 1) == 0) InputTrace.Mark("physical-hook-return", 0, message.ToInt64());
         }
         return CallNextHookEx(mouseHook, code, message, data);
     }
     private IntPtr Keyboard(int code, IntPtr message, IntPtr data)
     {
-        if (code >= 0 && Volatile.Read(ref disposed) == 0 && (message.ToInt64() is 0x0100 or 0x0104)) {
+        if (code >= 0 && Volatile.Read(ref disposed) == 0 && (message.ToInt64() is 0x0100 or 0x0101 or 0x0104 or 0x0105)) {
             var input = Marshal.PtrToStructure<KeyData>(data);
-            if ((input.Flags & 0x10) == 0) onInput(OwnWindow(Native.GetForegroundWindow()), input.Vk == 0x1B);
+            if ((input.Flags & 0x10) == 0) {
+                Interlocked.Increment(ref sequence); onSequenceChanged();
+                // Up changes the handoff sequence, while preserving the original
+                // active-input revocation policy (which only reacts to Down).
+                if (message.ToInt64() is 0x0100 or 0x0104) onInput(OwnWindow(Native.GetForegroundWindow()), input.Vk == 0x1B);
+            }
         }
         return CallNextHookEx(keyHook, code, message, data);
     }

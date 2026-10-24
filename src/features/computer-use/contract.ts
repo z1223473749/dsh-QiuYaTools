@@ -20,6 +20,29 @@ export interface ComputerAction {
 export interface ComputerActionRequest { actionId: string; frameId: string; action: ComputerAction }
 export interface ComputerActionResult { actionId: string; targetId: string; epoch: number; result: unknown }
 export interface ComputerStatus { available: boolean; platform?: string; permissions?: Record<string, boolean>; capabilities?: Record<string, boolean> | string[]; message?: string; [key: string]: unknown }
+/** Private native/FIFO vocabulary. These fields are never tool or renderer inputs. */
+export interface ForegroundWorkerIdentity {
+  pid: number; createdAtTicks: string; executablePath: string; imageSHA256: string
+  parentPid: number; parentCreatedAtTicks: string; sessionId: number; desktopSHA256: string
+  instanceId: string; architecture: 'arm64' | 'x64'
+}
+export interface ForegroundReleaseToken { tokenId: string; identity: ForegroundWorkerIdentity; epoch: number; physicalSequence: string; targetId: string; expiresAtQpc: string }
+export interface ForegroundActionTicket {
+  ticketId: string; identity: ForegroundWorkerIdentity; epoch: number; logicalEpoch: number; targetId: string
+  geometrySHA256: string; actionSHA256: string; surfaceGeneration: number; physicalSequence: string; expiresAtQpc: string
+}
+export interface ForegroundContext { identity: ForegroundWorkerIdentity; physicalSequence: string; controlled: boolean; release?: ForegroundReleaseToken | null }
+export interface ForegroundGrantReceipt {
+  attempted: boolean; allowed: boolean; error: number; donor: ForegroundWorkerIdentity; recipient: ForegroundWorkerIdentity
+  ticketId: string; releaseTokenId: string; physicalSequence: string
+}
+export interface ForegroundHandoffDriver {
+  readonly physicalSequence: string | undefined
+  context(signal?: AbortSignal): Promise<ForegroundContext>
+  prepare(input: { epoch: number; logicalEpoch: number; targetId: string; actionSHA256: string; surfaceGeneration: number }, signal?: AbortSignal): Promise<{ ticket: ForegroundActionTicket; physicalSequence: string }>
+  grant(input: { releaseToken: ForegroundReleaseToken; recipient: ForegroundWorkerIdentity; ticket: ForegroundActionTicket }, signal?: AbortSignal): Promise<ForegroundGrantReceipt>
+  cancel(input: { ticketId?: string; releaseTokenId?: string }): Promise<{ cancelled: boolean }>
+}
 export interface ComputerSessionSnapshot {
   sessionId: string; state: ComputerState; target: NativeTarget | null; epoch: number; updatedAt: number
   lastObservation?: Omit<ComputerObservation, 'imageBase64' | 'elements' | 'mediaType'>
@@ -27,6 +50,7 @@ export interface ComputerSessionSnapshot {
   lastAction?: { actionId: string; action: ComputerAction; actor?: 'ai' | 'human'; phase: 'executing' | 'completed' | 'failed'; at: number }
 }
 export interface DeviceDriver {
+  readonly foregroundHandoff?: ForegroundHandoffDriver
   status(signal?: AbortSignal): Promise<ComputerStatus>
   applications?(signal?: AbortSignal): Promise<NativeApplication[]>
   launchApplication?(appId: string, signal?: AbortSignal): Promise<unknown>
@@ -36,7 +60,7 @@ export interface DeviceDriver {
   preview?(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
   lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown>
   release(epoch: number, signal?: AbortSignal): Promise<unknown>
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown>
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }): Promise<unknown>
   resolveActionTarget?(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal): Promise<NativeTarget | null>
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal): Promise<unknown>
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }): Promise<unknown>
@@ -46,6 +70,14 @@ export interface DeviceDriver {
 export interface NativeComputerEvent { event: string; sessionId?: string; [key: string]: unknown }
 export class ComputerError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'ComputerError' }
+}
+/** Keep the original action failure and failed cleanup separately without
+ * exposing their arbitrary payloads through the public finite error message. */
+export class ComputerActionCleanupError extends ComputerError {
+  constructor(readonly actionError: unknown, readonly cleanupErrors: readonly unknown[]) {
+    super('INPUT_CLEANUP_FAILED', '操作与输入释放未能同时确认，请检查连接和当前状态，不要重复输入。')
+    this.name = 'ComputerActionCleanupError'
+  }
 }
 export function computerError(error: unknown): { code: string; message: string } {
   return error instanceof ComputerError ? { code: error.code, message: error.message } : { code: 'COMPUTER_FAILED', message: error instanceof Error ? error.message : '电脑操控失败' }

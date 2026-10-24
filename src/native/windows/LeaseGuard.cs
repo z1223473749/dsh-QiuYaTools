@@ -104,6 +104,18 @@ internal sealed class DesktopLeaseGuard : IDisposable
         File.Delete(journalPath);
     }
 
+    // Read-only proof used between clean release and a sibling ASFW handoff.
+    // It neither recovers a journal nor injects releases. Hold it through ASFW.
+    internal IDisposable RequireIdleAndJournalAbsent()
+    {
+        if (lease != null || OwnerId != null) throw new NativeFailure("desktop-busy", "Foreground handoff requires a released desktop lease");
+        var proof = OpenLock();
+        try {
+            if (File.Exists(journalPath)) throw new NativeFailure("foreground-journal-present", "Foreground handoff requires an empty input journal");
+            return proof;
+        } catch { proof.Dispose(); throw; }
+    }
+
     internal void Release()
     {
         if (lease == null) return;
