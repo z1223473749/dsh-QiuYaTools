@@ -93,3 +93,31 @@ node --test tests/windows-acceptance*.test.mjs tests/windows-command-receipt.tes
 ```
 
 回归运行真实 Node 子进程/stdio、真实流式回调、固定 5 秒超时与迟到回执，以及当前生产 AnnotationEditor 的 React DOM。浏览器作者回调在隔离 JSDOM 中执行，明确不声称合成对象等于真实 trusted 浏览器输入。测试不启动 Harness、浏览器、PD 或 Windows API。命令回执回归另行覆盖真实 Node 子进程空 stdout、慢/失败 onStart、child 先退出、迟到零退出、exit 后管道尾部和 HTTP 409/空响应。5ms 预算与 30ms 回调的旧红新绿复现属于纯载体测试，不是对旧实机结果改判。实际 Mac/Windows 逐功能验收、真实 DeepSeek、截图和可安装包的结论仍以项目外的独立实测报告为准。
+
+## 原进程句柄与同快照归属核验
+
+`windows-own-reader-stdio.ps1` 仅在完整 `pin` / `tree` 操作成功并产生可解析结果后，提交该操作取得的原进程句柄。保留表按精确 PID 与 UTC birth ticks 去重，committed 与 pending 合计最多 128 项；这个上限不代表每次正常读取的瞬时局部句柄也算在表内。失败事务释放全部 pending，EOF 或协议异常释放整个保留表，单项释放异常不会阻止清理其余项。
+
+`retired` 命中同一原 PID/birth 时，以原内核句柄的一次 `WaitForSingleObject(...,0)` 判断：signal 0 使用已有契约 `same-handle-signaled`，258 仍是 `exact-original-alive`，closed / invalid / 其他结果继续拒绝。这个缓存不用于 `pin`、`listener` 或新的输入授权。缓存未命中时保留原严格读取；如果 .NET/PowerShell 返回空 `SafeHandle`，只在独立 fresh `GetProcessById` 的 `ArgumentException` 确证不存在时使用已有 `process-absent`。重新取得一个 Process 对象本身不证明原进程已退，访问错误、仍在或未知都不能转成 gone。
+
+有限诊断只包含阶段/门的枚举、PID、birth SHA、白名单异常类型和数值码，不记录任意异常原文、命令行、窗口正文或令牌。树的 parent snapshot 明确标为原 CIM 微秒时间，不冒充持有的实时父进程句柄，也不改变原成员归属、身份或退休门。
+
+`tests/fixtures/windows-retirement-contract.mjs` 保存已冻结完整 UI 载体的原 `auditOwnedRetired()` 消费器合同，仅移除模块导出并注入其原有的 `pinsFile` / `readOwn` 依赖；它不是公共 `e2e-harness.mjs` 中的函数。六项回归通过真实 Node 子进程与 stdio 读取该合同：接受已有的 `same-handle-signaled` / `process-absent`，拒绝两个旧的未声明 reason、未知 reason，以及仍活着的精确原进程。每例仅发一次原查询，EOF 自然退场，不发信号或重放。
+
+```sh
+node --test tests/windows-retirement-consumer.test.mjs
+```
+
+这六项是消费者合同回归，不冒充 Windows API 实测。持有原句柄的 Windows PowerShell 自有控制子进程七项实测单独保存在项目外，其原 reader 摘要为 `3f6ba406…`；随后公共 reader 增加了已有 reason 的兼容映射、有限诊断与同快照因果检查，不能把整个当前文件宣称为那轮旧源的逐字重跑。实际 full12、UIA、原生窗口自然退出和截图仍以各自的实测报告为准；旧失败与 unknown 不因此补绿。
+
+Win32_Process 的 ParentProcessId 是数字引用，父 PID 被复用后可能指向更晚出生的进程。tree 先保持原 live 根身份核验，再使用**同一次** CIM 枚举建立 UTC 出生索引，且根的 CIM 微秒出生必须与已 pin 的内核 birth 对上。只有 child 在同一快照中明确早于 parent，才在读取候选内核句柄之前否定这条不可能的父子边。相同微秒、缺失、重复、无效日期（包括 MinValue/MaxValue）仍保留原候选并执行原严格读取；不能用时间戳授予所有权或声明退休。既有 pin 不从集合删除，所有原内核句柄的退休检查保持不变，128 个保留表项、16 层、原 query/清退预算及 unknown 拒绝都不变。最多 16 条有限边诊断只含 PID、两个快照出生、固定原因和两个 false 声明，不含命令行、窗口正文或令牌。
+
+Windows PowerShell 5.1 的七组自动控制直接提取两份公共 PS 的同一函数块，仅在本进程读取一次 fresh CIM 与 kernel birth；其余为日期/根边界数据，不启动业务子进程、Host、浏览器或输入。先明确绑定当前两份源摘要，再执行：
+
+```powershell
+$warmSHA=(Get-FileHash scripts/windows-acceptance/windows-own-reader-stdio.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+$coldSHA=(Get-FileHash scripts/windows-acceptance/windows-owned-process.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/fixtures/windows-tree-snapshot-control.ps1 -WarmSHA256 $warmSHA -ColdSHA256 $coldSHA
+```
+
+这七组控制不能代替 full12、UIA、原生窗口自然退出或原内核句柄证据。2026-10-25 同源七组实测已通过（372 ms，两个准备/执行命令均自然 0，输入/信号/Task/VM 设置变更均为 0），永久原始回执存放项目外；旧 832 未知与其原失败不因此补绿。规则依据微软 [Win32_Process / ParentProcessId 官方说明](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process#properties)。

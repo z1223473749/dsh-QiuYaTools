@@ -1,0 +1,36 @@
+param(
+ [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$WarmSHA256,
+ [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$ColdSHA256
+)
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+if($PSVersionTable.PSVersion.Major-ne 5){throw 'Run this no-GUI control in Windows PowerShell 5.1'}
+$qytClock=[Diagnostics.Stopwatch]::StartNew()
+$qytExpected=@($WarmSHA256,$ColdSHA256)
+$qytReaders=@((Join-Path $PSScriptRoot '../../scripts/windows-acceptance/windows-own-reader-stdio.ps1'),(Join-Path $PSScriptRoot '../../scripts/windows-acceptance/windows-owned-process.ps1'))
+$qytCores=@()
+for($qytSourceIndex=0;$qytSourceIndex-lt 2;$qytSourceIndex++){
+ $qytSourceItem=Get-Item -LiteralPath $qytReaders[$qytSourceIndex]
+ if($qytSourceItem.PSIsContainer-or ($qytSourceItem.Attributes-band [IO.FileAttributes]::ReparsePoint)-or (Get-FileHash -LiteralPath $qytSourceItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant()-cne $qytExpected[$qytSourceIndex]){throw 'CONTROL_READER_SOURCE_SHA'}
+ $qytText=[IO.File]::ReadAllText($qytSourceItem.FullName)
+ $qytBegin='function New-OwnTreeSnapshotIndex('; $qytEnd='function Read-Pins {'
+ $qytBeginAt=$qytText.IndexOf($qytBegin,[StringComparison]::Ordinal);$qytEndAt=$qytText.IndexOf($qytEnd,[StringComparison]::Ordinal)
+ if($qytBeginAt-lt 0-or $qytEndAt-le $qytBeginAt-or $qytText.IndexOf($qytBegin,$qytBeginAt+1,[StringComparison]::Ordinal)-ge 0-or $qytText.IndexOf($qytEnd,$qytEndAt+1,[StringComparison]::Ordinal)-ge 0){throw 'CONTROL_UNIQUE_FUNCTION_ANCHORS'}
+ $qytCores+=($qytText.Substring($qytBeginAt,$qytEndAt-$qytBeginAt))
+}
+if($qytCores[0]-cne $qytCores[1]){throw 'CONTROL_READERS_FUNCTIONS_DIVERGE'}
+$qytTokens=$null;$qytErrors=$null;$qytParsed=[Management.Automation.Language.Parser]::ParseInput($qytCores[0],[ref]$qytTokens,[ref]$qytErrors)
+if($qytErrors.Count-ne 0-or $qytParsed.EndBlock.Statements.Count-ne 2-or @($qytParsed.EndBlock.Statements|Where-Object{$_-isnot [Management.Automation.Language.FunctionDefinitionAst]}).Count-ne 0){throw 'CONTROL_FUNCTION_AST'}
+. ([scriptblock]::Create($qytCores[0]));$qytRows=@()
+function Assert-Control([bool]$qytValue,[string]$qytCode){if(!$qytValue){throw $qytCode}}
+$qytCurrent=[Diagnostics.Process]::GetCurrentProcess();try{$qytOwnBirth=$qytCurrent.StartTime.ToUniversalTime().Ticks.ToString();$qytOwnCim=@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID));Assert-Control ($qytOwnCim.Count-eq 1) 'CONTROL_OWN_CIM_ONE';$qytOwnIndex=New-OwnTreeSnapshotIndex $qytOwnCim @(@{pid=$PID;birthTicks=$qytOwnBirth});Assert-Control ($qytOwnIndex.ContainsKey($PID)) 'CONTROL_FRESH_OWN_ROOT';$qytRows+=@{name='actual-current-PowerShell-kernel-birth-and-fresh-CIM-root-join';passed=$true}}finally{$qytCurrent.Dispose()}
+$qytEpoch=[DateTime]::new(639284798000000000,[DateTimeKind]::Utc);$qytRootPin=@{pid=8100;birthTicks=$qytEpoch.Ticks.ToString()};$qytParent=[pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=$qytEpoch}
+$qytEarlier=[pscustomobject]@{ProcessId=8200;ParentProcessId=8100;CreationDate=$qytEpoch.AddTicks(-10)};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytEarlier) @($qytRootPin);Assert-Control (!(Test-OwnSnapshotParentEdge $qytIndex $qytEarlier)) 'CONTROL_IMPOSSIBLE_EDGE';$qytRows+=@{name='strictly-earlier-child-in-same-fresh-snapshot-rejects-only-parent-edge';passed=$true}
+$qytLater=[pscustomobject]@{ProcessId=8201;ParentProcessId=8100;CreationDate=$qytEpoch.AddTicks(10)};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytLater) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytLater) 'CONTROL_POSSIBLE_CHILD';$qytRows+=@{name='later-child-remains-a-candidate-for-original-strict-kernel-read';passed=$true}
+$qytEqual=[pscustomobject]@{ProcessId=8202;ParentProcessId=8100;CreationDate=$qytEpoch.AddTicks(-2)};$qytRoundedParent=[pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=$qytEpoch.AddTicks(-1)};$qytIndex=New-OwnTreeSnapshotIndex @($qytRoundedParent,$qytEqual) @(@{pid=8100;birthTicks=$qytRoundedParent.CreationDate.Ticks.ToString()});Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytEqual) 'CONTROL_MICROSECOND_EQUAL';$qytRows+=@{name='same-microsecond-never-proves-a-negative-parent-edge';passed=$true}
+$qytMissing=[pscustomobject]@{ProcessId=8203;ParentProcessId=8100;CreationDate=$null};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytMissing) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytMissing) 'CONTROL_MISSING_DATE';$qytMissingParent=[pscustomobject]@{ProcessId=8204;ParentProcessId=9999;CreationDate=$qytEpoch};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytMissingParent) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytMissingParent) 'CONTROL_MISSING_PARENT';foreach($qytInvalidDate in @([DateTime]::MinValue,[DateTime]::MaxValue,'not-a-date')){$qytInvalidChild=[pscustomobject]@{ProcessId=8205;ParentProcessId=8100;CreationDate=$qytInvalidDate};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytInvalidChild) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytInvalidChild) 'CONTROL_INVALID_DATE_POSSIBLE';$qytInvalidParent=[pscustomobject]@{ProcessId=8300;ParentProcessId=8100;CreationDate=$qytInvalidDate};$qytBeforeInvalidParent=[pscustomobject]@{ProcessId=8301;ParentProcessId=8300;CreationDate=$qytEpoch.AddTicks(-100)};$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytInvalidParent,$qytBeforeInvalidParent) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytBeforeInvalidParent) 'CONTROL_INVALID_PARENT_POSSIBLE'};$qytRows+=@{name='missing-or-unparseable-birth-and-missing-parent-keep-unknown-candidate';passed=$true}
+$qytIndex=New-OwnTreeSnapshotIndex @($qytParent,$qytEarlier,$qytEarlier) @($qytRootPin);Assert-Control (Test-OwnSnapshotParentEdge $qytIndex $qytEarlier) 'CONTROL_DUPLICATE_CANDIDATE';$qytRows+=@{name='duplicate-child-snapshot-is-not-negative-evidence';passed=$true}
+$qytRejected=0;$qytBadCases=@(@{pairs=@($qytParent,$qytParent)},@{pairs=@([pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=$qytEpoch.AddTicks(10)})},@{pairs=@([pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=$null})},@{pairs=@([pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=[DateTime]::MinValue})},@{pairs=@([pscustomobject]@{ProcessId=8100;ParentProcessId=1;CreationDate=[DateTime]::MaxValue})});foreach($qytBadCase in $qytBadCases){try{$qytUnexpected=New-OwnTreeSnapshotIndex $qytBadCase.pairs @($qytRootPin)}catch{$qytRejected++}};Assert-Control ($qytRejected-eq 5) 'CONTROL_ROOT_BIRTH_BOUND';$qytRows+=@{name='duplicate-missing-or-changed-root-CIM-birth-remains-rejected';passed=$true}
+Assert-Control ($qytRows.Count-eq 7) 'CONTROL_ALL_SEVEN'
+for($qytSourceIndex=0;$qytSourceIndex-lt 2;$qytSourceIndex++){if((Get-FileHash -LiteralPath $qytReaders[$qytSourceIndex] -Algorithm SHA256).Hash.ToLowerInvariant()-cne $qytExpected[$qytSourceIndex]){throw 'CONTROL_SOURCE_CHANGED'}}
+@{passed=$true;tests=$qytRows;powerShellVersion=$PSVersionTable.PSVersion.ToString();actualCIMSelf=1;sourceSHA256=$qytExpected;childrenStarted=0;ownershipGranted=$false;retiredClaim=$false;signals=0;TaskChanges=0;Input=0;VMChanges=0;elapsedMs=$qytClock.ElapsedMilliseconds}|ConvertTo-Json -Depth 8 -Compress
