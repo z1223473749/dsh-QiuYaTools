@@ -76,6 +76,49 @@ test('companion startup failure rejects without an unhandled Host stream error',
   finally { companion.dispose() }
 })
 
+async function delayedExitCompanion(name) {
+  const executable = join(temporary, `${name}.cjs`)
+  const retired = join(temporary, `${name}-retired.json`)
+  await writeFile(executable, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:request.requestId,ok:true})+'\\n')});rl.on('close',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(retired)},JSON.stringify({pid:process.pid,natural:true}));process.stdout.write('{"event":"browserShutdown","passed":true}\\n',()=>process.exit(0))},120));`)
+  return { executable, retired }
+}
+
+test('companion disposal waits for delayed EOF teardown and shares one retirement promise', async () => {
+  const fixture = await delayedExitCompanion('delayed-native-exit')
+  const companion = new SessionWindowCompanion(process.execPath, [fixture.executable])
+  await companion.open({ sessionId: 'delayed-exit' })
+  const retirement = companion.dispose()
+  assert.equal(typeof retirement?.then, 'function', 'the Host must be able to await native teardown')
+  assert.equal(companion.dispose(), retirement, 'repeated disposal waits for the same child')
+  let finished = false
+  retirement.then(() => { finished = true })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(finished, false, 'ending stdin is not completion')
+  await retirement
+  const receipt = JSON.parse(await readFile(fixture.retired, 'utf8'))
+  assert.equal(receipt.natural, true)
+  assert.throws(() => process.kill(receipt.pid, 0), error => error.code === 'ESRCH')
+  await assert.rejects(() => companion.open({}), /unavailable/)
+})
+
+test('Host endpoint cleanup returns the native retirement to Cordis disposal', async () => {
+  const fixture = await delayedExitCompanion('context-native-exit')
+  const transport = windowFetchFixture({ sessionController: { list: async () => ({ items: [{ sessionId: 'delayed-exit', title: 'Delayed', blank: false }] }) } })
+  const ctx = new Context()
+  const plugin = ctx.plugin(child => {
+    child.effect(() => installHost(transport.host, () => true, {
+      executable: process.execPath, args: [fixture.executable], getHarnessVersion: () => versionCompatibility.harnessVersion,
+    }))
+  })
+  await plugin.await()
+  try {
+    assert.equal((await transport.call('open', { sessionId: 'delayed-exit', source: 'menu' })).ok, true)
+    await plugin.dispose()
+    assert.equal(JSON.parse(await readFile(fixture.retired, 'utf8')).natural, true, 'Cordis waits until the companion completes EOF teardown')
+    assert.equal(transport.routes.size, 0)
+  } finally { await plugin.dispose() }
+})
+
 test('drag preparation and cancellation share the helper without cancellation starting a new process', async () => {
   const before = (await readFile(records, 'utf8')).trim().split('\n').length
   const dormant = new SessionWindowCompanion(process.execPath, [fixture])

@@ -73,6 +73,7 @@ export class SessionWindowCompanion {
   private child: ChildProcessWithoutNullStreams | undefined
   private sequence = 0
   private disposed = false
+  private retirement: Promise<void> | undefined
   private readonly pending = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>()
   constructor(private readonly executable: string, private readonly args: readonly string[] = []) {}
 
@@ -146,22 +147,38 @@ export class SessionWindowCompanion {
     clearTimeout(pending.timer); this.pending.delete(id); pending.reject(error)
   }
 
-  dispose(): void {
-    if (this.disposed) return
+  dispose(): Promise<void> {
+    if (this.retirement) return this.retirement
     this.disposed = true
     for (const id of this.pending.keys()) this.failRequest(id, new Error('Session windows are unavailable'))
     const child = this.child
     this.child = undefined
-    if (!child) return
-    child.stdin.end()
-    const timer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGTERM') }, 1500)
-    timer.unref()
-    child.once('exit', () => clearTimeout(timer))
+    if (!child) return this.retirement = Promise.resolve()
+    // Keep the Host and its output pipe alive while the native helper drains
+    // WebView. Ending stdin alone does not complete an asynchronous teardown.
+    this.retirement = new Promise<void>(resolve => {
+      let finished = false
+      const finish = (): void => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        child.off('close', finish)
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        if (child.exitCode === null) child.kill('SIGTERM')
+        finish()
+      }, 1500)
+      timer.unref()
+      child.once('close', finish)
+      child.stdin.end()
+    })
+    return this.retirement
   }
 }
 
 /** Root waits only for connection and webServer. Session readers are resolved on the authenticated call. */
-export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, companionOptions?: { executable: string; args?: readonly string[]; getHarnessVersion?: () => unknown | Promise<unknown> }): () => void {
+export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, companionOptions?: { executable: string; args?: readonly string[]; getHarnessVersion?: () => unknown | Promise<unknown> }): () => Promise<void> {
   const services = ctx as unknown as HostServices
   // A normal .app bundle gives AppKit, LaunchServices and accessibility tools
   // one stable identity while stdin still carries the private launch facts.
@@ -312,5 +329,9 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
         return Response.json({ type: 'server-response', rpcId: message.rpcId, result })
       },
     }))
-  return () => { companion.dispose(); for (const dispose of unregister) void dispose() }
+  return async () => {
+    const retirement = companion.dispose()
+    try { await Promise.all(unregister.map(dispose => dispose())) }
+    finally { await retirement }
+  }
 }
