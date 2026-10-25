@@ -126,13 +126,31 @@ internal sealed class NativeContext : ApplicationContext
             Program.Emit(new { requestId, ok = false, error = new { code, message = error is NativeFailure ? error.Message : "Native operation failed" } });
         }
     }
-    private void Shutdown()
+    private async void Shutdown()
     {
         if (exiting) return;
         exiting = true; parentWatch.Stop();
-        try { computer?.Dispose(); }
-        catch (NativeFailure) { Environment.ExitCode = 1; Program.Emit(new { @event = "inputCleanupFailed" }); }
-        finally { windows.Dispose(); ExitThread(); }
+        // A Windows computer owner must confirm input release within the Host's
+        // original 1500ms hard limit. Browser process groups then drain under a
+        // separate bound; they never keep an unconfirmed input owner alive.
+        try {
+            var inputReleased = false;
+            try { computer?.Dispose(); inputReleased = true; }
+            catch (Exception) { Environment.ExitCode = 1; }
+            if (computer != null) {
+                try {
+                    if (inputReleased) Program.Emit(new { @event = "inputReleased", passed = true });
+                    else Program.Emit(new { @event = "inputCleanupFailed" });
+                } catch (Exception) { Environment.ExitCode = 1; }
+            }
+            var browserReleased = false;
+            try {
+                await windows.ShutdownAsync(WindowManager.BrowserShutdownMilliseconds);
+                browserReleased = true;
+            } catch (Exception) { Environment.ExitCode = 1; }
+            try { Program.Emit(new { @event = "browserShutdown", passed = browserReleased }); }
+            catch (Exception) { Environment.ExitCode = 1; }
+        } finally { ExitThread(); }
     }
     protected override void Dispose(bool disposing)
     {

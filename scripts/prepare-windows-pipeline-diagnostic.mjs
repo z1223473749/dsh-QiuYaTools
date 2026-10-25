@@ -26,7 +26,7 @@ export function instrumentPipelineSource(name, source) {
     replace('"targets" => await Task.Run(computer.Targets),', '"targets" => await PipelineTrace.Run(computer.Targets, "targets"),')
     replace('"applications" => await Task.Run(applications.Applications),', '"applications" => await PipelineTrace.Run(applications.Applications, "applications"),')
     replace('        } catch (Exception error) {\n            var code = error is NativeFailure', '        } catch (Exception error) {\n            PipelineTrace.Mark("dispatch-error");\n            var code = error is NativeFailure')
-    replace('        catch (NativeFailure) { Environment.ExitCode = 1;', '        catch (NativeFailure) { PipelineTrace.Mark("shutdown-cleanup-failed"); Environment.ExitCode = 1;')
+    replace('            try { computer?.Dispose(); inputReleased = true; }\n            catch (Exception) { Environment.ExitCode = 1; }', '            try { computer?.Dispose(); inputReleased = true; }\n            catch (Exception) { PipelineTrace.Mark("shutdown-cleanup-failed"); Environment.ExitCode = 1; }')
     replace('        exiting = true; parentWatch.Stop();', '        PipelineTrace.Mark("shutdown-start"); exiting = true; parentWatch.Stop();')
   } else if (name === 'ComputerDriver.cs') {
     replace('    internal object[] Targets()\n    {', '    internal object[] Targets()\n    {\n        PipelineTrace.Mark("targets-enumerate-enter");')

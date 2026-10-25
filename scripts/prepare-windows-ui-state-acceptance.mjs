@@ -36,10 +36,10 @@ export function makeWindowsUIStateSource(source) {
   for (const [before, after] of [
     ["assert.equal(await page.getByRole('spinbutton').nth(1).inputValue(), '4')", "assert.equal(await page.getByRole('spinbutton').nth(1).inputValue(), '4'); await screenshot('thresholds-saved')"],
     ["assert.equal(await ghost.innerText(), '继续检查本地测试结果。')", "assert.equal(await ghost.innerText(), '继续检查本地测试结果。'); await screenshot('prompt-suggestion')"],
-    ["await editor().press('Tab'); assert.equal(await editor().innerText(), '继续检查本地测试结果。')", "await editor().press('Tab'); assert.equal(await editor().innerText(), '继续检查本地测试结果。'); await screenshot('prompt-accepted')"],
+    ["await editor().press('Tab'); assert.equal(await editor().innerText(), '继续检查本地测试结果。')\n    await screenshot('prompt-accepted')", "await editor().press('Tab'); assert.equal(await editor().innerText(), '继续检查本地测试结果。'); await screenshot('prompt-accepted')"],
     ["await menu(alpha); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).click()", "await menu(alpha); await screenshot('session-menu-copy'); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).click()"],
     ["await row(alpha).locator('[data-qyt-manual-unread=\"true\"]').waitFor()", "await row(alpha).locator('[data-qyt-manual-unread=\"true\"]').waitFor(); await screenshot('session-menu-unread')"],
-    ["await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await page.keyboard.press('Escape')", "await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await screenshot('session-menu-pin'); await page.keyboard.press('Escape')"],
+    ["await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await screenshot('session-menu-pin'); await page.keyboard.press('Escape')", "await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await screenshot('session-menu-pin'); await page.keyboard.press('Escape')"],
   ]) source = replaceOnce(source, before, after)
   source = replaceOnce(source, "'official-Harness-feature-evidence-subset'", "'official-Harness-Windows-UI-state-supplement'")
   source = replaceOnce(source, "scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence'", "scope: 'headless-windows-ui-states'")

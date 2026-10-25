@@ -67,3 +67,18 @@ test('real Node preload cannot recursively start a writer inside Workers and ret
     assert.ok(trace.records.every(row => ['host-trace-start', 'host-loop-delivery'].includes(row.phase)))
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
+
+test('two-phase shutdown instrumentation reverses exactly without changing input ACK or browser drain contract', async () => {
+  const source = await readFile(new URL('../src/native/windows/Program.cs', import.meta.url), 'utf8')
+  const diagnostic = instrumentPipelineSource('Program.cs', source)
+  const body = value => value.slice(value.indexOf('    private async void Shutdown()'), value.indexOf('    protected override void Dispose(bool disposing)'))
+  let restored = body(diagnostic)
+  for (const marker of ['PipelineTrace.Mark("shutdown-start"); ', 'PipelineTrace.Mark("shutdown-cleanup-failed"); ']) {
+    assert.equal(restored.split(marker).length - 1, 1)
+    restored = restored.replace(marker, '')
+  }
+  assert.equal(restored, body(source))
+  assert.equal((body(diagnostic).match(/PipelineTrace.Mark\("shutdown-cleanup-failed"\)/gu) ?? []).length, 1)
+  assert.throws(() => instrumentPipelineSource('Program.cs', source.replace('            try { computer?.Dispose(); inputReleased = true; }', '            try { computer?.Dispose(); }')), /anchor changed/u)
+  assert.throws(() => instrumentPipelineSource('Program.cs', source.replace('            catch (Exception) { Environment.ExitCode = 1; }', '            catch (Exception) { Environment.ExitCode = 2; }')), /anchor changed/u)
+})

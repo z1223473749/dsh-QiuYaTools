@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { ComputerActionCleanupError, ComputerError } from './contract.ts'
 import { foregroundContext, foregroundGrant, foregroundRelease, foregroundTicket } from './foreground-handoff.ts'
+import { waitForComputerRetirement } from './native-retirement.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, ForegroundActionTicket, ForegroundHandoffDriver, ForegroundWorkerIdentity, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 
 export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[] }
@@ -71,17 +72,34 @@ export class NativeCompanionDriver implements DeviceDriver {
     // EOF asks the independent native message loop to revoke and release first.
     // A wedged worker gets a fixed grace; Windows then uses a separate process
     // to send only the last acknowledged owned keyups/mouseups after it exits.
-    if (child.exitCode === null && child.signalCode === null && child.pid) await new Promise<void>((resolve, reject) => {
-      let deadline: ReturnType<typeof setTimeout> | undefined
-      const timer = setTimeout(() => {
-        child.kill('SIGKILL')
-        deadline = setTimeout(() => reject(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器未确认退出，已阻止新的电脑输入。')), 2000)
-        deadline.unref()
-      }, 1500)
-      timer.unref()
-      child.once('exit', () => { clearTimeout(timer); clearTimeout(deadline); resolve() })
-      child.stdin.end()
-    })
+    if (child.exitCode === null && child.signalCode === null && child.pid) {
+      let emergency: Promise<void> | undefined
+      let retirement: Awaited<ReturnType<typeof waitForComputerRetirement>> | undefined
+      let failure: unknown
+      try {
+        retirement = await waitForComputerRetirement(child, process.platform, receipt => {
+          if (!receipt.inputReleased) {
+            emergency = this.releaseHeldInputs(held)
+            void emergency.catch(() => {})
+          }
+        })
+      } catch (error) { failure = error }
+      if (emergency) await emergency
+      if (failure) throw failure
+      if (!retirement) throw new ComputerError('NATIVE_CLEANUP_FAILED', '执行器退出状态未确认。')
+      // The native release completed before the browser drain. Do not send a
+      // second set of keyups after this exact worker has already released them.
+      if (retirement.inputReleased) {
+        if (retirement.forced || retirement.code !== 0 || retirement.signal !== null || retirement.browserShutdownPassed !== true) {
+          throw new ComputerError('NATIVE_CLEANUP_FAILED', '输入已释放，但窗口组件未确认正常退出，已阻止新的电脑输入。')
+        }
+        return
+      }
+      return
+    }
+    await this.releaseHeldInputs(held)
+  }
+  private async releaseHeldInputs(held: NativeHeldInputs): Promise<void> {
     const args = this.options.releaseInputArgs ?? (process.platform === 'win32' ? ['--release-input'] : undefined)
     if (!args || !held.keys.length && !held.mouseButtons.length && !held.unicodeUnits?.length) return
     await new Promise<void>((resolve, reject) => {

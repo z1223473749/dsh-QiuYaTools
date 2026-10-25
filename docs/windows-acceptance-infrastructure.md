@@ -94,7 +94,8 @@ node --test tests/windows-acceptance*.test.mjs tests/windows-command-receipt.tes
 
 回归运行真实 Node 子进程/stdio、真实流式回调、固定 5 秒超时与迟到回执，以及当前生产 AnnotationEditor 的 React DOM。浏览器作者回调在隔离 JSDOM 中执行，明确不声称合成对象等于真实 trusted 浏览器输入。测试不启动 Harness、浏览器、PD 或 Windows API。命令回执回归另行覆盖真实 Node 子进程空 stdout、慢/失败 onStart、child 先退出、迟到零退出、exit 后管道尾部和 HTTP 409/空响应。5ms 预算与 30ms 回调的旧红新绿复现属于纯载体测试，不是对旧实机结果改判。实际 Mac/Windows 逐功能验收、真实 DeepSeek、截图和可安装包的结论仍以项目外的独立实测报告为准。
 
-## 原进程句柄与同快照归属核验
+
+## 原进程句柄与浏览器准备边界
 
 `windows-own-reader-stdio.ps1` 仅在完整 `pin` / `tree` 操作成功并产生可解析结果后，提交该操作取得的原进程句柄。保留表按精确 PID 与 UTC birth ticks 去重，committed 与 pending 合计最多 128 项；这个上限不代表每次正常读取的瞬时局部句柄也算在表内。失败事务释放全部 pending，EOF 或协议异常释放整个保留表，单项释放异常不会阻止清理其余项。
 
@@ -102,13 +103,22 @@ node --test tests/windows-acceptance*.test.mjs tests/windows-command-receipt.tes
 
 有限诊断只包含阶段/门的枚举、PID、birth SHA、白名单异常类型和数值码，不记录任意异常原文、命令行、窗口正文或令牌。树的 parent snapshot 明确标为原 CIM 微秒时间，不冒充持有的实时父进程句柄，也不改变原成员归属、身份或退休门。
 
-`tests/fixtures/windows-retirement-contract.mjs` 保存已冻结完整 UI 载体的原 `auditOwnedRetired()` 消费器合同，仅移除模块导出并注入其原有的 `pinsFile` / `readOwn` 依赖；它不是公共 `e2e-harness.mjs` 中的函数。六项回归通过真实 Node 子进程与 stdio 读取该合同：接受已有的 `same-handle-signaled` / `process-absent`，拒绝两个旧的未声明 reason、未知 reason，以及仍活着的精确原进程。每例仅发一次原查询，EOF 自然退场，不发信号或重放。
+`browser-ready-file.mjs` 保留原 ENOENT 等待行为；只有针对调用方这一个自有 `DevToolsActivePort` 文件的 `EBUSY + open + exact path` 才同样视为尚未 ready。EACCES、EPERM、其他文件、其他 syscall 及未知错误仍失败。调用方继续使用原启动 deadline，不重新启动浏览器，也不重放请求。
+
+`installed-renderer.mjs` 的 `withInstalledRenderer()` 接收调用方原有的准备/验证函数，通过唯一且明确的源锚点增加一个显式安装的 Edge 界面 renderer。其 canonical 普通文件、SHA、大小、版本仍要在 Windows 实机验证；原生产 Chrome 字段和原预算完整保留。缺少绑定、路径/摘要变化或源锚点变化立即拒绝。该辅助模块不会下载、安装或启动浏览器，也不是新的生产工具注册。
+
+完整 UI 用例补充两张已有操作后的被动状态图：`prompt-accepted` 是 Tab 建议被接受后的输入框，`session-menu-pin` 是菜单中置顶状态已经改变后的画面。没有增加输入动作、业务检查数或延长预算。
+
+回归命令：
 
 ```sh
-node --test tests/windows-retirement-consumer.test.mjs
+node --test tests/windows-retirement-consumer.test.mjs tests/windows-browser-inputs.test.mjs
 ```
 
-这六项是消费者合同回归，不冒充 Windows API 实测。持有原句柄的 Windows PowerShell 自有控制子进程七项实测单独保存在项目外，其原 reader 摘要为 `3f6ba406…`；随后公共 reader 增加了已有 reason 的兼容映射、有限诊断与同快照因果检查，不能把整个当前文件宣称为那轮旧源的逐字重跑。实际 full12、UIA、原生窗口自然退出和截图仍以各自的实测报告为准；旧失败与 unknown 不因此补绿。
+其中 24 个纯 Node 用例含真实子进程/stdio，由未改动的 full12 消费器契约读取保留句柄与 fresh absence 的结果投影，拒绝旧的未声明 reason、未知 reason 及仍活着的原进程；这不冒充 Windows API 实测。持有原句柄的 Windows PowerShell 自有控制子进程七项实测、正式 Windows 全功能、自然清退和截图证据均单独保存在项目外，实际验收不得从这些纯测试推定。原 `3f6ba406…` 七项内核实现到公共 reader 只涉及两个已有 reason 名称的兼容映射；资源与进程未知仍必须在真实报告中保留失败。
+
+
+同快照父子出生因果（只读测试基础设施）：
 
 Win32_Process 的 ParentProcessId 是数字引用，父 PID 被复用后可能指向更晚出生的进程。tree 先保持原 live 根身份核验，再使用**同一次** CIM 枚举建立 UTC 出生索引，且根的 CIM 微秒出生必须与已 pin 的内核 birth 对上。只有 child 在同一快照中明确早于 parent，才在读取候选内核句柄之前否定这条不可能的父子边。相同微秒、缺失、重复、无效日期（包括 MinValue/MaxValue）仍保留原候选并执行原严格读取；不能用时间戳授予所有权或声明退休。既有 pin 不从集合删除，所有原内核句柄的退休检查保持不变，128 个保留表项、16 层、原 query/清退预算及 unknown 拒绝都不变。最多 16 条有限边诊断只含 PID、两个快照出生、固定原因和两个 false 声明，不含命令行、窗口正文或令牌。
 

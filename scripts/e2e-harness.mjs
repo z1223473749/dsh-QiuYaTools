@@ -259,6 +259,7 @@ try {
     const ghost = page.locator('.qyt-prompt-suggestion-text').first(); await ghost.waitFor({ state: 'visible', timeout: 15000 })
     assert.equal(await ghost.innerText(), '继续检查本地测试结果。')
     await editor().focus(); await editor().press('Tab'); assert.equal(await editor().innerText(), '继续检查本地测试结果。')
+    await screenshot('prompt-accepted')
     await sleep(150)
     await editor().press('ControlOrMeta+A'); await editor().press('Backspace')
     await waitFor(async () => (await editor().innerText()).trim() === '', 'Accepted suggestion could not be cleared')
@@ -307,7 +308,7 @@ try {
     await row(alpha).locator('[data-qyt-manual-unread="true"]').waitFor()
     await row(alpha).click(); await waitFor(async () => (await row(alpha).locator('[data-qyt-manual-unread="true"]').count()) === 0, 'Explicit revisit did not clear manual unread')
     await menu(alpha); await page.getByRole('menuitem', { name: '置顶会话', exact: true }).click()
-    await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await page.keyboard.press('Escape')
+    await menu(alpha); await page.getByRole('menuitem', { name: '取消置顶', exact: false }).waitFor(); await screenshot('session-menu-pin'); await page.keyboard.press('Escape')
     return { clipboard: 'browser-local writeText spy, system clipboard untouched' }
   })
   let independentTarget
@@ -396,6 +397,9 @@ try {
     assert.ok(independentTarget && alphaId, 'The fixture session window must exist before computer control')
     await row(alpha).click(); await sleep(300)
     if (process.platform === 'win32') {
+      // Finish the browser composer before asking the public command to reveal
+      // Alpha. A later browser focus must not undo this native precondition.
+      await editor().fill('E2E:computer-move')
       // Beta's preceding drag case may cover Alpha. Reuse the exact own
       // window through the public command before the unchanged real hit test.
       const reuseStart = windowRpc.length
@@ -404,7 +408,6 @@ try {
       const reused = (await driver.targets()).filter(target => target.id === independentTarget.id)
       assert.equal(reused.length, 1); assert.equal(reused[0].pid, independentTarget.pid); assert.equal(reused[0].appId, independentTarget.appId)
       await writeFile(join(output, 'fixture-public-window-reuse.json'), JSON.stringify({ sessionId: alphaId, exactTargetId: independentTarget.id, acknowledged: true, sameIdentity: true, authorizationStarted: false }, null, 2))
-      await editor().fill('E2E:computer-move')
       const beforeSetup = independentTarget
       const activation = JSON.parse(await nativeCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-activate-windows.ps1'), '-WindowId', independentTarget.id, '-ProfileRoot', profileHome, '-DiagnosticPath', join(output, 'fixture-user-activation-diagnostic.json')]))
       assert.equal(activation.active, true)

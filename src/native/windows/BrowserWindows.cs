@@ -10,10 +10,14 @@ namespace QiuYaTools.Windows;
 internal sealed class WindowManager : IDisposable
 {
     internal static readonly object Deferred = new();
+    // Input release has its own hard deadline. This bound only drains the
+    // original WebView process groups after the native input owner is fenced.
+    internal const int BrowserShutdownMilliseconds = 5_000;
     private readonly Dictionary<string, BrowserWindow> sessions = new();
     private readonly Dictionary<string, BrowserWindow> previews = new();
     private PreviewDataScope? previewData;
     private string? prepared;
+    private readonly HashSet<BrowserWindow> browserLifetimes = new();
     internal async Task<object?> Session(string op, JsonElement request, object requestId)
     {
         if (op is not ("open" or "prepare" or "cancel")) throw new NativeFailure("unknown-operation", "Unknown session operation");
@@ -29,7 +33,7 @@ internal sealed class WindowManager : IDisposable
         var query = url.Query.TrimStart('?').Split('&').Select(part => part.Split('=', 2)).Where(parts => Uri.UnescapeDataString(parts[0]) == "qiuya-session").ToArray();
         if (query.Length != 1 || query[0].Length != 2 || Uri.UnescapeDataString(query[0][1]) != id) throw new NativeFailure("invalid-request", "Invalid session URL identity");
         if (sessions.TryGetValue(id, out var existing)) {
-            if (!existing.Failed) {
+            if (!existing.Failed && !existing.IsClosing) {
                 if (op == "prepare") return new { prepared = true };
                 if (prepared == id) prepared = null;
                 existing.Reveal(request, requestId);
@@ -45,7 +49,8 @@ internal sealed class WindowManager : IDisposable
         var title = Program.Text(request, "title", 20_000);
         var window = new BrowserWindow(id, url, title, uuid.ToString("D"), op == "prepare", preview: false);
         sessions[id] = window;
-        window.FormClosed += (_, _) => { if (sessions.GetValueOrDefault(id) == window) sessions.Remove(id); if (prepared == id) prepared = null; };
+        TrackBrowserLifetime(window);
+        window.FormClosed += (_, _) => { if (sessions.GetValueOrDefault(id) == window) { sessions.Remove(id); if (prepared == id) prepared = null; } };
         if (op == "open") window.AddWaiting(requestId);
         window.Position(request);
         // A preparation receipt does not wait for in-page readiness, so Escape remains cancellable.
@@ -59,17 +64,18 @@ internal sealed class WindowManager : IDisposable
         var id = Program.Text(request, "sessionId", 1024);
         var url = ValidateUrl(Program.Text(request, "url", 32768));
         var title = Program.Text(request, "title", 20_000);
-        if (previews.TryGetValue(id, out var existing)) { existing.Present(true); return new { opened = true }; }
+        if (previews.TryGetValue(id, out var existing) && !existing.IsClosing) { existing.Present(true); return new { opened = true }; }
         CheckRuntime();
         previewData ??= new PreviewDataScope(BrowserWindow.DataRoot());
         var window = new BrowserWindow(id, url, title, previewData.Store(id), false, preview: true, previewData);
         previews[id] = window;
+        TrackBrowserLifetime(window);
         window.FormClosed += (_, _) => {
             if (previews.GetValueOrDefault(id) == window) previews.Remove(id);
             if (!window.PreserveSessionOnClose) Program.Emit(new { @event = "previewClosed", sessionId = id });
         };
         await window.Initialize();
-        if (window.Failed) throw new NativeFailure("preview-failed", "Preview could not load");
+        if (window.Failed || window.IsClosing) throw new NativeFailure("preview-failed", "Preview could not load");
         window.Present(false);
         return new { opened = true };
     }
@@ -98,11 +104,40 @@ internal sealed class WindowManager : IDisposable
         try { if (string.IsNullOrWhiteSpace(CoreWebView2Environment.GetAvailableBrowserVersionString())) throw new Exception(); }
         catch { throw new NativeFailure("webview2-runtime-missing", "Install the Microsoft Edge WebView2 Runtime to open native windows"); }
     }
-    public void Dispose()
+    private void TrackBrowserLifetime(BrowserWindow window)
+    {
+        browserLifetimes.Add(window);
+        _ = ForgetRetiredBrowser(window);
+    }
+    private async Task ForgetRetiredBrowser(BrowserWindow window)
+    {
+        try { await window.BrowserRetired; browserLifetimes.Remove(window); }
+        catch { /* Keep a failed or unknown lifetime in the shutdown barrier. */ }
+    }
+    internal async Task ShutdownAsync(int remainingMilliseconds)
+    {
+        // Snapshot also includes already closed windows whose browser group is still alive.
+        // Closing the controls is part of this budget; it is not proof that their
+        // browser processes have exited. Keep the STA available for exit events.
+        var closeClock = Stopwatch.StartNew();
+        var pending = browserLifetimes.ToArray();
+        CloseWindows();
+        try {
+            remainingMilliseconds -= checked((int)closeClock.ElapsedMilliseconds);
+            if (remainingMilliseconds < 0) throw new TimeoutException("Browser shutdown deadline");
+            if (pending.Length == 0) return;
+            if (remainingMilliseconds == 0) throw new TimeoutException("Browser shutdown deadline");
+            await Task.WhenAll(pending.Select(window => window.BrowserRetired)).WaitAsync(TimeSpan.FromMilliseconds(remainingMilliseconds));
+        } finally { previewData?.Dispose(); previewData = null; }
+    }
+    private void CloseWindows()
     {
         foreach (var window in sessions.Values.Concat(previews.Values).ToArray()) window.Close();
         sessions.Clear(); previews.Clear();
-        previewData?.Dispose();
+    }
+    public void Dispose()
+    {
+        CloseWindows(); previewData?.Dispose(); previewData = null;
     }
 }
 
@@ -118,8 +153,21 @@ internal sealed class BrowserWindow : Form
     private readonly System.Windows.Forms.Timer deadline = new() { Interval = 30_000 };
     private readonly List<object> waiting = new();
     internal bool IsPreview => preview;
+    internal bool IsClosing => closeRequested || IsDisposed;
     internal bool PreserveSessionOnClose { get; private set; }
     private Task? preserveClose;
+    private bool closeRequested;
+    private readonly BrowserExitState browserLifetime = new();
+    private CoreWebView2Environment? browserEnvironment;
+    internal Task BrowserRetired => browserLifetime.Completion;
+    private void BrowserProcessExited(object? sender, CoreWebView2BrowserProcessExitedEventArgs args) => browserLifetime.BrowserExited(args.BrowserProcessId);
+    private async Task ReleaseRetiredEnvironment()
+    {
+        try { await BrowserRetired; }
+        catch { return; }
+        if (browserEnvironment != null) browserEnvironment.BrowserProcessExited -= BrowserProcessExited;
+        browserEnvironment = null;
+    }
     protected override bool ShowWithoutActivation => preview;
     protected override CreateParams CreateParams
     {
@@ -189,6 +237,12 @@ internal sealed class BrowserWindow : Form
         ShowInTaskbar = !preview;
         Controls.Add(web); Controls.Add(failure);
         deadline.Tick += (_, _) => Fail("会话加载超时，请关闭窗口后重试。");
+        FormClosing += (_, args) => {
+            if (browserLifetime.CanDisposeView) return;
+            // Canceling a hidden preparation must not dispose WebView while its
+            // asynchronous controller creation can still create a browser later.
+            closeRequested = true; args.Cancel = true; deadline.Stop(); Hide();
+        };
         FormClosed += (_, _) => { deadline.Stop(); Complete(false); web.Dispose(); deadline.Dispose(); };
         // Construct a native handle without showing hidden drag preparations.
         _ = Handle; _ = web.Handle;
@@ -246,6 +300,7 @@ internal sealed class BrowserWindow : Form
     internal async Task Initialize()
     {
         try {
+            if (IsDisposed || closeRequested) { browserLifetime.NoBrowserCreated(); return; }
             var directory = Path.Combine(DataRoot(), store);
             if (preview) PreviewDataScope.ValidateUdfPath(directory);
             Directory.CreateDirectory(directory);
@@ -254,14 +309,18 @@ internal sealed class BrowserWindow : Form
             // no later helper may assume an unrecorded browser process has exited.
             previewData?.BeginningBrowser();
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: directory);
+            browserEnvironment = environment;
+            environment.BrowserProcessExited += BrowserProcessExited;
+            _ = ReleaseRetiredEnvironment();
             if (preview) {
                 var options = environment.CreateCoreWebView2ControllerOptions();
                 options.IsInPrivateModeEnabled = true;
                 options.ProfileName = "Preview" + Guid.NewGuid().ToString("N");
                 await web.EnsureCoreWebView2Async(environment, options);
             } else await web.EnsureCoreWebView2Async(environment);
+            browserLifetime.BrowserCreated(web.CoreWebView2.BrowserProcessId);
             if (previewData != null) previewData.BrowserCreated(checked((int)web.CoreWebView2.BrowserProcessId));
-            if (IsDisposed) return;
+            if (IsDisposed || closeRequested) return;
             web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             web.CoreWebView2.Settings.AreHostObjectsAllowed = false;
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
@@ -312,7 +371,8 @@ internal sealed class BrowserWindow : Form
                 deadline.Start();
             }
             web.CoreWebView2.Navigate(exchange ? new UriBuilder(origin) { Path = "/", Query = string.Join("&", tokenParts), Fragment = "" }.Uri.AbsoluteUri : origin.AbsoluteUri);
-        } catch { Fail("窗口组件初始化失败，请检查 WebView2 Runtime。"); }
+        } catch { browserLifetime.InitializationFailed(); Fail("窗口组件初始化失败，请检查 WebView2 Runtime。"); }
+        finally { browserLifetime.InitializationFinished(); if (closeRequested && !IsDisposed) Close(); }
     }
     internal static string DataRoot()
     {

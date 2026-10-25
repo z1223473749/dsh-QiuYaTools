@@ -74,6 +74,8 @@ export class SessionWindowCompanion {
   private sequence = 0
   private disposed = false
   private retirement: Promise<void> | undefined
+  private readonly draining = new Set<Promise<void>>()
+  private cleanupFailure: Error | undefined
   private readonly pending = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>()
   constructor(private readonly executable: string, private readonly args: readonly string[] = []) {}
 
@@ -130,7 +132,6 @@ export class SessionWindowCompanion {
     // Drain WebKit diagnostics without printing token-bearing URLs.
     child.stderr.resume()
     const failed = (): void => {
-      lines.close()
       if (this.child !== child) return
       this.child = undefined
       for (const requestId of this.pending.keys()) this.failRequest(requestId, new Error('会话窗口已退出，请重试。'))
@@ -138,6 +139,14 @@ export class SessionWindowCompanion {
     child.stdin.on('error', failed)
     child.once('error', failed)
     child.once('exit', failed)
+    // Exit may precede the final stdout data. Keep draining until stdio closes.
+    let finishDrain!: () => void
+    const draining = new Promise<void>(resolve => { finishDrain = resolve })
+    this.draining.add(draining)
+    child.once('close', (code, signal) => {
+      if (child.pid && (code !== 0 || signal !== null)) this.cleanupFailure ??= new Error('会话窗口组件未正常退出。')
+      lines.close(); this.draining.delete(draining); finishDrain()
+    })
     return child
   }
 
@@ -153,25 +162,27 @@ export class SessionWindowCompanion {
     for (const id of this.pending.keys()) this.failRequest(id, new Error('Session windows are unavailable'))
     const child = this.child
     this.child = undefined
-    if (!child) return this.retirement = Promise.resolve()
+    const draining = [...this.draining]
+    if (!child && draining.length === 0) return this.retirement = this.cleanupFailure ? Promise.reject(this.cleanupFailure) : Promise.resolve()
     // Keep the Host and its output pipe alive while the native helper drains
     // WebView. Ending stdin alone does not complete an asynchronous teardown.
-    this.retirement = new Promise<void>(resolve => {
+    this.retirement = new Promise<void>((resolve, reject) => {
       let finished = false
-      const finish = (): void => {
+      const finish = (error?: Error): void => {
         if (finished) return
         finished = true
         clearTimeout(timer)
-        child.off('close', finish)
-        resolve()
+        if (error) reject(error)
+        else resolve()
       }
       const timer = setTimeout(() => {
-        if (child.exitCode === null) child.kill('SIGTERM')
-        finish()
-      }, 1500)
+        this.cleanupFailure ??= new Error('会话窗口组件未确认退出。')
+        if (child?.exitCode === null) child.kill('SIGTERM')
+        finish(this.cleanupFailure)
+      }, process.platform === 'win32' ? 6000 : 1500)
       timer.unref()
-      child.once('close', finish)
-      child.stdin.end()
+      void Promise.all(draining).then(() => finish(this.cleanupFailure))
+      child?.stdin.end()
     })
     return this.retirement
   }
