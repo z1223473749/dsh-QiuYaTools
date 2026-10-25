@@ -194,8 +194,40 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-computer-fields label { display:grid; gap:6px; font-size:12px; }
 .qyt-computer-fields input:not([type="checkbox"]), .qyt-computer-fields select, .qyt-computer-fields textarea { width:100%; min-width:0; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
 .qyt-computer-fields .qyt-computer-check { display:flex; align-items:center; gap:7px; }
-.qyt-computer-advanced > summary { cursor:pointer; font-size:13px; font-weight:600; }
-.qyt-computer-advanced > summary > span { display:block; margin-top:5px; color:var(--qyt-computer-secondary); font-size:11px; font-weight:400; }
+.qyt-computer-settings-hint { margin:0; padding:0 5px; color:var(--qyt-computer-secondary); font-size:12px; line-height:1.7; }
+.qyt-computer-environment { display:flex; min-width:0; }
+.qyt-computer-environment-trigger { display:inline-flex; align-items:center; gap:5px; max-width:150px; min-height:28px; padding:4px 7px; border:0; border-radius:7px; background:transparent; color:var(--qyt-computer-secondary); font:inherit; font-size:12px; white-space:nowrap; cursor:pointer; }
+.qyt-computer-environment-trigger:hover:enabled, .qyt-computer-environment-trigger[aria-expanded="true"] { background:var(--qyt-computer-soft); color:var(--qyt-computer-accent); }
+.qyt-computer-environment-trigger > svg { flex:none; width:15px; height:15px; }
+.qyt-computer-environment-trigger > svg:last-child { width:12px; height:12px; }
+.qyt-computer-environment-trigger > span { overflow:hidden; text-overflow:ellipsis; }
+.qyt-computer-environment-popover { box-sizing:border-box; z-index:1000; width:380px; max-width:calc(100vw - 24px); max-height:calc(100vh - 96px); overflow:auto; overscroll-behavior:contain; padding:15px; border:1px solid var(--qyt-computer-line); border-radius:14px; background:var(--qyt-computer-bg); box-shadow:0 12px 40px #152c3b26, 0 2px 7px #152c3b0a; scrollbar-width:thin; }
+.qyt-computer-environment-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.qyt-computer-environment-heading > strong { font-size:14px; }
+.qyt-computer-environment-close { display:grid; place-items:center; width:24px; height:24px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--qyt-computer-secondary); font:inherit; font-size:20px; cursor:pointer; }
+.qyt-computer-environment-close:hover { background:var(--qyt-computer-muted-bg); }
+.qyt-computer-environment-hint { margin:3px 0 13px; color:var(--qyt-computer-secondary); font-size:11px; }
+.qyt-computer-environment-current { margin:8px 0 12px; }
+.qyt-computer-environment-panel .qyt-computer-caption { display:block; color:var(--qyt-computer-secondary); font-size:11px; line-height:1.6; }
+.qyt-computer-environment-panel .qyt-muted { color:var(--qyt-computer-secondary); font-size:11px; line-height:1.65; }
+.qyt-computer-environment-fields { min-width:0; margin:0; padding:0; border:0; }
+.qyt-computer-environment-fields > legend { margin-bottom:7px; padding:0; }
+.qyt-computer-environment-options { display:grid; gap:7px; }
+.qyt-computer-environment-option { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid var(--qyt-computer-line); border-radius:10px; cursor:pointer; }
+.qyt-computer-environment-option:hover, .qyt-computer-environment-option[data-selected="true"] { background:var(--qyt-computer-soft); border-color:color-mix(in srgb,var(--qyt-computer-accent) 40%,var(--qyt-computer-line)); }
+.qyt-computer-environment-option > input { flex:none; width:14px; height:14px; margin:0; accent-color:var(--qyt-computer-accent); }
+.qyt-computer-environment-option-icon { display:grid; place-items:center; width:30px; height:30px; border-radius:8px; color:var(--qyt-computer-accent); background:var(--qyt-computer-muted-bg); }
+.qyt-computer-environment-option-icon > svg { width:21px; height:21px; }
+.qyt-computer-environment-option strong { font-size:12px; font-weight:600; }
+.qyt-computer-environment-panel .qyt-computer-actions { display:flex; align-items:center; gap:8px; margin-top:15px; }
+.qyt-computer-environment-panel .qyt-computer-error { margin:12px 0 0; color:var(--qyt-computer-error); font-size:12px; overflow-wrap:anywhere; }
+.qyt-computer-environment-fields:disabled .qyt-computer-environment-options { opacity:.6; }
+.qyt-computer-environment-panel details > summary { cursor:pointer; font-size:12px; }
+.qyt-computer-environment-panel details label { margin-top:10px; }
+.qyt-computer-file-exchange { margin-top:16px; padding-top:14px; border-top:1px solid var(--qyt-computer-line); font-size:12px; overflow-wrap:anywhere; }
+.qyt-computer-file-exchange h4 { margin:0; font-size:12px; }
+.qyt-computer-file-exchange input[type="file"] { display:block; max-width:100%; margin-top:8px; font-size:11px; }
+@media(max-width:600px){.qyt-computer-environment-trigger{max-width:110px;padding-inline:4px;font-size:11px}.qyt-computer-environment-popover{max-height:calc(100dvh - 96px)}}
 .qyt-computer-task { display:grid; gap:11px; padding-top:13px; margin-top:13px; border-top:1px solid var(--qyt-computer-line); }
 .qyt-computer-task strong { font-size:12px; overflow-wrap:anywhere; }
 .qyt-computer-inline-toggle { border-color:var(--qyt-computer-line); background:var(--qyt-computer-soft); color:var(--qyt-computer-text); }

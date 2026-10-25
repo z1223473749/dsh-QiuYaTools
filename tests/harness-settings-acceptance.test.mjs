@@ -137,6 +137,16 @@ test('the settings oracle rejects mixed panels and pending configuration instead
   assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /not loaded/u)
 })
 
+test('computer settings acceptance requires chat guidance and rejects a restored pairing form', async t => {
+  const f = await settings(t), expected = await f.select('computer')
+  const hint = f.section.querySelector('.qyt-computer-settings-hint')
+  hint.textContent = ''
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /entry guidance/u)
+  hint.textContent = '在聊天输入框旁选择操作环境'
+  const input = f.section.ownerDocument.createElement('input'); input.type = 'password'; hint.append(input)
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /conversation composer/u)
+})
+
 test('external image manifests include only registered evidence, bind bytes, and keep portable relative paths', async t => {
   const base = await mkdtemp(join(tmpdir(), 'qiuya-image-manifest-')); t.after(() => rm(base, { recursive: true, force: true }))
   const output = join(base, 'logs'), directory = join(base, '外部 screenshots')

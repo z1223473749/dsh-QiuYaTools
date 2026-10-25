@@ -20,6 +20,7 @@ import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { ComputerPanel } from '../features/computer-use/panel.tsx'
+import { installChatComputerEnvironment } from '../features/computer-use/chat-environment.tsx'
 import { installWorkbenchClient } from '../features/workbench/client.tsx'
 import { createWorkbenchAPI, type WorkbenchConnection } from '../features/workbench/client-api.ts'
 import { SitePermissions } from '../features/workbench/Views.tsx'
@@ -269,6 +270,7 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   ctx.effect(() => installQTheme(ctx, form))
+  ctx.effect(() => installChatComputerEnvironment(ctx, form))
   ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'], child => { child.effect(() => installWorkbenchClient(child, form)) })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',

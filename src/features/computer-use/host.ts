@@ -165,9 +165,10 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           }
           else if (input.op === 'exchange') {
             if (manager) {
-              value = await manager.exchange(sessionId, input.request, request.signal)
+              value = await manager.exchange(sessionId, input.request, request.signal, input.expectedEnvironmentId)
               assertEnabled(sessionId); if (!owner()) throw new Error('文件交换需要本机所有者权限。')
             } else {
+            if (input.expectedEnvironmentId !== undefined || sessionId !== undefined) throw new ComputerError('CONTROL_CHANGED', '请刷新当前聊天的操作环境后再使用文件交换。')
             if (!(driver instanceof ComputerDriverRouter)) throw new Error('文件交换仅适用于已配对的独立电脑。')
             const controller = new AbortController(); fileRequests.add(controller)
             try { value = await driver.exchange(input.request, AbortSignal.any([request.signal, controller.signal])); assertEnabled(); if (!owner()) throw new Error('文件交换需要本机所有者权限。') }

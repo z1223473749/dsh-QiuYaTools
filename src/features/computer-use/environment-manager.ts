@@ -188,7 +188,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (!entry || entry.retiring || entry.switching) return undefined
     return readModelObservationGeneration(entry.service, sessionId, entry.service.get(sessionId))
   }
-  environments() { return this.all().map(entry => ({ ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
+  environments() { return this.all().map(entry => ({ environmentId: entry.environmentId, ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
   isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
   async statusFor(sessionId?: string, signal?: AbortSignal) {
     this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
@@ -317,13 +317,21 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
       return status
     } finally { entry.switching = false; entry.lastUsed = this.now(); this.notify() }
   }
-  async exchange(sessionId: string | undefined, request: unknown, signal?: AbortSignal) {
-    this.assertEnabled(); const entry = this.entry(sessionId)
+  async exchange(sessionId: string | undefined, request: unknown, signal?: AbortSignal, expectedEnvironmentId?: unknown) {
+    this.assertEnabled(); signal?.throwIfAborted(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
+    // A local digest or another window can outlive a remote-to-remote reconnect.
+    // Bind every scoped RPC to the exact connection that showed the file area;
+    // reject before creating a router or forwarding even a filename elsewhere.
+    const expected = expectedEnvironmentId === undefined ? undefined : requireIdentity(expectedEnvironmentId, '电脑环境')
+    if ((sessionId !== undefined && !expected) || (expected !== undefined && this.existing(sessionId)?.environmentId !== expected)) throw new ComputerError('CONTROL_CHANGED', '文件交换环境已变化，请刷新当前聊天的操作环境后重试。')
+    const entry = this.entry(sessionId), environmentId = entry.environmentId
     if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境')
     const controller = new AbortController(); entry.files.add(controller)
     try {
       const result = await entry.driver.exchange(request, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal)
-      this.assertEnabled(); controller.signal.throwIfAborted(); return result
+      this.assertEnabled(); signal?.throwIfAborted(); controller.signal.throwIfAborted()
+      if (this.existing(sessionId) !== entry || entry.environmentId !== environmentId) throw new ComputerError('CONTROL_CHANGED', '文件交换环境已变化，请刷新当前聊天的操作环境后重试。')
+      return result
     } finally { entry.files.delete(controller); entry.lastUsed = this.now() }
   }
   async openPreview(sessionId: string, url: string, title: string, signal?: AbortSignal) {

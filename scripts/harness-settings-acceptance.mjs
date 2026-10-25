@@ -38,10 +38,11 @@ export function inspectSettingsTab(section, expected) {
   }
   for (const label of expected.regions ?? []) require(panel.querySelector(`section[aria-label="${label}"]`), `region ${label} is missing`)
   if (expected.id === 'computer') {
-    require([...panel.querySelectorAll('summary')].some(node => text(node).startsWith('高级操作环境')), 'the advanced environment disclosure is missing')
+    require(!panel.querySelector('.qyt-computer-advanced,input[type="password"]'), 'per-chat environment configuration must stay in the conversation composer')
+    require(text(panel.querySelector('.qyt-computer-settings-hint')).includes('聊天输入框'), 'the chat environment entry guidance is missing')
     require([...panel.querySelectorAll('button')].some(node => text(node) === '重新检查'), 'permission recheck is missing')
     require([...panel.querySelectorAll('button')].some(node => text(node) === '添加应用'), 'application authorization entry is missing')
-    evidence.advancedExpanded = panel.querySelector('details')?.open === true
+    evidence.environmentEntry = 'conversation.input.left'
   }
   if (expected.steps) {
     const steps = [...panel.querySelectorAll('ol > li')].map(text)
