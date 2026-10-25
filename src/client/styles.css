@@ -163,11 +163,36 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-computer-panel .qyt-computer-empty { margin-top:14px; color:var(--qyt-computer-secondary); font-size:12px; line-height:1.7; }
 .qyt-computer-panel .qyt-computer-notice { margin-top:12px; padding:10px 12px; border-radius:9px; background:var(--qyt-computer-soft); font-size:12px; }
 .qyt-computer-panel .qyt-computer-error { color:var(--qyt-computer-error); font-size:12px; overflow-wrap:anywhere; }
-.qyt-computer-add-application { display:flex; flex-wrap:wrap; align-items:end; gap:8px; margin-top:14px; padding:12px; border:1px solid var(--qyt-computer-line); border-radius:10px; background:var(--qyt-computer-muted-bg); }
-.qyt-computer-add-application > label { flex:1; min-width:140px; display:grid; gap:5px; font-size:12px; }
+.qyt-computer-add-application { display:grid; min-width:0; gap:10px; margin-top:14px; padding:12px; border:1px solid var(--qyt-computer-line); border-radius:10px; background:var(--qyt-computer-muted-bg); }
+.qyt-application-picker-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; font-weight:600; }
+.qyt-application-picker-heading .qyt-computer-caption { font-weight:400; }
+.qyt-application-search { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); }
+.qyt-application-search:focus-within { border-color:var(--qyt-computer-accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--qyt-computer-accent) 14%,transparent); }
+.qyt-application-search > svg { flex:none; width:16px; height:16px; color:var(--qyt-computer-secondary); }
+.qyt-application-search > input { flex:1; min-width:0; width:100%; padding:0; border:0; outline:0; background:transparent; color:var(--qyt-computer-text); font:inherit; font-size:12px; line-height:20px; }
+.qyt-application-search > input::placeholder { color:var(--qyt-computer-secondary); }
+.qyt-computer-surface .qyt-application-search > input:focus-visible { outline:none; }
+.qyt-application-search > button { flex:none; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:5px; background:var(--qyt-computer-soft); color:var(--qyt-computer-secondary); font-size:17px; cursor:pointer; }
+.qyt-application-list { display:grid; align-content:start; gap:2px; max-height:236px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--qyt-computer-line) transparent; }
+.qyt-application-option { display:flex; align-items:center; gap:10px; width:100%; min-width:0; min-height:44px; padding:6px 9px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--qyt-computer-text); text-align:left; font:inherit; font-size:12px; cursor:pointer; }
+.qyt-application-option[data-active="true"] { border-color:var(--qyt-computer-line); background:var(--qyt-computer-soft); }
+.qyt-application-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--qyt-computer-accent) 30%,transparent); background:var(--qyt-computer-soft); }
+.qyt-application-option:disabled { opacity:.5; cursor:default; }
+.qyt-application-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:30px; height:30px; color:var(--qyt-computer-secondary); }
+.qyt-application-icon > img { width:100%; height:100%; object-fit:contain; }
+.qyt-application-icon > svg { width:24px; height:24px; }
+.qyt-application-name { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qyt-application-running { flex:none; color:var(--qyt-computer-secondary); font-size:10px; }
+.qyt-application-check { flex:none; width:16px; color:var(--qyt-computer-accent); font-size:16px; }
+.qyt-application-picker-footer { display:flex; align-items:center; gap:8px; padding-top:10px; border-top:1px solid var(--qyt-computer-line); }
+.qyt-application-picker-footer > .qyt-computer-caption { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qyt-computer-panel .qyt-application-no-results { margin:0; padding:18px 8px; text-align:center; color:var(--qyt-computer-secondary); font-size:12px; }
+.qyt-computer-application-identity { display:flex; align-items:center; gap:10px; }
+.qyt-computer-application-identity > div { min-width:0; }
+@media(max-width:400px){.qyt-application-picker-footer{flex-wrap:wrap}.qyt-application-picker-footer>.qyt-computer-caption{flex-basis:100%}}
 .qyt-computer-fields { display:grid; gap:12px; margin-top:14px; }
 .qyt-computer-fields label { display:grid; gap:6px; font-size:12px; }
-.qyt-computer-fields input:not([type="checkbox"]), .qyt-computer-fields select, .qyt-computer-fields textarea, .qyt-computer-add-application select { width:100%; min-width:0; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
+.qyt-computer-fields input:not([type="checkbox"]), .qyt-computer-fields select, .qyt-computer-fields textarea { width:100%; min-width:0; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
 .qyt-computer-fields .qyt-computer-check { display:flex; align-items:center; gap:7px; }
 .qyt-computer-advanced > summary { cursor:pointer; font-size:13px; font-weight:600; }
 .qyt-computer-advanced > summary > span { display:block; margin-top:5px; color:var(--qyt-computer-secondary); font-size:11px; font-weight:400; }

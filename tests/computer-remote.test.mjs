@@ -215,3 +215,20 @@ test('paired application discovery stays metadata-only and launches only namespa
   assert.equal((await f.raw({ op: 'openSystemSettings', payload: { kind: 'accessibility' } })).value.error.code, 'OP_NOT_ALLOWED')
   assert.deepEqual(f.input, []); assert.deepEqual(f.leased, [])
 })
+
+test('paired application catalogs retain safe icons across HTTP without paths or lost invalid-icon applications', async t => {
+  const f = await fixture(t), a = f.remote('icon-catalog-owner')
+  const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
+  const rows = [
+    { appId: 'icon.app', name: '远端图标应用', running: true, launchable: true, iconDataUrl, executablePath: 'C:\\private\\app.exe', iconPath: 'C:\\private\\icon.ico' },
+    { appId: 'legacy.app', name: '旧版远端应用', running: false },
+    { appId: 'url.app', name: '外链应用', running: false, iconDataUrl: 'https://example.invalid/icon.png' },
+    { appId: 'bad.app', name: '损坏图标应用', running: true, iconDataUrl: 'data:image/png;base64,!!!!' },
+  ]
+  f.driver.applications = async () => rows
+  assert.deepEqual(await a.applications(), [
+    { appId: `${a.deviceId}:icon.app`, name: '远端图标应用', running: true, launchable: true, iconDataUrl },
+    ...rows.slice(1).map(({ appId, name, running }) => ({ appId: `${a.deviceId}:${appId}`, name, running })),
+  ])
+  assert.deepEqual(f.input, []); assert.deepEqual(f.leased, [])
+})

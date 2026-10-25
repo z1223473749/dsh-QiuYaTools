@@ -4,8 +4,15 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import React, { act } from 'react'
-import { createRoot } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
+
+// ReactDOM detects native input support at import time. Give that detection a
+// real DOM so focus does not activate its legacy IE attachEvent polyfill.
+const detectionDom = new JSDOM(''), detectionSaved = new Map(['window', 'document'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+Object.assign(globalThis, { window: detectionDom.window, document: detectionDom.window.document })
+const { createRoot } = await import('react-dom/client')
+detectionDom.window.close()
+for (const [key, descriptor] of detectionSaved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]
 
 const require = createRequire(import.meta.url)
 const { Simulate } = require('react-dom/test-utils')
@@ -85,12 +92,91 @@ test('system permission shortcuts never grant themselves, and Windows shows no f
 test('manual persistent app list adds and revokes by application identity', async t => {
   const f = await fixture(t); await f.render(); await f.click('添加应用')
   const form = f.dom.window.document.querySelector('form'); assert.ok(form)
-  assert.equal(form.querySelector('select').options[0].textContent, '自有应用')
+  assert.equal(form.querySelector('select'), null)
+  assert.equal(f.button('添加应用').disabled, true, 'an open picker cannot start a second load that would reopen after Cancel')
+  assert.equal(f.dom.window.document.activeElement, form.querySelector('[aria-label="搜索应用"]'), 'search gains focus after the pending discovery finishes')
+  assert.equal(form.querySelector('[role="option"]').textContent, '自有应用运行中')
+  assert.equal(f.button('始终允许').disabled, true, 'opening the list never preselects an app to authorize')
+  await f.click('自有应用运行中')
   await act(async () => { form.dispatchEvent(new f.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick() })
   assert.deepEqual(f.mutations().at(-1), { op: 'allow', appId: 'fixture.app', allowed: true })
   assert.equal(f.dom.window.document.querySelector('form'), null)
   await f.click('撤销 自有应用'); assert.deepEqual(f.mutations().at(-1), { op: 'allow', appId: 'fixture.app', allowed: false })
   assert.match(f.dom.window.document.querySelector('[aria-label="始终允许的应用"]').textContent, /暂无持续授权/u)
+})
+
+test('application picker searches names and identities, clears hidden selection, and grants only after explicit confirmation', async t => {
+  const f = await fixture(t)
+  f.applications.push({ appId: 'org.mozilla.firefox', name: 'Firefox', running: false }, { appId: 'com.example.editor', name: '工具箱编辑器', running: false })
+  await f.render(); await f.click('添加应用')
+  const field = f.dom.window.document.querySelector('[role="combobox"][aria-label="搜索应用"]')
+  const search = async value => act(async () => { Simulate.change(field, { target: { value } }); await tick() })
+  await search('ＦＩＲＥＦＯＸ')
+  assert.deepEqual([...f.dom.window.document.querySelectorAll('[role="option"]')].map(node => node.textContent), ['Firefox'])
+  await act(async () => { Simulate.keyDown(field, { key: 'Enter', preventDefault() {} }); await tick() })
+  assert.equal(f.button('始终允许').disabled, false); assert.deepEqual(f.mutations(), [], 'Enter in search selects without granting')
+  await search('com.example')
+  assert.equal(f.button('始终允许').disabled, true, 'a previous hidden selection must not remain authorizable')
+  assert.equal(f.dom.window.document.querySelector('[role="option"]').textContent, '工具箱编辑器')
+  await f.click('工具箱编辑器'); await f.click('始终允许')
+  assert.deepEqual(f.mutations(), [{ op: 'allow', appId: 'com.example.editor', allowed: true }])
+})
+
+test('adding an application during automatic catalog discovery shares the in-flight read instead of racing the native catalog', async t => {
+  const f = await fixture(t), finish = f.plan('applications')
+  await f.render(); await f.click('添加应用')
+  assert.equal(f.calls.filter(row => row.op === 'applications').length, 1)
+  assert.equal(f.dom.window.document.querySelector('form'), null)
+  await act(async () => { finish({ ok: true, value: structuredClone(f.applications) }); await tick() })
+  assert.ok(f.dom.window.document.querySelector('form'))
+  assert.equal(f.dom.window.document.querySelectorAll('[role="option"]').length, 1)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('a late current-chat initialization cannot discard the owner application-picker read', async t => {
+  const f = await fixture(t), finish = f.plan('applications')
+  await f.render(); await f.click('添加应用'); await f.switchSession('A')
+  await act(async () => { finish({ ok: true, value: structuredClone(f.applications) }); await tick() })
+  assert.ok(f.dom.window.document.querySelector('form'), 'this is an owner-wide picker, independent of the current chat seat')
+  assert.equal(f.calls.filter(row => row.op === 'applications').length, 1)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('application picker handles keyboard navigation, no matches, clear and cancel without granting', async t => {
+  const f = await fixture(t); f.applications.push({ appId: 'fixture.second', name: '第二个应用', running: false })
+  await f.render(); await f.click('添加应用')
+  const field = f.dom.window.document.querySelector('[aria-label="搜索应用"]')
+  const key = async value => act(async () => { Simulate.keyDown(field, { key: value, preventDefault() {} }); await tick() })
+  await key('ArrowDown'); await key('Enter')
+  assert.equal(f.dom.window.document.querySelector('[aria-selected="true"][role="option"]').textContent, '第二个应用✓')
+  assert.equal(f.dom.window.document.getElementById(field.getAttribute('aria-activedescendant')).getAttribute('aria-selected'), 'true')
+  await act(async () => { Simulate.change(field, { target: { value: '不存在' } }); await tick() })
+  assert.match(f.dom.window.document.querySelector('form').textContent, /未找到匹配的应用/u)
+  assert.equal(field.hasAttribute('aria-activedescendant'), false); await key('Enter'); assert.deepEqual(f.mutations(), [])
+  await f.click('清除搜索'); assert.equal(field.value, ''); assert.equal(f.dom.window.document.querySelectorAll('[role="option"]').length, 2)
+  await key('Escape'); assert.equal(f.dom.window.document.querySelector('form'), null); assert.deepEqual(f.mutations(), [])
+})
+
+test('application icons display a valid embedded PNG, with fallback for missing or failed images', async t => {
+  const f = await fixture(t), iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWr8AAAAASUVORK5CYII='
+  f.applications[0].iconDataUrl = iconDataUrl
+  f.applications.push({ appId: 'missing', name: '无图标', running: false, iconDataUrl: 'https://invalid.example/icon.png' })
+  await f.render(); await f.click('添加应用')
+  const options = f.dom.window.document.querySelectorAll('[role="option"]'), image = options[0].querySelector('img')
+  assert.equal(image.src, iconDataUrl); assert.equal(options[1].querySelector('img'), null); assert.ok(options[1].querySelector('.qyt-application-icon svg'))
+  await act(async () => { Simulate.error(image); await tick() })
+  assert.equal(options[0].querySelector('img'), null); assert.ok(options[0].querySelector('.qyt-application-icon svg'))
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('IME candidate keys stay with the input method and cannot select, cancel or grant an application', async t => {
+  const f = await fixture(t); await f.render(); await f.click('添加应用')
+  const field = f.dom.window.document.querySelector('[aria-label="搜索应用"]'), form = field.closest('form')
+  await act(async () => { Simulate.compositionStart(field); await tick() })
+  for (const key of ['Enter', 'Escape', 'ArrowDown', 'ArrowUp']) await act(async () => { Simulate.keyDown(field, { key, nativeEvent: { isComposing: true } }); await tick() })
+  assert.ok(f.dom.window.document.querySelector('form')); assert.equal(form.querySelector('[role="option"][aria-selected="true"]'), null)
+  await act(async () => { form.dispatchEvent(new f.dom.window.Event('submit', { bubbles: true, cancelable: true })); Simulate.compositionEnd(field); Simulate.keyDown(field, { key: 'Enter', keyCode: 229 }); await tick() })
+  assert.equal(f.button('始终允许').disabled, true); assert.deepEqual(f.mutations(), [])
 })
 
 test('global pending approvals use their own device preflight and exact request identity, independent from the local Mac', async t => {

@@ -35,6 +35,62 @@ import Foundation
         precondition(!NativeApplicationCatalog.validAppId("com.apple.finder\n"), "An app identity must end at the actual string boundary")
         let boundedName = NativeApplicationCatalog.displayName("A" + String(repeating: "\u{301}", count: 10_000))
         precondition(boundedName.unicodeScalars.count <= 160 && boundedName.utf8.count <= 640, "A single large combining grapheme cannot exceed the metadata wire budget")
+        do {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            bitmap.setColor(NSColor(deviceRed: 0, green: 0.5, blue: 0.5, alpha: 1), atX: 0, y: 0)
+            let original = NSImage(size: NSSize(width: 64, height: 64)); original.addRepresentation(bitmap)
+            let dataURL = NativeApplicationCatalog.iconDataURL(original)!
+            precondition(original.size == NSSize(width: 64, height: 64), "Rasterizing an icon cannot mutate its shared system image")
+            precondition(dataURL.hasPrefix("data:image/png;base64,"), "Application icon is an inline PNG, never a path or network URL")
+            let data = Data(base64Encoded: String(dataURL.dropFirst("data:image/png;base64,".count)))!
+            let decoded = NSBitmapImageRep(data: data)!
+            precondition(data.count <= 16 * 1024 && decoded.pixelsWide == 32 && decoded.pixelsHigh == 32,
+                "Application icon is a fixed 32-pixel PNG within its 16 KiB budget")
+            precondition(NativeApplicationCatalog.iconDataURL(nil) == nil, "Unavailable icons are omitted")
+            let missing = NativeApplicationMetadata(appId: "own.app", name: "Own", running: true, launchable: false)
+            precondition(missing.json["iconDataUrl"] == nil, "Missing icon metadata has no placeholder path")
+            var present = missing; present.iconDataUrl = dataURL
+            precondition(present.json["iconDataUrl"] as? String == dataURL && present.json["launchable"] as? Bool == false,
+                "An icon enriches display metadata without acquiring launch permission")
+            let cache = NativeApplicationIconCache<String>(); var reads = 0
+            func read() -> String? { reads += 1; return dataURL }
+            precondition(cache.icon(appId: "own", key: "identity-a", now: 1, mayLoad: true, load: read) == dataURL)
+            precondition(cache.icon(appId: "own", key: "identity-a", now: 2.5, mayLoad: false, load: read) == dataURL && reads == 1,
+                "Cached icons are reused during polling, even after the separate I/O budget")
+            _ = cache.icon(appId: "own", key: "identity-b", now: 3, mayLoad: true, load: read)
+            precondition(reads == 2, "A changed application identity invalidates its cached icon")
+            _ = cache.icon(appId: "own", key: "identity-b", now: 63, mayLoad: true, load: read)
+            precondition(reads == 3, "Positive icon cache entries expire after sixty seconds")
+            cache.retain([])
+            _ = cache.icon(appId: "own", key: "identity-b", now: 64, mayLoad: true, load: read)
+            precondition(reads == 4, "Removing an application retires its icon cache")
+            var failedReads = 0
+            func unavailable() -> String? { failedReads += 1; return nil }
+            _ = cache.icon(appId: "missing", key: "a", now: 1, mayLoad: true, load: unavailable)
+            _ = cache.icon(appId: "missing", key: "a", now: 2.5, mayLoad: true, load: unavailable)
+            precondition(failedReads == 1, "Unavailable icons have a short negative cache")
+            _ = cache.icon(appId: "missing", key: "a", now: 6, mayLoad: true, load: unavailable)
+            precondition(failedReads == 2, "A transient icon failure may recover after five seconds")
+            precondition(cache.icon(appId: "deferred", key: "a", now: 1, mayLoad: false, load: read) == nil && reads == 4,
+                "An exhausted icon budget starts no read and does not remove discovery metadata")
+            _ = cache.icon(appId: "deferred", key: "a", now: 2, mayLoad: true, load: read)
+            precondition(reads == 5, "An icon skipped by the I/O budget can be loaded on the next refresh")
+            let userApps = "/Users/own/Applications"
+            func priority(_ running: Bool, _ regular: Bool, _ path: String?) -> Int {
+                NativeApplicationCatalog.iconPriority(running: running, regular: regular, installationPath: path, userApplicationsPath: userApps)
+            }
+            precondition(priority(true, true, "/Applications/Chrome.app") == 0 && priority(true, false, "/System/Library/CoreServices/OwnHelper.app") == 1,
+                "Running regular applications get icons before running helpers")
+            precondition(priority(false, false, "/Applications/Own.app") == 2 && priority(false, false, userApps + "/Own.app") == 2,
+                "Common and per-user application directories get icons before system applications")
+            precondition(priority(false, false, "/System/Applications/TextEdit.app") == 3 && priority(false, false, "/System/Library/CoreServices/OwnHelper.app") == 4,
+                "System application icons precede inactive service helpers")
+            precondition(priority(false, false, "/ApplicationsOther/Own.app") == 4 && priority(false, false, userApps + "Other/Own.app") == 4 && priority(false, false, nil) == 4,
+                "Icon priority respects directory boundaries and does not invent an installation")
+            print("Application icon pure checks: fixed PNG, original image unchanged, optional metadata, identity cache, expiry, failure recovery, deferred reads and running/common/system/helper priorities")
+        }
         let badgeTarget = CGRect(x: -900, y: 80, width: 640, height: 460)
         let badge = AIOperationBadge.frame(target: badgeTarget)!
         precondition(badgeTarget.contains(badge) && badge.minY >= badgeTarget.minY + 40 && badge.maxX <= badgeTarget.maxX - 12, "Operation receipt stays inside its target below title buttons")

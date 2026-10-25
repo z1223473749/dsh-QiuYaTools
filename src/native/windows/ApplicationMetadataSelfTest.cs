@@ -55,6 +55,87 @@ internal static class ApplicationMetadataSelfTest
             try { _ = catalog.Launch(input); } catch (NativeFailure error) when (error.Code == "APPLICATION_NOT_LISTED") { rejected = true; }
             Check(rejected, "unlisted-launch-never-reaches-process-start-" + cases.Count);
         }
+        string ownIcon;
+        using (var bitmap = new System.Drawing.Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb)) {
+            using (var graphics = System.Drawing.Graphics.FromImage(bitmap)) graphics.Clear(System.Drawing.Color.Teal);
+            using var png = new MemoryStream(); bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+            ownIcon = NativeApplicationCatalog.PngDataURL(png.ToArray()) ?? throw new InvalidOperationException("Own icon PNG could not be encoded");
+            Check(ownIcon.StartsWith("data:image/png;base64,", StringComparison.Ordinal) && png.Length <= 16 * 1024, "application-icon-is-fixed-32-png-with-bounded-data-only");
+            var wrongSize = png.ToArray(); wrongSize[19] = 64;
+            Check(NativeApplicationCatalog.PngDataURL(wrongSize) == null, "application-icon-rejects-non-32-pixel-png");
+            var wrongSignature = png.ToArray(); wrongSignature[0] = 0;
+            Check(NativeApplicationCatalog.PngDataURL(wrongSignature) == null && NativeApplicationCatalog.PngDataURL(new byte[16 * 1024 + 1]) == null,
+                "application-icon-rejects-invalid-signature-and-over-16k-png");
+        }
+        {
+            var path = CatalogFixture.PathFor("cached-icon"); var installation = new NativeApplicationCatalog.Installation(path, "Cached", new(1, 0, 1, 0, 1, 1));
+            var apps = new Dictionary<string, NativeApplicationCatalog.Installation> { ["own"] = installation };
+            var cache = new NativeApplicationCatalog.IconCache(); var reads = 0;
+            string? Read(NativeApplicationCatalog.Installation _) { reads++; return ownIcon; }
+            var first = cache.Complete(apps, Read, () => 0, 1000);
+            var second = cache.Complete(apps, Read, () => 500, 2500);
+            Check(reads == 1 && first["own"] == ownIcon && second["own"] == ownIcon, "application-icon-cache-avoids-reextracting-and-serves-cached-icons-after-budget");
+            apps["own"] = installation with { Identity = new(1, 0, 2, 0, 1, 1) };
+            _ = cache.Complete(apps, Read, () => 0, 2600);
+            Check(reads == 2, "application-installation-identity-change-invalidates-icon-cache");
+            _ = cache.Complete(apps, Read, () => 0, 62600);
+            Check(reads == 3, "application-icon-cache-expires-after-sixty-seconds");
+            _ = cache.Complete(new Dictionary<string, NativeApplicationCatalog.Installation>(), Read, () => 0, 63000);
+            _ = cache.Complete(apps, Read, () => 0, 64000);
+            Check(reads == 4, "application-removed-from-catalog-retires-its-cached-icon");
+        }
+        {
+            var path = CatalogFixture.PathFor("negative-icon");
+            var apps = new Dictionary<string, NativeApplicationCatalog.Installation> { ["own"] = new(path, "Own", new(1, 0, 1, 0, 1, 1)) };
+            var cache = new NativeApplicationCatalog.IconCache(); var reads = 0;
+            string? Read(NativeApplicationCatalog.Installation _) { reads++; throw new IOException("Own icon unavailable"); }
+            var first = cache.Complete(apps, Read, () => 0, 1000); _ = cache.Complete(apps, Read, () => 0, 2500);
+            Check(first.Count == 0 && reads == 1, "application-icon-failure-is-contained-and-negatively-cached");
+            _ = cache.Complete(apps, Read, () => 0, 6000);
+            Check(reads == 2, "application-icon-negative-cache-retries-after-five-seconds");
+        }
+        {
+            var a = CatalogFixture.PathFor("icon-budget-a"); var b = CatalogFixture.PathFor("icon-budget-b");
+            var metadataReads = 0; var iconReads = 0; var iconElapsed = 0L;
+            var sources = new NativeApplicationCatalog.Sources(
+                (canRead, _, accept) => { if (canRead()) accept(a); if (canRead()) accept(b); },
+                (_, _, _) => { },
+                path => { metadataReads++; return new(path, Path.GetFileNameWithoutExtension(path), new(1, 0, (uint)metadataReads, 0, 1, 1)); }, () => 0,
+                _ => { Check(metadataReads == 2, "all-application-metadata-is-discovered-before-icon-io"); iconReads++; iconElapsed = 501; return ownIcon; },
+                () => iconElapsed, () => 1000);
+            var result = CatalogFixture.Read(new NativeApplicationCatalog(sources)); var rows = CatalogFixture.Applications(result);
+            Check(rows.Length == 2 && iconReads == 1 && rows.Count(row => row.TryGetProperty("iconDataUrl", out _)) == 1 && !result.GetProperty("truncated").GetBoolean(),
+                "icon-budget-keeps-all-applications-and-never-starts-a-second-read-after-five-hundred-ms");
+            Check(rows.All(row => row.GetProperty("running").GetBoolean() && !row.GetProperty("launchable").GetBoolean()), "icon-enrichment-does-not-acquire-launch-or-control-capability");
+        }
+        Check(NativeApplicationCatalog.IconPriority(true, @"C:\Windows\System32\OwnHelper.exe", @"C:\Windows") == 0,
+            "running-application-icons-precede-registered-apps-and-helpers");
+        Check(NativeApplicationCatalog.IconPriority(false, @"C:\Program Files\Own\Own.exe", @"C:\Windows") == 1 &&
+            NativeApplicationCatalog.IconPriority(false, @"C:\Users\Own\AppData\Local\Own\Own.exe", @"C:\Windows") == 1,
+            "common-and-per-user-application-icons-precede-system-apps");
+        Check(NativeApplicationCatalog.IconPriority(false, @"C:\Windows\SystemApps\Own\Own.exe", @"C:\Windows") == 2 &&
+            NativeApplicationCatalog.IconPriority(false, @"C:\Windows\System32\Own.exe", @"C:\Windows") == 3 &&
+            NativeApplicationCatalog.IconPriority(false, @"C:\Program Files\Own\OwnHelper.exe", @"C:\Windows") == 3,
+            "system-application-icons-precede-inactive-service-helpers");
+        Check(NativeApplicationCatalog.IconPriority(false, @"c:\WINDOWSother\Own.exe", @"C:\Windows") == 1 &&
+            NativeApplicationCatalog.IconPriority(false, @"c:/WINDOWS/SystemApps/Own/Own.exe", @"C:\Windows") == 2,
+            "icon-priority-matches-windows-case-and-directory-boundaries");
+        {
+            var applicationRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "qyt-icon-priority-selftest");
+            var normal = Path.Combine(applicationRoot, "z-normal-application.exe"); var helper = Path.Combine(applicationRoot, "a-OwnHelper.exe");
+            var system = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemApps", "b-system.exe");
+            var elapsed = 0L; var loaded = new List<string>();
+            var sources = new NativeApplicationCatalog.Sources(
+                (_, _, _) => { },
+                (canRead, _, accept) => { foreach (var path in new[] { helper, system, normal }) if (canRead()) accept(path); },
+                path => new(path, Path.GetFileNameWithoutExtension(path), new(1, 0, 1, 0, 1, 1)), () => 0,
+                value => { loaded.Add(value.Path); elapsed = 501; return ownIcon; }, () => elapsed, () => 1000);
+            var rows = CatalogFixture.Applications(CatalogFixture.Read(new NativeApplicationCatalog(sources)));
+            Check(loaded.SequenceEqual(new[] { normal }) && rows.Single(row => row.GetProperty("appId").GetString() == NativeApplicationCatalog.AppId(normal)).TryGetProperty("iconDataUrl", out _),
+                "bounded-icon-phase-loads-a-common-app-before-alphabetically-earlier-system-helpers");
+            Check(rows.Select(row => row.GetProperty("name").GetString()).SequenceEqual(new[] { "a-OwnHelper", "b-system", "z-normal-application" }),
+                "icon-enrichment-priority-does-not-reorder-the-visible-application-catalog");
+        }
         {
             var f = new CatalogFixture(); var own = CatalogFixture.PathFor("running-only"); f.Running.Add(own);
             f.Registered.AddRange(Enumerable.Range(0, 512).Select(index => CatalogFixture.PathFor("registered-" + index)));

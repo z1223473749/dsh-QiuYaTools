@@ -7,7 +7,29 @@ struct NativeApplicationMetadata {
     let name: String
     let running: Bool
     let launchable: Bool
-    var json: [String: Any] { ["appId": appId, "name": name, "running": running, "launchable": launchable] }
+    var iconDataUrl: String? = nil
+    var json: [String: Any] {
+        var value: [String: Any] = ["appId": appId, "name": name, "running": running, "launchable": launchable]
+        if let iconDataUrl { value["iconDataUrl"] = iconDataUrl }
+        return value
+    }
+}
+
+/// The cache contains display data only. Its key never grants launch or input.
+/// Negative entries are short lived so a transient icon failure can recover.
+final class NativeApplicationIconCache<Key: Equatable> {
+    private struct Entry { let key: Key; let icon: String?; let created: TimeInterval }
+    private var entries: [String: Entry] = [:]
+    func retain(_ appIds: Set<String>) { entries = entries.filter { appIds.contains($0.key) } }
+    func icon(appId: String, key: Key, now: TimeInterval, mayLoad: Bool, load: () -> String?) -> String? {
+        if let entry = entries[appId], entry.key == key, now >= entry.created,
+           now - entry.created < (entry.icon == nil ? 5 : 60) { return entry.icon }
+        guard mayLoad else { return nil }
+        let icon = load()
+        if entries[appId] == nil, entries.count >= 512, let first = entries.keys.first { entries.removeValue(forKey: first) }
+        entries[appId] = Entry(key: key, icon: icon, created: now)
+        return icon
+    }
 }
 
 private struct ApplicationFileIdentity: Equatable {
@@ -29,11 +51,24 @@ private struct RegisteredApplication {
     }
 }
 
+private struct ApplicationIconIdentity: Equatable {
+    let path: String?
+    let bundle: ApplicationFileIdentity?, info: ApplicationFileIdentity?, executable: ApplicationFileIdentity?
+    let pid: pid_t?, launched: Date?
+    init(installation: RegisteredApplication?, running: NSRunningApplication?) {
+        path = installation?.url.path; bundle = installation?.bundleIdentity
+        info = installation?.infoIdentity; executable = installation?.executableIdentity
+        pid = installation == nil ? running?.processIdentifier : nil
+        launched = installation == nil ? running?.launchDate : nil
+    }
+}
+
 /// Standard application directories only. App paths stay inside this process;
 /// callers receive bounded identity/display metadata, never command lines.
 @MainActor final class NativeApplicationCatalog {
     private var listed: [String: RegisteredApplication] = [:]
     private var listing = false
+    private let icons = NativeApplicationIconCache<ApplicationIconIdentity>()
     private var roots: [URL] {
         [URL(fileURLWithPath: "/Applications", isDirectory: true), URL(fileURLWithPath: "/System/Applications", isDirectory: true),
          URL(fileURLWithPath: "/System/Library/CoreServices", isDirectory: true),
@@ -43,6 +78,29 @@ private struct RegisteredApplication {
     nonisolated static func displayName(_ value: String) -> String {
         let scalars = value.unicodeScalars.lazy.map { CharacterSet.controlCharacters.contains($0) ? UnicodeScalar(32)! : $0 }.prefix(160)
         return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    nonisolated static func iconPriority(running: Bool, regular: Bool, installationPath: String?, userApplicationsPath: String) -> Int {
+        if running { return regular ? 0 : 1 }
+        guard let path = installationPath else { return 4 }
+        if path.hasPrefix("/Applications/") || path.hasPrefix(userApplicationsPath + "/") { return 2 }
+        if path.hasPrefix("/System/Applications/") { return 3 }
+        return 4
+    }
+    /// Rasterize the system icon without changing the shared NSImage instance.
+    /// A fixed bitmap also strips any original image metadata or file location.
+    static func iconDataURL(_ image: NSImage?) -> String? {
+        guard let image, image.isValid,
+              let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32,
+                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        context.cgContext.clear(CGRect(x: 0, y: 0, width: 32, height: 32))
+        image.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32), from: .zero, operation: .copy, fraction: 1)
+        guard let png = bitmap.representation(using: .png, properties: [:]), png.count <= 16 * 1024 else { return nil }
+        return "data:image/png;base64," + png.base64EncodedString()
     }
     private nonisolated static func read(_ input: URL, roots: [URL]) -> RegisteredApplication? {
         guard input.pathExtension.lowercased() == "app", let bundleIdentity = ApplicationFileIdentity(input.path, directory: true) else { return nil }
@@ -69,9 +127,9 @@ private struct RegisteredApplication {
     func applications() async throws -> [String: Any] {
         guard !listing else { throw ComputerError("APPLICATIONS_BUSY", "An application list is already being prepared.") }
         listing = true; defer { listing = false }
-        let running = NSWorkspace.shared.runningApplications.compactMap { application -> (String, String)? in
+        let running = NSWorkspace.shared.runningApplications.compactMap { application -> (String, String, NSRunningApplication)? in
             guard !application.isTerminated, let id = application.bundleIdentifier, Self.validAppId(id) else { return nil }
-            let name = Self.displayName(application.localizedName ?? id); return name.isEmpty ? nil : (id, name)
+            let name = Self.displayName(application.localizedName ?? id); return name.isEmpty ? nil : (id, name, application)
         }
         let roots = self.roots.map { $0.resolvingSymlinksInPath().standardizedFileURL }
         let result = await Task.detached(priority: .utility) { () -> ([String: RegisteredApplication], Bool) in
@@ -97,9 +155,41 @@ private struct RegisteredApplication {
         }.value
         listed = result.0
         var metadata = listed.mapValues { NativeApplicationMetadata(appId: $0.appId, name: $0.name, running: false, launchable: true) }
-        for (id, name) in running { metadata[id] = NativeApplicationMetadata(appId: id, name: name, running: true, launchable: listed[id] != nil) }
-        let ordered = metadata.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        return ["applications": ordered.prefix(512).map { $0.json }, "truncated": result.1 || ordered.count > 512]
+        var runningById: [String: NSRunningApplication] = [:]
+        for (id, name, application) in running {
+            metadata[id] = NativeApplicationMetadata(appId: id, name: name, running: true, launchable: listed[id] != nil)
+            runningById[id] = application
+        }
+        var ordered = Array(metadata.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.prefix(512))
+        icons.retain(Set(ordered.map { $0.appId }))
+        // This phase starts only after discovery, so slow or unavailable icons
+        // cannot remove applications or consume discovery's existing budget.
+        let userApplicationsPath = roots.last!.path
+        let installedForIcons = listed
+        let iconOrder = ordered.indices.sorted { a, b in
+            func priority(_ index: Int) -> Int {
+                let value = ordered[index], application = runningById[value.appId]
+                return Self.iconPriority(running: value.running, regular: application?.activationPolicy == .regular,
+                    installationPath: installedForIcons[value.appId]?.url.path, userApplicationsPath: userApplicationsPath)
+            }
+            let first = priority(a), second = priority(b)
+            return first == second ? a < b : first < second
+        }
+        let iconStarted = ProcessInfo.processInfo.systemUptime
+        for index in iconOrder {
+            let appId = ordered[index].appId, installation = listed[appId], application = runningById[appId]
+            let identity = ApplicationIconIdentity(installation: installation, running: application)
+            ordered[index].iconDataUrl = icons.icon(appId: appId, key: identity,
+                now: ProcessInfo.processInfo.systemUptime, mayLoad: ProcessInfo.processInfo.systemUptime - iconStarted < 0.5) {
+                    if let installation {
+                        guard let current = Self.read(installation.url, roots: roots), installation.sameInstallation(current) else { return nil }
+                        return Self.iconDataURL(NSWorkspace.shared.icon(forFile: installation.url.path))
+                    }
+                    guard let application, !application.isTerminated, application.bundleIdentifier == appId else { return nil }
+                    return Self.iconDataURL(application.icon)
+                }
+        }
+        return ["applications": ordered.map { $0.json }, "truncated": result.1 || metadata.count > 512]
     }
     func launch(_ appId: String) async throws -> [String: Any] {
         guard Self.validAppId(appId), let expected = listed[appId] else { throw ComputerError("APPLICATION_NOT_LISTED", "Refresh applications and select a launchable installed application.") }

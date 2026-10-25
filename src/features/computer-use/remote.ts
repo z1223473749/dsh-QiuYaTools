@@ -3,6 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
 import { ComputerError, computerError, parseComputerAction, requireIdentity } from './contract.ts'
+import { applicationIconDataUrl } from './application-icon.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 import { ComputerExchange, EXCHANGE_MAX_BYTES, EXCHANGE_CHUNK_BYTES, parseExchangeRequest, type ExchangeResult } from './exchange.ts'
 export { NativeCompanionDriver } from './native.ts'
@@ -158,7 +159,10 @@ export class RemoteComputerDriver implements DeviceDriver {
   async applications(signal?: AbortSignal): Promise<NativeApplication[]> {
     const applications = await this.rpc<NativeApplication[]>('applications', {}, signal)
     if (!Array.isArray(applications) || applications.length > 1024 || applications.some(app => !app || typeof app.appId !== 'string' || !app.appId || app.appId.length > 512 || typeof app.name !== 'string' || !app.name || app.name.length > 640 || Array.from(app.name).length > 160 || typeof app.running !== 'boolean')) throw new ComputerError('REMOTE_PROTOCOL', '远端应用目录无效')
-    return applications.map(({ appId, name, running, launchable }) => ({ appId: `${this.deviceId}:${appId}`, name, running, ...(launchable === undefined ? {} : { launchable }) }))
+    return applications.map(({ appId, name, running, launchable, iconDataUrl: rawIcon }) => {
+      const iconDataUrl = applicationIconDataUrl(rawIcon)
+      return { appId: `${this.deviceId}:${appId}`, name, running, ...(launchable === undefined ? {} : { launchable }), ...(iconDataUrl ? { iconDataUrl } : {}) }
+    })
   }
   launchApplication(appId: string, signal?: AbortSignal) {
     const prefix = `${this.deviceId}:`

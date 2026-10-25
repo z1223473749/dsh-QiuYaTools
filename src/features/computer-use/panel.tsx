@@ -4,6 +4,7 @@ import { ComputerApprovalCard, ComputerIcon, SystemPermissionNotice, computerApp
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComputerSessionSnapshot, NativeTarget } from './contract.ts'
 import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.ts'
+import { ApplicationIcon, ApplicationPicker } from './application-picker.tsx'
 
 interface Rpc { rpc: { call(channel: string, endpoint: string, payload: unknown): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }> } }
 interface Catalog { list: { getSnapshot(): { ids: string[]; byId: Record<string, { displayTitle?: string; title?: string; blank?: boolean; origin?: string }> } } }
@@ -88,10 +89,12 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   const activeSessionId = useSyncExternalStore(currentSeat ? listener => currentSeat.subscribe(listener) : noSubscribe, () => currentSeat?.getSnapshot().key, () => undefined)
   const [status, setStatus] = useState<Status>({ sessions: [], allowedApps: [], native: null })
   const [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [fileGeneration, setFileGeneration] = useState(0)
-  const [applications, setApplications] = useState<NativeApplication[]>([]), [addingApp, setAddingApp] = useState(false), [appId, setAppId] = useState('')
+  const [applications, setApplications] = useState<NativeApplication[]>([]), [addingApp, setAddingApp] = useState(false)
+  const [applicationBusy, setApplicationBusy] = useState(false), applicationGeneration = useRef(0)
   const [mode, setMode] = useState<'local' | 'remote' | 'browser'>('local'), [endpointUrl, setEndpointUrl] = useState(''), [token, setToken] = useState(''), [allowPrivate, setAllowPrivate] = useState(false)
   const [browser, setBrowser] = useState<'chrome' | 'edge'>('chrome'), [origins, setOrigins] = useState(''), [initialUrl, setInitialUrl] = useState(''), [cdpEndpoint, setCdpEndpoint] = useState('')
   const revision = useRef(0), mounted = useRef(true), performing = useRef(false), refreshSequence = useRef(0)
+  const applicationRead = useRef<Promise<NativeApplication[]> | undefined>(undefined)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; revision.current++ } }, [])
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
@@ -104,6 +107,14 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     const generation = revision.current, sequence = ++refreshSequence.current, result = await call('status') as Status
     if (!mounted.current || generation !== revision.current || sequence !== refreshSequence.current) return
     setStatus(result)
+  }
+  const loadApplications = () => {
+    if (!applicationRead.current) {
+      const pending = call('applications') as Promise<NativeApplication[]>
+      applicationRead.current = pending
+      void pending.finally(() => { if (applicationRead.current === pending) applicationRead.current = undefined }).catch(() => {})
+    }
+    return applicationRead.current
   }
   useEffect(() => {
     // Credentials and browser targets belong to this chat. Retain the chosen
@@ -121,21 +132,31 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     return () => { disposed = true; window.clearInterval(timer) }
   }, [enabled, activeSessionId])
   useEffect(() => {
+    applicationGeneration.current++; setApplicationBusy(false); setAddingApp(false)
     if (!enabled) return
     let disposed = false
     // Application names are owner-only metadata; loading them never opens a
     // control session or the manual add form. Keep identities if discovery fails.
-    void call('applications').then(result => { if (!disposed && mounted.current) setApplications(result as NativeApplication[]) }).catch(() => {})
+    void loadApplications().then(result => { if (!disposed && mounted.current) setApplications(result) }).catch(() => {})
     return () => { disposed = true }
   }, [enabled])
+  const openApplications = async () => {
+    if (busy || applicationBusy || addingApp || !enabled) return
+    const generation = ++applicationGeneration.current
+    setApplicationBusy(true); setMessage('')
+    try {
+      const list = await loadApplications()
+      if (mounted.current && generation === applicationGeneration.current) { setApplications(list); setAddingApp(true) }
+    } catch (error) { if (mounted.current && generation === applicationGeneration.current) setMessage((error as Error).message) }
+    finally { if (mounted.current && generation === applicationGeneration.current) setApplicationBusy(false) }
+  }
   const action = async (op: string, extra: object = {}) => {
     if (performing.current) return
     performing.current = true; const generation = revision.current; setBusy(true); setMessage('')
     try {
       if (op !== 'refresh') {
-        const result = await call(op, extra)
+        await call(op, extra)
         if (!mounted.current || generation !== revision.current) return
-        if (op === 'applications') { const list = result as NativeApplication[]; setApplications(list); setAddingApp(true); setAppId(list[0]?.appId ?? '') }
         if (op === 'connect') setFileGeneration(value => value + 1)
       }
       await refresh(); return true
@@ -160,9 +181,9 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
         : <p className="qyt-muted">{native?.message || (native?.available ? '当前交互桌面已就绪。' : '正在检查本机状态…')}</p>}
     </section>
     <section className="qyt-card" aria-label="始终允许的应用">
-      <div className="qyt-computer-section-heading"><div><h4>始终允许的应用</h4><p className="qyt-muted">这些应用无需重复询问。撤销后会立即停止相应操作。</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('applications') }}>添加应用</button></div>
-      {addingApp && <form className="qyt-computer-add-application" onSubmit={event => { event.preventDefault(); if (appId) void action('allow', { appId, allowed: true }).then(accepted => { if (accepted) setAddingApp(false) }) }}><label>选择应用<select value={appId} disabled={busy} onChange={event => setAppId(event.target.value)}>{applications.map(app => <option key={app.appId} value={app.appId}>{app.name}</option>)}</select></label><button type="submit" className="qyt-button qyt-button-primary" disabled={busy || !appId}>始终允许</button><button type="button" className="qyt-button" onClick={() => setAddingApp(false)}>取消</button>{!applications.length && <p className="qyt-muted">暂无可添加的应用。请先打开需要操作的应用，再重新添加。</p>}</form>}
-      {status.allowedApps.length ? <div className="qyt-computer-permission-list">{status.allowedApps.map(id => <div className="qyt-computer-permission-row" key={id}><div><strong>{applications.find(app => app.appId === id)?.name || id}</strong><span className="qyt-computer-caption">持续授权</span></div><button type="button" className="qyt-button" disabled={busy} aria-label={`撤销 ${applications.find(app => app.appId === id)?.name || id}`} onClick={() => { void action('allow', { appId: id, allowed: false }) }}>撤销</button></div>)}</div> : <p className="qyt-computer-empty">暂无持续授权。模型首次使用应用时会向你询问。</p>}
+      <div className="qyt-computer-section-heading"><div><h4>始终允许的应用</h4><p className="qyt-muted">这些应用无需重复询问。撤销后会立即停止相应操作。</p></div><button type="button" className="qyt-button" disabled={busy || applicationBusy || addingApp || !enabled} onClick={() => { void openApplications() }}>{applicationBusy ? '正在读取…' : '添加应用'}</button></div>
+      {addingApp && enabled && <ApplicationPicker applications={applications} busy={busy} onCancel={() => setAddingApp(false)} onAllow={appId => { void action('allow', { appId, allowed: true }).then(accepted => { if (accepted) setAddingApp(false) }) }}/>}
+      {status.allowedApps.length ? <div className="qyt-computer-permission-list">{status.allowedApps.map(id => <div className="qyt-computer-permission-row" key={id}><div className="qyt-computer-application-identity"><ApplicationIcon application={applications.find(app => app.appId === id)}/><div><strong>{applications.find(app => app.appId === id)?.name || id}</strong><span className="qyt-computer-caption">持续授权</span></div></div><button type="button" className="qyt-button" disabled={busy} aria-label={`撤销 ${applications.find(app => app.appId === id)?.name || id}`} onClick={() => { void action('allow', { appId: id, allowed: false }) }}>撤销</button></div>)}</div> : <p className="qyt-computer-empty">暂无持续授权。模型首次使用应用时会向你询问。</p>}
     </section>
     <section className="qyt-card" aria-label="电脑任务概览"><div className="qyt-computer-section-heading"><div><h4>任务概览</h4><p className="qyt-muted">每个聊天都有独立的预览、授权和暂停状态。</p></div><span className="qyt-computer-status-badge">{tasks.length} 个任务</span></div>
       {!tasks.length && <p className="qyt-computer-empty">还没有电脑任务。回到聊天，告诉模型你想完成什么。</p>}

@@ -2,7 +2,7 @@ import React from 'react'
 
 export const computerStateLabels: Record<string, string> = { idle: '等待任务', awaitingPermission: '等待授权', ready: '已就绪', running: '正在操作', paused: '已暂停', humanControl: '你正在接管', resuming: '正在继续', stopping: '正在停止', stopped: '已停止', faulted: '需要处理', disconnected: '连接断开', connecting: '正在连接', pausing: '正在暂停', handingOver: '正在接管' }
 export interface ComputerApprovalRequest { requestId: string; requestVersion: number; sessionId: string; appId: string; appName: string; targetTitle?: string; reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight?: ComputerNativeView }
-export interface NativeApplication { appId: string; name: string; running: boolean }
+export type { NativeApplication } from './contract.ts'
 export interface ComputerNativeView { available?: boolean; platform?: string; permissions?: Record<string, boolean>; message?: string; mode?: 'local' | 'remote' | 'browser' }
 export type SystemPermissionKind = 'screenRecording' | 'accessibility' | 'inputMonitoring'
 export const computerApprovalNeedsSystemPermissions = (native: ComputerNativeView | null | undefined): boolean => native?.platform === 'darwin' && native.mode !== 'browser' && (native.permissions?.screenRecording !== true || native.permissions?.accessibility !== true || native.permissions?.postEvents === false)

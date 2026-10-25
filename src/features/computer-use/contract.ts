@@ -3,7 +3,7 @@ export type ComputerState = 'idle' | 'connecting' | 'awaitingPermission' | 'read
 export interface ComputerGeometry { x: number; y: number; width: number; height: number; scale: number }
 export interface NativeTarget extends ComputerGeometry { id: string; appId: string; title: string; pid: number }
 /** Metadata only: discovery never includes window contents or executable paths. */
-export interface NativeApplication { appId: string; name: string; running: boolean; launchable?: boolean }
+export interface NativeApplication { appId: string; name: string; running: boolean; launchable?: boolean; iconDataUrl?: string }
 export type ComputerSystemPermission = 'screenRecording' | 'accessibility' | 'inputMonitoring'
 export interface ComputerObservation {
   targetId: string; frameId: string; imageBase64: string; mediaType: 'image/jpeg'

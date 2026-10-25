@@ -249,3 +249,23 @@ test('native application metadata accepts bounded Unicode scalars and strips unl
     await assert.rejects(driver.openSystemSettings('arbitrary-url'), { code: 'INVALID_PERMISSION' })
   } finally { await driver.dispose() }
 })
+
+test('native application catalog retains a bounded embedded icon and keeps legacy or invalid-icon apps available', async () => {
+  const worker = join(directory, 'icon-catalog.cjs')
+  const iconDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
+  const rows = [
+    { appId: 'icon.app', name: '有图标应用', running: true, launchable: true, iconDataUrl, executablePath: '/private/app', iconPath: '/private/icon' },
+    { appId: 'legacy.app', name: '旧版应用', running: false },
+    { appId: 'url.app', name: '外链图标应用', running: false, iconDataUrl: 'https://example.invalid/icon.png' },
+    { appId: 'svg.app', name: '矢量图标应用', running: true, iconDataUrl: 'data:image/svg+xml;base64,PHN2Zy8+' },
+    { appId: 'bad.app', name: '损坏图标应用', running: false, iconDataUrl: 'data:image/png;base64,!!!!' },
+  ]
+  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1}:{applications:${JSON.stringify(rows)}}})+'\\n')})`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker] })
+  try {
+    assert.deepEqual(await driver.applications(), [
+      { appId: 'icon.app', name: '有图标应用', running: true, launchable: true, iconDataUrl },
+      ...rows.slice(1).map(({ appId, name, running }) => ({ appId, name, running })),
+    ])
+  } finally { await driver.dispose() }
+})

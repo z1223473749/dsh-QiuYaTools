@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { ComputerActionCleanupError, ComputerError } from './contract.ts'
+import { applicationIconDataUrl } from './application-icon.ts'
 import { foregroundContext, foregroundGrant, foregroundRelease, foregroundTicket } from './foreground-handoff.ts'
 import { waitForComputerRetirement } from './native-retirement.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, ForegroundActionTicket, ForegroundHandoffDriver, ForegroundWorkerIdentity, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
@@ -261,7 +262,10 @@ export class NativeCompanionDriver implements DeviceDriver {
   async applications(signal?: AbortSignal): Promise<NativeApplication[]> {
     const result = await this.checked<{ applications: NativeApplication[] }>('applications', {}, signal)
     if (!Array.isArray(result?.applications) || result.applications.length > 1024 || result.applications.some(app => !app || typeof app.appId !== 'string' || !app.appId || app.appId.length > 512 || /[\x00-\x1f\x7f]/u.test(app.appId) || typeof app.name !== 'string' || !app.name || app.name.length > 640 || Array.from(app.name).length > 160 || /[\x00-\x1f\x7f]/u.test(app.name) || typeof app.running !== 'boolean' || app.launchable !== undefined && typeof app.launchable !== 'boolean')) throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的应用目录无效')
-    return result.applications.map(({ appId, name, running, launchable }) => ({ appId, name, running, ...(launchable === undefined ? {} : { launchable }) }))
+    return result.applications.map(({ appId, name, running, launchable, iconDataUrl: rawIcon }) => {
+      const iconDataUrl = applicationIconDataUrl(rawIcon)
+      return { appId, name, running, ...(launchable === undefined ? {} : { launchable }), ...(iconDataUrl ? { iconDataUrl } : {}) }
+    })
   }
   launchApplication(appId: string, signal?: AbortSignal) {
     // Once written, cancelling a caller cannot undo NSWorkspace/Shell launch.

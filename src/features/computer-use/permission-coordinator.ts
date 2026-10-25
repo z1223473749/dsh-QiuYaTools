@@ -114,7 +114,7 @@ export class ComputerPermissionCoordinator {
       if (this.candidates.size >= 256 || rows.length >= 64) break
       seen.add(app.appId)
       const id = randomUUID(), expiresAt = this.now() + (this.options.candidateTtlMs ?? 60_000)
-      this.candidates.set(id, { ...binding, id, application: { ...app }, expiresAt, preflight: permissionProjection(status) })
+      this.candidates.set(id, { ...binding, id, application: { appId: app.appId, name: app.name, running: app.running, launchable: app.launchable }, expiresAt, preflight: permissionProjection(status) })
       rows.push({ candidateId: id, appName: app.name, running: app.running === true, granted: allowed.has(app.appId) || this.hasSessionGrant(binding.sessionId, app.appId), expiresAt })
     }
     return { applications: rows, truncated: matching.length > rows.length, preflight: permissionProjection(status), next: 'Choose a candidateId and call qiuya_computer_request_control. New application access requires the owner’s decision.' }
