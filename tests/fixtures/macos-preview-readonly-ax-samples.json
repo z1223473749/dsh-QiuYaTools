@@ -1,0 +1,804 @@
+{
+  "version": 1,
+  "scope": "Actual read-only projections from original readiness samples. No pixels, input, private tokens, remote model or generated acknowledgement.",
+  "sources": {
+    "oldFailed": {
+      "relativeEvidence": "Mac-630602-完整12项-880de8ef-1d48-44b8-8a7b-e5419ce3f5ae/mac-preview-readiness-attempts.json",
+      "sha256": "c8c7f1d5c06a7586d730853f456b3a6c3638bf57a753544c8fc2b58626ebf63e",
+      "bytes": 5462
+    },
+    "oldPassed": {
+      "relativeEvidence": "Mac-323f-完整12项-c8583c4c-08e0-491b-9b1d-1b6b7b04bf64/mac-preview-readiness-attempts.json",
+      "sha256": "9ad24ee70e1e56f7b1221070368d7d2557fd49be6101be9765b010cda5c05ada",
+      "bytes": 2543
+    },
+    "currentReadOnlyHit": {
+      "relativeEvidence": "Mac-630602-完整12项-AX只读采样-670f4a3b-8071-4415-8187-3ccd11dc2677/mac-preview-readiness-attempts.json",
+      "sha256": "4f11bf727b66ff3bd31989719ba8590f1048674b81795d2467644f4aabb505c9",
+      "bytes": 18279
+    }
+  },
+  "samples": {
+    "oldFailed": [
+      {
+        "labels": [
+          "AXWindow",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXButton",
+          "AXButton",
+          "AXGroup",
+          "AXGroup",
+          "AXButton",
+          "AXStaticText",
+          "QiuYaTools · 电脑操控"
+        ],
+        "recognizedText": [
+          "+ Q工作区内修改～",
+          "⑦ 2轮9步，11842 tok/s",
+          "接管后输入文字",
+          "QiuYa 本地测试模型 ～",
+          "〇 0%",
+          "输入",
+          "Enter",
+          "46 ms"
+        ]
+      },
+      {
+        "labels": [
+          "AXWindow",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXButton",
+          "AXButton",
+          "AXGroup",
+          "AXGroup",
+          "AXButton",
+          "AXStaticText",
+          "QiuYaTools · 电脑操控"
+        ],
+        "recognizedText": [
+          "+ Q工作区内修改～",
+          "⑦ 2轮9步，11842 tok/s",
+          "接管后输入文字",
+          "QiuYa 本地测试模型 ～",
+          "〇 0%",
+          "输入",
+          "Enter",
+          "53 ms"
+        ]
+      },
+      {
+        "labels": [
+          "AXWindow",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXButton",
+          "AXButton",
+          "AXGroup",
+          "AXGroup",
+          "AXButton",
+          "AXStaticText",
+          "QiuYaTools · 电脑操控"
+        ],
+        "recognizedText": [
+          "+ Q工作区内修改～",
+          "⑦ 2轮9步，11842 tok/s",
+          "接管后输入文字",
+          "QiuYa 本地测试模型 ～",
+          "〇 0%",
+          "输入",
+          "Enter",
+          "56 ms"
+        ]
+      }
+    ],
+    "oldPassed": [
+      {
+        "labels": [
+          "AXWindow",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXGroup",
+          "AXScrollArea",
+          "AXWebArea",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXStaticText",
+          "电脑操控",
+          "AXButton",
+          "暂停",
+          "AXButton",
+          "接管",
+          "AXButton",
+          "继续",
+          "AXButton",
+          "停止",
+          "AXGroup",
+          "AXStaticText",
+          "已就绪",
+          "AXImage",
+          "实时电脑画面",
+          "实时电脑画面",
+          "AXGroup",
+          "AXTextField",
+          "接管后输入文字",
+          "接管后输入文字",
+          "AXGroup",
+          "AXButton",
+          "输入",
+          "AXButton",
+          "Enter",
+          "AXStaticText",
+          "41 ms",
+          "AXButton",
+          "AXButton",
+          "AXGroup",
+          "AXButton",
+          "AXStaticText",
+          "QiuYaTools · 电脑操控"
+        ],
+        "canvas": {
+          "height": 358,
+          "width": 640,
+          "x": 544,
+          "y": 248
+        },
+        "recognizedText": [
+          "+ Q工作区内修改～",
+          "⑦ 2轮9步，12857 tok/s",
+          "接管后输入文字",
+          "QiuYa 本地测试模型 ～",
+          "〇 0%",
+          "输入",
+          "Enter",
+          "44 ms"
+        ]
+      }
+    ],
+    "currentReadOnlyHit": [
+      {
+        "labels": [
+          "AXWindow",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXGroup",
+          "AXScrollArea",
+          "AXWebArea",
+          "QiuYaTools · 电脑操控",
+          "AXGroup",
+          "AXStaticText",
+          "电脑操控",
+          "AXButton",
+          "暂停",
+          "AXButton",
+          "接管",
+          "AXButton",
+          "继续",
+          "AXButton",
+          "停止",
+          "AXGroup",
+          "AXStaticText",
+          "已就绪",
+          "AXImage",
+          "实时电脑画面",
+          "实时电脑画面",
+          "AXGroup",
+          "AXTextField",
+          "接管后输入文字",
+          "接管后输入文字",
+          "AXGroup",
+          "AXButton",
+          "输入",
+          "AXButton",
+          "Enter",
+          "AXButton",
+          "AXButton",
+          "AXGroup",
+          "AXButton",
+          "AXStaticText",
+          "QiuYaTools · 电脑操控"
+        ],
+        "canvas": {
+          "height": 358,
+          "width": 640,
+          "x": 544,
+          "y": 248
+        },
+        "recognizedText": [
+          "+ Q工作区内修改～",
+          "⑦ 2轮9步•11538 tok/s",
+          "接管后输入文字",
+          "QiuYa 本地测试模型 ～",
+          "〇 0%",
+          "输入",
+          "Enter",
+          "55 ms"
+        ],
+        "axReadEvidence": {
+          "firstVisit": {
+            "attributeFailureRows": [
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.1169443130493164,
+                "error": -25212,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04100799560546875,
+                "error": -25212,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.07605552673339844,
+                "error": -25205,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 15.986919403076172,
+                "error": -25212,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.431060791015625,
+                "error": -25205,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04506111145019531,
+                "error": -25205,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.03600120544433594,
+                "error": -25205,
+                "nodeIndex": 4
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.041961669921875,
+                "error": -25205,
+                "nodeIndex": 3
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.028014183044433594,
+                "error": -25212,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.35500526428222656,
+                "error": -25205,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.029087066650390625,
+                "error": -25205,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.1119375228881836,
+                "error": -25205,
+                "nodeIndex": 6
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 0,
+                "elapsedMs": 0.033020973205566406,
+                "error": -25205,
+                "nodeIndex": 0
+              }
+            ],
+            "attributeOutcomes": {
+              "AXChildren:-25212": 3,
+              "AXChildren:0": 4,
+              "AXChildrenInNavigationOrder:-25205": 2,
+              "AXChildrenInNavigationOrder:-25212": 1,
+              "AXChildrenInNavigationOrder:0": 4,
+              "AXContents:-25205": 7
+            },
+            "attributeReadRows": [
+              {
+                "attribute": "AXChildren",
+                "childCount": 5,
+                "depth": 0,
+                "elapsedMs": 14.998078346252441,
+                "error": 0,
+                "nodeIndex": 0
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.1169443130493164,
+                "error": -25212,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04100799560546875,
+                "error": -25212,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.07605552673339844,
+                "error": -25205,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 15.986919403076172,
+                "error": -25212,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.431060791015625,
+                "error": -25205,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04506111145019531,
+                "error": -25205,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 1,
+                "depth": 1,
+                "elapsedMs": 2.036929130554199,
+                "error": 0,
+                "nodeIndex": 3
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.8399486541748047,
+                "error": 0,
+                "nodeIndex": 4
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.034928321838378906,
+                "error": 0,
+                "nodeIndex": 4
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.03600120544433594,
+                "error": -25205,
+                "nodeIndex": 4
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 1,
+                "depth": 1,
+                "elapsedMs": 0.06198883056640625,
+                "error": 0,
+                "nodeIndex": 3
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.041961669921875,
+                "error": -25205,
+                "nodeIndex": 3
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.028014183044433594,
+                "error": -25212,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.35500526428222656,
+                "error": -25205,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.029087066650390625,
+                "error": -25205,
+                "nodeIndex": 5
+              }
+            ],
+            "collisionRowsCap": 16,
+            "cutoffDeadline": 0,
+            "cutoffDepth": 0,
+            "cutoffNodes": 0,
+            "duplicateHashCount": 6,
+            "elapsedMs": 36.4069938659668,
+            "failureRowsCap": 16,
+            "inputEventsPosted": 0,
+            "maxDepthSeen": 2,
+            "maxSingleReadMs": 15.986919403076172,
+            "nodeCount": 7,
+            "originalDepthBound": 16,
+            "originalNodeBound": 600,
+            "originalTraversalBudgetMs": 1500,
+            "ownershipGranted": false,
+            "pauseFoundByOriginalNamedPredicate": false,
+            "readCount": 21,
+            "readElapsedMs": 36.12983226776123,
+            "readOnly": true,
+            "readRowsCap": 16,
+            "unequalHashCollisionCount": 0,
+            "unequalHashCollisionRows": []
+          },
+          "globalHitProbe": {
+            "authenticatedOwnHit": true,
+            "copyError": 0,
+            "elapsedMs": 65.39809703826904,
+            "elementAvailable": true,
+            "identityBeforeAfterValidated": true,
+            "inputEventsPosted": 0,
+            "ownershipGranted": false,
+            "pid": 39722,
+            "pidError": 0,
+            "point": {
+              "x": 864,
+              "y": 336.7
+            },
+            "pointInsideBoundPreview": true,
+            "readOnly": true,
+            "role": "AXImage",
+            "sameExpectedAXWindow": true,
+            "sameExpectedPID": true
+          },
+          "inputEventsPosted": 0,
+          "lastVisit": {
+            "attributeFailureRows": [
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.01895427703857422,
+                "error": -25212,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.03504753112792969,
+                "error": -25205,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.02002716064453125,
+                "error": -25212,
+                "nodeIndex": 20
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.030040740966796875,
+                "error": -25205,
+                "nodeIndex": 20
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.015974044799804688,
+                "error": -25205,
+                "nodeIndex": 20
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 2,
+                "elapsedMs": 0.012993812561035156,
+                "error": -25205,
+                "nodeIndex": 22
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.012993812561035156,
+                "error": -25205,
+                "nodeIndex": 21
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.011920928955078125,
+                "error": -25212,
+                "nodeIndex": 23
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04100799560546875,
+                "error": -25205,
+                "nodeIndex": 23
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.016927719116210938,
+                "error": -25205,
+                "nodeIndex": 23
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 1,
+                "elapsedMs": 0.04506111145019531,
+                "error": -25205,
+                "nodeIndex": 24
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 0,
+                "elapsedMs": 0.028014183044433594,
+                "error": -25205,
+                "nodeIndex": 0
+              }
+            ],
+            "attributeOutcomes": {
+              "AXChildren:-25212": 2,
+              "AXChildren:0": 23,
+              "AXChildrenInNavigationOrder:-25205": 2,
+              "AXChildrenInNavigationOrder:0": 23,
+              "AXContents:-25205": 7,
+              "AXContents:-25212": 1,
+              "AXContents:0": 17
+            },
+            "attributeReadRows": [
+              {
+                "attribute": "AXChildren",
+                "childCount": 5,
+                "depth": 0,
+                "elapsedMs": 0.12302398681640625,
+                "error": 0,
+                "nodeIndex": 0
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 1,
+                "depth": 1,
+                "elapsedMs": 0.04696846008300781,
+                "error": 0,
+                "nodeIndex": 1
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 1,
+                "depth": 2,
+                "elapsedMs": 0.08499622344970703,
+                "error": 0,
+                "nodeIndex": 2
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 1,
+                "depth": 3,
+                "elapsedMs": 0.09298324584960938,
+                "error": 0,
+                "nodeIndex": 3
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 3,
+                "depth": 4,
+                "elapsedMs": 0.0820159912109375,
+                "error": 0,
+                "nodeIndex": 4
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 6,
+                "depth": 5,
+                "elapsedMs": 0.0940561294555664,
+                "error": 0,
+                "nodeIndex": 5
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.03504753112792969,
+                "error": 0,
+                "nodeIndex": 6
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.029087066650390625,
+                "error": 0,
+                "nodeIndex": 6
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.025033950805664062,
+                "error": 0,
+                "nodeIndex": 6
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.028014183044433594,
+                "error": 0,
+                "nodeIndex": 7
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.02205371856689453,
+                "error": 0,
+                "nodeIndex": 7
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.01895427703857422,
+                "error": 0,
+                "nodeIndex": 7
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.02396106719970703,
+                "error": 0,
+                "nodeIndex": 8
+              },
+              {
+                "attribute": "AXChildrenInNavigationOrder",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.028014183044433594,
+                "error": 0,
+                "nodeIndex": 8
+              },
+              {
+                "attribute": "AXContents",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.015974044799804688,
+                "error": 0,
+                "nodeIndex": 8
+              },
+              {
+                "attribute": "AXChildren",
+                "childCount": 0,
+                "depth": 6,
+                "elapsedMs": 0.02300739288330078,
+                "error": 0,
+                "nodeIndex": 9
+              }
+            ],
+            "collisionRowsCap": 16,
+            "cutoffDeadline": 0,
+            "cutoffDepth": 0,
+            "cutoffNodes": 0,
+            "duplicateHashCount": 25,
+            "elapsedMs": 12.501001358032227,
+            "failureRowsCap": 16,
+            "inputEventsPosted": 0,
+            "maxDepthSeen": 7,
+            "maxSingleReadMs": 7.2460174560546875,
+            "nodeCount": 25,
+            "originalDepthBound": 16,
+            "originalNodeBound": 600,
+            "originalTraversalBudgetMs": 1500,
+            "ownershipGranted": false,
+            "pauseFoundByOriginalNamedPredicate": true,
+            "readCount": 75,
+            "readElapsedMs": 12.143373489379883,
+            "readOnly": true,
+            "readRowsCap": 16,
+            "unequalHashCollisionCount": 0,
+            "unequalHashCollisionRows": []
+          },
+          "nodesAttempts": 2,
+          "nodesElapsedMs": 208.2540988922119,
+          "originalAttemptsBound": 60,
+          "originalSleepMs": 50,
+          "ownershipGranted": false,
+          "postHitOriginalPauseFound": true,
+          "readOnly": true
+        }
+      }
+    ]
+  },
+  "inputSlices": {
+    "    func physicalHit(": {
+      "end": "    func click(",
+      "sha256": "4fbac2f2f854be9111e3ae702f1f1f25e674625a1277ad41da97864f3683b3c2",
+      "bytes": 3349
+    },
+    "    func click(": {
+      "end": "    func screenshot(",
+      "sha256": "caeadbfbc6ff73b4e44aa5593cbe37d70fe124386252c395ad3d8ced1130026c",
+      "bytes": 6525
+    },
+    "private func exactRoute(": {
+      "end": "private func sameExactRoute(",
+      "sha256": "0d1bde8b304b8b9e06cf8497d0c313d2476a1415ec3bcce5c99b84fc88eb9365",
+      "bytes": 2710
+    },
+    "private func visit(": {
+      "end": "private func observedVisit(",
+      "sha256": "6d75772acd3f5bb53e9c1099878725e6052bfa6fec8b32e5266dcc39fc91add5",
+      "bytes": 616
+    }
+  },
+  "beforeSwiftSHA256": "5da24faf089439fa8fb9cae766dda11c164e94fa90c0c0477f334a3efb1d080b",
+  "afterSwiftSHA256": "19ab2348e9c8a1e9205618c31fd12973de5362e9c8a5a78db7c09e9750a4d765"
+}

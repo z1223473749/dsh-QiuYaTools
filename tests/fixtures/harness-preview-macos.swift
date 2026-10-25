@@ -411,6 +411,64 @@ private func visit(_ root: AXUIElement) -> [AXUIElement] {
     }
     walk(root, 0); return values
 }
+private func observedVisit(_ root: AXUIElement, evidence: inout [String: Any]) -> [AXUIElement] {
+    var values: [AXUIElement] = [], seen = Set<CFHashCode>(), firstByHash = [CFHashCode: AXUIElement]()
+    let started = Date(), deadline = Date().addingTimeInterval(1.5)
+    var reads = 0, maxDepth = 0, duplicateHash = 0, unequalHashCollision = 0
+    var cutoffDepth = 0, cutoffNodes = 0, cutoffDeadline = 0
+    var readMs = 0.0, maxReadMs = 0.0
+    var outcomes = [String: Int](), readRows = [[String: Any]](), failures = [[String: Any]](), collisions = [[String: Any]]()
+    func children(_ node: AXUIElement, _ key: String, _ depth: Int, _ index: Int) -> [AXUIElement] {
+        let began = Date(); var value: CFTypeRef?
+        let code = AXUIElementCopyAttributeValue(node, key as CFString, &value)
+        let elapsed = Date().timeIntervalSince(began) * 1000
+        reads += 1; readMs += elapsed; maxReadMs = max(maxReadMs, elapsed)
+        let outcome = key + ":" + String(code.rawValue); outcomes[outcome, default: 0] += 1
+        let result = code == .success ? value as? [AXUIElement] ?? [] : []
+        if readRows.count < 16 {
+            readRows.append(["nodeIndex": index, "depth": depth, "attribute": key,
+                "error": code.rawValue, "elapsedMs": elapsed, "childCount": result.count])
+        }
+        if code != .success && failures.count < 16 {
+            failures.append(["nodeIndex": index, "depth": depth, "attribute": key,
+                "error": code.rawValue, "elapsedMs": elapsed, "childCount": result.count])
+        }
+        return result
+    }
+    func walk(_ node: AXUIElement, _ depth: Int) {
+        maxDepth = max(maxDepth, depth)
+        // Preserve the original ordered bounds and hash-only deduplication.
+        // A collision is disclosed, never repaired or treated as a ready node.
+        guard depth < 16 else { cutoffDepth += 1; return }
+        guard values.count < 600 else { cutoffNodes += 1; return }
+        guard Date() < deadline else { cutoffDeadline += 1; return }
+        let hash = CFHash(node)
+        guard seen.insert(hash).inserted else {
+            duplicateHash += 1
+            if let prior = firstByHash[hash], !CFEqual(prior, node) {
+                unequalHashCollision += 1
+                if collisions.count < 16 { collisions.append(["hash": String(hash), "depth": depth, "CFEqual": false]) }
+            }
+            return
+        }
+        firstByHash[hash] = node
+        let index = values.count; values.append(node)
+        for key in [kAXChildrenAttribute, "AXChildrenInNavigationOrder", "AXContents"] {
+            for child in children(node, key, depth, index).prefix(120) { walk(child, depth + 1) }
+        }
+    }
+    walk(root, 0)
+    evidence = ["elapsedMs": Date().timeIntervalSince(started) * 1000, "nodeCount": values.count,
+        "readCount": reads, "readElapsedMs": readMs, "maxSingleReadMs": maxReadMs, "maxDepthSeen": maxDepth,
+        "attributeOutcomes": outcomes, "attributeReadRows": readRows, "readRowsCap": 16,
+        "attributeFailureRows": failures, "failureRowsCap": 16,
+        "duplicateHashCount": duplicateHash, "unequalHashCollisionCount": unequalHashCollision,
+        "unequalHashCollisionRows": collisions, "collisionRowsCap": 16,
+        "cutoffDepth": cutoffDepth, "cutoffNodes": cutoffNodes, "cutoffDeadline": cutoffDeadline,
+        "originalDepthBound": 16, "originalNodeBound": 600, "originalTraversalBudgetMs": 1500,
+        "readOnly": true, "inputEventsPosted": 0, "ownershipGranted": false]
+    return values
+}
 private func axWindow(_ owner: Identity, _ frame: CGRect) throws -> AXUIElement {
     let app = AXUIElementCreateApplication(owner.pid); AXUIElementSetMessagingTimeout(app, 0.25)
     let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
@@ -454,6 +512,7 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
 @MainActor private final class Interactor {
     let binding: Binding
     private var accessibilityActivation: [String: Int32] = [:]
+    private var lastAXReadEvidence: [String: Any] = [:]
     init(_ binding: Binding) { self.binding = binding }
     func validate(requirePreview: Bool = true) throws -> (CGRect?, CGRect) {
         guard try identity(binding.ancestor.pid) == binding.ancestor,
@@ -468,7 +527,7 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         }
         return (try preview.map(bounds), try bounds(target))
     }
-    func nodes() async throws -> (CGRect, [AXUIElement]) {
+    func nodes(allowReadOnlyProbe: Bool = false) async throws -> (CGRect, [AXUIElement]) {
         _ = try validate()
         let application = AXUIElementCreateApplication(binding.preview.pid)
         AXUIElementSetMessagingTimeout(application, 0.25)
@@ -478,17 +537,55 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
         for key in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
             accessibilityActivation[key] = AXUIElementSetAttributeValue(application, key as CFString, kCFBooleanTrue).rawValue
         }
-        var last: (CGRect, [AXUIElement])?
-        for _ in 0..<60 {
+        let nodeStarted = Date()
+        var last: (CGRect, [AXUIElement])?, firstVisit: [String: Any]?, hitProbe: [String: Any]?
+        for attempt in 0..<60 {
             let (preview, _) = try validate()
             guard let preview else { throw fail("owned-preview-retired") }
-            let elements = visit(try axWindow(binding.preview, preview))
+            var traversal = [String: Any]()
+            let root = try axWindow(binding.preview, preview)
+            let elements = allowReadOnlyProbe ? observedVisit(root, evidence: &traversal) : visit(root)
             last = (preview, elements)
-            if elements.contains(where: { named($0, "暂停") }) { return last! }
+            let pauseFound = elements.contains(where: { named($0, "暂停") })
+            traversal["pauseFoundByOriginalNamedPredicate"] = pauseFound
+            if firstVisit == nil { firstVisit = traversal }
+            // One additional public AX getter, only after the original first
+            // traversal has failed. It may ask WebKit for its remote AX child;
+            // it never substitutes for the required labels/canvas/latency.
+            if attempt == 0 && !pauseFound && allowReadOnlyProbe { hitProbe = try readonlyAXHit(preview) }
+            lastAXReadEvidence = ["nodesAttempts": attempt + 1,
+                "nodesElapsedMs": Date().timeIntervalSince(nodeStarted) * 1000,
+                "firstVisit": firstVisit ?? [:], "lastVisit": traversal,
+                "globalHitProbe": hitProbe as Any? ?? NSNull(),
+                "postHitOriginalPauseFound": hitProbe != nil && pauseFound,
+                "originalAttemptsBound": 60, "originalSleepMs": 50,
+                "readOnly": true, "inputEventsPosted": 0, "ownershipGranted": false]
+            if pauseFound { return last! }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         guard let last else { throw fail("owned-preview-ax-not-ready") }
         return last
+    }
+    private func readonlyAXHit(_ frame: CGRect) throws -> [String: Any] {
+        _ = try validate()
+        // Stay below this exact preview's native title/header, inside content.
+        // A different topmost owner is observed only and grants no capability.
+        let point = CGPoint(x: frame.midX, y: frame.minY + min(frame.height - 24, max(96, frame.height * 0.35)))
+        let expectedWindow = try axWindow(binding.preview, frame)
+        let began = Date(), hit = axPhysicalHit(point, diagnosticOnly: true)
+        var value: [String: Any] = ["point": ["x": point.x, "y": point.y],
+            "pointInsideBoundPreview": frame.contains(point), "copyError": hit.copyResult,
+            "elementAvailable": hit.elementAvailable, "pidError": hit.pidResult as Any? ?? NSNull(),
+            "pid": hit.pid as Any? ?? NSNull(), "sameExpectedPID": hit.pid == binding.preview.pid,
+            "sameExpectedAXWindow": hit.window.map { CFEqual($0, expectedWindow) } ?? false,
+            "elapsedMs": Date().timeIntervalSince(began) * 1000, "readOnly": true,
+            "inputEventsPosted": 0, "ownershipGranted": false]
+        let ownHit = hit.pid == binding.preview.pid && (hit.window.map { CFEqual($0, expectedWindow) } ?? false)
+        value["authenticatedOwnHit"] = ownHit
+        if ownHit, let element = hit.element, let role = attribute(element, kAXRoleAttribute) as? String { value["role"] = String(role.prefix(80)) } else { value["role"] = NSNull() }
+        _ = try validate()
+        value["identityBeforeAfterValidated"] = true
+        return value
     }
     func physicalHit(_ point: CGPoint, expected: AXUIElement, roles: Set<String>, label: String?, subrole: String?) throws -> RouteProof {
         let (preview, _) = try validate()
@@ -636,10 +733,11 @@ private final class FrameWriter: NSObject, SCStreamOutput, @unchecked Sendable {
             for _ in 0..<100 { if row(binding.previewWindowId, binding.preview.pid) == nil { return ["closed": true, "alreadyClosed": false, "elapsedMs": Date().timeIntervalSince(start) * 1000, "click": receipt] }; try await Task.sleep(nanoseconds: 20_000_000) }
             throw fail("owned-preview-did-not-retire")
         }
-        let (frame, elements) = try await nodes()
+        let (frame, elements) = try await nodes(allowReadOnlyProbe: op == "observe")
         var result: [String: Any] = ["binding": try encoded(binding), "previewFrame": jsonRect(frame), "inputEmpty": emptyInput(), "accessibilityActivation": accessibilityActivation]
         switch op {
         case "observe":
+            result["axReadEvidence"] = lastAXReadEvidence
             result["labels"] = elements.flatMap { node in [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].compactMap { attribute(node, $0) as? String }.filter { !$0.isEmpty }.map { String($0.prefix(200)) } }
             if let canvas = try? one(elements, roles: ["AXImage"], label: "实时电脑画面"), let rect = rectangle(canvas) { result["canvas"] = jsonRect(rect) }
         case "button":
