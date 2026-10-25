@@ -3,8 +3,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { ComputerError, requireIdentity, type ComputerSessionSnapshot, type ComputerStatus, type NativeApplication, type NativeTarget } from './contract.ts'
 
 /** This context comes from the SDK, never from model-controlled arguments. */
-export interface ComputerEntryExecution { callId: string; agent?: { id: string; session?: unknown }; signal: AbortSignal }
+export interface ComputerEntryExecution { callId: string; agent?: { id: string; session?: unknown }; signal: AbortSignal; operationSessionId?: string }
 export interface ComputerEntryBackend {
+  resolveTask?(chatSessionId: string, taskId?: string): string
   get(sessionId: string): ComputerSessionSnapshot | undefined
   allowedApps(): string[]
   setAppAllowed(appId: string, allowed: boolean): Promise<unknown>
@@ -17,7 +18,7 @@ export interface ComputerEntryBackend {
 }
 export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissions: Record<string, boolean>; capabilities: Record<string, boolean> }
 export interface ComputerPendingPermission {
-  requestId: string; requestVersion: 1; sessionId: string; appId: string; appName: string
+  requestId: string; requestVersion: 1; sessionId: string; taskId?: string; appId: string; appName: string
   reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight: ComputerPermissionPreflight
 }
 interface Binding { sessionId: string; agent: NonNullable<ComputerEntryExecution['agent']>; generation: number }
@@ -63,6 +64,8 @@ export class ComputerPermissionCoordinator {
     this.timer = setInterval(() => this.sweep(), 250); this.timer.unref()
   }
   private now(): number { return this.options.now?.() ?? Date.now() }
+  /** Pure public-SDK caller validation for task metadata tools; no OS query. */
+  assertCaller(exec: ComputerEntryExecution): void { this.bind(exec) }
   private bind(exec: ComputerEntryExecution): Binding {
     exec.signal.throwIfAborted()
     if (this.disposed || !this.options.enabled()) throw failure('DISABLED', '电脑操控未启用。')
@@ -70,12 +73,18 @@ export class ComputerPermissionCoordinator {
     if (!agent || this.options.lookupAgent(agent.id) !== agent) throw failure('CALLER_NOT_LIVE', '当前 Agent 已失效，不能申请电脑操控。')
     if (!this.options.isRootAgent(agent)) throw failure('DELEGATED_CALLER', '电脑操控授权必须由当前聊天的主 Agent 申请。')
     requireIdentity(exec.callId, '工具调用')
-    return { sessionId: requireIdentity(agent.id, '会话'), agent, generation: this.options.backend.authorizationGeneration(agent.id) }
+    const chatSessionId = requireIdentity(agent.id, '会话'), sessionId = exec.operationSessionId === undefined ? chatSessionId : requireIdentity(exec.operationSessionId, '电脑任务')
+    // operationSessionId is supplied by the Host resolver. Recheck ownership
+    // here so a manually constructed execution cannot bypass that resolver.
+    const resolved = this.options.backend.resolveTask?.(chatSessionId, sessionId === chatSessionId ? undefined : sessionId)
+    if (sessionId !== chatSessionId && resolved !== sessionId || resolved !== undefined && resolved !== sessionId) throw failure('TASK_NOT_FOUND', '电脑任务不存在或不属于当前聊天。')
+    return { sessionId, agent, generation: this.options.backend.authorizationGeneration(sessionId) }
   }
   private check(binding: Binding, signal?: AbortSignal): void {
     signal?.throwIfAborted()
     if (this.disposed || !this.options.enabled()) throw failure('DISABLED', '电脑操控未启用。')
-    if (this.options.lookupAgent(binding.sessionId) !== binding.agent || !this.options.isRootAgent(binding.agent)) throw failure('CALLER_NOT_LIVE', '发起请求的 Agent 已失效。')
+    if (this.options.lookupAgent(binding.agent.id) !== binding.agent || !this.options.isRootAgent(binding.agent)) throw failure('CALLER_NOT_LIVE', '发起请求的 Agent 已失效。')
+    if (binding.sessionId !== binding.agent.id && this.options.backend.resolveTask?.(binding.agent.id, binding.sessionId) !== binding.sessionId) throw failure('TASK_NOT_FOUND', '电脑任务不存在或不属于当前聊天。')
     if (this.options.backend.authorizationGeneration(binding.sessionId) !== binding.generation) throw failure('REQUEST_STALE', '操作环境或控制权已变化，请重新申请。')
     const state = this.options.backend.get(binding.sessionId)?.state
     if (state && ['paused', 'humanControl', 'pausing', 'handingOver', 'resuming', 'stopping'].includes(state)) throw failure('OWNER_RESUME_REQUIRED', '会话已暂停或由用户接管，需要用户先恢复控制。')
@@ -141,7 +150,7 @@ export class ComputerPermissionCoordinator {
       const requestId = randomUUID(), controller = new AbortController()
       const aborted = () => this.cancelRequest(binding.sessionId, requestId, 1)
       const pending: Pending = { ...binding, candidate, controller, resolve, reject,
-        card: { requestId, requestVersion: 1, sessionId: binding.sessionId, appId: candidate.application.appId, appName: candidate.application.name, reason: reason.trim(), createdAt: this.now(), expiresAt: this.now() + (this.options.requestTtlMs ?? 120_000), state: 'pending', preflight: candidate.preflight },
+        card: { requestId, requestVersion: 1, sessionId: binding.agent.id, ...(binding.sessionId === binding.agent.id ? {} : { taskId: binding.sessionId }), appId: candidate.application.appId, appName: candidate.application.name, reason: reason.trim(), createdAt: this.now(), expiresAt: this.now() + (this.options.requestTtlMs ?? 120_000), state: 'pending', preflight: candidate.preflight },
         cleanup: () => exec.signal.removeEventListener('abort', aborted),
       }
       this.requests.set(requestId, pending); exec.signal.addEventListener('abort', aborted, { once: true })
@@ -186,11 +195,11 @@ export class ComputerPermissionCoordinator {
   }
   pending(sessionId?: string): ComputerPendingPermission[] {
     this.sweep()
-    return [...this.requests.values()].filter(item => !sessionId || item.sessionId === sessionId).map(item => ({ ...item.card }))
+    return [...this.requests.values()].filter(item => !sessionId || item.sessionId === sessionId || item.agent.id === sessionId).map(item => ({ ...item.card }))
   }
   async pendingWithPreflight(sessionId?: string, signal?: AbortSignal): Promise<ComputerPendingPermission[]> {
     this.sweep()
-    const pending = [...this.requests.values()].filter(item => !sessionId || item.sessionId === sessionId)
+    const pending = [...this.requests.values()].filter(item => !sessionId || item.sessionId === sessionId || item.agent.id === sessionId)
     let index = 0
     await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
       while (index < pending.length) {
@@ -261,6 +270,13 @@ export class ComputerPermissionCoordinator {
   cancelSession(sessionId?: string): void {
     for (const item of [...this.requests.values()]) if (!sessionId || item.sessionId === sessionId) this.cancelRequest(item.sessionId, item.card.requestId, 1)
     for (const [id, candidate] of this.candidates) if (!sessionId || candidate.sessionId === sessionId) this.candidates.delete(id)
+  }
+  /** Whole-chat teardown is explicit; pausing the default operation must not
+   * cancel its sibling tasks merely because pending(root) aggregates them. */
+  cancelChat(chatSessionId: string): void {
+    requireIdentity(chatSessionId, '聊天')
+    for (const item of [...this.requests.values()]) if (item.agent.id === chatSessionId) this.cancelRequest(item.sessionId, item.card.requestId, 1)
+    for (const [id, candidate] of this.candidates) if (candidate.agent.id === chatSessionId) this.candidates.delete(id)
   }
   cancelApp(appId: string): void { for (const item of [...this.requests.values()]) if (item.candidate.application.appId === appId) this.cancelRequest(item.sessionId, item.card.requestId, 1); for (const [id, candidate] of this.candidates) if (candidate.application.appId === appId) this.candidates.delete(id) }
   private sweep(): void {

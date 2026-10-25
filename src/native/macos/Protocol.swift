@@ -4,10 +4,16 @@ import Foundation
 /// stdout is a protocol channel: diagnostics and target contents never go to logs.
 enum Wire {
     private static let lock = NSLock()
+    private static var output = FileHandle.standardOutput
+    private static var outputFailure: (() -> Void)?
+    static func useOutput(_ handle: FileHandle, onFailure: (() -> Void)? = nil) {
+        lock.lock(); defer { lock.unlock() }; output = handle; outputFailure = onFailure
+    }
     static func send(_ value: [String: Any]) {
         guard JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value) else { return }
-        lock.lock(); defer { lock.unlock() }
-        FileHandle.standardOutput.write(data + Data([10]))
+        lock.lock()
+        do { try output.write(contentsOf: data + Data([10])); lock.unlock() }
+        catch { let failed = outputFailure; lock.unlock(); failed?() }
     }
     static func success(_ id: Any, _ result: [String: Any] = [:]) { send(["requestId": id, "ok": true, "result": result]) }
     static func failure(_ id: Any, _ error: Error) {

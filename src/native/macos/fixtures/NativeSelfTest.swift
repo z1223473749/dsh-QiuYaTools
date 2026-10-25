@@ -23,6 +23,10 @@ import Foundation
         try await completedKeyboardActions()
         try await keyboardReadinessRetries()
         ownedKeyboardRecipientRelease()
+        try permissionGuideApplicationIdentity()
+        permissionGuidePlacement()
+        permissionGuideLifetime()
+        try macControlTransportPolicy()
         for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
             let (returned, url) = try NativeApplicationCatalog.settingsURL(kind)
             precondition(returned == kind && url.scheme == "x-apple.systempreferences" && url.absoluteString.hasPrefix("x-apple.systempreferences:com.apple.preference.security?Privacy_"))
@@ -1169,6 +1173,188 @@ import Foundation
             } catch { precondition(!cursorOK || !heldOK) }
             precondition(sequence == (cursorOK && heldOK ? ["cursor", "held", "unlock"] : ["cursor", "held"]), "All cleanup paths attempt held input but retain global guard on either failure")
         }
+    }
+
+    private static func permissionGuideLifetime() {
+        var state = PermissionGuideLifetime(), shown = 0
+        func callback(_ revision: UInt64?) { if state.accepts(revision) { shown += 1 } }
+        callback(nil)
+        precondition(shown == 0, "A guide that was never opened cannot appear")
+        let old = state.begin()
+        callback(old); callback(nil)
+        precondition(shown == 2, "The current timer and active drag completion may update the guide")
+        state.end()
+        callback(old); callback(nil)
+        precondition(shown == 2, "Closing fences both queued timer and late drag completion before window cleanup")
+        let reopened = state.begin()
+        callback(old)
+        precondition(shown == 2 && reopened != old, "A previous lifetime's queued timer cannot affect an explicitly reopened guide")
+        callback(reopened)
+        precondition(shown == 3, "An explicit new open can follow Settings again")
+        state.end(); state.end()
+        callback(reopened); callback(nil)
+        precondition(shown == 3, "Repeated shutdown remains closed after all late callbacks")
+    }
+
+    private static func macControlTransportPolicy() throws {
+        let fileManager = FileManager.default
+        guard let temporaryRoot = MacSocketPathPolicy.canonicalDirectory("/tmp") else { preconditionFailure("The test socket requires a short POSIX temporary path") }
+        let directory = URL(fileURLWithPath: temporaryRoot).appendingPathComponent("qyt-transport-policy-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? fileManager.removeItem(at: directory) }
+        guard let canonical = MacSocketPathPolicy.canonicalDirectory(directory.path) else { preconditionFailure("The test directory must have a POSIX canonical path") }
+        precondition(MacSocketPathPolicy.canonicalDirectory(canonical) == canonical,
+                     "A Node-compatible POSIX path remains canonical even if Foundation shortens /private/tmp or /private/var")
+        let symbolic = directory.appendingPathComponent("alias")
+        try fileManager.createSymbolicLink(atPath: symbolic.path, withDestinationPath: canonical)
+        precondition(MacSocketPathPolicy.canonicalDirectory(symbolic.path) != symbolic.path,
+                     "A symbolic-link control directory cannot pass the canonical-path comparison")
+        let nonce = String(repeating: "a1", count: 32)
+        let arguments = ["--qiuya-control-socket", "/private/tmp/qyt-test/control.sock", "--qiuya-control-nonce", nonce, "--qiuya-owner-pid", "123"]
+        let parsed = try MacTransportArguments.parse(arguments)
+        precondition(parsed == MacTransportArguments(socketPath: "/private/tmp/qyt-test/control.sock", nonce: nonce, ownerPid: 123), "The public LaunchServices argument schema parses exactly")
+        let standardInput = try MacTransportArguments.parse([]), fixture = try MacTransportArguments.parse(["--fixture"])
+        precondition(standardInput == nil, "No transport arguments retains standard input")
+        precondition(fixture == nil, "Existing nontransport fixture arguments retain standard input")
+        var rejected = [Array(arguments.dropLast()), arguments + ["--extra", "x"], arguments + Array(arguments.prefix(2)),
+                        ["--qiuya-unknown", "x"], ["--qiuya-control-socket", "/private/tmp/own.sock"]]
+        for path in ["relative.sock", "/private/tmp/../other.sock", "/private/tmp/a\0b", "/private/tmp/a\nb", "//private/tmp/control.sock", "/private/tmp/./control.sock", "/private/tmp//control.sock", "/private/tmp/", "/" + String(repeating: "a", count: 103)] {
+            var candidate = arguments; candidate[1] = path; rejected.append(candidate)
+        }
+        for invalidNonce in ["", String(repeating: "a", count: 63), String(repeating: "A", count: 64), String(repeating: "z", count: 64)] {
+            var candidate = arguments; candidate[3] = invalidNonce; rejected.append(candidate)
+        }
+        for pid in ["0", "1", "-1", "0123", "123x", "2147483648", " 123", "123\n"] {
+            var candidate = arguments; candidate[5] = pid; rejected.append(candidate)
+        }
+        for candidate in rejected {
+            do { _ = try MacTransportArguments.parse(candidate); preconditionFailure("An ambiguous transport configuration was accepted") }
+            catch { precondition((error as? ComputerError)?.code == "NATIVE_TRANSPORT_ARGUMENTS") }
+        }
+        let socketPath = canonical + "/control.sock", descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        precondition(descriptor >= 0 && socketPath.utf8.count <= 103)
+        defer { Darwin.close(descriptor) }
+        var address = sockaddr_un(); address.sun_family = sa_family_t(AF_UNIX); address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(socketPath.utf8) + [0]) }
+        let bound = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        precondition(bound == 0 && chmod(socketPath, 0o600) == 0, "The framing fixture uses a real private Unix socket")
+        var liveSocketArguments = arguments; liveSocketArguments[1] = socketPath
+        let liveSocket = try MacTransportArguments.parse(liveSocketArguments)
+        precondition(liveSocket?.socketPath == socketPath, "An existing /private/tmp socket must not be rejected by Foundation's path abbreviation")
+        let owner = MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 50, uniqueId: 80)
+        precondition(MacOwnerPolicy.current(expected: owner, actual: owner, alive: true), "An unchanged live owner is accepted independently of launchd parentage")
+        precondition(!MacOwnerPolicy.current(expected: owner, actual: owner, alive: false), "A retired owner cannot retain control")
+        precondition(!MacOwnerPolicy.current(expected: owner, actual: nil, alive: true), "Unavailable birth information fails closed")
+        for changed in [MacProcessIdentity(pid: 124, uid: 501, startSeconds: 10, startMicroseconds: 50, uniqueId: 80),
+                        MacProcessIdentity(pid: 123, uid: 502, startSeconds: 10, startMicroseconds: 50, uniqueId: 80),
+                        MacProcessIdentity(pid: 123, uid: 501, startSeconds: 11, startMicroseconds: 50, uniqueId: 80),
+                        MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 51, uniqueId: 80),
+                        MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 50, uniqueId: 81)] {
+            precondition(!MacOwnerPolicy.current(expected: owner, actual: changed, alive: true), "PID reuse and changed owner identities cannot inherit the connection")
+        }
+        var lifetime = MacTransportLifetime()
+        precondition(!lifetime.markRetired(), "An unconnected process cannot issue a retirement receipt")
+        precondition(lifetime.markReady() && !lifetime.markReady(), "The first ready frame is unique")
+        precondition(lifetime.markRetired() && !lifetime.markRetired(), "Retirement is acknowledged once and cannot be upgraded by a late cleanup")
+        lifetime.markClosed(); lifetime.markClosed()
+        precondition(!lifetime.markReady() && !lifetime.markRetired(), "A closed transport cannot be resurrected by queued work")
+        var closedEarly = MacTransportLifetime(); closedEarly.markClosed()
+        precondition(!closedEarly.markReady(), "Closing before readiness suppresses a late handshake")
+        var decoder = MacJSONLineDecoder(maximumBytes: 8)
+        let firstChunk = try decoder.append(Data("{\"x\":".utf8))
+        precondition(firstChunk.isEmpty)
+        let lines = try decoder.append(Data("1}\n\n2\n3".utf8))
+        precondition(lines == [Data("{\"x\":1}".utf8), Data("2".utf8)], "Split lines and multiple commands preserve framing without empty commands")
+        let tail = try decoder.finish(), empty = try decoder.finish()
+        precondition(tail == Data("3".utf8), "The existing final standard-input line remains compatible")
+        precondition(empty == nil)
+        var oversized = MacJSONLineDecoder(maximumBytes: 8)
+        do { _ = try oversized.append(Data("123456789".utf8)); preconditionFailure("A missing newline escaped the line budget") }
+        catch { precondition((error as? ComputerError)?.code == "NATIVE_MESSAGE_LIMIT") }
+        var longLine = MacJSONLineDecoder(maximumBytes: 8)
+        do { _ = try longLine.append(Data("123456789\n".utf8)); preconditionFailure("A complete oversized line escaped the line budget") }
+        catch { precondition((error as? ComputerError)?.code == "NATIVE_MESSAGE_LIMIT") }
+    }
+
+    private static func permissionGuidePlacement() {
+        let size = CGSize(width: 320, height: 84)
+        let wide = CGRect(x: 0, y: 24, width: 1800, height: 1000)
+        let leftSettings = CGRect(x: 100, y: 120, width: 720, height: 800)
+        let right = PermissionGuidePlacement.frame(size: size, beside: leftSettings, in: wide)
+        precondition(wide.contains(right) && right.minX > leftSettings.maxX && !right.intersects(leftSettings), "A free right-hand area keeps the list unobscured")
+        let rightSettings = CGRect(x: 1050, y: 120, width: 720, height: 800)
+        let left = PermissionGuidePlacement.frame(size: size, beside: rightSettings, in: wide)
+        precondition(wide.contains(left) && left.maxX < rightSettings.minX && !left.intersects(rightSettings), "A free left-hand area is used when the right side does not fit")
+        let secondary = CGRect(x: -1600, y: -900, width: 1600, height: 900)
+        let negative = PermissionGuidePlacement.frame(size: size, beside: CGRect(x: -1500, y: -820, width: 720, height: 740), in: secondary)
+        precondition(secondary.contains(negative) && negative.maxX < 0, "Negative-origin displays preserve AppKit coordinates")
+        let small = CGRect(x: -400, y: -200, width: 900, height: 700)
+        let cramped = PermissionGuidePlacement.frame(size: size, beside: small.insetBy(dx: 12, dy: 12), in: small)
+        precondition(small.contains(cramped) && cramped.size == size, "A narrow screen still keeps the entire guide within its visible frame")
+        precondition(cramped.maxX == small.maxX - 24 && cramped.maxY == small.maxY - 68,
+                     "Without side room the compact card rests inside the upper-right edge of Settings")
+        let clamped = PermissionGuidePlacement.clamped(CGRect(origin: CGPoint(x: -10000, y: 10000), size: size), to: small)
+        precondition(small.contains(clamped) && clamped.minX == small.minX + 12 && clamped.maxY == small.maxY - 12, "Clamping respects the menu and Dock-safe visible frame")
+        let undersized = CGRect(x: 20, y: 30, width: 200, height: 60)
+        precondition(undersized.contains(PermissionGuidePlacement.clamped(CGRect(origin: .zero, size: size), to: undersized)), "Even a smaller-than-guide display yields bounded geometry")
+    }
+
+    @MainActor private static func permissionGuideApplicationIdentity() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory.appendingPathComponent("qiuya-permission-guide-selftest-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? fileManager.removeItem(at: directory) }
+        func application(_ name: String, id: String = PermissionGuideApplication.bundleIdentifier, packageType: String = "APPL", executableName: String = "qiuya-computer", binaryOutside: Bool = false) throws -> (URL, URL) {
+            let app = directory.appendingPathComponent(name, isDirectory: true)
+            let contents = app.appendingPathComponent("Contents", isDirectory: true)
+            let bin = contents.appendingPathComponent("MacOS", isDirectory: true)
+            try fileManager.createDirectory(at: bin, withIntermediateDirectories: true)
+            let executable = binaryOutside ? directory.appendingPathComponent(UUID().uuidString) : bin.appendingPathComponent(executableName)
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            let info: [String: Any] = ["CFBundleIdentifier": id, "CFBundleExecutable": executableName, "CFBundlePackageType": packageType]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
+            return (app, executable)
+        }
+        let (app, executable) = try application("QiuYaTools Computer.app")
+        let actual = try PermissionGuideApplication.validated(bundleURL: app, executableURL: executable)
+        precondition(actual.bundleURL == app.standardizedFileURL && actual.executableURL == executable.standardizedFileURL,
+                     "The authorization artifact is the actual executable's bundle")
+        precondition(actual.pasteboardURL.isFileURL && actual.pasteboardURL.absoluteString == app.absoluteString,
+                     "The drag source exports a native file URL rather than a display string")
+        for (name, id, packageType, outside) in [("Wrong.app", "com.example.other", "APPL", false),
+                                              ("NotApplication", PermissionGuideApplication.bundleIdentifier, "APPL", false),
+                                              ("NotAppPackage.app", PermissionGuideApplication.bundleIdentifier, "BNDL", false),
+                                              ("Outside.app", PermissionGuideApplication.bundleIdentifier, "APPL", true)] {
+            let (candidate, binary) = try application(name, id: id, packageType: packageType, binaryOutside: outside)
+            do { _ = try PermissionGuideApplication.validated(bundleURL: candidate, executableURL: binary); preconditionFailure("An unrelated authorization artifact was accepted") }
+            catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        }
+        for (candidate, binary) in [(URL(string: "https://example.com/Other.app")!, executable),
+                                    (app, URL(string: "https://example.com/qiuya-computer")!),
+                                    (app, directory.appendingPathComponent("missing"))] {
+            do { _ = try PermissionGuideApplication.validated(bundleURL: candidate, executableURL: binary); preconditionFailure("A remote URL or unrelated binary was accepted") }
+            catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        }
+        let (retired, retiredExecutable) = try application("Removed.app")
+        try fileManager.removeItem(at: retiredExecutable)
+        do { _ = try PermissionGuideApplication.validated(bundleURL: retired, executableURL: retiredExecutable); preconditionFailure("A missing executable was accepted") }
+        catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        for kind in ["screenRecording", "accessibility", "inputMonitoring"] {
+            let content = try PermissionGuideContent.validated(kind)
+            precondition(content.kind == kind && !content.label.isEmpty && !content.purpose.isEmpty)
+        }
+        for kind: Any in ["file:///tmp/app", "accessibility?redirect=x", "", NSNull(), 1] {
+            do { _ = try PermissionGuideContent.validated(kind); preconditionFailure("An unsupported guide destination was accepted") } catch {}
+        }
+        let guide = PermissionGuideController()
+        precondition(guide.status["shown"] as? Bool == false && guide.status["kind"] == nil,
+                     "Creating the guide does not open a window or select a permission")
+        precondition(guide.status["appName"] as? String == PermissionGuideApplication.appName && guide.status.keys.allSatisfy { ["shown", "kind", "appName"].contains($0) },
+                     "Guide diagnostics never disclose local paths")
+        do { _ = try guide.open("file:///tmp/app"); preconditionFailure("Invalid kind opened a permission guide") } catch {}
+        guide.close(); guide.close()
+        precondition(guide.status["shown"] as? Bool == false, "Closing an unused guide is harmless and opens no window")
     }
 
     @MainActor private static func approvedSmallGlyph() throws {

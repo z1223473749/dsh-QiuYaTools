@@ -61,7 +61,7 @@ export function apply(ctx: Context, config: Config): void {
           tools.effect(() => {
             const enabled = () => config.enabled.get() && config.computerUseEnabled.get()
             let recorder: ComputerToolsRecorder | undefined, modelTarget: ModelTargetRegistry | undefined
-            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, onSelected: exec => modelTarget?.selectDesktop(exec), recorder: {
+            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, ...(host.manager ? { tasks: host.manager } : {}), onSelected: exec => modelTarget?.selectDesktop(exec), recorder: {
               observed: (...args) => recorder?.observed(...args) ?? Promise.resolve(undefined),
               issuing: (...args) => recorder?.issuing(...args) ?? Promise.resolve(undefined),
             } })

@@ -274,4 +274,12 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 body[data-ds-dark-theme] .qyt-computer-inline-card{box-shadow:0 8px 26px #00000032,0 1px 5px #00000014}
 body[data-ds-dark-theme] .qyt-computer-inline-card[data-dragging="true"]{box-shadow:0 16px 38px #0000004d,0 3px 10px #00000022}
 @media(prefers-reduced-motion:reduce){.qyt-computer-inline-card,.qyt-computer-inline-image>.qyt-computer-inline-actions{transition:none}}
+.qyt-computer-inline-tasks { position:absolute; z-index:3; bottom:7px; left:50%; transform:translateX(-50%); display:flex; gap:3px; padding:3px 5px; max-width:calc(100% - 16px); border:1px solid var(--qyt-computer-line); border-radius:20px; background:color-mix(in srgb,var(--qyt-computer-bg) 92%,transparent); backdrop-filter:blur(8px); box-shadow:0 2px 8px #18252c12; }
+.qyt-computer-inline-tasks > button { display:flex; align-items:center; justify-content:center; gap:3px; min-width:23px; height:21px; padding:2px 5px; border:0; border-radius:12px; background:transparent; color:var(--qyt-computer-secondary); font:inherit; font-size:10px; cursor:pointer; }
+.qyt-computer-inline-tasks > button[aria-selected="true"] { background:var(--qyt-computer-soft); color:var(--qyt-computer-accent); font-weight:600; }
+.qyt-computer-inline-tasks > button > span { width:4px; height:4px; border-radius:50%; background:currentColor; }
+.qyt-computer-inline-tasks > button:focus-visible { outline:2px solid var(--qyt-computer-accent); outline-offset:1px; }
+.qyt-computer-task-picker { display:flex; align-items:flex-end; gap:8px; margin:0 0 14px; }
+.qyt-computer-task-picker > label { flex:1; display:grid; gap:6px; min-width:0; color:var(--qyt-computer-secondary); font-size:12px; }
+.qyt-computer-task-picker select { width:100%; min-width:0; border:1px solid var(--qyt-computer-line); border-radius:8px; padding:8px 10px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
 @media(forced-colors:active){.qyt-computer-inline-card{border-color:CanvasText;box-shadow:none}.qyt-computer-inline-image>.qyt-computer-inline-actions{background:Canvas;border-color:ButtonText}}

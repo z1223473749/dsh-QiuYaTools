@@ -47,3 +47,26 @@ export async function waitForHarnessComputerPipeline(read, { now = Date.now, sle
   }
   throw new Error(`The multi-turn computer pipeline did not complete within ${HARNESS_COMPUTER_PIPELINE_MS} ms; no input was replayed`)
 }
+
+/** Bind normal WM_CLOSE cleanup to this run's actual native session windows.
+ * The Windows observer rechecks the original process/parent/window identities;
+ * this projection never authorizes a path prefix or an arbitrary desktop HWND. */
+export function createHarnessWindowsSessionCloseRequest({ host, hostExecutable, hostSHA256, profileRoot, architecture, nativeExecutable, nativeSHA256, windows }) {
+  const fail = () => { throw new Error('The normal window close must bind this exact live isolated Host and session windows') }
+  if (!Number.isSafeInteger(host?.pid) || host.pid < 1 || host.exitCode !== null || host.signalCode !== null ||
+    !['arm64', 'x64'].includes(architecture) || !/^[a-f0-9]{64}$/u.test(nativeSHA256 ?? '') || !/^[a-f0-9]{64}$/u.test(hostSHA256 ?? '') ||
+    !/^[a-z]:\\[^\x00-\x1f]+$/iu.test(hostExecutable ?? '') || !/^[a-z]:\\[^\x00-\x1f]+\\qiuya-harness-e2e-[a-zA-Z0-9]{6}\\qiuya-harness-home$/iu.test(profileRoot ?? '') ||
+    nativeExecutable?.toLowerCase() !== `${profileRoot}\\profiles\\web\\node_modules\\dsh-qiuya-tools\\lib\\native\\win32-${architecture}\\qiuya-windows.exe`.toLowerCase() ||
+    !Array.isArray(windows) || windows.length < 1 || windows.length > 2) fail()
+  const seen = new Set(), sessions = new Set(); let helperPID, helperBirthTicks
+  const projected = windows.map(({ sessionId, title, target }) => {
+    const match = /^window:([a-f0-9]+):(\d+):(\d+)$/iu.exec(target?.id ?? '')
+    if (!match || !Number.isSafeInteger(target.pid) || target.pid < 1 || String(target.pid) !== match[2] ||
+      !/^session-[a-zA-Z0-9-]+$/u.test(sessionId ?? '') || !/^E2E:(Alpha|Beta)-[a-zA-Z0-9]+$/u.test(title ?? '') ||
+      target.title !== title + ' — QiuYaTools' || target.appId?.toLowerCase() !== nativeExecutable.toLowerCase() ||
+      seen.has(target.id) || sessions.has(sessionId) || helperPID !== undefined && (helperPID !== target.pid || helperBirthTicks !== match[3])) fail()
+    seen.add(target.id); sessions.add(sessionId); helperPID = target.pid; helperBirthTicks = match[3]
+    return { sessionId, targetId: target.id, title: target.title }
+  })
+  return { version: 1, operation: 'normal-close-owned-session-windows', hostPID: host.pid, hostExecutable, hostSHA256, profileRoot, architecture, nativeExecutable, nativeSHA256, helperPID, helperBirthTicks, windows: projected, budgetMs: 5000 }
+}

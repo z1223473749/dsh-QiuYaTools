@@ -18,6 +18,62 @@ test('portable transformer preserves exact837ec after explicit infrastructure an
  const publicReuse="      await writeFile(join(output, 'fixture-public-window-reuse.json'), JSON.stringify({ sessionId: alphaId, exactTargetId: independentTarget.id, acknowledged: true, sameIdentity: true, authorizationStarted: false }, null, 2))";
  assert.equal(body.split(composerBefore).length,2);body=body.replace(composerBefore,"    if (process.platform === 'win32') {\n");
  assert.equal(body.split(publicReuse).length,2);body=body.replace(publicReuse,publicReuse+"\n      await editor().fill('E2E:computer-move')");
+ // Windows full-suite EOF routing is test infrastructure only. Mac lifecycle
+ // still uses its reviewed branch; inverse these exact optional additions.
+ for(const[before,after]of[
+  ["import { join, resolve, sep } from 'node:path'","import { join, resolve } from 'node:path'"],
+  ["startsWith(temporary + sep)","startsWith(temporary + '/')"],
+  ["const windowsFullRunId = process.platform === 'win32' && !featureEvidenceOnly && !windowStateDiagnostic ? randomUUID() : undefined\n",''],
+  ["...(windowsFullRunId ? { QIUYA_HARNESS_WINDOWS_FULL: '1', QIUYA_HARNESS_WINDOWS_RUN_ID: windowsFullRunId, QIUYA_HARNESS_WINDOWS_CANDIDATE_SHA256: candidateSHA256, QIUYA_HARNESS_WINDOWS_PROFILE: profileHome } : {}), ",''],
+  ["...(windowsFullRunId ? [{ name: 'host-shutdown', run: () => { try { windowsWindowRetirementObserver?.beginHostEOF() } finally { host?.stdin.end() } } }] : [{ name: 'host-shutdown', run: () => { host?.stdin.end(); host?.kill('SIGTERM') } }]),","{ name: 'host-shutdown', run: () => { host?.stdin.end(); host?.kill('SIGTERM') } },"],
+  ["...(windowsFullRunId ? { windowsHostRetirement, windowsSessionWindowRetirement, windowsSessionConsoleRetirement } : {}), ",''],
+ ]){assert.equal(body.split(before).length,2);body=body.replace(before,after)}
+ // Normal WM_CLOSE retirement is Windows-only test infrastructure. Reverse
+ // only the exact reviewed additions; the historical Mac body digest below
+ // stays unchanged and catches every other business or deadline change.
+ for(const[before,after]of[
+  ["finalizeHarnessOwnedResources, createHarnessWindowsSessionCloseRequest }", "finalizeHarnessOwnedResources }"],
+  ["import { startHarnessWindowsWindowRetirement } from './harness-windows-window-retirement.mjs'\n", ''],
+  ["const sourceFailure=process.platform === 'darwin' ? ownedMacInputSourceFailure(profileHome,host.pid) : null", "const sourceFailure=ownedMacInputSourceFailure(profileHome,host.pid)"],
+  ["const ownedWindowsSessionTargets = []\nlet windowsSessionWindowRetirement, windowsSessionConsoleRetirement, windowsWindowRetirementObserver\n", ''],
+  ["    if (windowsFullRunId) ownedWindowsSessionTargets.push({ sessionId: alphaId, title: alpha, target })\n", ''],
+  ["    if (windowsFullRunId) ownedWindowsSessionTargets.push({ sessionId: betaId, title: beta, target })\n", ''],
+ ]){assert.equal(body.split(before).length,2);body=body.replace(before,after)}
+ const closeStart=body.indexOf("    ...(windowsFullRunId && ownedWindowsSessionTargets.length ? [{ name: 'normal-close-owned-native-session-windows'");
+ const closeEnd=body.indexOf("    { name: 'observer-dispose'",closeStart);assert(closeStart>0&&closeEnd>closeStart);
+ const closeStage=body.slice(closeStart,closeEnd);assert.equal(hash(Buffer.from(closeStage)),'59812b84097dbdfa2a1fee0beb3384db62227ff19aad20067af8913b6b9097e6');assert.equal(body.split(closeStage).length,2);body=body.replace(closeStage,'');
+ // The current product selects environments in the calling chat composer.
+ // Reverse only this reviewed UI relocation before preserving the historical
+ // full12 business-body digest; upload/download/duplicate and all deadlines stay exact.
+ const current = await readFile(join(repo,'scripts/e2e-harness.mjs'),'utf8');
+ const environmentHelper=current.slice(current.indexOf('async function openOwnComputerEnvironment(sessionId) {'),current.indexOf('async function ownFeatureEvidence(kind) {'));
+ assert(environmentHelper.startsWith('async function openOwnComputerEnvironment(sessionId) {')&&environmentHelper.endsWith('\n'));
+ assert.equal(body.split(environmentHelper).length,2);body=body.replace(environmentHelper,'');
+ for(const[before,after]of[
+  [`      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+      let environment = await openOwnComputerEnvironment(alphaId)
+      await environment.getByRole('radio', { name: /远端电脑/u }).check()
+      await environment.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
+      await environment.getByLabel('配对密钥', { exact: true }).fill(pairing)
+      await environment.getByRole('checkbox', { name: /允许连接受信任的私有网络/u }).check()
+      await environment.getByRole('button', { name: '使用此环境', exact: true }).click()
+      await environment.waitFor({ state: 'hidden' })
+      environment = await openOwnComputerEnvironment(alphaId)
+      const pane = environment.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')`,
+   `      await page.locator('.qyt-computer-advanced > summary').click()
+      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('remote')
+      await page.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
+      await page.getByLabel('配对密钥', { exact: true }).fill(pairing)
+      await page.getByRole('checkbox', { name: /允许连接受信任的私有网络/u }).check()
+      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()
+      const pane = page.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')`],
+  [`      await environment.getByRole('radio', { name: /这台电脑/u }).check()
+      await environment.getByRole('button', { name: '使用此环境', exact: true }).click()`,
+   `      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('local')
+      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()`],
+  ["      await waitFor(async () => await page.locator(`[data-qyt-computer-environment=${JSON.stringify(alphaId)}]:visible`).getByRole('button', { name: '操作环境：这台电脑', exact: true }).count() === 1, 'The exact chat did not return to its local environment')",
+   "      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()"],
+ ]){assert.equal(body.split(before).length,2);body=body.replace(before,after)}
  assert.notEqual(hash(Buffer.from(s)),hash(Buffer.from(body)));assert.equal(hash(Buffer.from(body)),'827e931a1af78e164d2230d936dcc05d7384599d0e05a52523317cfe8fc32feb');assert(s.includes('timeoutMs = 30000'));assert(s.includes('within3000ms'));assert(!s.includes("host.kill('SIGKILL')"));assert(s.includes('readFinalOwnUploadedFile'));
 });
 test('all12business rows/order/normal exit and expectedcurrentcandidate required',()=>{const sha='a'.repeat(64),r=passed(sha);assert(assessMacFullHarnessReport(r,sha).passed);for(const change of[x=>x.tests.pop(),x=>x.tests.reverse(),x=>x.tests[2].status='failed',x=>x.fullAcceptanceEvidence.forcedHostTermination=true,x=>x.fullAcceptanceEvidence.hostExitCode=1,x=>x.ownedCleanup.passed=false,x=>x.frontendErrors=['error'],x=>x.candidateSHA256='b'.repeat(64)]){const x=structuredClone(r);change(x);assert.equal(assessMacFullHarnessReport(x,sha).passed,false)}assert.throws(()=>assessMacFullHarnessReport(r));});
@@ -38,7 +94,7 @@ async function canary(){const dir=await temp(),marker=join(dir,'called'),preload
 test('real plan has no process/network boundary; syntheticartifact cannot executeevenRootapproved run',async()=>{const p=await prepare(),c=await canary(),r=await exec(process.execPath,['--import',c.preload,p.entry,'--plan'],{timeout:30000});assert.equal(JSON.parse(r.stdout).status,'prepared-not-run');await assert.rejects(exec(process.execPath,['--import',c.preload,p.entry,'--run','--root-approved','--gui-gate','root-approved'],{timeout:30000}),e=>e.code===1&&e.stderr.includes('Synthetic test observer cannot execute acceptance'));await assert.rejects(lstat(c.marker),{code:'ENOENT'});await assert.rejects(lstat(p.output),{code:'ENOENT'});});
 test('real manifest plan preserves generated full12 preparedpreflight; ownNode snapshot stops at missingarchive withzeroHost',async()=>{const p=await prepare(),c=await canary(),plan=await exec(process.execPath,['--import',c.preload,p.entry,'--plan'],{timeout:30000});assert.equal(JSON.parse(plan.stdout).status,'prepared-not-run');const snapshot=join(p.directory,'snapshot/scripts/e2e-harness.mjs'),source=await readFile(snapshot,'utf8');assert(source.includes('assertHarnessMacEntryPrepared({ prepared: true, headlessSubset: false })'));const out=join(await temp(),'unstarted-output'),missing=join(p.unit,'deliberately-missing-current-candidate.tgz');await assert.rejects(exec(process.execPath,['--import',c.preload,snapshot,'--package',missing,'--output',out],{timeout:10000}),e=>e.code===1&&e.stderr.includes('ENOENT')&&e.stderr.includes('deliberately-missing-current-candidate.tgz')&&!e.stderr.includes('MAC_NATIVE_ACCEPTANCE_PREPARATION_REQUIRED')&&!e.stderr.includes('PROCESS_CANARY'));assert((await lstat(out)).isDirectory());await assert.rejects(lstat(c.marker),{code:'ENOENT'});await assert.rejects(lstat(p.output),{code:'ENOENT'});});
 for(const kind of['frozen-source','runtime-bytes','runtime-link'])test('late '+kind+' changed rejectsplanbeforeHost/GUI',async()=>{const p=await prepare(),d=JSON.parse(await readFile(join(p.directory,'prepare-data.json'))),c=await canary();let path,original,target;try{if(kind==='frozen-source'){path=join(p.directory,'snapshot/scripts/e2e-harness.mjs');original=await readFile(path);await writeFile(path,'changed')}else if(kind==='runtime-bytes'){path=p.runtimes.host;original=await readFile(path);await writeFile(path,'changed')}else{[path,target]=Object.entries(d.runtimeLinks)[0];original=await readlink(path);await unlink(path);await symlink(dirname(target),path,'dir')}await assert.rejects(exec(process.execPath,['--import',c.preload,p.entry,'--plan'],{timeout:30000}),e=>e.code===1&&!e.stderr.includes('PROCESS_CANARY'));await assert.rejects(lstat(c.marker),{code:'ENOENT'});}finally{if(kind==='runtime-link'){await unlink(path);await symlink(original,path,'dir')}else await writeFile(path,original)}});
-test('writefalse Node closures retainstatic19includingpreflightanddeployment and exactdynamicnative5; no productionoutput/nativebuild',async()=>{const outputs=await Promise.all(['scripts/e2e-harness.mjs','src/features/computer-use/native.ts','scripts/prepare-macos-full-harness-acceptance.mjs'].map(name=>build({entryPoints:[join(repo,name)],absWorkingDir:repo,bundle:true,packages:'external',write:false,platform:'node',format:'esm',metafile:true})));assert.equal(Object.keys(outputs[0].metafile.inputs).length,19);assert(Object.keys(outputs[0].metafile.inputs).includes('scripts/harness-macos-entry-preflight.mjs'));assert.deepEqual(Object.keys(outputs[1].metafile.inputs).sort(),['src/features/computer-use/application-icon.ts','src/features/computer-use/contract.ts','src/features/computer-use/foreground-handoff.ts','src/features/computer-use/native-retirement.ts','src/features/computer-use/native.ts'],'Only the reviewed bounded application-icon dependency joins the native retirement closure; unknown additions still fail');assert(outputs.every(r=>r.errors.length===0&&r.warnings.length===0&&r.outputFiles.length===1));});
+test('writefalse Node closures retainstatic20includingpreflightdeploymentandWindows-onlyretirement and exactdynamicnative6; no productionoutput/nativebuild',async()=>{const outputs=await Promise.all(['scripts/e2e-harness.mjs','src/features/computer-use/native.ts','scripts/prepare-macos-full-harness-acceptance.mjs'].map(name=>build({entryPoints:[join(repo,name)],absWorkingDir:repo,bundle:true,packages:'external',write:false,platform:'node',format:'esm',metafile:true})));assert.equal(Object.keys(outputs[0].metafile.inputs).length,20);assert(Object.keys(outputs[0].metafile.inputs).includes('scripts/harness-macos-entry-preflight.mjs'));assert(Object.keys(outputs[0].metafile.inputs).includes('scripts/harness-windows-window-retirement.mjs'));assert.deepEqual(Object.keys(outputs[1].metafile.inputs).sort(),['src/features/computer-use/application-icon.ts','src/features/computer-use/contract.ts','src/features/computer-use/foreground-handoff.ts','src/features/computer-use/macos-launch.ts','src/features/computer-use/native-retirement.ts','src/features/computer-use/native.ts'],'Only the reviewed application icon, retirement and authenticated LaunchServices transport join the native closure; unknown additions still fail');assert(outputs.every(r=>r.errors.length===0&&r.warnings.length===0&&r.outputFiles.length===1));});
 
 test('real ownNode compiler transport preserves natural exit and limitsoutput without launchingSwift',async()=>{const r=await runObserverCompiler(process.execPath,['-e',"process.stdout.write('own-compiler-protocol')"],2000);assert.equal(r.code,0);assert.equal(r.signal,null);assert.equal(r.stdout.toString(),'own-compiler-protocol');assert.equal(r.compilerProcess.naturallyExited,true);assert.equal(r.compilerProcess.signalsSent,0);await assert.rejects(runObserverCompiler(process.execPath,['-e',"process.stdout.write('x'.repeat(70000))"],2000),e=>e.code==='OBSERVER_COMPILE_FAILED'&&e.compilerProcess.stdoutBytes===70000);});
 test('real ownNode unknown retains exactchild metadata, sendsnosignal and neverreplays; laternatural exitdoesnotrewriteunknown',async()=>{let record;await assert.rejects(runObserverCompiler(process.execPath,['-e','setTimeout(()=>process.exit(0),150)'],30),e=>{assert.equal(e.code,'OBSERVER_COMPILE_UNKNOWN');record=e.compilerProcess;assert(Number.isSafeInteger(record.pid));return true});assert.equal(record.signalsSent,0);assert.equal(record.unknown,true);const end=Date.now()+2000;while(!record.naturallyExited&&Date.now()<end)await new Promise(done=>setTimeout(done,5));assert.equal(record.naturallyExited,true);assert.equal(record.code,0);assert.equal(record.signal,null);assert.equal(record.unknown,true)});

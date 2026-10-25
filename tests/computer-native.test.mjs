@@ -14,6 +14,63 @@ test.after(() => rm(directory, { recursive: true, force: true }))
 const script = join(directory, 'fixture.cjs'), records = join(directory, 'requests.jsonl')
 await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
 
+async function settingsFixture(name) {
+  const executable = join(directory, `${name}.cjs`), journal = join(directory, `${name}.jsonl`), receipt = join(directory, `${name}-receipt.json`)
+  const permissions = { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false }
+  await writeFile(receipt, '{}')
+  await writeFile(executable, `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({event:'started'})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify(r)+'\\n');const result=r.op==='status'?{platform:'darwin',available:true,protocolVersion:1,permissions:${JSON.stringify(permissions)}}:JSON.parse(fs.readFileSync(${JSON.stringify(receipt)},'utf8')).result;process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n')});rl.on('close',()=>process.exit(0));`)
+  return { driver: new NativeCompanionDriver({ executable: process.execPath, args: [executable] }), permissions, reply: value => writeFile(receipt, JSON.stringify({ result: value })), read: async () => (await readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse), journal }
+}
+
+test('permission settings validates launch and guide receipts without granting OS access or replaying native work', async () => {
+  const fixture = await settingsFixture('settings-receipts'), { driver } = fixture
+  try {
+    for (const kind of ['screenRecording', 'accessibility', 'inputMonitoring']) {
+      const receipt = { opened: true, kind, supported: true, guideReady: true, appName: 'QiuYaTools Computer' }
+      await fixture.reply(receipt)
+      assert.deepEqual(await driver.openSystemSettings(kind), receipt)
+      assert.deepEqual((await driver.status()).permissions, fixture.permissions, 'A ready card cannot be treated as OS authorization or a claim of immediate visibility')
+    }
+    await fixture.reply({ opened: true, guideShown: true })
+    assert.deepEqual(await driver.openSystemSettings('accessibility'), { opened: true, guideShown: true }, 'The previous visible-guide receipt remains compatible')
+    await fixture.reply({ opened: true })
+    assert.deepEqual(await driver.openSystemSettings('accessibility'), { opened: true }, 'Older helpers without guide metadata remain compatible')
+    await fixture.reply({ opened: false, kind: 'accessibility', supported: true })
+    await assert.rejects(driver.openSystemSettings('accessibility'), { code: 'SYSTEM_SETTINGS_UNAVAILABLE', message: '无法打开系统权限设置，请稍后重试。' })
+    await fixture.reply({ opened: false, kind: 'accessibility', supported: false })
+    await assert.rejects(driver.openSystemSettings('accessibility'), { code: 'SYSTEM_SETTINGS_UNAVAILABLE', message: '当前系统不支持此 macOS 权限设置。' })
+    await fixture.reply({ opened: true, kind: 'accessibility', guideShown: false })
+    await assert.rejects(driver.openSystemSettings('accessibility'), { code: 'PERMISSION_GUIDE_UNAVAILABLE' })
+    await fixture.reply({ opened: true, kind: 'accessibility', guideReady: false })
+    await assert.rejects(driver.openSystemSettings('accessibility'), { code: 'PERMISSION_GUIDE_UNAVAILABLE' })
+    assert.deepEqual((await driver.status()).permissions, fixture.permissions)
+    const rows = await fixture.read()
+    assert.equal(rows.filter(row => row.op === 'openSystemSettings').length, 9)
+    assert.ok(rows.every(row => row.event === 'started' || ['status', 'openSystemSettings'].includes(row.op)), 'Permission setup must never capture or inject input')
+  } finally { await driver.dispose() }
+})
+
+test('malformed permission setup receipts are rejected without marking the helper unavailable', async () => {
+  const fixture = await settingsFixture('invalid-settings-receipts'), { driver } = fixture
+  const invalid = [undefined, null, [], true, 1, 'opened', {}, { opened: 'true' }, { opened: 1 }, { opened: true, kind: 'inputMonitoring' }, { opened: true, supported: 'true' }, { opened: true, guideShown: 1 }, { opened: true, guideReady: 'true' }, { opened: true, guideReady: 1 }, { opened: true, guideReady: null }]
+  try {
+    for (const value of invalid) {
+      await fixture.reply(value)
+      await assert.rejects(driver.openSystemSettings('accessibility'), { code: 'NATIVE_PROTOCOL' })
+    }
+    assert.deepEqual((await driver.status()).permissions, fixture.permissions)
+    assert.equal((await fixture.read()).filter(row => row.op === 'openSystemSettings').length, invalid.length, 'A malformed receipt must not trigger a replay')
+  } finally { await driver.dispose() }
+})
+
+test('invalid permission kinds never start a native process or pass paths and URLs to it', async () => {
+  const fixture = await settingsFixture('invalid-settings-kinds'), { driver } = fixture
+  try {
+    for (const kind of ['', 'screenRecording\n', 'accessibility;open', 'file:///Applications/Other.app', 'https://example.invalid', { kind: 'accessibility' }, null]) await assert.rejects(driver.openSystemSettings(kind), { code: 'INVALID_PERMISSION' })
+    await assert.rejects(readFile(fixture.journal), { code: 'ENOENT' }, 'The worker writes its start receipt before accepting any RPC')
+  } finally { await driver.dispose() }
+})
+
 let captureFixtureSequence = 0
 async function captureFixture({ captureDelay = 120, timeoutMs = 10_000, gated = false, exitOnCapture = false } = {}) {
   const number = ++captureFixtureSequence, executable = join(directory, `capture-slot-${number}.cjs`), journal = join(directory, `capture-slot-${number}.jsonl`), gate = join(directory, `capture-slot-${number}.gate`)

@@ -250,7 +250,7 @@ test('receipt-bound cursor preparation freezes exact sources and rejects drift w
   try {
     // This is a filesystem/receipt unit fixture, never an actual native lineage
     // claim. No ignored build artifacts or live formal helper are dependencies.
-    const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
+    const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'MacTransport', 'PermissionGuide', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
     const files = [...nativeNames, 'src/features/computer-use/contract.ts', 'lib/macos-manifest.json', 'lib/QiuYaTools Computer.app/Contents/Info.plist',
       'scripts/macos-cursor-diagnostic-core.mjs', 'scripts/prepare-macos-multitask-acceptance.mjs', 'scripts/test-macos-multitask-manager.mjs', 'tests/macos-multitask-runner.test.mjs',
       'src/native/macos/fixtures/AICursorFixture.swift', 'src/native/macos/fixtures/AICursorObserver.swift', 'src/native/macos/fixtures/LeaseOracle.swift']

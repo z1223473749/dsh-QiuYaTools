@@ -7,11 +7,72 @@ export function collectWorkbenchPreviewResponses(page,expected){const records=[]
 /** Runs in the existing page, read-only. It decodes only the current own data URI. */
 export async function captureWorkbenchPaint(image,{sessionId}){const before=image.currentSrc||image.src,owner=image.closest('[data-qyt-workbench-chat]');if(!image.isConnected||owner?.getAttribute('data-qyt-workbench-chat')!==sessionId||!image.complete||image.naturalWidth<=1||image.naturalHeight<=1)return null;if(!before.startsWith('data:image/jpeg;base64,'))return null;const encoded=before.slice('data:image/jpeg;base64,'.length);if(encoded.length>32*1024*1024)return null;const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0)),digest=await crypto.subtle.digest('SHA-256',bytes),after=image.currentSrc||image.src,box=image.getBoundingClientRect();if(before!==after||!image.isConnected)return null;return{painted:true,complete:image.complete,connected:image.isConnected,chatSessionId:sessionId,imageSHA256:[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join(''),width:image.naturalWidth,height:image.naturalHeight,fit:getComputedStyle(image).objectFit,box:{x:box.x,y:box.y,width:box.width,height:box.height}}}
 
-/** Official visible panel owns header utilities and chat content as siblings.
- * The header anchor is allowed to have no area; its fixed card must be visible. */
-export function locateHarnessWorkbenchChat(page,sessionId){assert(text(sessionId));const content=page.locator(`[data-conversation-content][data-conversation-session=${JSON.stringify(sessionId)}]:visible`),anchor=`[data-qyt-workbench-chat=${JSON.stringify(sessionId)}]`;const owner=page.locator('[data-phase="active"]:visible,[data-phase="settling"]:visible,[data-phase="hero"]:visible').filter({has:content}).filter({has:page.locator(anchor)});return{owner,anchor:owner.locator(anchor)}}
-/** Runs read-only in the actual page. No synthetic visibility assumptions. */
-export function captureHarnessWorkbenchScope(anchor,{sessionId}){if(!anchor.isConnected||anchor.getAttribute('data-qyt-workbench-chat')!==sessionId)throw Error('WRONG_WORKBENCH_CHAT');const phases=new Set(['active','settling','hero']),visible=node=>{const b=node.getBoundingClientRect(),s=getComputedStyle(node);return node.isConnected&&node.getClientRects().length>0&&b.width>0&&b.height>0&&s.visibility!=='hidden'&&s.display!=='none'};for(let root=anchor.parentElement;root;root=root.parentElement){if(!phases.has(root.getAttribute('data-phase')))continue;const contents=[...root.querySelectorAll('[data-conversation-content][data-conversation-session]')].filter(v=>v.closest('[data-phase]')===root);if(!contents.length)continue;if(contents.length!==1||contents[0].getAttribute('data-conversation-session')!==sessionId||!visible(root)||!visible(contents[0]))throw Error('WRONG_VISIBLE_CONVERSATION_OWNER');const anchors=[...root.querySelectorAll('[data-qyt-workbench-chat]')].filter(v=>{for(let p=v.parentElement;p;p=p.parentElement){if(phases.has(p.getAttribute('data-phase'))&&[...p.querySelectorAll('[data-conversation-content][data-conversation-session]')].some(c=>c.closest('[data-phase]')===p))return p===root}return false});if(anchors.length!==1||anchors[0]!==anchor)throw Error('AMBIGUOUS_WORKBENCH_ANCHOR');const box=anchor.getBoundingClientRect(),ownerBox=root.getBoundingClientRect();return{chatSessionId:sessionId,phase:root.getAttribute('data-phase'),uniqueOwnPanel:true,uniqueOwnContent:true,uniqueOwnAnchor:true,anchorAreaRequired:false,anchorBox:{width:box.width,height:box.height},ownerBox:{x:ownerBox.x,y:ownerBox.y,width:ownerBox.width,height:ownerBox.height}}}throw Error('VISIBLE_CONVERSATION_OWNER_MISSING')}
+/** The official input overlay owns a zero-area marker; React portals its card to body.
+ * The returned `anchor` is the portal, retained as the caller's card-search alias.
+ * Gates are lazy Playwright selectors so the actual approval can mount after send. */
+export function locateHarnessWorkbenchChat(page, sessionId) {
+  assert(text(sessionId))
+  const id = JSON.stringify(sessionId)
+  const content = `[data-conversation-content][data-conversation-session=${id}]`
+  const marker = `[data-qyt-workbench-anchor=${id}]`
+  const portal = `.qyt-workbench-small-portal[data-qyt-workbench-chat=${id}]`
+  const phase = ':is([data-phase="active"],[data-phase="settling"],[data-phase="hero"])'
+  // A nested inactive panel cannot lend its marker or content to a visible parent.
+  const owner = `${phase}:visible:has(${content}:visible):has(${marker})` +
+    `:not(:has([data-phase] ${content})):not(:has([data-phase] ${marker}))` +
+    `:not(:has([data-conversation-content][data-conversation-session]:not(${content})))` +
+    `:not(:has([data-qyt-workbench-anchor]:not(${marker})))`
+  const card = `body > ${portal} > :is(.qyt-workbench-approvals,.qyt-workbench-small):visible`
+  const unique = selector => `:has(${selector}):not(:has(:nth-match(${selector},2)))`
+  const gate = 'html' + [owner, `${content}:visible`, marker,
+    `[data-qyt-workbench-chat=${id}]`, card].map(unique).join('')
+  return { owner: page.locator(`${gate} ${owner}`), anchor: page.locator(`${gate} body > ${portal}`) }
+}
+/** Runs read-only in the real document; geometry comes from the browser itself.
+ * No request, decision, synthetic event, or visibility override is issued here. */
+export function captureHarnessWorkbenchScope(anchor, { sessionId }) {
+  if (!anchor.isConnected || anchor.getAttribute('data-qyt-workbench-chat') !== sessionId) throw Error('WRONG_WORKBENCH_CHAT')
+  const doc = anchor.ownerDocument, view = doc.defaultView
+  const phases = new Set(['active', 'settling', 'hero'])
+  const visible = node => {
+    const box = node.getBoundingClientRect(), style = view.getComputedStyle(node)
+    return node.isConnected && node.getClientRects().length > 0 && box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+  }
+  const allContents = [...doc.querySelectorAll('[data-conversation-content][data-conversation-session]')]
+  const contents = allContents.filter(node => node.getAttribute('data-conversation-session') === sessionId && visible(node))
+  if (contents.length !== 1) throw Error('WRONG_VISIBLE_CONVERSATION_OWNER')
+  const content = contents[0], owner = content.closest('[data-phase]')
+  if (!owner || !phases.has(owner.getAttribute('data-phase')) || !visible(owner)) throw Error('VISIBLE_CONVERSATION_OWNER_MISSING')
+  const ownedContents = allContents.filter(node => node.closest('[data-phase]') === owner)
+  if (ownedContents.length !== 1 || ownedContents[0] !== content) throw Error('WRONG_VISIBLE_CONVERSATION_OWNER')
+  const panels = [...doc.querySelectorAll('[data-phase]')].filter(node => phases.has(node.getAttribute('data-phase')) && visible(node) && allContents.some(item => item.closest('[data-phase]') === node && item.getAttribute('data-conversation-session') === sessionId && visible(item)))
+  if (panels.length !== 1 || panels[0] !== owner) throw Error('WRONG_VISIBLE_CONVERSATION_OWNER')
+  const allMarkers = [...doc.querySelectorAll('[data-qyt-workbench-anchor]')]
+  const markers = allMarkers.filter(node => node.getAttribute('data-qyt-workbench-anchor') === sessionId)
+  if (markers.length !== 1) throw Error('AMBIGUOUS_WORKBENCH_MARKER')
+  const marker = markers[0]
+  if (!marker.isConnected || marker.closest('[data-phase]') !== owner) throw Error('WRONG_WORKBENCH_MARKER_OWNER')
+  const ownedMarkers = allMarkers.filter(node => node.closest('[data-phase]') === owner)
+  if (ownedMarkers.length !== 1 || ownedMarkers[0] !== marker) throw Error('AMBIGUOUS_WORKBENCH_MARKER')
+  const portals = [...doc.querySelectorAll('[data-qyt-workbench-chat]')].filter(node => node.getAttribute('data-qyt-workbench-chat') === sessionId)
+  if (portals.length !== 1 || portals[0] !== anchor) throw Error('AMBIGUOUS_WORKBENCH_PORTAL')
+  if (anchor.parentElement !== doc.body || !anchor.classList.contains('qyt-workbench-small-portal')) throw Error('WRONG_WORKBENCH_PORTAL_OWNER')
+  const cards = [...anchor.children].filter(node => node.matches('.qyt-workbench-approvals,.qyt-workbench-small') && visible(node))
+  if (cards.length !== 1) throw Error('VISIBLE_WORKBENCH_CARD_MISSING_OR_AMBIGUOUS')
+  const box = anchor.getBoundingClientRect(), markerBox = marker.getBoundingClientRect(), ownerBox = owner.getBoundingClientRect(), cardBox = cards[0].getBoundingClientRect()
+  return {
+    chatSessionId: sessionId, phase: owner.getAttribute('data-phase'), ownership: 'input-overlay-body-portal',
+    uniqueOwnPanel: true, uniqueOwnContent: true, uniqueOwnAnchor: true, uniqueOwnPortal: true,
+    contentChatSessionId: content.getAttribute('data-conversation-session'), markerChatSessionId: marker.getAttribute('data-qyt-workbench-anchor'), portalChatSessionId: anchor.getAttribute('data-qyt-workbench-chat'),
+    markerConnected: marker.isConnected, portalConnected: anchor.isConnected, markerNearestPhaseMatchesOwner: true,
+    markerAttribute: 'data-qyt-workbench-anchor', portalAttribute: 'data-qyt-workbench-chat', portalParent: 'body',
+    anchorRole: 'body-portal-card-search-alias', anchorAreaRequired: false, portalAreaRequired: false,
+    anchorBox: { width: box.width, height: box.height }, markerBox: { width: markerBox.width, height: markerBox.height },
+    ownerBox: { x: ownerBox.x, y: ownerBox.y, width: ownerBox.width, height: ownerBox.height },
+    cardKind: cards[0].classList.contains('qyt-workbench-small') ? 'preview' : 'approval',
+    cardBox: { x: cardBox.x, y: cardBox.y, width: cardBox.width, height: cardBox.height },
+  }
+}
 
 /** Own authored fixture only. A trusted DOM update precedes the original screenshot; background RAF is not a capture prerequisite. */
 export function fixtureMovePaintURL(url,nonce,role){assert.match(nonce,/^[a-f0-9]{32}$/u);assert(['A','B'].includes(role));const u=new URL(url);assert.equal(u.protocol,'http:');assert.equal(u.hostname,'127.0.0.1');assert(u.port);assert.equal(u.username,'');assert.equal(u.password,'');assert.equal(u.search,'');assert.equal(u.hash,'');assert.equal(u.pathname,'/'+nonce+'/'+role+'/A/');return new URL('paint-state',u).href}

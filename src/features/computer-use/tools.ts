@@ -24,12 +24,19 @@ export interface ComputerToolsRecorder {
   /** Persist issued before dispatch; returning a closure never grants control. */
   issuing(exec: ComputerToolRunContext, request: Readonly<ComputerActionRequest>): Promise<((result: ComputerActionResult | undefined) => Promise<unknown>) | undefined>
 }
-export interface ComputerToolsOptions { onSelected?(exec: ComputerToolRunContext): void; recorder?: ComputerToolsRecorder; sessionId?: (exec: ComputerToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator }
-const noParameters = { type: 'object', properties: {}, additionalProperties: false }
+export interface ComputerToolTasks {
+  createTask(chatSessionId: string, label?: string): string
+  resolveTask(chatSessionId: string, taskId?: string): string
+  listTasks(chatSessionId: string): readonly { chatSessionId: string; taskId: string; taskLabel?: string }[]
+}
+export interface ComputerToolsOptions { onSelected?(exec: ComputerToolRunContext): void; recorder?: ComputerToolsRecorder; sessionId?: (exec: ComputerToolRunContext) => string | undefined; enabled?: () => boolean; entry?: ComputerPermissionCoordinator; tasks?: ComputerToolTasks }
+const taskParameter = { type: 'string', description: 'Opaque taskId returned by qiuya_computer_task. Supply it explicitly for this task on every call. Omit it only for the default task; there is no last-selected task.' }
+const noParameters = { type: 'object', properties: { taskId: taskParameter }, additionalProperties: false }
 // The public SDK retains structured codes only for its own HarnessError class;
 // PTC forwards just the message. Every tool boundary uses a finite vocabulary
 // so models retain the code without receiving driver paths or exception text.
 const entryErrors: Record<string, string> = {
+  TASK_NOT_FOUND: '电脑任务不存在或不属于当前聊天，请列出当前聊天的任务。', TASK_LIMIT: '当前聊天的电脑任务已达上限，请用户清理闲置任务。', INVALID_TASK_LABEL: '任务名称必须是1至120个字符且不含控制字符。', TASKS_UNAVAILABLE: '当前环境尚未提供电脑多任务入口，请使用默认任务。',
   ABORTED: '当前工具调用已取消。', COMPUTER_ENTRY_FAILED: '电脑操控入口未能完成，请用户检查连接和权限。',
   INVALID_REQUEST: '电脑操控参数无效。', DISABLED: '电脑操控未启用。', DISPOSED: '电脑操控已关闭。',
   SESSION_REQUIRED: '必须从当前聊天的 Agent 调用电脑操控。', CALLER_NOT_LIVE: '发起请求的 Agent 已失效。', DELEGATED_CALLER: '请由当前聊天的主 Agent 申请操控。',
@@ -85,42 +92,97 @@ function parameters(value: unknown, allowed: string[]): Record<string, unknown> 
 /** Uses only the current Agent's public tool/attachment services; no model requests. */
 export function installComputerTools(ctx: Context, service: ComputerServiceFacade, options: ComputerToolsOptions = {}): () => void {
   const services = ctx as Context & ComputerToolServices
-  const session = (exec: ComputerToolRunContext): string => {
+  const session = (exec: ComputerToolRunContext, input: Record<string, unknown> = {}): string => {
+    exec.signal.throwIfAborted()
     if (options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用')
-    const id = options.sessionId?.(exec) ?? exec.agent?.id
-    if (!id) throw new ComputerError('SESSION_REQUIRED', '电脑操控工具必须由当前会话的 Agent 调用')
+    const chat = options.sessionId?.(exec) ?? exec.agent?.id
+    if (!chat) throw new ComputerError('SESSION_REQUIRED', '电脑操控工具必须由当前会话的 Agent 调用')
+    requireIdentity(chat, '聊天')
+    const taskId = input.taskId === undefined ? undefined : requireIdentity(input.taskId, '电脑任务')
+    if (!options.tasks) {
+      if (taskId !== undefined) throw new ComputerError('TASKS_UNAVAILABLE', '电脑多任务入口不可用')
+      return chat
+    }
+    const id = requireIdentity(options.tasks.resolveTask(chat, taskId), '电脑任务')
+    if (taskId === undefined && id !== chat) throw new ComputerError('TASK_NOT_FOUND', '默认任务归属无效')
     return id
+  }
+  const bindSession = (exec: ComputerToolRunContext, input: Record<string, unknown>) => {
+    if (input.taskId !== undefined) assertTaskCaller(exec)
+    const id = session(exec, input), chat = options.sessionId?.(exec) ?? exec.agent?.id
+    const taskId = input.taskId === undefined ? undefined : requireIdentity(input.taskId, '电脑任务')
+    const isDefault = id === chat
+    const assertCurrent = () => { if (taskId !== undefined) assertTaskCaller(exec); if (session(exec, input) !== id) throw new ComputerError('TASK_NOT_FOUND', '电脑任务归属已变化') }
+    return { id, taskId, isDefault, assertCurrent }
+  }
+  const operationExecution = (exec: ComputerToolRunContext, operationSessionId: string) => ({ ...exec, operationSessionId })
+  const taskResult = (value: object, taskId?: string) => ({ ...value, ...(taskId === undefined ? {} : { taskId }) })
+  const taskLabel = (value: unknown): string | undefined => {
+    if (value === undefined) return undefined
+    if (typeof value !== 'string' || !value.trim() || Array.from(value.trim()).length > 120 || /[\x00-\x1f\x7f]/u.test(value)) throw new ComputerError('INVALID_TASK_LABEL', '电脑任务名称无效')
+    return value.trim()
+  }
+  const assertTaskCaller = (exec: ComputerToolRunContext) => {
+    if (!options.entry?.assertCaller) throw new ComputerError('TASKS_UNAVAILABLE', '电脑多任务入口不可用')
+    options.entry.assertCaller(exec)
   }
   const output = { schema: { type: 'object', additionalProperties: true }, render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] }
   const register = (definition: ComputerToolDefinition) => services.tools.register({ ...definition, execute: (args, exec) => toolRun(exec, () => definition.execute(args, exec)) })
   const unregister = [
+    ...(options.tasks && options.entry ? [register({
+      name: 'qiuya_computer_task', description: 'Create or list independent computer tasks in the calling chat only. Creating/listing only reserves or reads task identities; it does not launch applications, capture a screen, acquire control, or grant permission. Use the returned taskId explicitly on each later computer tool call. Omitting taskId always uses the default task, never the last-selected task.',
+      parameters: { type: 'object', additionalProperties: false, required: ['op'], properties: { op: { type: 'string', enum: ['create', 'list'] }, label: { type: 'string', minLength: 1, maxLength: 120 } } }, output,
+      async execute(args, exec) {
+        const input = parameters(args, ['op', 'label'])
+        if (input.op !== 'create' && input.op !== 'list' || input.op === 'list' && input.label !== undefined) throw new ComputerError('INVALID_REQUEST', '任务操作参数无效')
+        assertTaskCaller(exec); session(exec)
+        const chat = requireIdentity(options.sessionId?.(exec) ?? exec.agent?.id, '聊天')
+        if (input.op === 'create') {
+          const label = taskLabel(input.label), taskId = requireIdentity(options.tasks!.createTask(chat, label), '电脑任务')
+          exec.signal.throwIfAborted(); assertTaskCaller(exec)
+          options.tasks!.resolveTask(chat, taskId)
+          return { chatSessionId: chat, taskId, ...(label === undefined ? {} : { taskLabel: label }) }
+        }
+        const rows = options.tasks!.listTasks(chat), ids = new Set<string>()
+        if (!Array.isArray(rows) || rows.length > 8) throw new ComputerError('TASK_LIMIT', '电脑任务列表无效')
+        const tasks = rows.map(row => {
+          if (row.chatSessionId !== chat) throw new ComputerError('TASK_NOT_FOUND', '电脑任务归属无效')
+          const taskId = requireIdentity(row.taskId, '电脑任务'), label = taskLabel(row.taskLabel)
+          if (ids.has(taskId)) throw new ComputerError('TASK_NOT_FOUND', '电脑任务列表无效')
+          ids.add(taskId)
+          return { chatSessionId: chat, taskId, ...(label === undefined ? {} : { taskLabel: label }) }
+        })
+        exec.signal.throwIfAborted(); assertTaskCaller(exec)
+        return { tasks }
+      },
+    })] : []),
     ...(options.entry ? [
       register({
-        name: 'qiuya_computer_discover', description: 'Discover application names in this chat’s current computer environment, including installed applications when supported. Returns short-lived candidate IDs and permission preflight only, without screenshots or window contents. Call this first when the user asks to operate an application. No control or grant is acquired.', parameters: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 160, description: 'Application name to search, such as Chrome or 微信. Filter is applied before result limits.' }, kind: { type: 'string', enum: ['all', 'application', 'browser'] } } }, output,
-        async execute(args, exec) { return entryRun(exec, () => { const input = parameters(args, ['query', 'kind']); session(exec); return options.entry!.discover(exec, input as { query?: string; kind?: 'all' | 'application' | 'browser' }) }) },
+        name: 'qiuya_computer_discover', description: 'Discover application names in this chat’s current computer environment, including installed applications when supported. Returns short-lived candidate IDs and permission preflight only, without screenshots or window contents. Call this first when the user asks to operate an application. No control or grant is acquired.', parameters: { type: 'object', additionalProperties: false, properties: { taskId: taskParameter, query: { type: 'string', maxLength: 160, description: 'Application name to search, such as Chrome or 微信. Filter is applied before result limits.' }, kind: { type: 'string', enum: ['all', 'application', 'browser'] } } }, output,
+        async execute(args, exec) { return entryRun(exec, () => { const input = parameters(args, ['taskId', 'query', 'kind']), binding = bindSession(exec, input); return options.entry!.discover(operationExecution(exec, binding.id), { query: input.query, kind: input.kind } as { query?: string; kind?: 'all' | 'application' | 'browser' }).then(result => { binding.assertCurrent(); return taskResult(result, binding.taskId) }) }) },
       }),
       register({
         name: 'qiuya_computer_request_control', description: 'Request control of a discovered application for this chat. Supply its candidateId and a short explanation of the user’s task. The owner chooses allow once, always allow, or deny in the UI; this tool waits for that decision. Existing owner grants may start directly. Cannot self-authorize, resume a paused/human-controlled session, choose another chat, or alter OS permissions.',
-        parameters: { type: 'object', additionalProperties: false, required: ['candidateId', 'reason'], properties: { candidateId: { type: 'string' }, reason: { type: 'string', maxLength: 600 } } }, output,
-        async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['candidateId', 'reason']); session(exec); const result = await options.entry!.requestControl(exec, requireIdentity(input.candidateId, '应用候选'), input.reason as string); exec.signal.throwIfAborted(); options.onSelected?.(exec); return JSON.parse(JSON.stringify(result)) }) },
+        parameters: { type: 'object', additionalProperties: false, required: ['candidateId', 'reason'], properties: { taskId: taskParameter, candidateId: { type: 'string' }, reason: { type: 'string', maxLength: 600 } } }, output,
+        async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['taskId', 'candidateId', 'reason']), binding = bindSession(exec, input); const result = await options.entry!.requestControl(operationExecution(exec, binding.id), requireIdentity(input.candidateId, '应用候选'), input.reason as string); binding.assertCurrent(); if (binding.isDefault) options.onSelected?.(exec); return JSON.parse(JSON.stringify(taskResult(result, binding.taskId))) }) },
       }),
     ] : []),
     register({
       name: 'qiuya_computer_targets', description: 'List windows only in applications already authorized by the owner. Requires an active computer session; does not grant access.', parameters: noParameters, output,
-      async execute(args, exec) { parameters(args, []); return { targets: await service.permittedTargets(session(exec), exec.signal) } },
+      async execute(args, exec) { const input = parameters(args, ['taskId']), binding = bindSession(exec, input); const targets = await service.permittedTargets(binding.id, exec.signal); binding.assertCurrent(); return taskResult({ targets }, binding.taskId) },
     }),
     register({
       name: 'qiuya_computer_select', description: 'Switch the active computer session to an already-authorized application window. Cannot resume a paused or human-controlled session and cannot grant new application access.',
-      parameters: { type: 'object', additionalProperties: false, required: ['targetId'], properties: { targetId: { type: 'string' } } }, output,
-      async execute(args, exec) { const input = parameters(args, ['targetId']); const result = await service.selectTarget(session(exec), requireIdentity(input.targetId, '目标'), exec.signal); exec.signal.throwIfAborted(); options.onSelected?.(exec); return JSON.parse(JSON.stringify(result)) },
+      parameters: { type: 'object', additionalProperties: false, required: ['targetId'], properties: { taskId: taskParameter, targetId: { type: 'string' } } }, output,
+      async execute(args, exec) { const input = parameters(args, ['taskId', 'targetId']), binding = bindSession(exec, input); const result = await service.selectTarget(binding.id, requireIdentity(input.targetId, '目标'), exec.signal); binding.assertCurrent(); if (binding.isDefault) options.onSelected?.(exec); return JSON.parse(JSON.stringify(taskResult(result, binding.taskId))) },
     }),
     register({
       name: 'qiuya_computer_status', description: 'Read this chat’s computer-control session. When idle, discover applications and request control; application authorization remains an owner decision.', parameters: noParameters, output,
       async execute(args, exec) {
-        parameters(args, []); const id = session(exec)
+        const input = parameters(args, ['taskId']), binding = bindSession(exec, input), id = binding.id
         const value = JSON.parse(JSON.stringify(service.get(id) ?? { sessionId: id, state: 'idle' }))
         if (value.error) { const error = publicToolError(value.error); value.error = { code: error.code, message: error.message } }
-        return value
+        binding.assertCurrent(); return taskResult(value, binding.taskId)
       },
     }),
     register({
@@ -128,27 +190,29 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       output: {
         schema: { type: 'object', additionalProperties: true, required: ['targetId', 'frameId', 'width', 'height', 'elements', 'image'], properties: { targetId: { type: 'string' }, frameId: { type: 'string', description: 'Single-use observation frame for the next act. Every successful act consumes it; observe again before another act.' }, width: { type: 'integer' }, height: { type: 'integer' }, elements: { type: 'string' }, image: { type: 'object', additionalProperties: true } } },
         render(_args, value) {
-          const result = value as unknown as { image: ComputerImageAttachmentRef; frameId: string; width: number; height: number; elements: string; targetId: string; acceptance?: unknown }
-          return [{ type: 'text', text: JSON.stringify({ targetId: result.targetId, frameId: result.frameId, width: result.width, height: result.height, elements: result.elements, ...(result.acceptance ? { acceptance: result.acceptance } : {}) }) }, { type: 'image', attachment: result.image }]
+          const result = value as unknown as { image: ComputerImageAttachmentRef; frameId: string; width: number; height: number; elements: string; targetId: string; taskId?: string; acceptance?: unknown }
+          return [{ type: 'text', text: JSON.stringify({ targetId: result.targetId, frameId: result.frameId, width: result.width, height: result.height, elements: result.elements, ...(result.taskId === undefined ? {} : { taskId: result.taskId }), ...(result.acceptance ? { acceptance: result.acceptance } : {}) }) }, { type: 'image', attachment: result.image }]
         },
       },
       async execute(args, exec) {
-        parameters(args, [])
-        options.onSelected?.(exec)
-        const observation = await service.observe(session(exec), exec.signal)
+        const input = parameters(args, ['taskId']), binding = bindSession(exec, input)
+        if (binding.isDefault) options.onSelected?.(exec)
+        const observation = await service.observe(binding.id, exec.signal)
         const capturedAt = Date.now()
-        exec.signal.throwIfAborted()
+        binding.assertCurrent()
         const image = await services.attachments.saveImage({ data: Buffer.from(observation.imageBase64, 'base64'), mediaType: observation.mediaType, name: 'computer-observation.jpg' })
         exec.signal.throwIfAborted()
-        const acceptance = await options.recorder?.observed(exec, observation, image, capturedAt)
+        binding.assertCurrent()
+        const acceptance = binding.isDefault ? await options.recorder?.observed(exec, observation, image, capturedAt) : undefined
         exec.signal.throwIfAborted()
-        return JSON.parse(JSON.stringify({ targetId: observation.targetId, frameId: observation.frameId, width: observation.width, height: observation.height, elements: observation.elements, image, ...(acceptance ? { acceptance } : {}) }))
+        binding.assertCurrent()
+        return JSON.parse(JSON.stringify(taskResult({ targetId: observation.targetId, frameId: observation.frameId, width: observation.width, height: observation.height, elements: observation.elements, image, ...(acceptance ? { acceptance } : {}) }, binding.taskId)))
       },
     }),
     register({
       name: 'qiuya_computer_act', description: 'Perform one action in this chat’s authorized application using a fresh frameId from observe. Every successful act, including click/type/key/move, consumes that frameId. Before the next act, observe again and use its new frameId: observe → click → observe → type → observe → key. Do not repeat a completed action to refresh a frame or automatically replay unconfirmed input. Browser mode also supports navigate/openTab(url), selectorClick/selectorType(selector,text), and closeTab within owner-approved origins. These browser actions do not work in native desktop mode. Paused and human-controlled sessions reject Agent input.',
       parameters: { type: 'object', additionalProperties: false, required: ['frameId', 'action'], properties: {
-        actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string', description: 'Fresh frameId from the latest observe, valid for one successful act only. After success, observe again before any next act; never repeat the completed action just to refresh its frame.' },
+        taskId: taskParameter, actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string', description: 'Fresh frameId from the latest observe, valid for one successful act only. After success, observe again before any next act; never repeat the completed action just to refresh its frame.' },
         action: { type: 'object', required: ['kind'], additionalProperties: false, properties: {
           kind: { type: 'string', enum: ['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'] },
           x: { type: 'number' }, y: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, text: { type: 'string' }, key: { type: 'string' }, deltaX: { type: 'number' }, deltaY: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] },
@@ -156,21 +220,22 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
         } },
       } }, output,
       async execute(args, exec) {
-        const input = parameters(args, ['actionId', 'frameId', 'action']), id = session(exec)
+        const input = parameters(args, ['taskId', 'actionId', 'frameId', 'action']), binding = bindSession(exec, input), id = binding.id
         const request = { actionId: input.actionId === undefined ? String(exec.callId) : requireIdentity(input.actionId, '操作'), frameId: requireIdentity(input.frameId, '帧'), action: parseComputerAction(input.action) }
-        options.onSelected?.(exec)
-        const completed = await options.recorder?.issuing(exec, request)
+        if (binding.isDefault) options.onSelected?.(exec)
+        const completed = binding.isDefault ? await options.recorder?.issuing(exec, request) : undefined
         let result: ComputerActionResult
-        try { exec.signal.throwIfAborted(); result = await service.act(id, request, exec.signal) }
+        try { binding.assertCurrent(); result = await service.act(id, request, exec.signal) }
         catch (error) { try { await completed?.(undefined) } catch {} throw error }
         const acceptance = await completed?.(result)
         exec.signal.throwIfAborted()
-        return JSON.parse(JSON.stringify({ ...result, ...(acceptance ? { acceptance } : {}) }))
+        binding.assertCurrent()
+        return JSON.parse(JSON.stringify(taskResult({ ...result, ...(acceptance ? { acceptance } : {}) }, binding.taskId)))
       },
     }),
     register({
       name: 'qiuya_computer_pause', description: 'Pause this chat’s computer session, cancel pending input and release held keys/buttons. Continuing and granting access remain owner actions in the computer panel.', parameters: noParameters, output,
-      async execute(args, exec) { parameters(args, []); return JSON.parse(JSON.stringify(await service.pause(session(exec)))) },
+      async execute(args, exec) { const input = parameters(args, ['taskId']), binding = bindSession(exec, input); const result = await service.pause(binding.id); binding.assertCurrent(); return JSON.parse(JSON.stringify(taskResult(result, binding.taskId))) },
     }),
   ]
   return () => { for (const dispose of unregister.reverse()) dispose() }

@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+import { launchMacCompanion, retireMacCompanion } from './macos-launch.ts'
 import { createReadStream } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { ComputerActionCleanupError, ComputerError } from './contract.ts'
@@ -32,7 +34,7 @@ function ownedInputs(message: Record<string, unknown>): NativeHeldInputs | undef
     ...(message.unicodeUnits === undefined ? {} : { unicodeUnits: [...message.unicodeUnits as number[]] }),
     ...(message.ownerId === undefined ? {} : { ownerId: message.ownerId as string }) }
 }
-/** Bounded JSONL companion transport. Requests and secrets never enter argv. */
+/** Bounded JSONL companion transport. Model requests and credentials never enter argv. */
 export class NativeCompanionDriver implements DeviceDriver {
   private child?: ChildProcessWithoutNullStreams
   private readonly pending = new Map<number, Pending>()
@@ -70,6 +72,8 @@ export class NativeCompanionDriver implements DeviceDriver {
     this.emit({ event: 'disconnected' })
   }
   private async retire(child: ChildProcessWithoutNullStreams, held: NativeHeldInputs): Promise<void> {
+    const macRetirement = retireMacCompanion(child)
+    if (macRetirement) { await macRetirement; return }
     // EOF asks the independent native message loop to revoke and release first.
     // A wedged worker gets a fixed grace; Windows then uses a separate process
     // to send only the last acknowledged owned keyups/mouseups after it exits.
@@ -117,7 +121,9 @@ export class NativeCompanionDriver implements DeviceDriver {
     if (this.child) return this.child
     const executable = this.options.executable ?? computerCompanionPath()
     const args = this.options.args ?? (process.platform === 'win32' ? ['--computer'] : [])
-    const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
+    const child = process.platform === 'darwin' && this.options.executable === undefined
+      ? launchMacCompanion(dirname(dirname(dirname(executable))))
+      : spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
     this.child = child; this.backendGeneration++
     child.stdin.on('error', error => this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child))
     child.stdout.setEncoding('utf8')
@@ -272,9 +278,15 @@ export class NativeCompanionDriver implements DeviceDriver {
     // Retain the transport slot until its real reply, or report uncertainty.
     return this.checked('launchApplication', { appId }, signal, true)
   }
-  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
-    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) return Promise.reject(new ComputerError('INVALID_PERMISSION', '系统权限类型无效'))
-    return this.checked('openSystemSettings', { kind }, signal)
+  async openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
+    const result = await this.checked<{ opened?: unknown; kind?: unknown; supported?: unknown; guideShown?: unknown; guideReady?: unknown }>('openSystemSettings', { kind }, signal)
+    if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.opened !== 'boolean' || result.kind !== undefined && result.kind !== kind || result.supported !== undefined && typeof result.supported !== 'boolean' || result.guideShown !== undefined && typeof result.guideShown !== 'boolean' || result.guideReady !== undefined && typeof result.guideReady !== 'boolean') throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的系统权限设置回执无效')
+    if (!result.opened) throw new ComputerError('SYSTEM_SETTINGS_UNAVAILABLE', result.supported === false ? '当前系统不支持此 macOS 权限设置。' : '无法打开系统权限设置，请稍后重试。')
+    // Older companions may omit guide metadata. Readiness does not claim the
+    // card is visible: it follows Settings when that application is in front.
+    if (result.guideReady === false || result.guideShown === false) throw new ComputerError('PERMISSION_GUIDE_UNAVAILABLE', '系统设置已打开，但授权卡片暂不可用，请重试。')
+    return result
   }
   private capture(targetId: string, preview: boolean, signal?: AbortSignal): Promise<ComputerObservation> {
     if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))

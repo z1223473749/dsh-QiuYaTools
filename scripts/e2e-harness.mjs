@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
 import { chromium } from 'playwright'
@@ -14,13 +14,14 @@ import { build } from 'esbuild'
 import { waitFinalNativeSession,readFinalOwnUploadedFile } from './harness-final-frame-evidence.mjs'
 import { captureHarnessComputerDiagnostic, HARNESS_COMPUTER_DIAGNOSTIC_CODES } from '../tests/fixtures/harness-e2e-provider.mjs'
 import { captureSettingsTabs, createHarnessImageLayout } from './harness-settings-acceptance.mjs'
-import { waitForHarnessComputerPipeline, matchesHarnessPreviewControlState, harnessFailedComputerDrained, finalizeHarnessOwnedResources } from './harness-computer-pipeline.mjs'
+import { waitForHarnessComputerPipeline, matchesHarnessPreviewControlState, harnessFailedComputerDrained, finalizeHarnessOwnedResources, createHarnessWindowsSessionCloseRequest } from './harness-computer-pipeline.mjs'
 import { preserveOwnedPreviewTrace, stoppedPreviewLabels, stoppedPreviewAcknowledged, waitPreviewControlSharedBudget } from './harness-passive-owned-evidence.mjs'
 import { createOwnSessionBodyOracle } from './harness-session-body-oracle.mjs'
 import { fixturePlanRevisionText, archiveCollectionEvidence, planRevisionEvidence, waitForInlinePaint } from './harness-feature-evidence.mjs'
 import { readOwnHarnessPastedText } from './harness-pasted-text-evidence.mjs'
 import { captureHarnessWorkspaceDom, registerHarnessWorkspace, selectedHarnessWorkspaceSession, waitForHarnessNewBlankSession, navigateHarnessPage, sanitizeHarnessDiagnostic } from '../tests/fixtures/harness-workspace-prerequisite.mjs'
 import { assertHarnessMacEntryPrepared } from './harness-macos-entry-preflight.mjs'
+import { startHarnessWindowsWindowRetirement } from './harness-windows-window-retirement.mjs'
 import { stagePassiveObserverForProvider } from './harness-passive-observer-artifact.mjs'
 import { HARNESS_PASSIVE_OBSERVER_SHA256 } from '../tests/fixtures/harness-passive-input-source.mjs'
 
@@ -46,11 +47,14 @@ await mkdir(imageLayout.directory, { recursive: true })
 const candidateSHA256 = candidate ? createHash('sha256').update(await readFile(resolve(candidate))).digest('hex') : null
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-e2e-'))
 const profileHome = join(temporary, 'qiuya-harness-home')
-const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1', ...(process.platform === 'darwin' ? { QIUYA_OWNED_PREVIEW_TRACE: '1', QIUYA_PASSIVE_INPUT_SOURCE: '1', NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + pathToFileURL(join(root, 'tests/fixtures/owned-preview-rpc-preload.mjs')).href].filter(Boolean).join(' ') } : {}) }
+const windowsFullRunId = process.platform === 'win32' && !featureEvidenceOnly && !windowStateDiagnostic ? randomUUID() : undefined
+const env = { ...process.env, DSH_HOME: profileHome, QIUYA_HARNESS_E2E: '1', ...(windowsFullRunId ? { QIUYA_HARNESS_WINDOWS_FULL: '1', QIUYA_HARNESS_WINDOWS_RUN_ID: windowsFullRunId, QIUYA_HARNESS_WINDOWS_CANDIDATE_SHA256: candidateSHA256, QIUYA_HARNESS_WINDOWS_PROFILE: profileHome } : {}), ...(process.platform === 'darwin' ? { QIUYA_OWNED_PREVIEW_TRACE: '1', QIUYA_PASSIVE_INPUT_SOURCE: '1', NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + pathToFileURL(join(root, 'tests/fixtures/owned-preview-rpc-preload.mjs')).href].filter(Boolean).join(' ') } : {}) }
 const tests = [], errors = [], screenshots = [], windowRpc = []
 let host, browser, page, driver, macPreviewRetirement, diagnosticComplete = false
 let macTargetFixture, macTargetBinding, macTargetEvidenceSequence = 0
 let blankSessionSequence = 0, ownSessionBodyOracle
+const ownedWindowsSessionTargets = []
+let windowsSessionWindowRetirement, windowsSessionConsoleRetirement, windowsWindowRetirementObserver
 const readOwnSessionBody = input => { ownSessionBodyOracle ??= createOwnSessionBodyOracle({ root, temporary, profileRoot: profileHome, host, runnerPID: process.pid, run: nativeCommand }); return ownSessionBodyOracle(input) }
 class PreviewWindowDiagnosticStop extends Error {}
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
@@ -158,6 +162,16 @@ async function newSession(label) {
   return id
 }
 async function menu(label) { await row(label).click({ button: 'right' }); await page.getByRole('menuitem', { name: '复制会话标题', exact: true }).waitFor() }
+async function openOwnComputerEnvironment(sessionId) {
+  const owner = page.locator(`[data-qyt-computer-environment=${JSON.stringify(sessionId)}]:visible`)
+  assert.equal(await owner.count(), 1, 'Exactly one visible composer must own this test chat environment')
+  await owner.getByRole('button', { name: /^操作环境：/u }).click()
+  const dialog = page.getByRole('dialog', { name: '操作环境', exact: true }).filter({ has: page.locator(`[data-qyt-environment-session=${JSON.stringify(sessionId)}]`) })
+  await dialog.waitFor()
+  assert.equal(await dialog.count(), 1, 'The environment dialog must belong to this exact chat default task')
+  assert.equal(await dialog.getByRole('combobox', { name: '选择当前聊天的电脑任务', exact: true }).inputValue(), '', 'The full feature case must keep its original default task')
+  return dialog
+}
 async function ownFeatureEvidence(kind) {
   return page.evaluate(async kind => {
     const response = await fetch('/api/qiuya-e2e-owned-feature', { method: 'POST', signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) })
@@ -176,7 +190,7 @@ try {
     await execute(['plugin', '--profile', 'web', 'add', resolve(candidate)])
     assert.equal(createHash('sha256').update(await readFile(resolve(candidate))).digest('hex'), candidateSHA256, 'The candidate changed while Harness was installing it')
     const fixture = join(temporary, 'provider'); await mkdir(fixture)
-    const providerBundle = await build({ entryPoints: [join(root, 'tests/fixtures/harness-e2e-provider.mjs')], outfile: join(fixture, 'index.mjs'), absWorkingDir: root, write: false, bundle: true, platform: 'node', format: 'esm' }); assert.ok(join(fixture, 'index.mjs').startsWith(temporary + '/')); await writeFile(join(fixture, 'index.mjs'), providerBundle.outputFiles[0].contents)
+    const providerBundle = await build({ entryPoints: [join(root, 'tests/fixtures/harness-e2e-provider.mjs')], outfile: join(fixture, 'index.mjs'), absWorkingDir: root, write: false, bundle: true, platform: 'node', format: 'esm' }); assert.ok(join(fixture, 'index.mjs').startsWith(temporary + sep)); await writeFile(join(fixture, 'index.mjs'), providerBundle.outputFiles[0].contents)
     if (process.platform === 'darwin' && (!featureEvidenceOnly || featureEvidenceCases.has('computer-main-agent-tools-and-image-adapter-pipeline'))) {
       const observerDeployment = await stagePassiveObserverForProvider({ sourceDirectory: join(root, 'tests/fixtures'), providerDirectory: fixture, expectedSHA256: HARNESS_PASSIVE_OBSERVER_SHA256 })
       await writeFile(join(output, 'passive-observer-runtime-binding.json'), JSON.stringify(observerDeployment, null, 2), { flag: 'wx' })
@@ -342,6 +356,7 @@ try {
       }
     }
     independentTarget = target
+    if (windowsFullRunId) ownedWindowsSessionTargets.push({ sessionId: alphaId, title: alpha, target })
     if (process.platform === 'darwin' && candidate) await ownMacTarget('bind', alpha, { targetPid: target.pid, targetWindowId: Number(target.id.replace('mac-window:', '')) })
     const observation = process.platform === 'darwin' ? await waitFinalNativeSession({ driver, target, title: alpha, sessionId: alphaId, deadline: finalNativeDeadline, acknowledged: () => windowRpc.some(row => row.request?.sessionId === alphaId && row.result?.ok && row.result?.value?.opened), record: evidence => writeFile(join(output, 'independent-window-final-body.json'), JSON.stringify(evidence, null, 2)), readBody: readOwnSessionBody, recordFailureRaster: async observation => { const bytes = Buffer.from(observation.imageBase64, 'base64'); await writeFile(imagePath('independent-window-final-failed-diagnostic.jpg'), bytes); return { status: 'failed-diagnostic-only', file: imageReference('independent-window-final-failed-diagnostic.jpg'), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') } } }) : await driver.observe(target.id)
     await writeFile(imagePath('independent-window.jpg'), Buffer.from(observation.imageBase64, 'base64'))
@@ -375,6 +390,7 @@ try {
     await writeFile(join(output, 'drag-browser-events.json'), JSON.stringify(facts, null, 2))
     const finalDragDeadline = Date.now() + 35000
     const target = await waitFor(async () => (await driver.targets()).find(target => target.title.includes(beta)), 'The real browser drag did not reveal its native session window', Math.max(1, finalDragDeadline - Date.now()))
+    if (windowsFullRunId) ownedWindowsSessionTargets.push({ sessionId: betaId, title: beta, target })
     assert.ok(facts.some(event => event.kind === 'dragstart' && event.isTrusted), 'The browser must generate an actual trusted dragstart')
     assert.ok(facts.some(event => event.kind === 'drop' && event.isTrusted), 'The browser must generate an actual trusted drop')
     await waitFor(() => windowRpc.some(request => request.request?.sessionId === betaId && request.request.source === 'drag' && request.result?.value?.opened), 'The dragged native window did not acknowledge its exact session', Math.max(1, finalDragDeadline - Date.now()))
@@ -475,7 +491,7 @@ try {
     const pipelineProgress = []
     try {
       await waitForHarnessComputerPipeline(async remainingMs => {
-        const sourceFailure=ownedMacInputSourceFailure(profileHome,host.pid)
+        const sourceFailure=process.platform === 'darwin' ? ownedMacInputSourceFailure(profileHome,host.pid) : null
         if(sourceFailure)throw new Error('PASSIVE_SOURCE_DIAGNOSTIC_UNAVAILABLE:'+sourceFailure.stage+':'+sourceFailure.code+'; original input not replayed')
         const raw = await readFile(join(profileHome, 'e2e-adapter-requests.jsonl'), 'utf8')
         // The provider appends complete JSONL rows synchronously. A concurrent
@@ -892,13 +908,16 @@ try {
     try {
       await row(alpha).click(); await openSettings(); await page.getByRole('tab', { name: '电脑操控', exact: true }).click()
       const enable = page.getByRole('switch', { name: '启用电脑操控', exact: true }); if (!await enable.isChecked()) await enable.click()
-      await page.locator('.qyt-computer-advanced > summary').click()
-      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('remote')
-      await page.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
-      await page.getByLabel('配对密钥', { exact: true }).fill(pairing)
-      await page.getByRole('checkbox', { name: /允许连接受信任的私有网络/u }).check()
-      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()
-      const pane = page.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')
+      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+      let environment = await openOwnComputerEnvironment(alphaId)
+      await environment.getByRole('radio', { name: /远端电脑/u }).check()
+      await environment.getByLabel('配对地址', { exact: true }).fill(server.endpoint)
+      await environment.getByLabel('配对密钥', { exact: true }).fill(pairing)
+      await environment.getByRole('checkbox', { name: /允许连接受信任的私有网络/u }).check()
+      await environment.getByRole('button', { name: '使用此环境', exact: true }).click()
+      await environment.waitFor({ state: 'hidden' })
+      environment = await openOwnComputerEnvironment(alphaId)
+      const pane = environment.getByRole('heading', { name: '手动文件交换', exact: true }).locator('..')
       await pane.waitFor()
       await pane.getByRole('button', { name: '检查并刷新交换目录', exact: true }).click()
       const picker = pane.locator('input[type="file"]'); await picker.waitFor()
@@ -922,10 +941,10 @@ try {
       assert.deepEqual(await readFile(join(directory, name)), bytes)
       Object.assign(evidence, { name, size: bytes.length, sha256, uploadedBytesVerified: true, browserDownloadVerified: true, duplicateRejectedWithoutOverwrite: true })
       await screenshot('file-exchange-ui')
-      await page.getByRole('combobox', { name: /^操作环境/u }).selectOption('local')
-      await page.getByRole('button', { name: '连接当前聊天的环境', exact: true }).click()
+      await environment.getByRole('radio', { name: /这台电脑/u }).check()
+      await environment.getByRole('button', { name: '使用此环境', exact: true }).click()
       await waitFor(async () => await page.getByRole('heading', { name: '手动文件交换', exact: true }).count() === 0, 'The file-only remote environment did not disconnect')
-      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+      await waitFor(async () => await page.locator(`[data-qyt-computer-environment=${JSON.stringify(alphaId)}]:visible`).getByRole('button', { name: '操作环境：这台电脑', exact: true }).count() === 1, 'The exact chat did not return to its local environment')
       assert.ok(calls.status > 0)
       for (const key of ['observe', 'lease', 'release', 'act', 'preview']) assert.equal(calls[key], 0, 'File exchange must not invoke desktop ' + key)
       return { size: bytes.length, unicodeFilename: true, sha256, byteVerified: true, noOverwrite: true, nativeInputCalls: 0 }
@@ -954,12 +973,52 @@ finally {
     await copyFile(join(profileHome, 'native-zorder-trace.jsonl'), join(output, 'native-zorder-trace.jsonl')).catch(error => { if (error.code !== 'ENOENT') errors.push('Native presentation evidence could not be preserved: ' + sanitizeHarnessDiagnostic(error.message)) })
   }
   const ownedCleanupErrors = await finalizeHarnessOwnedResources([
+    ...(windowsFullRunId && ownedWindowsSessionTargets.length ? [{ name: 'normal-close-owned-native-session-windows', run: async () => {
+      const nativeExecutable = join(profileHome, `profiles/web/node_modules/dsh-qiuya-tools/lib/native/win32-${process.arch}/qiuya-windows.exe`)
+      try {
+        const binding = createHarnessWindowsSessionCloseRequest({ host, hostExecutable: cli[0], hostSHA256: createHash('sha256').update(await readFile(cli[0])).digest('hex'), profileRoot: profileHome, architecture: process.arch, nativeExecutable, nativeSHA256: createHash('sha256').update(await readFile(nativeExecutable)).digest('hex'), windows: ownedWindowsSessionTargets })
+        windowsWindowRetirementObserver = startHarnessWindowsWindowRetirement({ args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tests/fixtures/harness-close-session-windows.ps1'), '-BindingBase64', Buffer.from(JSON.stringify(binding)).toString('base64')] })
+        const result = await windowsWindowRetirementObserver.ready()
+        assert.equal(result.operation, binding.operation); assert.equal(result.passed, true); assert.equal(result.hostPID, host.pid); assert.equal(result.helperPID, binding.helperPID); assert.equal(result.helperBirthTicks, binding.helperBirthTicks); assert.equal(result.helperSHA256, binding.nativeSHA256)
+        assert.equal(result.budgetMs, 5000); assert.ok(result.elapsedMs <= 5000); assert.equal(result.processSignalsSent, 0); assert.equal(result.normalWMCloseCount, binding.windows.length); assert.equal(result.windowGroupReleased, true)
+        assert.deepEqual(result.windows.map(({ sessionId, targetId }) => ({ sessionId, targetId })), binding.windows.map(({ sessionId, targetId }) => ({ sessionId, targetId }))); assert.ok(result.windows.every(window => window.wmClosePosted && window.windowGone))
+        assert.ok(result.browserProcesses.length > 0 && result.browserProcesses.every(child => child.cachedOriginalHandle && child.exitCode === 0))
+        assert.equal(result.consoleProcesses.length, 1); assert.ok(result.consoleProcesses.every(child => child.cachedOriginalHandle && child.systemConsolePathVerified && child.signatureStatus === 'Valid' && child.parentPID === binding.helperPID))
+        windowsSessionWindowRetirement = result
+      } catch (error) { windowsWindowRetirementObserver?.abortBeforeHostEOF(); windowsSessionWindowRetirement = { passed: false, error: sanitizeHarnessDiagnostic(error.message), processSignalsSent: 0 }; throw error }
+      finally { await writeFile(join(output, 'windows-session-window-normal-retirement.json'), JSON.stringify(windowsSessionWindowRetirement, null, 2)) }
+    } }] : []),
     { name: 'observer-dispose', run: () => driver?.dispose() },
     { name: 'browser-close', run: () => browser?.close() },
-    { name: 'host-shutdown', run: () => { host?.stdin.end(); host?.kill('SIGTERM') } },
+    ...(windowsFullRunId ? [{ name: 'host-shutdown', run: () => { try { windowsWindowRetirementObserver?.beginHostEOF() } finally { host?.stdin.end() } } }] : [{ name: 'host-shutdown', run: () => { host?.stdin.end(); host?.kill('SIGTERM') } }]),
   ])
   let forcedHostTermination = false
-  if (host && macPreviewRetirement) await new Promise(resolve => {
+  let windowsHostRetirement
+  if (windowsFullRunId && host) {
+    windowsHostRetirement = { hostPID: host.pid, natural: false, osSignalsSent: 0, budgetMs: 3000, waitTimedOut: false, precondition: 'Business native windows normally closed and original WebView groups retired before Host EOF', businessWindowsNormallyClosed: windowsSessionWindowRetirement?.passed === true }
+    await new Promise(resolve => {
+      if (host.exitCode !== null || host.signalCode !== null) return resolve()
+      const done = () => { clearTimeout(timer); resolve() }
+      const timer = setTimeout(() => { windowsHostRetirement.waitTimedOut = true; host.off('exit', done); resolve() }, 3000)
+      host.once('exit', done)
+    })
+    if (windowsWindowRetirementObserver) {
+      try {
+        windowsSessionConsoleRetirement = await windowsWindowRetirementObserver.finish()
+        assert.equal(windowsSessionConsoleRetirement.passed, true); assert.equal(windowsSessionConsoleRetirement.hostPID, host.pid); assert.equal(windowsSessionConsoleRetirement.helperPID, windowsSessionWindowRetirement.helperPID)
+        assert.equal(windowsSessionConsoleRetirement.hostExitCode, 0); assert.equal(windowsSessionConsoleRetirement.helperExitCode, 0); assert.equal(windowsSessionConsoleRetirement.processSignalsSent, 0); assert.equal(windowsSessionConsoleRetirement.budgetMs, 3000); assert.ok(windowsSessionConsoleRetirement.elapsedMs <= 3000)
+        assert.deepEqual(windowsSessionConsoleRetirement.observerExit, { code: 0, signal: null }); assert.deepEqual(windowsSessionConsoleRetirement.consoleProcesses.map(child => { const { exitCode, ...identity } = child; assert.equal(exitCode, 0); return identity }), windowsSessionWindowRetirement.consoleProcesses)
+      } catch (error) { windowsSessionConsoleRetirement = { passed: false, error: sanitizeHarnessDiagnostic(error.message), processSignalsSent: 0 }; errors.push('Original Windows Host/helper/console retirement was not confirmed: ' + sanitizeHarnessDiagnostic(error.message)) }
+      await writeFile(join(output, 'windows-session-console-natural-retirement.json'), JSON.stringify(windowsSessionConsoleRetirement, null, 2))
+    }
+    windowsHostRetirement.exitCode = host.exitCode; windowsHostRetirement.signal = host.signalCode
+    windowsHostRetirement.receipt = await readFile(join(profileHome, 'e2e-windows-normal-close.json'), 'utf8').then(JSON.parse).catch(() => null)
+    const receipt = windowsHostRetirement.receipt
+    windowsHostRetirement.natural = windowsHostRetirement.businessWindowsNormallyClosed && !windowsHostRetirement.waitTimedOut && host.exitCode === 0 && host.signalCode === null && receipt?.runId === windowsFullRunId && receipt?.candidateSHA256 === candidateSHA256 && receipt?.hostPID === host.pid && receipt?.source === 'own-stdin-eof-to-official-sigterm-handler' && receipt?.osSignalsSent === 0 && receipt?.eofCount === 1 && receipt?.officialHandlerInvoked === true && receipt?.fixtureEffectDisposed === true && Number.isSafeInteger(receipt?.signalListenerCount) && receipt.signalListenerCount > 0
+    if (!windowsHostRetirement.natural) errors.push('The exact Windows full-suite Host did not confirm natural exit0 and its own official EOF shutdown within3000ms; no signal or escalation was sent')
+    await writeFile(join(output, 'windows-host-natural-retirement.json'), JSON.stringify(windowsHostRetirement, null, 2))
+  }
+  else if (host && macPreviewRetirement) await new Promise(resolve => {
     if (host.exitCode !== null || host.signalCode !== null) return resolve()
     const finish = () => { clearTimeout(timer); resolve() }
     const timer = setTimeout(() => { forcedHostTermination = true; host.kill('SIGKILL'); resolve() }, 3000)
@@ -982,7 +1041,7 @@ finally {
   const passiveTraceEvidence = process.platform === 'darwin' ? await preserveOwnedPreviewTrace({ profileRoot: await realpath(profileHome).catch(() => profileHome), output: await realpath(output), host: { pid: host?.pid, retired: Boolean(host && (host.exitCode !== null || host.signalCode !== null)), exitCode: host?.exitCode ?? null, signal: host?.signalCode ?? null, forced: forcedHostTermination } }) : { status: 'unavailable', code: 'NOT_MAC_SCOPE', noRPCInferencePermitted: false }
   await writeFile(join(output, 'owned-preview-rpc-diagnostic-preservation.json'), JSON.stringify(passiveTraceEvidence, null, 2))
   const diagnosticSucceeded = windowStateDiagnostic && diagnosticComplete && tests.every(test => ['passed', 'diagnostic'].includes(test.status)) && !errors.length && !ownedCleanupErrors.length
-  const report = { passiveInputSourceEvidence, passiveTraceEvidence, status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length && !ownedCleanupErrors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : featureEvidenceOnly ? 'official-Harness-feature-evidence-subset' : 'official-Harness-isolated-profile-real-browser', selection: featureEvidenceOnly ? { scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence', selectedCases: [...featureEvidenceCases], fullUIAcceptance: false } : { scope: 'complete-configured-suite' }, platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, ownedCleanup: { passed: !ownedCleanupErrors.length, errors: ownedCleanupErrors }, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
+  const report = { passiveInputSourceEvidence, passiveTraceEvidence, ...(windowsFullRunId ? { windowsHostRetirement, windowsSessionWindowRetirement, windowsSessionConsoleRetirement } : {}), status: diagnosticSucceeded ? 'diagnostic' : tests.length && tests.every(test => test.status === 'passed') && !errors.length && !ownedCleanupErrors.length ? 'passed' : 'failed', kind: windowStateDiagnostic ? 'official-Harness-preview-window-state-diagnostic' : featureEvidenceOnly ? 'official-Harness-feature-evidence-subset' : 'official-Harness-isolated-profile-real-browser', selection: featureEvidenceOnly ? { scope: pastedTextOnly ? 'strict-pasted-text-evidence' : 'strict-feature-evidence', selectedCases: [...featureEvidenceCases], fullUIAcceptance: false } : { scope: 'complete-configured-suite' }, platform: process.platform, architecture: process.arch, browserChannel: arg('--browser', 'chrome'), candidate: candidate ? resolve(candidate) : null, candidateSHA256, testedAt: new Date().toISOString(), tests, frontendErrors: errors, ownedCleanup: { passed: !ownedCleanupErrors.length, errors: ownedCleanupErrors }, screenshots, screenshotEvidence: await imageLayout.manifest(), profileIsolation: true, model: 'deterministic local fixture, no real account credentials', limitations: ['Paste input is a browser ClipboardEvent; system clipboard API is spied inside the disposable browser to avoid altering the user clipboard.', 'This runner validates plugin UI and Host integration; it does not measure 30-minute preview endurance or claim Windows execution when run on macOS.', 'The local adapter proves actual main-Agent tool/image transport. External vision-model reasoning and physical IME composition require separate evidence.', ...(windowStateDiagnostic ? ['Diagnostic mode stops after the three native window observations; preview controls, manual input, archive/plan and file-exchange acceptance are not run.'] : [])] }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   if (!process.argv.includes('--keep-profile')) await rm(temporary, { recursive: true, force: true })
   console.log(JSON.stringify({ status: report.status, tests: tests.map(({ name, status }) => ({ name, status })), report: join(output, 'report.json') }, null, 2))

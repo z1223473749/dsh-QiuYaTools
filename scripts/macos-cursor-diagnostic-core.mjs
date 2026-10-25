@@ -206,7 +206,7 @@ export function instrumentMacCursorSources({ cursor, input }) {
   return { cursor, input }
 }
 
-const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
+const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'MacTransport', 'PermissionGuide', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
 
 /** Freeze source and a build plan only. This function cannot compile, start a Host, or send input. */
 export async function prepareMacCursorSourceSnapshot({ root, base, expectedHelperSHA256 = currentCursorBaseline, buildReceiptPath = 'artifacts/computer-use/macos-keyboard-pair-formal-build/1c5b471e-9d6e-4d3d-9f83-bb58b1a311de/report.json' }) {

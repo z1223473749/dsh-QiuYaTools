@@ -4,6 +4,7 @@ import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.t
 
 export type ComputerEnvironmentCall = (op: string, extra?: object, signal?: AbortSignal) => Promise<unknown>
 export interface ComputerEnvironmentStatus {
+  tasks?: { chatSessionId: string; taskId: string; taskLabel?: string }[]
   native?: ComputerNativeView | null
   environments?: { environmentId?: string; sessionId?: string; mode: 'local' | 'remote' | 'browser'; switching?: boolean; retiring?: boolean }[]
 }

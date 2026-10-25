@@ -121,14 +121,22 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         rpcId = envelope.rpcId
         const input = envelope.payload
         if (!input || typeof input !== 'object') throw new Error('无效参数')
-        const sessionId = input.sessionId === undefined ? undefined : requireIdentity(input.sessionId, '会话')
+        const chatSessionId = input.sessionId === undefined ? undefined : requireIdentity(input.sessionId, '会话')
+        if (input.taskId !== undefined && (!manager || !chatSessionId)) throw new ComputerError('TASK_NOT_FOUND', '此电脑任务不属于当前聊天。')
+        const sessionId = input.taskId === undefined ? chatSessionId : manager!.resolveTask(chatSessionId!, requireIdentity(input.taskId, '电脑任务'))
         let value: unknown
         if (input.op === 'status') {
           const changing = manager ? manager.isSwitching(sessionId) : switching
-          value = { enabled: enabled(), switching: changing, sessions: service.list(), pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments() } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? sessionId === undefined ? manager.authorizationStatus(undefined, request.signal) : manager.statusIfPresentFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
+          value = { enabled: enabled(), switching: changing, sessions: service.list(), pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments(), ...(chatSessionId ? { tasks: manager.listTasks(chatSessionId) } : {}) } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? sessionId === undefined ? manager.authorizationStatus(undefined, request.signal) : manager.statusIfPresentFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
         } else {
           if (!['pause', 'stop', 'cancelRequest'].includes(input.op) && !(input.op === 'allow' && input.allowed === false)) assertEnabled(sessionId)
-          if (input.op === 'pending') value = { pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal) }
+          if (input.op === 'createTask') {
+            if (!manager || !chatSessionId) throw new ComputerError('TASK_NOT_FOUND', '请从当前聊天创建电脑任务。')
+            const sessions = services.get?.('sessions') as { get(id: string): unknown } | undefined
+            if (!sessions?.get(chatSessionId)) throw new ComputerError('SESSION_REQUIRED', '当前聊天不可用。')
+            value = { taskId: manager.createTask(chatSessionId, input.label) }
+          }
+          else if (input.op === 'pending') value = { pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal) }
           else if (input.op === 'decide' || input.op === 'cancelRequest') {
             if (!sessionId) throw new Error('授权决定必须绑定发起请求的聊天。')
             const requestId = requireIdentity(input.requestId, '授权请求')
@@ -180,7 +188,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           else if (input.op === 'start') {
             invalidate(sessionId)
             const sessions = services.get?.('sessions') as { get(id: string): unknown } | undefined
-            if (!sessions?.get(sessionId)) throw new Error('关联聊天不可用，请重新选择。')
+            if (!sessions?.get(chatSessionId!)) throw new Error('关联聊天不可用，请重新选择。')
             value = await service.start(sessionId, requireIdentity(input.targetId, '目标'), { allowOnce: true, signal: request.signal })
           }
           else if (input.op === 'pause') {
@@ -199,7 +207,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           else if (input.op === 'frame') value = await service.preview(sessionId, request.signal)
           else if (input.op === 'act') value = await service.humanAct(sessionId, input.request, request.signal)
           else if (input.op === 'preview') {
-            const url = services.connection.authenticatedUrl(`http://127.0.0.1:${services.webServer.port}${COMPUTER_PREVIEW_PATH}?session=${encodeURIComponent(sessionId)}`)
+            const url = services.connection.authenticatedUrl(`http://127.0.0.1:${services.webServer.port}${COMPUTER_PREVIEW_PATH}?session=${encodeURIComponent(chatSessionId!)}${input.taskId === undefined ? '' : `&task=${encodeURIComponent(input.taskId)}`}`)
             value = manager ? await manager.openPreview(sessionId, url, 'QiuYaTools · 电脑操控', request.signal) : await driver!.openPreview(url, 'QiuYaTools · 电脑操控', sessionId, request.signal)
           } else if (input.op === 'redock') {
             value = manager ? await manager.redock(sessionId, request.signal) : await driver!.closePreview(request.signal, { preserveSession: true })

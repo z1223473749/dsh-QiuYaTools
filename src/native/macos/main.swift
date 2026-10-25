@@ -4,9 +4,11 @@ import Foundation
 import ScreenCaptureKit
 
 @MainActor final class ComputerApplication: NSObject, NSApplicationDelegate {
+    private let transport: MacControlTransport
     private let capture = WindowCapture()
     private let input = NativeInput()
     private let applications = NativeApplicationCatalog()
+    private let permissionGuide = PermissionGuideController()
     private var preview: FloatingPreview?
     private var geometries: [String: FrameGeometry] = [:]
     private var observationBusy = false
@@ -16,7 +18,10 @@ import ScreenCaptureKit
     private var localInputMonitor: Any?
     private var signalSources: [DispatchSourceSignal] = []
 
+    init(transport: MacControlTransport) { self.transport = transport; super.init() }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let ready = transport.ready() { Wire.send(ready) }
         input.onCursorCleanupFailure = { [weak self] in
             Wire.send(["event": "inputCleanupFailed", "code": "CURSOR_CLEANUP_FAILED"])
             self?.shutdown()
@@ -34,17 +39,16 @@ import ScreenCaptureKit
             source.resume(); signalSources.append(source)
         }
         // No permission-request APIs are called here. Status is a pure preflight.
+        let controlTransport = transport
         DispatchQueue.global(qos: .userInitiated).async {
-            while let line = readLine() {
-                guard line.utf8.count <= 2_000_000, let data = line.data(using: .utf8),
-                      let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                DispatchQueue.main.async { self.receive(command) }
-            }
+            try? controlTransport.readCommands { command in DispatchQueue.main.async { self.receive(command) } }
             DispatchQueue.main.async { self.shutdown() }
         }
         let expectedParent = ProcessInfo.processInfo.environment["QIUYA_TOOLS_PARENT_PID"].flatMap(Int32.init)
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            if getppid() == 1 || expectedParent.map({ getppid() != $0 || kill($0, 0) != 0 }) == true {
+            let ownerRetired = controlTransport.isLaunchServices ? !controlTransport.ownerIsCurrent()
+                : getppid() == 1 || expectedParent.map({ getppid() != $0 || kill($0, 0) != 0 }) == true
+            if ownerRetired {
                 Task { @MainActor in self.shutdown() }
             }
             Task { @MainActor in
@@ -82,6 +86,7 @@ import ScreenCaptureKit
 
     func receive(_ command: [String: Any]) {
         guard !closing, let requestId = requestIdentifier(command["requestId"]), let op = command["op"] as? String else { return }
+        guard transport.ownerIsCurrent() else { shutdown(); return }
         // Revocations run before asynchronous work, rather than queueing behind a
         // capture or drag. Every individual injected event checks this state.
         if op == "lease" || op == "release" {
@@ -100,11 +105,12 @@ import ScreenCaptureKit
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
                 "aiCursor": input.aiCursorState, "aiOperation": input.aiOperationState,
-                "focusAttempt": input.focusAttempt as Any? ?? NSNull(), "preview": preview?.navigationState as Any? ?? NSNull()])
+                "focusAttempt": input.focusAttempt as Any? ?? NSNull(), "preview": preview?.navigationState as Any? ?? NSNull(),
+                "permissionGuide": permissionGuide.status])
             return
         }
         if op == "openSystemSettings" {
-            do { Wire.success(requestId, try NativeApplicationCatalog.openSystemSettings(command["kind"])) }
+            do { Wire.success(requestId, try permissionGuide.open(command["kind"])) }
             catch { Wire.failure(requestId, error) }
             return
         }
@@ -191,13 +197,21 @@ import ScreenCaptureKit
         if let globalInputMonitor { NSEvent.removeMonitor(globalInputMonitor) }
         if let localInputMonitor { NSEvent.removeMonitor(localInputMonitor) }
         globalInputMonitor = nil; localInputMonitor = nil
+        var inputReleased = true
         do { try input.shutdownCleanup() }
-        catch { Wire.send(["event": "inputCleanupFailed", "code": (error as? ComputerError)?.code ?? "INPUT_CLEANUP_FAILED"]) }
+        catch { inputReleased = false; Wire.send(["event": "inputCleanupFailed", "code": (error as? ComputerError)?.code ?? "INPUT_CLEANUP_FAILED"]) }
         preview?.close(); preview = nil
-        Task { @MainActor in await capture.stop(); NSApp.terminate(nil) }
+        permissionGuide.close()
+        let released = inputReleased
+        Task { @MainActor in
+            await capture.stop()
+            if let receipt = transport.retired(inputReleased: released, captureStopped: true) { Wire.send(receipt) }
+            NSApp.terminate(nil)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
     }
     func applicationWillTerminate(_ notification: Notification) {
+        permissionGuide.close()
         do { try input.shutdownCleanup() }
         catch { Wire.send(["event": "inputCleanupFailed", "code": (error as? ComputerError)?.code ?? "INPUT_CLEANUP_FAILED"]) }
     }
@@ -210,8 +224,17 @@ if CommandLine.arguments.contains("--input-guardian") {
 }
 
 MainActor.assumeIsolated {
+    let transport: MacControlTransport
+    do { transport = try MacControlTransport(arguments: Array(CommandLine.arguments.dropFirst())) }
+    catch {
+        // Finite diagnostics only: never print control paths, nonces or argv.
+        let code = (error as? ComputerError)?.code ?? "NATIVE_TRANSPORT_UNAVAILABLE"
+        FileHandle.standardError.write(Data("\(code)\n".utf8))
+        exit(1)
+    }
     let application = NSApplication.shared
-    let delegate = ComputerApplication()
+    let delegate = ComputerApplication(transport: transport)
+    Wire.useOutput(transport.output, onFailure: { DispatchQueue.main.async { delegate.shutdown() } })
     application.delegate = delegate
     application.setActivationPolicy(.accessory)
     application.run()

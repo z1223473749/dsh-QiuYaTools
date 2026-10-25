@@ -49,6 +49,6 @@ test('a linked bucket or leaf is refused instead of following a matching outside
 test('Windows oracle is ASCII-safe for PowerShell5.1 and both immutable transports include its source', async () => {
   const source = await readFile(new URL('./fixtures/harness-pasted-file-windows.ps1', import.meta.url), 'utf8')
   assert.ok([...source].every(character => character.charCodeAt(0) < 128))
-  for (const n of ['ReparsePoint', 'GetFinalPathNameByHandle', 'GetFileInformationByHandle', 'ComputeHash', 'FileShare]::Read']) assert.ok(source.includes(n))
+  for (const n of ['ReparsePoint', 'GetFinalPathNameByHandle', 'GetFileInformationByHandle', 'ComputeHash', 'CreateFileW', 'System.IO.FileStream']) assert.ok(source.includes(n))
   for (const file of ['../scripts/e2e-windows-harness-pd.mjs', '../scripts/prepare-windows-test-runtime.mjs']) assert.ok((await readFile(new URL(file, import.meta.url), 'utf8')).includes('harness-pasted-file-windows.ps1'))
 })

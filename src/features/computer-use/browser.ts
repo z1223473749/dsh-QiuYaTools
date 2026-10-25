@@ -4,8 +4,9 @@ import type { ChildProcess } from 'node:child_process'
 import { access, mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createBrowserAnnotationView } from './browser-annotation.ts'
+import { BrowserCaptureStreams } from './browser-capture.ts'
 import type { BrowserAnnotationView } from './browser-annotation.ts'
 import { ComputerError, parseComputerAction, requireIdentity } from './contract.ts'
 import type { ComputerAction, ComputerGeometry, ComputerObservation, ComputerStatus, DeviceDriver, NativeComputerEvent, NativeTarget } from './contract.ts'
@@ -19,6 +20,17 @@ export type BrowserSelectorAction = { kind: 'click' | 'type' | 'scroll'; selecto
 interface Pending { resolve(value: unknown): void; reject(error: unknown): void; clean(): void }
 interface OwnedBrowserInput { sessionId: string; tabId: string; method: string; params: Record<string, unknown> }
 interface OwnedBrowserLaunch { child: ChildProcess; activePort: string; endpoint?: string; ambiguous: boolean; stop(): void }
+/** Caller cancellation cannot discard an already-issued shared attach receipt. */
+function browserReceipt<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const clean = () => signal.removeEventListener('abort', abort), abort = () => { clean(); reject(signal.reason) }
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(value => { clean(); resolve(value) }, error => { clean(); reject(error) })
+    if (signal.aborted) abort()
+  })
+}
 /** Only this exact spawned child's complete stderr line can identify a late endpoint. */
 function trackOwnedBrowserLaunch(child: ChildProcess, activePort: string): OwnedBrowserLaunch {
   let tail = ''
@@ -44,7 +56,9 @@ class CdpConnection {
   private readonly pending = new Map<number, Pending>()
   private readonly listeners = new Set<(event: CdpEvent) => void>()
   private disposed = false
+  private readonly captures: BrowserCaptureStreams
   constructor(private readonly socket: WebSocket, private readonly timeoutMs: number) {
+    this.captures = new BrowserCaptureStreams({ send: (method, params, sessionId) => this.sendRaw(method, params, sessionId), subscribe: listener => this.subscribe(listener) })
     socket.addEventListener('message', event => {
       if (typeof event.data !== 'string' || event.data.length > 48 * 1024 * 1024) { this.fail(new ComputerError('BROWSER_PROTOCOL', '浏览器响应无效或超过限制')); socket.close(); return }
       let value: { id?: number; result?: unknown; error?: { message?: string }; method?: string; sessionId?: string; params?: Record<string, unknown> }
@@ -71,8 +85,17 @@ class CdpConnection {
     return new CdpConnection(socket, timeoutMs)
   }
   subscribe(listener: (event: CdpEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  private fail(error: unknown): void { this.disposed = true; for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }; this.pending.clear(); for (const listener of this.listeners) { try { listener({ method: 'QiuYa.disconnected' }) } catch {} } }
+  private fail(error: unknown): void { this.disposed = true; this.captures.disconnect(); for (const entry of this.pending.values()) { entry.clean(); entry.reject(error) }; this.pending.clear(); for (const listener of this.listeners) { try { listener({ method: 'QiuYa.disconnected' }) } catch {} } }
   send<T = Record<string, unknown>>(method: string, params: object = {}, sessionId?: string, signal?: AbortSignal): Promise<T> {
+    if (this.disposed) return Promise.reject(new ComputerError('BROWSER_DISCONNECTED', '浏览器连接已关闭'))
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    if (method === 'Page.captureScreenshot' && sessionId) return this.captures.capture<T>(sessionId, params, signal)
+    if (method === 'Target.detachFromTarget' && typeof (params as { sessionId?: unknown }).sessionId === 'string') return this.captures.retireSession((params as { sessionId: string }).sessionId, () => this.sendRaw<T>(method, params, sessionId, signal))
+    return this.sendRaw<T>(method, params, sessionId, signal)
+  }
+  drainCaptures(): Promise<void> { return this.captures.drain() }
+  retireCaptureSession<T>(sessionId: string, retiring: () => Promise<T>): Promise<T> { return this.captures.retireSession(sessionId, retiring) }
+  private sendRaw<T = Record<string, unknown>>(method: string, params: object = {}, sessionId?: string, signal?: AbortSignal): Promise<T> {
     if (this.disposed || this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new ComputerError('BROWSER_DISCONNECTED', '浏览器尚未连接'))
     if (signal?.aborted) return Promise.reject(signal.reason)
     if (this.pending.size >= 128) return Promise.reject(new ComputerError('BROWSER_QUEUE_FULL', '浏览器请求过多'))
@@ -128,6 +151,8 @@ export class BrowserSession {
   private child?: ChildProcess
   private ownedLaunch?: OwnedBrowserLaunch
   private readonly sessions = new Map<string, string>()
+  private readonly tabLifetimes = new Map<string, object>()
+  private readonly tabAttachPins = new Set<{ tabId: string; lifetime: object; ready: Promise<string> }>()
   private readonly ownedTabs = new Set<string>()
   private readonly diagnosticStreams = new Set<() => Promise<void>>()
   private readonly observations = new Map<string, ComputerObservation>()
@@ -135,9 +160,11 @@ export class BrowserSession {
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
   private readonly ownedInput = new Map<number, OwnedBrowserInput>()
   private readonly inputReleases = new Map<number, Promise<void>>()
-  private readonly annotationPins = new Set<{ sessionId?: string; view?: BrowserAnnotationView }>()
+  private readonly annotationPins = new Set<{ tabId: string; sessionId?: string; view?: BrowserAnnotationView }>()
+  private readonly retiringTabs = new Set<string>()
   private inputSequence = 0
   private frameId = 0
+  private readonly frameNamespace = randomUUID()
   private closing = false
   constructor(readonly options: BrowserOptions) {
     this.profileDir = options.profileDir ?? join(homedir(), '.qiuya-tools', 'computer-use', 'profiles', options.browser ?? 'chrome')
@@ -155,6 +182,15 @@ export class BrowserSession {
   subscribe(listener: (event: NativeComputerEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private emit(event: NativeComputerEvent): void { for (const listener of this.listeners) { try { listener(event) } catch {} } }
   private cdp(): CdpConnection { if (!this.connection) throw new ComputerError('BROWSER_NOT_CONNECTED', '请先连接浏览器'); return this.connection }
+  private tabLifetime(tabId: string): object {
+    if (this.closing || this.retiringTabs.has(tabId)) throw new ComputerError('CONTROL_CHANGED', '这个浏览器标签页正在结束。')
+    let lifetime = this.tabLifetimes.get(tabId)
+    if (!lifetime) { lifetime = {}; this.tabLifetimes.set(tabId, lifetime) }
+    return lifetime
+  }
+  private assertTabLifetime(tabId: string, lifetime: object): void {
+    if (this.closing || this.retiringTabs.has(tabId) || this.tabLifetimes.get(tabId) !== lifetime) throw new ComputerError('CONTROL_CHANGED', '这个浏览器标签页的读取通道已经变化。')
+  }
   async launch(signal?: AbortSignal): Promise<void> {
     if (this.connection) return
     if (this.child) throw new ComputerError('BROWSER_CLEANUP_FAILED', '上一次浏览器启动的退出尚未确认，请先结束该浏览器环境。')
@@ -226,9 +262,35 @@ export class BrowserSession {
     return { id: info.targetId, title: info.title, url: info.url, allowed: true }
   }
   private async tabSession(tabId: string, signal?: AbortSignal): Promise<string> {
+    const lifetime = this.tabLifetime(tabId)
+    signal?.throwIfAborted()
+    const pending = [...this.tabAttachPins].find(pin => pin.tabId === tabId)
+    if (pending) {
+      if (pending.lifetime !== lifetime) throw new ComputerError('BROWSER_CLEANUP_FAILED', '这个标签页的上次读取通道启动尚未确认。')
+      const session = await browserReceipt(pending.ready, signal)
+      this.assertTabLifetime(tabId, lifetime)
+      return session
+    }
     const old = this.sessions.get(tabId); if (old) return old
-    const result = await this.cdp().send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true }, undefined, signal)
-    this.sessions.set(tabId, result.sessionId); return result.sessionId
+    if (this.tabAttachPins.size >= 128) throw new ComputerError('BROWSER_QUEUE_FULL', '待确认的浏览器读取通道过多。')
+    const pin = { tabId, lifetime, ready: Promise.resolve('') }; this.tabAttachPins.add(pin)
+    pin.ready = (async () => {
+      try {
+        const result = await this.cdp().send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true })
+        const session = requireIdentity(result.sessionId)
+        this.sessions.set(tabId, session); this.tabAttachPins.delete(pin)
+        return session
+      } catch (error) {
+        // A real negative attach receipt owns no session. A timeout or malformed
+        // receipt leaves an exact pin until full transport retirement.
+        if (error instanceof ComputerError && error.code === 'BROWSER_CDP_FAILED') this.tabAttachPins.delete(pin)
+        throw error
+      }
+    })()
+    void pin.ready.catch(() => {})
+    const session = await browserReceipt(pin.ready, signal)
+    this.assertTabLifetime(tabId, lifetime)
+    return session
   }
   /** Separate flattened session; enabling these domains never changes another feature's session. */
   async subscribeDiagnostics(tabId: string, expectedOrigin: string, guard: () => void, onEvent: (event: DiagnosticEvent) => void, onInvalidated: () => void, signal: AbortSignal): Promise<() => Promise<void>> {
@@ -331,29 +393,52 @@ export class BrowserSession {
     catch (error) { await this.closeOwnedTab(result.targetId).catch(() => {}); throw error }
   }
   async closeTab(tabId: string, signal?: AbortSignal, beforeInput?: () => void): Promise<void> {
-    await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.(); await this.closeTarget(tabId)
+    await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.()
+    await this.closeTarget(tabId, async () => { await this.permission(tabId, signal); signal?.throwIfAborted(); beforeInput?.() })
   }
   /** Cleanup only: Host may close a target this instance actually created even after site revocation. */
   async closeOwnedTab(tabId: string): Promise<void> {
     if (!this.ownedTabs.has(tabId)) throw new ComputerError('TARGET_NOT_OWNED', '不能清理不属于本次浏览器的标签页')
     await this.closeTarget(tabId)
   }
-  private async closeTarget(tabId: string): Promise<void> {
-    const result = await this.cdp().send<{ success: boolean }>('Target.closeTarget', { targetId: tabId })
-    if (!result.success) throw new ComputerError('BROWSER_CLOSE_FAILED', '无法关闭标签页')
-    for (const [id, input] of this.ownedInput) if (input.tabId === tabId) this.ownedInput.delete(id)
-    this.sessions.delete(tabId); this.observations.delete(tabId); this.previewObservations.delete(tabId); this.ownedTabs.delete(tabId)
+  private async closeTarget(tabId: string, beforeClose?: () => Promise<void>): Promise<void> {
+    if (this.retiringTabs.has(tabId)) throw new ComputerError('CONTROL_CHANGED', '这个浏览器标签页正在结束。')
+    this.retiringTabs.add(tabId)
+    this.tabLifetimes.delete(tabId)
+    try {
+      if ([...this.tabAttachPins].some(pin => pin.tabId === tabId)) throw new ComputerError('BROWSER_CLEANUP_FAILED', '这个标签页的读取通道启动尚未确认。')
+      const connection = this.cdp(), close = async () => {
+        await beforeClose?.()
+        if (this.connection !== connection) throw new ComputerError('CONTROL_CHANGED', '浏览器连接已经变化。')
+        return connection.send<{ success: boolean }>('Target.closeTarget', { targetId: tabId })
+      }
+      // A target can also have independent, strictly read-only annotation
+      // sessions. Retire only this target's owned views before destroying it.
+      const annotations = await Promise.allSettled([...this.annotationPins].filter(pin => pin.tabId === tabId).map(pin => pin.view ? pin.view.close() : Promise.reject(new ComputerError('ANNOTATION_CLEANUP_UNCONFIRMED', '只读批注通道的启动或退出尚未确认。'))))
+      const annotationFailure = annotations.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+      if (annotationFailure) throw annotationFailure.reason
+      // Closing the target must not overtake its own still-issued read and make
+      // a later stop impossible to confirm on this otherwise-live connection.
+      const session = this.sessions.get(tabId)
+      const result = session ? await connection.retireCaptureSession(session, close) : await close()
+      if (!result.success) throw new ComputerError('BROWSER_CLOSE_FAILED', '无法关闭标签页')
+      for (const [id, input] of this.ownedInput) if (input.tabId === tabId) this.ownedInput.delete(id)
+      this.sessions.delete(tabId); this.observations.delete(tabId); this.previewObservations.delete(tabId); this.ownedTabs.delete(tabId)
+    } finally {
+      this.retiringTabs.delete(tabId)
+    }
   }
   async observe(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, false) }
   async preview(tabId: string, signal?: AbortSignal): Promise<ComputerObservation> { return this.capture(tabId, signal, true) }
   /** Host-only independent read channel; never selects a tab or registers an input frame. */
   async annotationView(tabId: string, expectedOrigin: string, signal: AbortSignal, guard: () => void): Promise<BrowserAnnotationView> {
-    signal.throwIfAborted(); guard(); const connection = this.cdp()
-    const assertConnection = () => { if (this.connection !== connection || this.closing) throw new ComputerError('ANNOTATION_STALE', '浏览器只读通道已变化。') }
+    signal.throwIfAborted(); guard(); const connection = this.cdp(), tabLifetime = this.tabLifetime(tabId)
+    const assertConnection = () => { if (this.connection !== connection || this.closing) throw new ComputerError('ANNOTATION_STALE', '浏览器只读通道已变化。'); this.assertTabLifetime(tabId, tabLifetime) }
     const permission = async (readSignal: AbortSignal) => { assertConnection(); const tab = await this.permission(tabId, readSignal); assertConnection(); if (originOf(tab.url) !== expectedOrigin) throw new ComputerError('SITE_REVOKED', '网页来源已变化。') }
     await permission(signal); signal.throwIfAborted(); guard()
+    if (this.retiringTabs.has(tabId)) throw new ComputerError('CONTROL_CHANGED', '这个浏览器标签页正在结束。')
     if (this.annotationPins.size >= 8) throw new ComputerError('ANNOTATION_LIMIT', '请关闭其他画面批注后重试。')
-    const pin: { sessionId?: string; view?: BrowserAnnotationView } = {}; this.annotationPins.add(pin)
+    const pin: { tabId: string; sessionId?: string; view?: BrowserAnnotationView } = { tabId }; this.annotationPins.add(pin)
     // An unknown attach ACK retains its exact capacity pin until full browser retirement; never replay it.
     const attached = await connection.send<{ sessionId: string }>('Target.attachToTarget', { targetId: tabId, flatten: true }, undefined, signal)
     pin.sessionId = requireIdentity(attached.sessionId)
@@ -380,15 +465,19 @@ export class BrowserSession {
     if (failure) throw failure.reason
   }
   private async capture(tabId: string, signal: AbortSignal | undefined, preview: boolean): Promise<ComputerObservation> {
+    const tabLifetime = this.tabLifetime(tabId)
     await this.permission(tabId, signal)
+    this.assertTabLifetime(tabId, tabLifetime)
     const session = await this.tabSession(tabId, signal), geometry = await this.metrics(tabId, signal)
     const tree = preview ? { nodes: [] } : await this.cdp().send<{ nodes: { ignored?: boolean; role?: { value?: string }; name?: { value?: string }; value?: { value?: unknown }; backendDOMNodeId?: number }[] }>('Accessibility.getFullAXTree', {}, session, signal)
     await this.permission(tabId, signal)
+    this.assertTabLifetime(tabId, tabLifetime)
     const screenshot = await this.cdp().send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 65, fromSurface: true, captureBeyondViewport: false }, session, signal)
     await this.permission(tabId, signal)
+    this.assertTabLifetime(tabId, tabLifetime)
     const size = jpegSize(screenshot.data)
     const elements = tree.nodes.filter(node => !node.ignored).slice(0, 1500).map(node => JSON.stringify({ role: node.role?.value, name: node.name?.value, value: typeof node.value?.value === 'string' ? node.value.value.slice(0, 4000) : node.value?.value, node: node.backendDOMNodeId })).join('\n').slice(0, 200_000)
-    const observation: ComputerObservation = { targetId: tabId, frameId: `browser-${++this.frameId}`, imageBase64: screenshot.data, mediaType: 'image/jpeg', ...size, elements, geometry }
+    const observation: ComputerObservation = { targetId: tabId, frameId: `browser-${this.frameNamespace}-${++this.frameId}`, imageBase64: screenshot.data, mediaType: 'image/jpeg', ...size, elements, geometry }
     if (preview) this.previewObservations.set(tabId, observation); else this.observations.set(tabId, observation)
     return observation
   }
@@ -508,6 +597,7 @@ export class BrowserSession {
     const annotationCleanup = await Promise.allSettled([...this.annotationPins].map(pin => pin.view ? pin.view.close() : Promise.reject(new ComputerError('ANNOTATION_CLEANUP_UNCONFIRMED', '上次只读批注通道退出尚未确认。'))))
     const annotationFailure = annotationCleanup.find((result): result is PromiseRejectedResult => result.status === 'rejected'); if (annotationFailure) cleanupError ??= annotationFailure.reason
     let connection = this.connection
+    try { await connection?.drainCaptures() } catch (error) { cleanupError ??= error }
     if (!this.child && cleanupError) throw cleanupError
     if (this.child) {
       const child = this.child
@@ -531,7 +621,7 @@ export class BrowserSession {
       this.child = undefined
       this.ownedInput.clear()
     }
-    this.connection = undefined; this.sessions.clear(); this.ownedTabs.clear(); this.invalidateObservations()
+    this.connection = undefined; this.sessions.clear(); this.tabLifetimes.clear(); this.tabAttachPins.clear(); this.ownedTabs.clear(); this.invalidateObservations()
     connection?.close(); this.annotationPins.clear(); this.diagnosticStreams.clear(); this.listeners.clear()
   }
 }

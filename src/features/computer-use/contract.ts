@@ -45,6 +45,8 @@ export interface ForegroundHandoffDriver {
 }
 export interface ComputerSessionSnapshot {
   sessionId: string; state: ComputerState; target: NativeTarget | null; epoch: number; updatedAt: number
+  /** Additional tasks retain their owning chat; sessionId is the runtime key. */
+  chatSessionId?: string; taskId?: string; taskLabel?: string
   lastObservation?: Omit<ComputerObservation, 'imageBase64' | 'elements' | 'mediaType'>
   error?: { code: string; message: string }
   lastAction?: { actionId: string; action: ComputerAction; actor?: 'ai' | 'human'; phase: 'executing' | 'completed' | 'failed'; at: number }

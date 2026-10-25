@@ -75,7 +75,7 @@ function cdpFixture() {
         if (params.type === 'keyUp') state.keyHeld = false; else state.mouseHeld = false
       }
       return {}
-    }, close() { state.disconnected = true },
+    }, async drainCaptures() {}, close() { state.disconnected = true },
   }
   return { browser, state }
 }

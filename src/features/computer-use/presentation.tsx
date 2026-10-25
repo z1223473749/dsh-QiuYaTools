@@ -1,7 +1,7 @@
 import React from 'react'
 
 export const computerStateLabels: Record<string, string> = { idle: '等待任务', awaitingPermission: '等待授权', ready: '已就绪', running: '正在操作', paused: '已暂停', humanControl: '你正在接管', resuming: '正在继续', stopping: '正在停止', stopped: '已停止', faulted: '需要处理', disconnected: '连接断开', connecting: '正在连接', pausing: '正在暂停', handingOver: '正在接管' }
-export interface ComputerApprovalRequest { requestId: string; requestVersion: number; sessionId: string; appId: string; appName: string; targetTitle?: string; reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight?: ComputerNativeView }
+export interface ComputerApprovalRequest { requestId: string; requestVersion: number; sessionId: string; taskId?: string; appId: string; appName: string; targetTitle?: string; reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight?: ComputerNativeView }
 export type { NativeApplication } from './contract.ts'
 export interface ComputerNativeView { available?: boolean; platform?: string; permissions?: Record<string, boolean>; message?: string; mode?: 'local' | 'remote' | 'browser' }
 export type SystemPermissionKind = 'screenRecording' | 'accessibility' | 'inputMonitoring'
@@ -17,6 +17,7 @@ export function SystemPermissionNotice({ native, busy, full = false, onOpenSetti
   if (!items.length) return null
   const remote = native.mode === 'remote'
   return <div className="qyt-computer-system-permissions" aria-label="系统权限引导">
+    {!remote && <p className="qyt-computer-caption">授权对象：<strong>QiuYaTools Computer.app（工具箱电脑操控）</strong>。点击“前往开启权限”后，系统设置旁会显示授权卡片；如果列表中找不到它，将卡片中的应用图标拖入权限列表，再手动开启。完成后返回这里重新检查。</p>}
     {!full && <p className="qyt-computer-notice" role="status">{remote ? '请在独立电脑上开启以下权限，再返回这里刷新。' : computerApprovalNeedsSystemPermissions(native) ? '先开启以下系统权限，再允许本次任务。' : '建议开启输入监控，便于在你操作时及时让出控制。'}</p>}
     <div className="qyt-computer-permission-list">{items.map(([kind, label, description, granted]) => <div className="qyt-computer-permission-row" key={kind}><div><strong>{label}</strong><span className="qyt-computer-caption">{description}</span></div><span className="qyt-computer-caption">{granted === undefined ? '待检查' : granted ? '已允许' : '未允许'}</span>{!remote && <button type="button" className="qyt-button" disabled={busy} aria-label={`前往开启${label}`} onClick={() => onOpenSettings(kind)}>前往开启权限</button>}</div>)}</div>
     {!full && <button type="button" className="qyt-button" disabled={busy} onClick={onRefresh}>刷新权限</button>}

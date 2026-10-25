@@ -11,8 +11,9 @@ interface Connection { rpc: { call(channel: string, endpoint: string, payload: u
 interface PreviewStatus { sessions: ComputerSessionSnapshot[]; pendingRequests?: ComputerApprovalRequest[]; native?: ComputerNativeView | null; environments?: { sessionId: string; previewDetached?: boolean }[] }
 const endpoint = 'qiuya-tools.computer.control'
 export { clampInlinePreviewPosition } from './inline-bounds.ts'
+import { isComputerTaskForChat } from './task-types.ts'
 import { inlinePreviewLayout, observeInlinePreviewLayout } from './inline-bounds.ts'
-export function inlineComputerPreviewUrl(sessionId: string): string { return `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}&view=inline` }
+export function inlineComputerPreviewUrl(sessionId: string, taskId?: string): string { return `/api/qiuya-tools.computer.preview?session=${encodeURIComponent(sessionId)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}&view=inline` }
 
 /** An additive, Session-scoped public slot. Unmounting its iframe does not
  * revoke another background task; only explicit owner controls change input.
@@ -24,7 +25,9 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
     const enabled = preferences.status === 'ready' && preferences.value?.enabled !== false && preferences.value?.computerUseEnabled === true
     const [native, setNative] = useState<ComputerNativeView | null>()
     const [requests, setRequests] = useState<ComputerApprovalRequest[]>([])
-    const [current, setCurrent] = useState<ComputerSessionSnapshot>(), [detached, setDetached] = useState(false)
+    const [tasks, setTasks] = useState<ComputerSessionSnapshot[]>([]), [selected, setSelected] = useState<string>(), [detachedTasks, setDetachedTasks] = useState<string[]>([])
+    const current = tasks.find(row => row.sessionId === selected) ?? tasks[0]
+    const detached = !!current && detachedTasks.includes(current.sessionId)
     const [busy, setBusy] = useState(false), [error, setError] = useState(''), [controlsHidden, setControlsHidden] = useState(false)
     const [position, setPosition] = useState<{ x: number; y: number }>(), [limits, setLimits] = useState<{ maxWidth: number; maxHeight: number }>(), [dragging, setDragging] = useState(false)
     const anchor = useRef<HTMLDivElement>(null), card = useRef<HTMLElement>(null), drag = useRef<{ pointerId: number; x: number; y: number; left: number; top: number; handle: HTMLElement }>()
@@ -32,7 +35,7 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++ } }, [])
     const call = async (op: string, signal?: AbortSignal, extra: object = {}) => {
       const peer = connection(); if (!peer) throw new Error('连接尚未就绪')
-      const result = await peer.rpc.call('/api', endpoint, { op, sessionId, ...extra }, signal)
+      const result = await peer.rpc.call('/api', endpoint, Object.fromEntries(Object.entries({ op, sessionId, ...extra }).filter(([, value]) => value !== undefined)), signal)
       if (!result.ok) throw new Error(result.error?.message ?? '电脑预览暂不可用')
       return result.value
     }
@@ -40,12 +43,12 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
       const revision = generation.current, sequence = ++refreshSequence.current, status = await call('status', signal) as PreviewStatus
       if (!mounted.current || signal?.aborted || revision !== generation.current || sequence !== refreshSequence.current) return
       setNative(status.native)
-      setCurrent(status.sessions.find(row => row.sessionId === sessionId))
+      setTasks(status.sessions.filter(row => isComputerTaskForChat(row, sessionId) && row.state !== 'stopped'))
       setRequests((status.pendingRequests ?? []).filter(row => row.sessionId === sessionId && row.state === 'pending'))
-      setDetached(status.environments?.find(row => row.sessionId === sessionId)?.previewDetached === true)
+      setDetachedTasks((status.environments ?? []).filter(row => row.previewDetached).map(row => row.sessionId))
     }
     useEffect(() => {
-      generation.current++; pending.current = false; setCurrent(undefined); setNative(undefined); setRequests([]); setError(''); setDetached(false); setBusy(false)
+      generation.current++; pending.current = false; setTasks([]); setSelected(undefined); setNative(undefined); setRequests([]); setError(''); setDetachedTasks([]); setBusy(false)
       if (!enabled) return
       const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>
       const poll = async () => {
@@ -60,12 +63,12 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
       pending.current = true
       const revision = generation.current; setBusy(true); setError('')
       try {
-        if (op !== 'refresh') await call(op, undefined, extra)
+        if (op !== 'refresh') await call(op, undefined, { ...(current?.taskId ? { taskId: current.taskId } : {}), ...extra })
         if (mounted.current && revision === generation.current) await refresh()
       } catch (failure) { if (mounted.current && revision === generation.current) setError((failure as Error).message) }
       finally { if (mounted.current && revision === generation.current) { pending.current = false; setBusy(false) } }
     }
-    const active = current && current.sessionId === sessionId && current.state !== 'stopped' ? current : undefined
+    const active = current && isComputerTaskForChat(current, sessionId) && current.state !== 'stopped' ? current : undefined
     const live = !!active && ['ready', 'running', 'paused', 'humanControl'].includes(active.state)
     const cancelDrag = () => {
       const previous = drag.current; drag.current = undefined
@@ -101,9 +104,9 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
       setPosition(clamp({ x: (position?.x ?? box.left) + direction[0] * step, y: (position?.y ?? box.top) + direction[1] * step }))
     }
     if (!enabled || (!requests.length && !active)) return null
-    const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void control('decide', { requestId: request.requestId, requestVersion: request.requestVersion, decision }) }
+    const decide = (request: ComputerApprovalRequest, decision: ComputerDecision) => { void control('decide', { requestId: request.requestId, requestVersion: request.requestVersion, ...(request.taskId ? { taskId: request.taskId } : { taskId: undefined }), decision }) }
     return <div ref={anchor} className="qyt-computer-inline-anchor qyt-computer-surface" data-qyt-computer-chat={sessionId}>
-      {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={{ ...limits, visibility: limits && (!limits.maxWidth || !limits.maxHeight) ? 'hidden' : undefined, ...(position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : {}) }} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
+      {(requests.length > 0 || active) && <section ref={card} className="qyt-computer-inline-card" aria-label="电脑实时预览" data-qyt-computer-inline={sessionId} data-task-count={tasks.length} data-qyt-computer-task={active?.taskId ?? sessionId} data-state={active?.state ?? 'awaitingPermission'} data-target-id={active?.target?.id} data-has-approval={requests.length > 0} data-dragging={dragging} data-controls-hidden={controlsHidden} style={{ ...limits, visibility: limits && (!limits.maxWidth || !limits.maxHeight) ? 'hidden' : undefined, ...(position ? { position: 'fixed', left: position.x, top: position.y, right: 'auto' } : {}) }} onPointerEnter={event => { if (event.buttons === 0) setControlsHidden(false) }} onPointerMove={moveDrag} onPointerUp={cancelDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag}>
         {requests.map(request => {
           const preflight = request.preflight ?? native
           return <React.Fragment key={request.requestId}>
@@ -121,9 +124,12 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
             <button type="button" disabled={busy || !live} aria-label={detached ? '收回电脑预览' : '弹出电脑预览'} onClick={() => { void control(detached ? 'redock' : 'preview') }}>{detached ? '收回' : '弹出'}</button>
             <button type="button" className="qyt-computer-inline-collapse" aria-label="隐藏预览控件" title="隐藏控件以操作完整画面；鼠标移出再进入或用 Tab 恢复" onClick={event => { event.currentTarget.blur(); setControlsHidden(true) }}>−</button>
           </div>
-          {live ? <iframe title="当前聊天的实时电脑画面" src={inlineComputerPreviewUrl(sessionId)} referrerPolicy="no-referrer" className="qyt-computer-inline-frame"/>
+          {live ? <iframe key={active.sessionId} title="当前聊天的实时电脑画面" src={inlineComputerPreviewUrl(sessionId, active.taskId)} referrerPolicy="no-referrer" className="qyt-computer-inline-frame"/>
               : <div className="qyt-computer-inline-detached">{active.error?.message || '等待电脑画面'}</div>}
           {active.state !== 'humanControl' && <div className="qyt-computer-inline-drag-surface" aria-hidden="true" onPointerDown={startDrag}/>}
+          {tasks.length > 1 && <div className="qyt-computer-inline-tasks" role="tablist" aria-label="当前聊天的电脑任务" onPointerDown={event => event.stopPropagation()}>
+            {tasks.map((task, index) => <button key={task.sessionId} type="button" role="tab" aria-selected={task.sessionId === active.sessionId} aria-label={`切换电脑任务 ${index + 1}：${task.taskLabel ?? task.target?.title ?? '默认任务'}`} title={task.taskLabel ?? task.target?.title ?? '默认任务'} disabled={busy} onClick={() => { cancelDrag(); setSelected(task.sessionId); setControlsHidden(false); setError('') }}><span/>{index + 1}</button>)}
+          </div>}
 
         </div>}
         {error && <p role="alert">{error}</p>}

@@ -8,6 +8,7 @@ import { NativeCompanionDriver } from './native.ts'
 import { RemoteComputerDriver } from './remote.ts'
 import { ComputerError, computerError, requireIdentity } from './contract.ts'
 import type { ComputerActionRequest, ComputerSessionSnapshot, ComputerSystemPermission, NativeTarget } from './contract.ts'
+import type { ComputerTaskIdentity } from './task-types.ts'
 
 export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget'>
 export interface ComputerConnectionOptions {
@@ -42,6 +43,7 @@ class ScheduledRemoteComputerDriver extends ScheduledComputerDriver {
  * calls without a chat and cannot switch or cancel another environment. */
 export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private readonly entries = new Map<string, Environment>()
+  private readonly tasks = new Map<string, ComputerTaskIdentity>()
   private legacy?: Environment
   private readonly snapshots = new Map<string, ComputerSessionSnapshot>()
   private readonly listeners = new Set<() => void>()
@@ -73,6 +75,44 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private assertEnabled() { this.assertLive(); if (this.options.enabled?.() === false) throw new ComputerError('DISABLED', '电脑操控未启用') }
   private notify() { for (const listener of this.listeners) { try { listener() } catch {} } }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  private assertChatIdentity(chatSessionId: string): void {
+    requireIdentity(chatSessionId, '聊天')
+    if (this.tasks.has(chatSessionId)) throw new ComputerError('TASK_NOT_FOUND', '电脑任务编号不能用作聊天身份')
+  }
+  /** Reserving a task records owner metadata only. No driver or OS query is
+   * created until an explicit environment/application request needs one. */
+  createTask(chatSessionId: string, label?: string): string {
+    this.assertEnabled(); this.assertChatIdentity(chatSessionId)
+    if (label !== undefined && (typeof label !== 'string' || !label.trim() || Array.from(label.trim()).length > 120 || /[\x00-\x1f\x7f]/u.test(label))) throw new ComputerError('INVALID_REQUEST', '电脑任务名称无效')
+    // Reclaim only terminal tasks whose native environment already completed
+    // retirement. Pending creation, live input and failed cleanup stay owned.
+    const reclaim = (allChats = false) => {
+      for (const [id, identity] of this.tasks) if ((allChats || identity.chatSessionId === chatSessionId) && !this.entries.has(id) && this.snapshots.has(id) && terminal(this.snapshots.get(id)!.state)) { this.tasks.delete(id); this.snapshots.delete(id) }
+    }
+    if (this.listTasks(chatSessionId).length >= 7) reclaim()
+    if (new Set([...this.entries.keys(), ...this.tasks.keys()]).size >= (this.options.maxEnvironments ?? 128)) reclaim(true)
+    if (this.listTasks(chatSessionId).length >= 7) throw new ComputerError('TASK_LIMIT', '当前聊天最多保留 8 个电脑任务，请先停止并释放闲置任务')
+    if (new Set([...this.entries.keys(), ...this.tasks.keys()]).size >= (this.options.maxEnvironments ?? 128)) throw new ComputerError('TASK_LIMIT', '电脑任务数量已达上限，请先停止并释放闲置任务')
+    let taskId = randomUUID()
+    while (taskId === chatSessionId || this.tasks.has(taskId) || this.entries.has(taskId) || this.snapshots.has(taskId) || [...this.tasks.values()].some(task => task.chatSessionId === taskId)) taskId = randomUUID()
+    this.tasks.set(taskId, { chatSessionId, taskId, ...(label === undefined ? {} : { taskLabel: label.trim() }) })
+    this.notify(); return taskId
+  }
+  resolveTask(chatSessionId: string, taskId?: string): string {
+    this.assertLive(); this.assertChatIdentity(chatSessionId)
+    if (taskId === undefined) return chatSessionId
+    requireIdentity(taskId, '电脑任务')
+    if (this.tasks.get(taskId)?.chatSessionId !== chatSessionId) throw new ComputerError('TASK_NOT_FOUND', '电脑任务不存在或不属于当前聊天')
+    return taskId
+  }
+  listTasks(chatSessionId: string): ComputerTaskIdentity[] {
+    this.assertLive(); this.assertChatIdentity(chatSessionId)
+    return [...this.tasks.values()].filter(task => task.chatSessionId === chatSessionId).map(task => ({ ...task }))
+  }
+  private projectSnapshot(snapshot: ComputerSessionSnapshot): ComputerSessionSnapshot & Partial<ComputerTaskIdentity> {
+    const identity = this.tasks.get(snapshot.sessionId)
+    return identity ? { ...snapshot, ...identity } : snapshot
+  }
   authorizationGeneration(sessionId: string) { requireIdentity(sessionId, '会话'); return this.authorizationVersions.get(sessionId) ?? this.authorizationBase }
   private invalidateAuthorization(sessionId?: string) {
     if (sessionId === undefined) { this.authorizationBase = ++this.authorizationSerial; this.authorizationVersions.clear() }
@@ -119,7 +159,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
     let entry = this.existing(sessionId)
     if (!entry) {
-      if (sessionId !== undefined && this.entries.size >= (this.options.maxEnvironments ?? 128)) throw new ComputerError('SESSION_LIMIT', '电脑环境数量已达上限，请停止闲置环境并等待释放')
+      if (sessionId !== undefined && !this.tasks.has(sessionId) && new Set([...this.entries.keys(), ...this.tasks.keys()]).size >= (this.options.maxEnvironments ?? 128)) throw new ComputerError('SESSION_LIMIT', '电脑环境数量已达上限，请停止闲置环境并等待释放')
       const driver = this.options.createRouter?.(sessionId, this.scheduler) ?? new ComputerDriverRouter({
         local: new ScheduledComputerDriver(new NativeCompanionDriver(), 'local-desktop', this.scheduler),
         remoteFactory: value => new ScheduledRemoteComputerDriver(new RemoteComputerDriver(value), this.scheduler),
@@ -147,7 +187,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   private trimSnapshots() {
     for (const [id, snapshot] of this.snapshots) {
       if (this.snapshots.size <= 128) break
-      if (!this.entries.has(id) && terminal(snapshot.state)) this.snapshots.delete(id)
+      if (!this.entries.has(id) && terminal(snapshot.state)) { this.snapshots.delete(id); this.tasks.delete(id) }
     }
   }
   private forSession(sessionId: string, create = false) {
@@ -157,11 +197,11 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (entry.retiring) throw new ComputerError('ENVIRONMENT_RETIRING', '此聊天的电脑环境正在清理')
     entry.lastUsed = this.now(); return entry
   }
-  get(sessionId: string) { return this.entries.get(sessionId)?.service.get(sessionId) ?? this.legacy?.service.get(sessionId) ?? (this.snapshots.has(sessionId) ? structuredClone(this.snapshots.get(sessionId)!) : undefined) }
+  get(sessionId: string) { const snapshot = this.entries.get(sessionId)?.service.get(sessionId) ?? this.legacy?.service.get(sessionId) ?? (this.snapshots.has(sessionId) ? structuredClone(this.snapshots.get(sessionId)!) : undefined); return snapshot ? this.projectSnapshot(snapshot) : undefined }
   list() {
     const values = new Map(this.snapshots)
     for (const entry of this.all()) for (const row of entry.service.list()) values.set(row.sessionId, row)
-    return [...values.values()].map(row => structuredClone(row))
+    return [...values.values()].map(row => this.projectSnapshot(structuredClone(row)))
   }
   /** Read-only workbench view identity, including an owner-paused environment. No router/OS query is created. */
   workbenchEnvironment(sessionId: string) {
@@ -170,7 +210,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (!entry || entry.retiring || entry.switching) return undefined
     const snapshot = entry.service.get(sessionId)
     if (!snapshot?.target || !['ready', 'running', 'paused', 'humanControl'].includes(snapshot.state)) return undefined
-    return { environmentId: entry.environmentId, mode: entry.driver.mode, snapshot: structuredClone(snapshot) }
+    return { environmentId: entry.environmentId, mode: entry.driver.mode, snapshot: this.projectSnapshot(structuredClone(snapshot)) }
   }
   /** Read existing runtime identity only. Never creates a router, queries the OS or revives history. */
   runEnvironment(sessionId: string) {
@@ -188,7 +228,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (!entry || entry.retiring || entry.switching) return undefined
     return readModelObservationGeneration(entry.service, sessionId, entry.service.get(sessionId))
   }
-  environments() { return this.all().map(entry => ({ environmentId: entry.environmentId, ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
+  environments() { return this.all().map(entry => ({ environmentId: entry.environmentId, ...(entry.sessionId === undefined ? {} : { sessionId: entry.sessionId, ...this.tasks.get(entry.sessionId) }), mode: entry.driver.mode, switching: entry.switching, retiring: entry.retiring, previewDetached: entry.previewDetached, ...(entry.cleanupError ? { cleanupError: entry.cleanupError } : {}) })) }
   isSwitching(sessionId?: string) { return this.existing(sessionId)?.switching === true }
   async statusFor(sessionId?: string, signal?: AbortSignal) {
     this.assertLive(); if (sessionId !== undefined) requireIdentity(sessionId, '会话')
@@ -273,7 +313,14 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     }
     if (!entry) {
       const previous = this.snapshots.get(sessionId)
-      if (previous && terminal(previous.state)) return Promise.resolve(structuredClone(previous))
+      if (previous && terminal(previous.state)) return Promise.resolve(this.projectSnapshot(structuredClone(previous)))
+      if (!pause && this.tasks.has(sessionId)) {
+        // Closing a metadata-only task must not create a native worker merely
+        // to stop it. Retain a tombstone until bounded task reclamation.
+        const stopped: ComputerSessionSnapshot = { sessionId, state: 'stopped', target: null, epoch: ++this.epochHighWater, updatedAt: this.now() }
+        this.snapshots.set(sessionId, stopped); this.notify()
+        return Promise.resolve(this.projectSnapshot(structuredClone(stopped)))
+      }
     }
     const service = this.forSession(sessionId).service
     return pause ? service.pause(sessionId) : service.stop(sessionId)
@@ -387,7 +434,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (this.sweeping) return this.sweeping
     if (this.disposed) return Promise.resolve()
     const protectedIds = new Set(protectedSessions)
-    const now = this.now(), ready = this.all().filter(entry => !entry.switching && !entry.files.size && (entry.retiring || (entry.sessionId === undefined || !protectedIds.has(entry.sessionId)) && now - entry.lastUsed >= (this.options.idleMs ?? 60_000) && entry.service.list().every(row => terminal(row.state))))
+    const now = this.now(), ready = this.all().filter(entry => !entry.switching && !entry.files.size && (entry.retiring || (entry.sessionId === undefined || !protectedIds.has(entry.sessionId) && !protectedIds.has(this.tasks.get(entry.sessionId)?.chatSessionId ?? '')) && now - entry.lastUsed >= (this.options.idleMs ?? 60_000) && entry.service.list().every(row => terminal(row.state))))
     const pending = Promise.allSettled(ready.map(entry => this.retire(entry))).then(rows => failMany(failures(rows), '闲置电脑环境清理未完成'))
     this.sweeping = pending
     void pending.then(() => { this.sweeping = undefined }, () => { this.sweeping = undefined }); return pending

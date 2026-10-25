@@ -18,6 +18,7 @@ function setup(t) {
       if (method === 'Target.attachToTarget') return { sessionId: 'own-diagnostics' }
       return {}
     },
+    async drainCaptures() {},
     close() { listeners.clear() },
   }
   const context = { chatSessionId: agent.id, environmentId: randomUUID(), workbenchTabId: randomUUID(), targetId: 'own-tab', epoch: 7, assertCurrent() { if (!allowed) throw Error('SITE_REVOKED') } }

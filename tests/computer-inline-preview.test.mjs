@@ -41,11 +41,12 @@ async function fixture(t, { initial = { status: 'ready', value: { enabled: true,
     if (input.op === 'status') return { ok: true, value: status() }
     if (input.op === 'openSettings') { assert.ok(['screenRecording', 'accessibility', 'inputMonitoring'].includes(input.kind)); return { ok: true, value: { opened: true } } }
     if (input.op === 'decide') { const request = requests.get(input.requestId); assert.ok(request); assert.equal(request.sessionId, input.sessionId); assert.equal(request.requestVersion, input.requestVersion); requests.delete(input.requestId); if (input.decision !== 'deny') states.set(input.sessionId, snapshot(input.sessionId)); return { ok: true, value: { requestId: input.requestId, state: input.decision === 'deny' ? 'denied' : 'approved' } } }
-    const current = states.get(input.sessionId); assert.ok(current, 'control needs a fixture-owned session')
-    if (input.op === 'preview' || input.op === 'redock') detached.set(input.sessionId, input.op === 'preview')
-    else if (['pause', 'takeover', 'resume', 'stop'].includes(input.op)) states.set(input.sessionId, { ...current, state: { pause: 'paused', takeover: 'humanControl', resume: 'ready', stop: 'stopped' }[input.op] })
+    const runtimeId = input.taskId ?? input.sessionId
+    const current = states.get(runtimeId); assert.ok(current, 'control needs a fixture-owned session')
+    if (input.op === 'preview' || input.op === 'redock') detached.set(runtimeId, input.op === 'preview')
+    else if (['pause', 'takeover', 'resume', 'stop'].includes(input.op)) states.set(runtimeId, { ...current, state: { pause: 'paused', takeover: 'humanControl', resume: 'ready', stop: 'stopped' }[input.op] })
     else throw Error('Unexpected owner control')
-    return { ok: true, value: states.get(input.sessionId) }
+    return { ok: true, value: states.get(runtimeId) }
   } } }
   const ctx = new Context(), registryPlugin = ctx.plugin(SlotRegistry); await registryPlugin.await()
   const peerPlugin = ctx.plugin(child => child.provide('connection', connection)); await peerPlugin.await()
@@ -355,4 +356,43 @@ test('request-scoped native permission refresh keeps postEvents refusal and late
   f.requests.get('request-A').preflight.permissions.postEvents = true; await f.click('seat', '刷新权限')
   assert.equal(f.button('seat', '允许一次').disabled, false); assert.match(f.container('seat').textContent, /建议开启输入监控/u)
   await f.click('seat', '始终允许'); assert.deepEqual(f.mutations(), [{ op: 'decide', sessionId: 'A', requestId: 'request-A', requestVersion: 1, decision: 'always' }])
+})
+
+
+test('one chat switches independent task previews and all controls retain the selected task identity', async t => {
+  const f = await fixture(t)
+  f.states.clear()
+  f.states.set('task-one', { ...snapshot('task-one'), chatSessionId: 'A', taskId: 'task-one', taskLabel: '订单核验' })
+  f.states.set('task-two', { ...snapshot('task-two', 'running'), chatSessionId: 'A', taskId: 'task-two', taskLabel: '浏览器整理' })
+  f.states.set('foreign', { ...snapshot('foreign'), chatSessionId: 'B', taskId: 'foreign', taskLabel: '其他聊天' })
+  await f.render({ seat: 'A' })
+  let card = f.container('seat').querySelector('[data-qyt-computer-inline]')
+  assert.equal(card.dataset.taskCount, '2')
+  assert.equal(card.dataset.qytComputerTask, 'task-one')
+  const firstFrame = card.querySelector('iframe')
+  assert.equal(new URL(firstFrame.src).searchParams.get('task'), 'task-one')
+  assert.equal(new URL(firstFrame.src).searchParams.get('session'), 'A')
+  await f.click('seat', '暂停电脑任务')
+  assert.equal(f.states.get('task-one').state, 'paused')
+  assert.equal(f.states.get('task-two').state, 'running')
+  await f.click('seat', '切换电脑任务 2：浏览器整理')
+  assert.equal(card.dataset.qytComputerTask, 'task-two')
+  assert.notEqual(card.querySelector('iframe'), firstFrame)
+  assert.equal(new URL(card.querySelector('iframe').src).searchParams.get('task'), 'task-two')
+  await f.click('seat', '接管电脑任务')
+  await f.click('seat', '弹出电脑预览')
+  await f.click('seat', '收回电脑预览')
+  await f.click('seat', '停止电脑任务')
+  assert.equal(f.states.get('task-two').state, 'stopped')
+  assert.equal(f.states.get('task-one').state, 'paused')
+  assert.equal(f.states.get('foreign').state, 'ready')
+  assert.equal(card.dataset.qytComputerTask, 'task-one')
+  assert.equal(card.querySelector('[role="tablist"]'), null)
+  assert.deepEqual(f.mutations(), [
+    {op:'pause',sessionId:'A',taskId:'task-one'},
+    {op:'takeover',sessionId:'A',taskId:'task-two'},
+    {op:'preview',sessionId:'A',taskId:'task-two'},
+    {op:'redock',sessionId:'A',taskId:'task-two'},
+    {op:'stop',sessionId:'A',taskId:'task-two'},
+  ])
 })

@@ -1,6 +1,8 @@
 /** Local-only deterministic provider for the installed Harness UI E2E runner. */
 import { appendFileSync, readFileSync, realpathSync, writeFileSync, constants } from 'node:fs'
 import { join } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
+import { openSync, fstatSync, ftruncateSync, writeSync, closeSync } from 'node:fs'
 import {createHash} from 'node:crypto'
 import {threadId} from 'node:worker_threads'
 import {OwnedMacInputSourceTrace} from './harness-passive-input-source.mjs'
@@ -92,8 +94,53 @@ export function installProviderOwnedPreviewTrace(ctx) {
     return ()=>trace.stop()
   })
 }
+/** Full Windows acceptance only. EOF invokes the official Host's existing
+ * shutdown event; this fixture never exits or signals a Windows process. */
+export function installOwnedWindowsFullEOFBridge(ctx) {
+  if (process.platform !== 'win32' || process.env.QIUYA_HARNESS_WINDOWS_FULL !== '1') return
+  const runId = process.env.QIUYA_HARNESS_WINDOWS_RUN_ID, candidateSHA256 = process.env.QIUYA_HARNESS_WINDOWS_CANDIDATE_SHA256
+  const profile = process.env.QIUYA_HARNESS_WINDOWS_PROFILE
+  if (process.env.QIUYA_HARNESS_E2E !== '1' || !profile || resolve(profile) !== resolve(process.env.DSH_HOME || '') || basename(profile) !== 'qiuya-harness-home' || !/^qiuya-harness-e2e-[a-zA-Z0-9]+$/u.test(basename(dirname(profile))) || !/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/u.test(runId || '') || !/^[a-f\d]{64}$/u.test(candidateSHA256 || '')) throw new Error('The Windows full-suite EOF bridge requires its exact own temporary profile, run and candidate')
+  return ctx.effect(() => {
+    const fd = openSync(join(profile, 'e2e-windows-normal-close.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    const initial = fstatSync(fd)
+    if (!initial.isFile() || initial.nlink !== 1) { closeSync(fd); throw new Error('Own EOF receipt must be a fresh ordinary file') }
+    let eofCount = 0, signalListenerCount = 0, officialHandlerInvoked = false
+    let eofAt, fixtureDisposedAfterEOFMs = null, originalProcessExit = null, closed = false
+    const persist = extra => {
+      const current = fstatSync(fd)
+      if (current.dev !== initial.dev || current.ino !== initial.ino || current.nlink !== 1) throw new Error('Own EOF receipt identity changed')
+      const text = JSON.stringify({ runId, candidateSHA256, hostPID: process.pid, source: 'own-stdin-eof-to-official-sigterm-handler', osSignalsSent: 0, eofCount, signalListenerCount, officialHandlerInvoked, fixtureDisposedAfterEOFMs, originalProcessExit, ...extra })
+      ftruncateSync(fd, 0); writeSync(fd, text, 0, 'utf8')
+    }
+    persist({ stage: 'installed', fixtureEffectDisposed: false })
+    const onEOF = () => {
+      eofAt = performance.now()
+      eofCount++; signalListenerCount = process.listenerCount('SIGTERM')
+      if (eofCount !== 1 || signalListenerCount < 1) throw new Error('The exact official Host shutdown handler must exist before one own EOF')
+      officialHandlerInvoked = true; persist({ stage: 'official-handler-dispatched', fixtureEffectDisposed: false })
+      process.emit('SIGTERM')
+    }
+    // A regular file descriptor and an exit listener do not keep Node alive.
+    // Retain only the original Host's own exit time; an eventual5s official
+    // fallback can never retroactively satisfy the runner's original3s bound.
+    let fixtureEffectDisposed = false
+    const onExit = code => {
+      originalProcessExit = { code, afterEOFMs: eofAt === undefined ? null : Math.max(0, performance.now() - eofAt) }
+      try { persist({ stage: 'original-host-exit', fixtureEffectDisposed }) } finally { if (!closed) { closed = true; closeSync(fd) } }
+    }
+    process.once('exit', onExit)
+    process.stdin.once('end', onEOF); process.stdin.resume()
+    return () => {
+      process.stdin.off('end', onEOF); process.stdin.pause()
+      fixtureEffectDisposed = true; fixtureDisposedAfterEOFMs = eofAt === undefined ? null : Math.max(0, performance.now() - eofAt)
+      persist({ stage: 'fixture-effect-disposed', fixtureEffectDisposed: true })
+    }
+  })
+}
 export function apply(ctx) {
   if (process.env.QIUYA_HARNESS_E2E !== '1' || !process.env.DSH_HOME?.includes('qiuya-harness-')) throw new Error('The E2E provider requires a dedicated temporary DSH_HOME')
+  installOwnedWindowsFullEOFBridge(ctx)
   installProviderOwnedPreviewTrace(ctx)
   const passiveInputSource=process.platform==='darwin'&&process.env.QIUYA_PASSIVE_INPUT_SOURCE==='1'?new OwnedMacInputSourceTrace(process.env.DSH_HOME):null
   ctx.effect(()=>()=>passiveInputSource?.close())
