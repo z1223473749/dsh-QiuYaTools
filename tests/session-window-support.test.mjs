@@ -182,7 +182,10 @@ function contextFixture(connection) {
   const ctx = {
     connection,
     effect(callback) { const stop = callback(); if (typeof stop === 'function') effects.push(stop) },
-    inject(_dependencies, install) { install(ctx) },
+    // Match Cordis: an optional contribution waits for its declared services.
+    // This support fixture provides only connection; editor services are covered
+    // by the real-Cordis conversation-reference lifecycle regression.
+    inject(dependencies, install) { if (dependencies.every(name => ctx[name] !== undefined)) install(ctx) },
     plugin(options) {
       const field = options.name.split('/').at(-1)
       starts.push(field); active.add(field)

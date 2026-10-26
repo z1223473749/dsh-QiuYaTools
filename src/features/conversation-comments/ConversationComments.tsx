@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import type { TokenSpan } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { createConversationCommentsStore, conversationCommentsPrompt, locateConversationComment, type ConversationComment, type ConversationTextAnchor } from './comments.ts'
 import { discoverConversationMessages, renderedConversationText, selectionConversationAnchor, conversationHighlightRanges, type ConversationMessageContent } from './dom.ts'
+import { commentReferenceSpan, conversationCommentReferenceText, conversationCommentSource } from './composer-reference.ts'
 
 export interface ConversationCommentsInjected {
   watchSubmitted: (confirm: (text: string, seq: number) => void) => () => void
@@ -12,8 +14,11 @@ export interface ConversationCommentsInjected {
   sendComments: (text: string) => Promise<string | null>
   /** Open a fresh conversation with the selected quote staged as an unsent draft. */
   openQuestion: (quote: string) => Promise<void>
+  /** Public native-reference insertion keeps normal composer submission in its owner. */
+  insertReference?: (text: string, count: number, span: TokenSpan) => boolean
+  watchOpenReference?: (open: () => void) => () => void
 }
-export type ConversationCommentsProps = PropsRuntime<'conversation.input.dock'> & PropsStore<ReturnType<typeof createConversationCommentsStore>>
+export type ConversationCommentsProps = PropsRuntime<'conversation.input.left'> & PropsStore<ReturnType<typeof createConversationCommentsStore>>
   & PropsLocale<'qiuyaConversationComments'> & InjectFace<ConversationCommentsInjected>
 interface Positioned { left: number; top: number }
 interface SelectionDraft extends ConversationTextAnchor, Positioned { messageId: string; contentId: string; id?: string }
@@ -91,13 +96,14 @@ function MessageComments({ surface, comments, onEdit, t }: {
 }
 
 export function ConversationComments({ sessionId, useChat, useSession, useInput, inputActions, useStore, actions, t,
-  watchSubmitted, submissionCursor, sendComments, openQuestion }: ConversationCommentsProps) {
+  watchSubmitted, submissionCursor, sendComments, openQuestion, insertReference, watchOpenReference }: ConversationCommentsProps) {
   const snapshot = useChat(value => value)
   const session = useSession(value => value)
   const input = useInput(value => value)
   const state = useStore(value => value)
   const anchor = useRef<HTMLDivElement>(null)
   const floating = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLElement>(null)
   const composing = useRef(false)
   const sending = useRef(false)
   const asking = useRef(false)
@@ -110,14 +116,33 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
   const [questionBusy, setQuestionBusy] = useState(false)
   const [questionError, setQuestionError] = useState('')
   const english = t('add') === 'Add comment'
-  const pending = state.staged.some(item => item.match !== 'includes')
-  const insertedBatches = state.staged.filter(item => item.match === 'includes' && input.draft.includes(item.draft.split('\n')[0]!))
+  const references = input.occurrences.filter(item => item.source === conversationCommentSource(sessionId))
+  const referenceText = (ref: string): string | undefined => { try { return conversationCommentReferenceText(ref, sessionId) } catch { return undefined } }
+  const admitted = [...(session.pendingSubmissions ?? []).map(item => item.text), ...(input.queue ?? []).map(message => message.content
+    .filter(block => block.type === 'text').map(block => block.text).join('\n'))]
+  const automaticPending = state.staged.filter(item => item.match === 'includes' && admitted.some(text => text.includes(item.draft)))
+  const pending = state.staged.some(item => item.match !== 'includes') || automaticPending.length > 0
+  const insertedBatches = state.staged.filter(item => item.match === 'includes' && input.draft.includes(item.draft.split('\n')[0]!)
+    && !references.some(reference => referenceText(reference.ref) === item.draft))
   const inserted = insertedBatches.length > 0
-  const frozenIds = new Set(state.staged.filter(item => item.match !== 'includes' || insertedBatches.includes(item)).flatMap(item => item.ids))
+  const frozenIds = new Set(state.staged.filter(item => item.match !== 'includes' || insertedBatches.includes(item) || automaticPending.includes(item)).flatMap(item => item.ids))
   const locked = session.openState !== 'open' || session.removed || session.subagent !== null || input.phase !== 'plain' || state.sending || pending || inserted
   const close = useCallback(() => { setSelection(undefined); setEditor(undefined); setNote(''); setQuestionError(''); composing.current = false }, [])
   useEffect(() => watchSubmitted(actions.confirmSubmitted), [watchSubmitted, actions])
+  useEffect(() => watchOpenReference?.(() => setExpanded(value => !value)), [watchOpenReference])
   useEffect(() => { close(); setExpanded(false); setStatus('') }, [sessionId, close])
+  useLayoutEffect(() => {
+    if (!expanded || !anchor.current || !panel.current) return
+    const place = (): void => {
+      const seat = anchor.current?.getBoundingClientRect(), node = panel.current
+      if (!seat || !node) return
+      const bounds = node.getBoundingClientRect()
+      node.style.left = `${Math.max(12, Math.min(seat.left, window.innerWidth - bounds.width - 12))}px`
+      node.style.top = `${Math.max(12, Math.min(seat.top - bounds.height - 8, window.innerHeight - bounds.height - 12))}px`
+    }
+    place(); window.addEventListener('resize', place); window.addEventListener('scroll', place, true)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
+  }, [expanded, state.comments])
   useLayoutEffect(() => {
     const container = anchor.current?.closest<HTMLElement>('[data-slot="main.conversation"]')
     if (!container) { setSurfaces([]); return }
@@ -169,6 +194,30 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
     window.getSelection()?.removeAllRanges(); close(); setStatus('')
   }
   const batch = (): string => `${t('receipt')}：${crypto.randomUUID()}\n${conversationCommentsPrompt(state.comments, english ? 'en' : 'zh')}`
+  const attach = (force = false): void => {
+    if (!insertReference || locked || references.length > 1) return
+    const reference = references[0]
+    if (reference && referenceText(reference.ref) === undefined) return
+    if (state.comments.length === 0) {
+      if (reference && inputActions.insertText('', commentReferenceSpan(input, reference))) {
+        actions.unstage(referenceText(reference.ref)!); inputActions.persistDraft()
+      }
+      return
+    }
+    const prompt = conversationCommentsPrompt(state.comments, english ? 'en' : 'zh')
+    if (reference && referenceText(reference.ref)?.slice(referenceText(reference.ref)!.indexOf('\n') + 1) === prompt) return
+    // A removed chip or an optimistic send must not silently re-add the same batch.
+    if (!reference && !force && state.staged.some(item => item.match === 'includes' && item.ids.length === state.comments.length
+      && state.comments.every(comment => item.ids.includes(comment.id) && item.revisions[comment.id] === state.revisions[comment.id]))) return
+    const text = batch(), cursor = submissionCursor()
+    if (!insertReference(text, state.comments.length, commentReferenceSpan(input, reference))) { setStatus(t('changed')); return }
+    actions.stage(text, state.comments.map(item => item.id), cursor, 'includes')
+    if (reference) actions.unstage(referenceText(reference.ref)!)
+    inputActions.persistDraft(); setStatus('')
+  }
+  // Saving a comment stages a native chip before the next user gesture. The host
+  // owns click/Enter delivery, reference serialization, attachments and failure recovery.
+  useLayoutEffect(() => { attach() })
   const ask = async (): Promise<void> => {
     if (!selection || asking.current) return
     asking.current = true; setQuestionBusy(true); setQuestionError('')
@@ -178,6 +227,7 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
   }
   const insert = (): void => {
     if (locked || !state.comments.length) return
+    if (insertReference) { attach(true); setExpanded(false); return }
     const text = batch(), cursor = submissionCursor()
     const addition = `${input.draft ? '\n\n' : ''}${text}`
     actions.stage(text, state.comments.map(item => item.id), cursor, 'includes')
@@ -192,11 +242,28 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
   const submit = async (): Promise<void> => {
     if (locked || !state.comments.length || sending.current) return
     const text = batch()
+    const reference = references[0], restore = reference && referenceText(reference.ref)
+    let restoreSpan: TokenSpan | undefined
+    if (reference && (references.length !== 1 || !restore)) { setStatus(t('changed')); return }
     sending.current = true; actions.setSending(true); setStatus('')
+    if (reference) {
+      if (!inputActions.insertText('', commentReferenceSpan(input, reference))) {
+        sending.current = false; actions.setSending(false); setStatus(t('changed')); return
+      }
+      // Remove this batch from the ordinary draft before its separate send so
+      // the user's next message cannot accidentally carry the same notes twice.
+      restoreSpan = inputActions.captureInsertion(); actions.unstage(restore!); inputActions.persistDraft()
+    }
     actions.stage(text, state.comments.map(item => item.id), submissionCursor())
     try {
       const error = await sendComments(text)
-      if (error !== null) { actions.unstage(text); setStatus(error) }
+      if (error !== null) {
+        actions.unstage(text)
+        if (restore && restoreSpan && insertReference?.(restore, state.comments.length, restoreSpan)) {
+          actions.stage(restore, state.comments.map(item => item.id), submissionCursor(), 'includes'); inputActions.persistDraft()
+        }
+        setStatus(error)
+      }
       else setStatus(t('pending'))
     } catch { setStatus(t('pending')) }
     finally { sending.current = false; actions.setSending(false) }
@@ -205,8 +272,8 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
     {surfaces.map(surface => <MessageComments key={`${surface.messageId}:${surface.contentId}`} surface={surface} t={t} onEdit={edit}
       comments={state.comments.flatMap((comment, i) => comment.messageId === surface.messageId && comment.contentId === surface.contentId ? [{ ...comment, number: i + 1 }] : [])} />)}
     {state.comments.length > 0 && <>
-      <button type="button" className="qyt-cc-chip" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>▤ {t('count', { count: state.comments.length })}</button>
-      {expanded && <section className="qyt-cc-panel" aria-label={t('title')}>
+      {references.length === 0 && <button type="button" className="qyt-cc-chip" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>▤ {t('count', { count: state.comments.length })}</button>}
+      {expanded && <section ref={panel} className="qyt-cc-panel" aria-label={t('title')}>
         <header><h4>{t('title')}</h4><button type="button" className="qyt-cc-icon" aria-label={t('close')} onClick={() => setExpanded(false)}>×</button></header>
         <ol className="qyt-cc-list">{state.comments.map((comment, i) => <li key={comment.id} className="qyt-cc-item" data-qyt-cc-item={comment.id}>
           <span>{i + 1}.</span><div className="qyt-cc-item-body"><blockquote>{comment.quote}</blockquote><p>{comment.note}</p></div>
@@ -214,7 +281,7 @@ export function ConversationComments({ sessionId, useChat, useSession, useInput,
           <button type="button" className="qyt-cc-icon" aria-label={t('remove')} disabled={frozenIds.has(comment.id)} onClick={() => actions.remove([comment.id])}>×</button>
         </li>)}</ol>
         <p className="qyt-cc-hint">{t('hint')}</p>
-        <div className="qyt-cc-actions"><button type="button" className="qyt-cc-action" disabled={locked} onClick={insert}>{t('insert')}</button>
+        <div className="qyt-cc-actions"><button type="button" className="qyt-cc-action" disabled={locked || references.length > 0} onClick={insert}>{t('insert')}</button>
           <button type="button" className="qyt-cc-action" data-primary disabled={locked} onClick={() => { void submit() }}>{t('send')}</button></div>
       </section>}
       {(pending || inserted || status) && <div className="qyt-cc-status" role="status">{pending ? t('pending') : inserted ? t('inserted') : status}</div>}

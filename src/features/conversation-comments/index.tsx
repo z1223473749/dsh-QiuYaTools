@@ -11,6 +11,7 @@ import { watchRevisionSubmissions } from '../plan-comments/revision-submissions.
 import { zh, en, type ConversationCommentKey } from './locales.ts'
 import styles from './styles.css'
 import { createNewConversationQuestion, type NewConversationQuestion } from './new-question.ts'
+import { conversationCommentReference, type ConversationCommentReferences } from './composer-reference.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap { qiuyaConversationComments: ConversationCommentKey }
@@ -20,16 +21,23 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export function installConversationComments(ctx: Context): () => void {
   const store = createConversationCommentsStore()
   const questions = new Map<SessionId, { binding: NonNullable<ReturnType<Context['sessions']['binding']>>; controller: NewConversationQuestion }>()
+  const references = ctx.get('qiuyaConversationCommentReferences') as ConversationCommentReferences
   const removeLocale = ctx.locale.register('qiuyaConversationComments', { zh, en })
   const style = document.createElement('style')
   style.dataset.qytConversationComments = ''; style.textContent = styles; document.head.append(style)
-  const unregister = ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock', id: 'qiuya-tools-conversation-comments', order: 80,
+  const unregister = ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+    name: 'conversation.input.left', id: 'qiuya-tools-conversation-comments', order: 80,
     locale: 'qiuyaConversationComments', store,
     inject: (sessionId: SessionId): ConversationCommentsInjected => {
       const binding = ctx.sessions.binding(sessionId)
       if (!binding) throw new Error('Conversation unavailable')
       return {
+        watchOpenReference: open => references.watchOpen(sessionId, () => ctx.sessions.binding(sessionId) === binding, open),
+        insertReference: (text, count, span) => {
+          if (ctx.sessions.binding(sessionId) !== binding || ctx.uiSession.adapter.current.getSnapshot().key !== sessionId) return false
+          const label = ctx.locale.getSnapshot().active.startsWith('zh') ? `${count} 条注释` : `${count} ${count === 1 ? 'comment' : 'comments'}`
+          return binding.ctx.bail(binding.ctx, 'slash/input-insert-reference', { reference: conversationCommentReference(sessionId, text, label), span }) === true
+        },
         watchSubmitted: confirm => watchRevisionSubmissions(binding.eventSource, confirm),
         submissionCursor: () => {
           const entries = binding.eventSource.getSnapshot().entries

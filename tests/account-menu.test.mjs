@@ -20,7 +20,7 @@ function settingsStore() {
   return { instance, seat: { ...handle, create: () => instance } }
 }
 
-function fixture(t, { declared = true, settings = true } = {}) {
+function fixture(t, { declared = true, settings = true, updates } = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div data-slot="settings.launcher"><button type="button" data-signed-out="false" aria-haspopup="menu" aria-expanded="false">Account</button></div></body></html>', { url: 'https://harness.test/' })
   const doc = dom.window.document
   const trigger = doc.querySelector('button')
@@ -90,7 +90,7 @@ function fixture(t, { declared = true, settings = true } = {}) {
     trigger.setAttribute('aria-expanded', 'false')
     activeMenu?.remove()
   })
-  const dispose = installAccountMenuEntry(ctx, () => ownLabel, dom.window)
+  const dispose = installAccountMenuEntry(ctx, () => ownLabel, dom.window, updates)
   t.after(() => { dispose(); dom.window.close() })
   return {
     doc, trigger, ctx, store, nativeActions, addMenu, tick, dispose,
@@ -107,6 +107,22 @@ function fixture(t, { declared = true, settings = true } = {}) {
     listenerCounts: () => [localeListeners.size, settingsListeners.size, injections.size],
   }
 }
+
+test('update badges react while the account menu is open and route only the toolbox update action', async t => {
+  let notice = null, opened = 0
+  const listeners = new Set()
+  const f = fixture(t, { updates: { source: { getSnapshot: () => ({ notice }), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) } }, label: restart => restart ? '重启生效' : '有新版本', open() { opened++ } } })
+  f.addMenu(); await f.tick()
+  assert.equal(f.entry().querySelector('[data-qyt-update-badge]'), null)
+  notice = { version: '0.6.3', restart: false }; for (const fn of listeners) fn(); await f.tick()
+  assert.equal(f.entry().querySelector('[data-qyt-update-badge]').textContent, '有新版本')
+  assert.equal(f.entry().querySelector('[data-qyt-update-badge]').title, 'v0.6.3')
+  notice = { version: '0.6.3', restart: true }; for (const fn of listeners) fn(); await f.tick()
+  assert.equal(f.entry().querySelector('[data-qyt-update-badge]').textContent, '重启生效')
+  f.entry().click(); await f.tick()
+  assert.equal(opened, 1); assert.deepEqual(f.nativeActions, [])
+  f.dispose(); assert.equal(listeners.size, 0)
+})
 
 test('the account row opens exactly the plugin section and closes only its owning account menu', async t => {
   const f = fixture(t)

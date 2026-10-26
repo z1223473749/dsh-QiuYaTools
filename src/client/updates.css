@@ -39,3 +39,8 @@
 .qyt-updates-steps i { font-style:normal; opacity:.5; }
 .qyt-updates a:focus-visible { outline:2px solid var(--qyt-ocean); outline-offset:3px; border-radius:6px; }
 @media (max-width:620px) { .qyt-about-update { padding:15px; } }
+.qyt-about-auto-check { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 0; }
+.qyt-about-auto-check span { display:grid; gap:5px; }
+.qyt-about-auto-check strong { font-size:12px; font-weight:500; }
+.qyt-about-auto-check small { color:var(--dsw-alias-label-secondary); font-size:11px; line-height:1.6; }
+.qyt-about-auto-check input { accent-color:var(--qyt-ocean,#277b8c); width:16px; height:16px; flex-shrink:0; }

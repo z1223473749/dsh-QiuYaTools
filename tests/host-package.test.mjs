@@ -35,6 +35,7 @@ const expected = {
   gitEnabled: true,
   qThemeEnabled: false,
   computerUseEnabled: true,
+  autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 }
@@ -59,7 +60,7 @@ assert.deepEqual(unwrap(host.Config({})), expected,
 for (const input of [
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
-  { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: true },
+  { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: true, autoCheckUpdates: false },
 ]) {
   const result = await standard.validate(input)
   assert.equal(result.issues, undefined, 'valid boundary or explicit settings must validate')
@@ -88,6 +89,7 @@ const invalid = [
   { pasteLineThreshold: '15' },
   { enabled: 'false' },
   { promptSuggestionsEnabled: 'true' },
+  { autoCheckUpdates: 'false' },
 ]
 for (const input of invalid) {
   const result = await standard.validate(input)
@@ -168,7 +170,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 13, invalidCases: 14, applied: true,
+    imported: true, standardSchema: true, volatileFields: 14, invalidCases: 15, applied: true,
   })
 })
 
@@ -199,7 +201,8 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), false)
-  assert.equal(Object.keys(fiber.config).length, 13)
+  assert.equal(Object.keys(fiber.config).length, 14)
+  assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
   assert.equal(fiber.config.gitEnabled.get(), true)
   for (const [field, value] of Object.entries(fiber.config)) {

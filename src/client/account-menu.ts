@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import { SETTINGS_ID } from '../shared.ts'
 import { createMenuBrandIcon } from './brand-icon.ts'
+import type { UpdateBadgeOptions } from './update-notice.ts'
 
 interface AccountMenuServices {
   slots: {
@@ -14,6 +15,20 @@ interface AccountMenuServices {
 
 type OpenSection = (id: string) => void
 const computerNavigation = new WeakMap<object, { pending: boolean; listeners: Set<() => void> }>()
+const updatesNavigation = new WeakMap<object, { pending: boolean; listeners: Set<() => void> }>()
+function updateNavigation(ctx: object) { let value = updatesNavigation.get(ctx); if (!value) { value = { pending: false, listeners: new Set() }; updatesNavigation.set(ctx, value) } return value }
+export function consumeUpdatesSettingsNavigation(ctx: object): boolean { const value = updateNavigation(ctx), pending = value.pending; value.pending = false; return pending }
+export function subscribeUpdatesSettingsNavigation(ctx: object, listener: () => void): () => void { const value = updateNavigation(ctx); value.listeners.add(listener); return () => { value.listeners.delete(listener) } }
+export function openUpdatesSettings(ctx: Context): boolean {
+  const slots = (ctx as unknown as AccountMenuServices).slots
+  if (!slots || typeof slots.entriesOfSlot !== 'function') return false
+  const open = settingsSectionOpener(slots)
+  if (!open) return false
+  const value = updateNavigation(ctx); value.pending = true
+  for (const listener of value.listeners) listener()
+  open(SETTINGS_ID)
+  return true
+}
 function navigation(ctx: object) { let value = computerNavigation.get(ctx); if (!value) { value = { pending: false, listeners: new Set() }; computerNavigation.set(ctx, value) } return value }
 export function consumeComputerSettingsNavigation(ctx: object): boolean { const value = navigation(ctx), pending = value.pending; value.pending = false; return pending }
 export function subscribeComputerSettingsNavigation(ctx: object, listener: () => void): () => void { const value = navigation(ctx); value.listeners.add(listener); return () => { value.listeners.delete(listener) } }
@@ -48,7 +63,7 @@ export function settingsSectionOpener(slots: AccountMenuServices['slots']): Open
  * slot. Add one DOM row only inside that identified menu, leaving the account
  * component and every built-in action under their original owner.
  */
-export function installAccountMenuEntry(ctx: Context, label: () => string, target: Window = window): () => void {
+export function installAccountMenuEntry(ctx: Context, label: () => string, target: Window = window, updates?: UpdateBadgeOptions): () => void {
   const doc = target.document
   const view = target as Window & typeof globalThis
   if (!doc?.body || typeof view.MutationObserver !== 'function') return () => {}
@@ -107,7 +122,8 @@ export function installAccountMenuEntry(ctx: Context, label: () => string, targe
           // The verified account trigger closes its own menu. No synthetic
           // events are dispatched to any Session or built-in menu row.
           if (match.trigger.getAttribute('aria-expanded') === 'true') match.trigger.click()
-          openSection(SETTINGS_ID)
+          if (updates?.source.getSnapshot().notice && updates.open) updates.open()
+          else openSection(SETTINGS_ID)
         }
         button.addEventListener('click', select)
         container.append(button)
@@ -119,6 +135,14 @@ export function installAccountMenuEntry(ctx: Context, label: () => string, targe
       const text = entry.button.querySelector('[data-qyt-account-menu-label]')!
       const next = label()
       if (text.textContent !== next) text.textContent = next
+      const notice = updates?.source.getSnapshot().notice
+      let badge = entry.button.querySelector<HTMLElement>('[data-qyt-update-badge]')
+      if (notice) {
+        if (!badge) { badge = doc.createElement('span'); badge.dataset.qytUpdateBadge = 'true'; badge.className = 'qyt-update-badge'; entry.button.append(badge) }
+        const badgeText = updates!.label(notice.restart)
+        if (badge.textContent !== badgeText) badge.textContent = badgeText
+        badge.title = `v${notice.version}`
+      } else badge?.remove()
       entry.button.disabled = settingsSectionOpener(services.slots) === undefined
     }
     const schedule = (): void => {
@@ -130,6 +154,7 @@ export function installAccountMenuEntry(ctx: Context, label: () => string, targe
     observer.observe(doc.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-expanded', 'data-signed-out'] })
     const offLocale = services.locale.subscribe(schedule)
     const offSettings = services.slots.subscribe('sidebar.settings', schedule)
+    const offUpdates = updates?.source.subscribe(schedule)
     reconcile()
     return () => {
       if (disposed) return
@@ -137,6 +162,7 @@ export function installAccountMenuEntry(ctx: Context, label: () => string, targe
       observer.disconnect()
       offLocale()
       offSettings()
+      offUpdates?.()
       for (const entry of mounted.values()) entry.cleanup()
       mounted.clear()
     }

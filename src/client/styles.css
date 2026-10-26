@@ -285,3 +285,8 @@ body[data-ds-dark-theme] .qyt-computer-inline-card[data-dragging="true"]{box-sha
 .qyt-computer-task-picker > label { flex:1; display:grid; gap:6px; min-width:0; color:var(--qyt-computer-secondary); font-size:12px; }
 .qyt-computer-task-picker select { width:100%; min-width:0; border:1px solid var(--qyt-computer-line); border-radius:8px; padding:8px 10px; background:var(--qyt-computer-bg); color:var(--qyt-computer-text); font:inherit; }
 @media(forced-colors:active){.qyt-computer-inline-card{border-color:CanvasText;box-shadow:none}.qyt-computer-inline-image>.qyt-computer-inline-actions{background:Canvas;border-color:ButtonText}}
+.qyt-update-badge { display:inline-flex; align-items:center; flex-shrink:0; margin-inline-start:7px; padding:2px 7px; border:0; border-radius:999px; background:var(--qyt-ocean-soft,rgba(39,123,140,.12)); color:var(--qyt-ocean,#277b8c); font-size:10px; line-height:1.5; white-space:nowrap; }
+button.qyt-update-badge { cursor:pointer; }
+.qyt-update-badge:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+.qyt-tabs [role="tab"] { position:relative; }
+.qyt-update-dot { position:absolute; top:8px; right:13px; width:6px; height:6px; border-radius:50%; background:var(--qyt-ocean,#277b8c); }

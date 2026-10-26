@@ -1,6 +1,6 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "为 DeepSeek Harness 提供 Git 分支、改动对比与 PR 管理，会话和计划批注、长文本附件、独立窗口、批量归档、提示词建议与 Q 主题，并支持 Mac/Windows 电脑操控和实时预览。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
@@ -83,9 +83,9 @@
     "test:templates": "node --test tests/acceptance-templates*.test.mjs"
   },
   "optionalDependencies": {
-    "dsh-qiuya-tools-native-darwin-universal": "0.6.2",
-    "dsh-qiuya-tools-native-win32-arm64": "0.6.2",
-    "dsh-qiuya-tools-native-win32-x64": "0.6.2"
+    "dsh-qiuya-tools-native-darwin-universal": "0.6.3",
+    "dsh-qiuya-tools-native-win32-arm64": "0.6.3",
+    "dsh-qiuya-tools-native-win32-x64": "0.6.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"

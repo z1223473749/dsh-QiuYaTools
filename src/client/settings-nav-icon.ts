@@ -3,6 +3,7 @@ import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import { SETTINGS_ID } from '../shared.ts'
 import { MONO_ICON_DATA_URL } from './brand-assets.ts'
 import { createMenuBrandIcon } from './brand-icon.ts'
+import type { UpdateBadgeOptions } from './update-notice.ts'
 
 interface SettingsNavigationServices {
   slots: {
@@ -14,7 +15,7 @@ interface SettingsNavigationServices {
 }
 
 /** Adapt only this section's fixed gear until Harness exposes a navigation icon seat. */
-export function installSettingsNavIcon(ctx: Context, target: Window = window): () => void {
+export function installSettingsNavIcon(ctx: Context, target: Window = window, updates?: UpdateBadgeOptions): () => void {
   const doc = target.document
   const view = target as Window & typeof globalThis
   if (!doc?.body || typeof view.MutationObserver !== 'function' || MONO_ICON_DATA_URL.length === 0) return () => {}
@@ -64,11 +65,22 @@ export function installSettingsNavIcon(ctx: Context, target: Window = window): (
         button.insertBefore(icon, native)
         mounted.set(button, { native, icon, restore() {
           icon.remove()
+          button.querySelector('[data-qyt-update-badge]')?.remove()
           delete button.dataset.qytSettingsNavButton
           if (previousDisplay) native.style.setProperty('display', previousDisplay, previousPriority)
           else native.style.removeProperty('display')
           if (!hadStyle && native.getAttribute('style') === '') native.removeAttribute('style')
         } })
+      }
+      for (const button of mounted.keys()) {
+        const notice = updates?.source.getSnapshot().notice
+        let badge = button.querySelector<HTMLElement>('[data-qyt-update-badge]')
+        if (notice) {
+          if (!badge) { badge = doc.createElement('span'); badge.dataset.qytUpdateBadge = 'true'; badge.className = 'qyt-update-badge'; button.append(badge) }
+          const next = updates!.label(notice.restart)
+          if (badge.textContent !== next) badge.textContent = next
+          badge.title = `v${notice.version}`
+        } else badge?.remove()
       }
     }
     const schedule = (): void => {
@@ -80,6 +92,7 @@ export function installSettingsNavIcon(ctx: Context, target: Window = window): (
     observer.observe(doc.body, { subtree: true, childList: true, characterData: true })
     const offLocale = services.locale.subscribe(schedule)
     const offSections = services.slots.subscribe('settings.section', schedule)
+    const offUpdates = updates?.source.subscribe(schedule)
     reconcile()
     return () => {
       if (disposed) return
@@ -87,6 +100,7 @@ export function installSettingsNavIcon(ctx: Context, target: Window = window): (
       observer.disconnect()
       offLocale()
       offSections()
+      offUpdates?.()
       for (const entry of mounted.values()) entry.restore()
       mounted.clear()
     }

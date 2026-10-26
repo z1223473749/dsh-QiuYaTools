@@ -17,7 +17,7 @@ const module = { exports: {} }
 vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.exports, queueMicrotask })
 const { installSettingsNavIcon } = module.exports
 
-function fixture(t, { declared = true, entries } = {}) {
+function fixture(t, { declared = true, entries, updates } = {}) {
   const dom = new JSDOM('<!doctype html><html><head><style>button{color:rgb(20,20,20)}body[data-dark] button{color:rgb(240,240,240)}</style></head><body></body></html>')
   const doc = dom.window.document
   let ownLabel = 'QiuYaTools'
@@ -42,7 +42,7 @@ function fixture(t, { declared = true, entries } = {}) {
     },
     locale: { subscribe(listener) { localeListeners.add(listener); return () => localeListeners.delete(listener) } },
   }
-  const dispose = installSettingsNavIcon(ctx, dom.window)
+  const dispose = installSettingsNavIcon(ctx, dom.window, updates)
   t.after(() => { dispose(); dom.window.close() })
   const render = ({ nativeDisplay } = {}) => {
     doc.querySelector('[data-shortcut-modal="settings"]')?.remove()
@@ -83,6 +83,18 @@ function fixture(t, { declared = true, entries } = {}) {
     listenerCounts: () => [sectionListeners.size, localeListeners.size, injections.size],
   }
 }
+
+test('only the proven toolbox settings row shows and removes the live update badge', async t => {
+  let notice = { version: '0.6.3', restart: false }
+  const listeners = new Set()
+  const f = fixture(t, { updates: { source: { getSnapshot: () => ({ notice }), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) } }, label: restart => restart ? '重启生效' : '有新版本' } })
+  f.render(); await f.tick()
+  assert.equal(f.button('qiuya-tools').querySelector('[data-qyt-update-badge]').textContent, '有新版本')
+  assert.equal(f.button('general').querySelector('[data-qyt-update-badge]'), null)
+  notice = null; for (const fn of listeners) fn(); await f.tick()
+  assert.equal(f.doc.querySelector('[data-qyt-update-badge]'), null)
+  f.dispose(); assert.equal(listeners.size, 0)
+})
 
 test('only the registered QiuYaTools navigation glyph becomes the monochrome currentColor mask', async t => {
   const f = fixture(t)

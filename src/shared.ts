@@ -15,6 +15,8 @@ export interface Preferences {
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
   computerUseEnabled: boolean
+  /** Background checks only; installation always requires an explicit action. */
+  autoCheckUpdates: boolean
   pasteCharacterThreshold: number
   pasteLineThreshold: number
 }
@@ -36,6 +38,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   gitEnabled: true,
   qThemeEnabled: false,
   computerUseEnabled: false,
+  autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 })

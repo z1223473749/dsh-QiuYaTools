@@ -32,6 +32,7 @@ export interface Config {
   gitEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
   computerUseEnabled: Volatile<boolean>
+  autoCheckUpdates: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
   pasteLineThreshold: Volatile<number>
 }
@@ -48,6 +49,7 @@ export const Config = z.object({
   gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
   computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
+  autoCheckUpdates: z.boolean().default(true).description('后台自动检查插件更新并显示提醒，安装由用户确认').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
     .description('粘贴内容达到此字符数时转为 TXT 附件').volatile(),
   pasteLineThreshold: z.number().step(1).min(1).max(100_000).default(15)

@@ -7,6 +7,7 @@ import { installBulkArchive } from '../features/bulk-archive/index.ts'
 import { installSessionWindows } from '../features/session-windows/index.tsx'
 import { installPlanComments } from '../features/plan-comments/index.tsx'
 import { installConversationComments } from '../features/conversation-comments/index.tsx'
+import { installConversationCommentReferences } from '../features/conversation-comments/composer-reference.ts'
 import { installSidebarTools } from '../features/sidebar-tools/index.tsx'
 import { installPromptSuggestions } from '../features/prompt-suggestions/index.tsx'
 import { installGit } from '../features/git/index.tsx'
@@ -17,7 +18,7 @@ const dependencies: Record<FeatureField, string[]> = {
   sessionWindowsEnabled: ['slots'],
   bulkArchiveEnabled: ['locale', 'sessions', 'workspaces', 'uiWorkspace'],
   planCommentsEnabled: ['slots', 'locale', 'sessions', 'sidebarRight'],
-  conversationCommentsEnabled: ['slots', 'locale', 'sessions', 'conversation', 'uiSession', 'uiWorkspace', 'workspaces'],
+  conversationCommentsEnabled: ['slots', 'locale', 'sessions', 'conversation', 'uiSession', 'uiWorkspace', 'workspaces', 'qiuyaConversationCommentReferences'],
   sidebarToolsEnabled: ['slots', 'sessions', 'workspaces', 'uiSession'],
   promptSuggestionsEnabled: ['slots', 'locale', 'connection', 'uiSession'],
   gitEnabled: ['slots', 'locale', 'connection', 'uiSession', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'resources', 'conversation', 'workspaces', 'uiWorkspace', 'remote', 'remote.session'],
@@ -25,6 +26,11 @@ const dependencies: Record<FeatureField, string[]> = {
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
 export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): void {
+  // Reference decoding belongs to the plugin, not to a visible feature toggle:
+  // saved drafts must remain sendable with either UI switch turned off.
+  ctx.inject(['inputTriggers', 'sessions', 'uiSession'], scope => {
+    scope.effect(() => installConversationCommentReferences(scope))
+  })
   const sessionWindowSupport = getSessionWindowSupport(ctx)
   const current = (): Preferences => ({ ...DEFAULT_PREFERENCES, ...form.getSnapshot().value })
   ctx.effect(() => {

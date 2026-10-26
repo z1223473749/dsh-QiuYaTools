@@ -130,9 +130,11 @@ test('built client follows the Harness loader and settings contribution lifecycl
   assert.deepEqual(mounted.injectedSlots, ['conversation.input.left', 'settings.section'])
   assert.deepEqual(mounted.injectedServices, [
     ['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'],
-    ['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'],
     ['connection'],
-  ], 'chat workbench contributions wait for the actual public sidebar services; version checks keep one optional connection')
+    ['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'],
+    ['inputTriggers', 'sessions', 'uiSession'],
+    ['connection'],
+  ], 'background updates and chat contributions wait for their real public connection and sidebar services')
   assert.deepEqual(mounted.requestedConfigIds, ['qiuya-tools'])
   assert.equal(mounted.sections.size, 2)
   assert.equal(mounted.sections.get('qiuya-tools-computer-environment')?.options.name, 'conversation.input.left', 'the environment selector uses the additive public composer slot')
@@ -201,6 +203,8 @@ test('host schema provides a volatile default and rejects string booleans', () =
   const paused = host.Config({ enabled: false })
   assert.equal(paused.enabled.get(), false)
   assert.equal(host.Config.simplify(paused).enabled, false, 'persistence must contain plain data')
+  assert.equal(host.Config({}).autoCheckUpdates.get(), true)
+  assert.equal(host.Config({ autoCheckUpdates: false }).autoCheckUpdates.get(), false, 'an explicit opt-out remains disabled')
   for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled', 'gitEnabled']) assert.equal(paused[field].get(), true)
   assert.throws(() => host.Config({ enabled: 'false' }), /boolean/i)
   assert.throws(() => host.Config({ enabled: 'true' }), /boolean/i)

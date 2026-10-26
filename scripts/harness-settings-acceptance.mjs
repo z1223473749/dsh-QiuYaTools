@@ -11,7 +11,7 @@ export const SETTINGS_ACCEPTANCE_PAGES = [
   { id: 'bulkArchiveEnabled', label: '批量归档', heading: '会话多选与批量归档', toggle: '会话多选与批量归档', steps: ['Shift', '右键已选会话', '右键工作区'] },
   { id: 'planCommentsEnabled', label: '计划批注', heading: '计划批注与修改建议', toggle: '计划批注与修改建议', features: [
     { heading: '计划批注与修改建议', toggle: '计划批注与修改建议', steps: ['选中文字添加批注', '计划卡片', '原有内容会保留'] },
-    { heading: '会话批注与修改建议', toggle: '会话批注与修改建议', steps: ['新会话提问', '批注编号常驻显示', '提交批注'] },
+    { heading: '会话批注与修改建议', toggle: '会话批注与修改建议', steps: ['新会话提问', '批注编号常驻显示', '发送消息时随文字、引用和附件一起提交'] },
   ] },
   { id: 'sidebarToolsEnabled', label: '会话菜单', heading: '会话与工作区菜单', toggle: '会话与工作区菜单', steps: ['置顶', '标记为未读', '会话 ID', '打开目录'] },
   { id: 'promptSuggestionsEnabled', label: '提示词', heading: '输入框提示词推荐', toggle: '输入框提示词推荐', steps: ['失焦后仍保留', 'Tab', '模型用量'] },

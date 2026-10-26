@@ -26,7 +26,9 @@ const compiled = await build({
   } }],
 })
 const module = { exports: {} }
-vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.exports, require })
+vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.exports, require: name => name === '@deepseek-ai/dsh-client-ui-primitives' ? {
+  Switch: ({ checked, disabled, label, onChange }) => React.createElement('button', { type: 'button', role: 'switch', 'aria-checked': checked, 'aria-label': label, disabled, onClick: () => onChange(!checked) }),
+} : require(name) })
 const { UpdatePanel } = module.exports
 
 const CHANNEL = '/api'
@@ -44,7 +46,7 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-function mount(handler, usePublicGet = false) {
+function mount(handler, usePublicGet = false, automatic) {
   const calls = []
   const lookedUp = []
   const connection = { rpc: { call(channel, endpoint, payload) {
@@ -55,7 +57,7 @@ function mount(handler, usePublicGet = false) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
-  act(() => root.render(React.createElement(UpdatePanel, { version: '0.2.3', ctx })))
+  act(() => root.render(React.createElement(UpdatePanel, { version: '0.2.3', ctx, automatic })))
   return {
     container, calls, lookedUp,
     button(label) { return [...container.querySelectorAll('button')].find(button => button.textContent === label) },
@@ -63,6 +65,19 @@ function mount(handler, usePublicGet = false) {
     dispose() { act(() => root.unmount()); container.remove() },
   }
 }
+
+test('the automatic update preference uses the existing form action and preserves manual checks while disabled', async () => {
+  const changes = []
+  const f = mount(() => Promise.resolve({ ok: true, value: available }), false, { enabled: false, disabled: false, onChange: value => changes.push(value) })
+  try {
+    const control = f.container.querySelector('[role="switch"][aria-label="自动检查更新"]')
+    assert.equal(control.getAttribute('aria-checked'), 'false')
+    await act(async () => { Simulate.click(control) })
+    assert.deepEqual(changes, [true])
+    assert.equal(f.calls.length, 0, 'changing the preference delegates persistence instead of installing or directly fetching')
+    await f.click('检查更新'); assert.equal(f.calls[0].payload.force, true)
+  } finally { f.dispose() }
+})
 
 test('Update panel shows the running version, waits for a user request and deduplicates repeated checks', async () => {
   const pending = deferred()

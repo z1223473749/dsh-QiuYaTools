@@ -15,10 +15,11 @@ import {
   type FeatureField, type Preferences,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
-import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation } from './account-menu.ts'
+import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation, consumeUpdatesSettingsNavigation, subscribeUpdatesSettingsNavigation, openUpdatesSettings } from './account-menu.ts'
 import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
+import { getUpdateNotice, installAutomaticUpdateChecks, disposeUpdateNotice } from './update-notice.ts'
 import { ComputerPanel } from '../features/computer-use/panel.tsx'
 import { installChatComputerEnvironment } from '../features/computer-use/chat-environment.tsx'
 import { installWorkbenchClient } from '../features/workbench/client.tsx'
@@ -86,6 +87,8 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
 }
 
 export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
+  const updates = getUpdateNotice(ctx)
+  const updateState = useSyncExternalStore(updates.subscribe, updates.getSnapshot, updates.getSnapshot)
   const workbenchAPI = useMemo(() => createWorkbenchAPI(() => ctx.get('connection') as WorkbenchConnection | undefined), [ctx])
   const snapshot = useSyncExternalStore(
     listener => form.subscribe(listener),
@@ -97,9 +100,9 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [thresholdDraft, setThresholdDraft] = useState<ThresholdDraft | null>(null)
   const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
-  const [activeTab, setActiveTab] = useState<SettingsTab>(() => consumeComputerSettingsNavigation(ctx) ? 'computer' : 'pastedTextEnabled')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => consumeUpdatesSettingsNavigation(ctx) ? 'updates' : consumeComputerSettingsNavigation(ctx) ? 'computer' : 'pastedTextEnabled')
   const [aboutVisited, setAboutVisited] = useState(false)
-  const [updatesVisited, setUpdatesVisited] = useState(false)
+  const [updatesVisited, setUpdatesVisited] = useState(() => activeTab === 'updates')
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
   const id = useId()
   const ready = snapshot.status === 'ready'
@@ -122,6 +125,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     tabs.current[TABS.findIndex(item => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
   useEffect(() => subscribeComputerSettingsNavigation(ctx, () => { if (consumeComputerSettingsNavigation(ctx)) activateTab('computer') }), [ctx])
+  useEffect(() => subscribeUpdatesSettingsNavigation(ctx, () => { if (consumeUpdatesSettingsNavigation(ctx)) activateTab('updates') }), [ctx])
 
   function navigateTabs(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
     const next = event.key === 'ArrowRight' ? (index + 1) % TABS.length
@@ -191,7 +195,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
         <header className="qyt-header">
           <span className="qyt-brand" aria-hidden="true"><span style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }} /></span>
           <div className="qyt-heading">
-            <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span></div>
+            <div className="qyt-title-row"><h2>{t('title')}</h2><span className="qyt-version">v{pkg.version}</span>{updateState.notice && <button className="qyt-update-badge" type="button" onClick={() => activateTab('updates')} title={`v${updateState.notice.version}`}>{t(updateState.notice.restart ? 'updateRestartRequired' : 'updateAvailable')}</button>}</div>
             <span className="qyt-status" role={saveState === 'error' ? 'alert' : 'status'} data-state={ready ? allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused' : 'pending'}><span className="qyt-status-dot" />{t(!ready ? snapshot.status === 'loading' ? 'loading' : 'unavailable' : !snapshot.writable ? 'readOnly' : saveState === 'error' ? 'saveError' : saveState === 'saving' ? 'saving' : saveState === 'saved' ? 'saved' : allEnabled ? windowCompatibility.versionSupported ? 'ready' : 'readyAvailable' : anyEnabled ? 'partial' : 'paused')}</span>
           </div>
           <div className="qyt-header-actions"><span>{t('enabled')}</span><button type="button" className="qyt-master-toggle" role="checkbox" aria-label={t('enabled')} aria-checked={allEnabled ? true : anyEnabled ? 'mixed' : false} title={t(allEnabled ? 'ready' : anyEnabled ? 'partial' : 'paused')} disabled={disabled} onClick={() => { void setAllFeatures(!allEnabled) }}><span aria-hidden="true" /></button></div>
@@ -200,14 +204,14 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
 
       <div className="qyt-tabs" role="tablist" aria-label={t('features')} aria-orientation="horizontal">
         {TABS.map((tab, index) => <button key={tab.id} ref={element => { tabs.current[index] = element }} type="button" role="tab" id={`${id}-tab-${tab.id}`} aria-selected={activeTab === tab.id} aria-controls={`${id}-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => { activateTab(tab.id) }} onKeyDown={event => { navigateTabs(event, index) }}>
-          <SettingsIcon name={tab.id} /><span>{t(tab.label)}</span>
+          <SettingsIcon name={tab.id} /><span>{t(tab.label)}</span>{tab.id === 'updates' && updateState.notice && <span className="qyt-update-dot" aria-label={t(updateState.notice.restart ? 'updateRestartRequired' : 'updateAvailable')}/>}
         </button>)}
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
         {tab.id === 'computer' ? activeTab === 'computer' && <><ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/><SitePermissions api={workbenchAPI}/></>
           : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
-          : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} />
+          : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} automatic={{ enabled: preferences.autoCheckUpdates !== false, disabled, label: t('autoCheckUpdates'), hint: t('autoCheckUpdatesHint'), onChange: value => { void persist([{ op: 'set', path: ['autoCheckUpdates'], value }]) } }} />
             : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
               <div className="qyt-card qyt-feature-summary">
                 <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name="qTheme"/></span><h3>{t('qTheme')}</h3></div><Switch className="qyt-switch" checked={preferences.qThemeEnabled === true} label={t('qTheme')} disabled={disabled} onChange={value => { void setThemeEnabled(value) }}/></div>
@@ -272,6 +276,9 @@ export function apply(ctx: Context): void {
   ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)); child.effect(() => installAcceptanceWorkflowClient(child)); child.effect(() => installAcceptanceTemplateClient(child)); child.effect(() => installBrowserDiagnosticClient(child, { feature: { subscribe: listener => form.subscribe(listener), getSnapshot() { const snapshot = form.getSnapshot(); return snapshot.status === 'ready' && snapshot.value?.enabled !== false && snapshot.value?.computerUseEnabled === true } } })) })
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
+  const updateNotice = getUpdateNotice(ctx)
+  ctx.effect(() => () => disposeUpdateNotice(ctx, updateNotice))
+  ctx.inject(['connection'], child => { child.effect(() => installAutomaticUpdateChecks(ctx, form, { disposeStore: false })) })
   ctx.effect(() => installQTheme(ctx, form))
   ctx.effect(() => installChatComputerEnvironment(ctx, form))
   ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'], child => { child.effect(() => installWorkbenchClient(child, form)) })
@@ -283,7 +290,8 @@ export function apply(ctx: Context): void {
     locale: NS,
     inject: () => ({ form, ctx }),
   }, QiuYaToolsSettings))
-  ctx.effect(() => installAccountMenuEntry(ctx, () => t('nav')))
-  ctx.effect(() => installSettingsNavIcon(ctx))
+  const updateBadge = { source: updateNotice, label: (restart: boolean) => t(restart ? 'updateRestartRequired' : 'updateAvailable'), open: () => { openUpdatesSettings(ctx) } }
+  ctx.effect(() => installAccountMenuEntry(ctx, () => t('nav'), window, updateBadge))
+  ctx.effect(() => installSettingsNavIcon(ctx, window, updateBadge))
   installFeatures(ctx, form)
 }

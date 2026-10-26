@@ -124,7 +124,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
   const request = options.fetch ?? globalThis.fetch.bind(globalThis)
   const architecture = process.arch === 'arm64' ? 'arm64' : 'x64'
   const platform = process.platform === 'win32' ? 'win32' : 'darwin'
-  const checker = new GitHubReleaseChecker({ repository: options.repository, currentVersion: options.version, packageName: options.packageName, architecture, platform, fetch: request })
+  const checker = new GitHubReleaseChecker({ repository: options.repository, currentVersion: options.version, packageName: options.packageName, architecture, platform, fetch: request, cacheMs: 24 * 60 * 60_000 })
   const lifetime = new AbortController()
   let disposed = false
   let pendingVersion: string | undefined
