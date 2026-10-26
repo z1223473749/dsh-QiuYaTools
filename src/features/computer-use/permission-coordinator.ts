@@ -16,7 +16,7 @@ export interface ComputerEntryBackend {
   launchApplicationFor?(sessionId: string, appId: string, signal?: AbortSignal): Promise<unknown>
   authorizationStart(sessionId: string, targetId: string, options: { allowOnce: boolean; signal: AbortSignal; expectedGeneration: number; expectedTarget: Pick<NativeTarget, 'id' | 'appId' | 'pid'> }): Promise<ComputerSessionSnapshot>
 }
-export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissions: Record<string, boolean>; capabilities: Record<string, boolean> }
+export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissions: Record<string, boolean>; capabilities: Record<string, boolean>; message?: string }
 export interface ComputerPendingPermission {
   requestId: string; requestVersion: 1; sessionId: string; taskId?: string; appId: string; appName: string
   reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight: ComputerPermissionPreflight
@@ -44,11 +44,12 @@ function safeName(appId: string): string {
   if (!/[\\/]/u.test(appId) && !/\.exe$/iu.test(leaf)) return '应用'
   return (leaf.replace(/\.exe$/iu, '').replace(/[\x00-\x1f\x7f]/gu, '').slice(0, 80) || '应用')
 }
+const unavailablePreflightMessage = '电脑操控连接暂不可用，当前无法检查系统权限。恢复连接后会自动重新检查。'
 function permissionProjection(status: ComputerStatus): ComputerPermissionPreflight {
   const permissions: Record<string, boolean> = {}, capabilities: Record<string, boolean> = {}
   for (const key of ['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring']) if (typeof status.permissions?.[key] === 'boolean') permissions[key] = status.permissions[key]
   if (status.capabilities && !Array.isArray(status.capabilities)) for (const key of ['capture', 'input', 'applications', 'launchApplication']) if (typeof status.capabilities[key] === 'boolean') capabilities[key] = status.capabilities[key]
-  return { available: status.available === true, ...(['darwin', 'win32', 'linux'].includes(String(status.platform)) ? { platform: String(status.platform) } : {}), ...(['local', 'remote', 'browser'].includes(String(status.mode)) ? { mode: String(status.mode) } : {}), permissions, capabilities }
+  return { available: status.available === true, ...(['darwin', 'win32', 'linux'].includes(String(status.platform)) ? { platform: String(status.platform) } : {}), ...(['local', 'remote', 'browser'].includes(String(status.mode)) ? { mode: String(status.mode) } : {}), permissions, capabilities, ...(status.available === false ? { message: unavailablePreflightMessage } : {}) }
 }
 /** Owner decisions are the only route from an opaque candidate to a grant.
  * No screenshot, AX text, title, executable path or pairing secret is disclosed
@@ -191,7 +192,8 @@ export class ComputerPermissionCoordinator {
     const status = await this.options.backend.authorizationStatus(binding.sessionId, signal); this.check(binding, signal)
     const pending = [...this.requests.values()].find(item => item.sessionId === binding.sessionId && item.generation === binding.generation)
     if (pending) pending.card.preflight = permissionProjection(status)
-    if (status.available !== true || ['screen', 'screenRecording', 'accessibility', 'postEvents'].some(key => status.permissions?.[key] === false)) throw failure('SYSTEM_PERMISSION_REQUIRED', '请由用户打开系统权限设置，允许屏幕录制和辅助功能后再确认此授权。')
+    if (status.available !== true) throw failure('NATIVE_UNAVAILABLE', unavailablePreflightMessage)
+    if (['screen', 'screenRecording', 'accessibility', 'postEvents'].some(key => status.permissions?.[key] === false)) throw failure('SYSTEM_PERMISSION_REQUIRED', '请由用户打开系统权限设置，允许屏幕录制和辅助功能后再确认此授权。')
   }
   pending(sessionId?: string): ComputerPendingPermission[] {
     this.sweep()
@@ -210,7 +212,7 @@ export class ComputerPermissionCoordinator {
           if (this.requests.get(item.card.requestId) === item) item.card.preflight = permissionProjection(status)
         } catch {
           signal?.throwIfAborted()
-          if (this.requests.get(item.card.requestId) === item) item.card.preflight = { available: false, permissions: {}, capabilities: {} }
+          if (this.requests.get(item.card.requestId) === item) item.card.preflight = { ...item.card.preflight, available: false, permissions: {}, capabilities: {}, message: unavailablePreflightMessage }
         }
       }
     }))
@@ -246,7 +248,7 @@ export class ComputerPermissionCoordinator {
       } catch (error) {
         // Opening OS settings is an owner action. Keep this exact card and
         // model waiter alive while permission is missing; no grant is written.
-        if (error instanceof ComputerError && error.code === 'SYSTEM_PERMISSION_REQUIRED' && this.requests.get(requestId) === pending) { pending.deciding = undefined; pending.decidingChoice = undefined; throw error }
+        if (error instanceof ComputerError && ['SYSTEM_PERMISSION_REQUIRED', 'NATIVE_UNAVAILABLE'].includes(error.code) && this.requests.get(requestId) === pending) { pending.deciding = undefined; pending.decidingChoice = undefined; throw error }
         if (this.requests.get(requestId) === pending) { this.requests.delete(requestId); pending.cleanup(); pending.reject(error) }
         throw error
       }

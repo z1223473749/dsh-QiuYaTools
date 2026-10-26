@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { spawn } from 'node:child_process'
+import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,8 +28,8 @@ if(readyMode==='nonce')ready.nonce='0'.repeat(64);if(readyMode==='owner')ready.o
 if(readyMode==='bundle')ready.bundleIdentifier='other.app';if(readyMode==='pid')ready.pid=ownerPid;
 if(readyMode==='birth')ready.nativeBirth={startSeconds:'100',startMicroseconds:'1000000',uniqueId:'99'};
 socket.on('connect',()=>{if(mode==='silent')return;setTimeout(()=>{if(mode==='invalid-json')socket.write('{broken\\n');else if(mode==='before-ready')socket.write(JSON.stringify({requestId:1,ok:true,result:{available:true}})+'\\n');else if(mode==='huge-ready')socket.write('x'.repeat(5000));else socket.write(JSON.stringify(ready)+'\\n');if(mode==='duplicate')socket.write(JSON.stringify(ready)+'\\n')},mode==='delayed'?75:0)});
-let buffer='';socket.on('data',chunk=>{buffer+=chunk.toString();let index;while((index=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(!line)continue;const request=JSON.parse(line);log({event:'request',request});socket.write(JSON.stringify({requestId:request.requestId,ok:true,result:{available:true,protocolVersion:1,permissions:{screenRecording:true,accessibility:true,postEvents:true,inputMonitoring:true}}})+'\\n')}});
-socket.on('end',()=>{log({event:'eof'});if(mode==='hang-retirement'){setInterval(()=>{},1000);return;}const receipt={event:'launchRetired',nonce,pid:process.pid,ownerPid,inputReleased:true,captureStopped:true};if(mode==='false-retired')receipt.captureStopped=false;if(mode==='wrong-retired')receipt.pid++;if(mode!=='missing-retired')socket.write(JSON.stringify(receipt)+'\\n');socket.end(()=>process.exit(0))});
+let buffer='',quitting=false;socket.on('data',chunk=>{buffer+=chunk.toString();let index;while((index=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(!line)continue;const request=JSON.parse(line);log({event:'request',request});const result=request.op==='applications'?{applications:[]}:request.op==='targets'?{targets:[]}:request.op==='openSystemSettings'?{opened:true,kind:request.kind,guideReady:true}:{available:true,platform:'darwin',protocolVersion:1,permissions:{screenRecording:!mode.startsWith('system-restart'),accessibility:!mode.startsWith('system-restart'),postEvents:!mode.startsWith('system-restart'),inputMonitoring:!mode.startsWith('system-restart')}};socket.write(JSON.stringify({requestId:request.requestId,ok:true,result})+'\\n');if(mode.startsWith('system-restart')&&request.op==='openSystemSettings'){quitting=true;log({event:'system-quit'});if(mode==='system-restart-held')socket.write(JSON.stringify({event:'inputHeld',keys:[17],mouseButtons:[]})+'\\n');if(mode==='system-restart-tail')socket.write('{incomplete');socket.end(()=>{if(mode==='system-restart-delayed')setTimeout(()=>process.exit(0),150);else process.exit(mode==='system-restart-failed'?7:0)})}}});
+socket.on('end',()=>{if(quitting)return;log({event:'eof'});if(mode==='hang-retirement'){setInterval(()=>{},1000);return;}const receipt={event:'launchRetired',nonce,pid:process.pid,ownerPid,inputReleased:true,captureStopped:true};if(mode==='false-retired')receipt.captureStopped=false;if(mode==='wrong-retired')receipt.pid++;if(mode!=='missing-retired')socket.write(JSON.stringify(receipt)+'\\n');socket.end(()=>process.exit(0))});
 `)
 let sequence = 0
 async function make(mode = 'normal', options = {}) {
@@ -123,11 +125,104 @@ test('missing, negative or mismatched native cleanup receipts never become a suc
   for (const mode of ['missing-retired', 'false-retired', 'wrong-retired']) {
     const fixture = await make(mode), { child } = fixture
     try {
-      await waitFor(() => child.pid)
+      child.stdin.write('{"requestId":1,"op":"observe","targetId":"fixture"}\n')
+      await waitFor(async () => (await fixture.read()).some(row => row.event === 'request'))
       await assert.rejects(retireMacCompanion(child), { code: 'NATIVE_CLEANUP_FAILED' })
       assert.equal(child.exitCode, null, mode)
       assert.equal(fixture.errors[0].code, 'NATIVE_CLEANUP_FAILED', mode)
     } finally { await fixture.cleanup() }
+  }
+})
+
+test('System Settings can retire an authenticated metadata-only worker after its socket, launcher and actual PID all exit', async () => {
+  const fixture = await make('system-restart'), { child } = fixture
+  let output = ''; child.stdout.on('data', chunk => { output += chunk })
+  const closed = once(child, 'close')
+  try {
+    for (const [index, op] of ['status', 'applications', 'targets'].entries()) child.stdin.write(JSON.stringify({ requestId: index + 1, op }) + '\n')
+    await waitFor(() => output.includes('"requestId":3'))
+    child.stdin.write('{"requestId":4,"op":"openSystemSettings","kind":"screenRecording"}\n')
+    assert.deepEqual(await closed, [0, null])
+    await retireMacCompanion(child)
+    assert.equal(fixture.errors.length, 0)
+    assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' })
+    const rows = await fixture.read()
+    assert.deepEqual(rows.filter(row => row.event === 'request').map(row => row.request.op), ['status', 'applications', 'targets', 'openSystemSettings'])
+    assert.ok(rows.some(row => row.event === 'system-quit'))
+    assert.ok(!rows.some(row => row.event === 'eof'), 'A system quit must not be mistaken for a native cleanup receipt')
+  } finally { await fixture.cleanup() }
+})
+
+test('permission-only exit still rejects live, reused or unreadable PIDs, failed launchers and unexpected native output', async () => {
+  for (const [mode, processAbsent] of [['system-restart', () => false], ['system-restart', () => { throw Object.assign(new Error('unreadable'), { code: 'EPERM' }) }], ['system-restart-failed'], ['system-restart-held'], ['system-restart-tail']]) {
+    const fixture = await make(mode, { processAbsent, retirementTimeoutMs: 80 }), { child } = fixture
+    try {
+      child.stdin.write('{"requestId":1,"op":"openSystemSettings","kind":"accessibility"}\n')
+      await waitFor(() => fixture.errors[0])
+      await assert.rejects(retireMacCompanion(child), { code: 'NATIVE_CLEANUP_FAILED' })
+      assert.equal(child.exitCode, null, mode)
+    } finally { await fixture.cleanup() }
+  }
+})
+
+test('partial or formerly hazardous commands keep requiring the exact cleanup receipt even after a later status', async () => {
+  for (const op of ['lease', 'release', 'observe', 'openPreview', 'launchApplication', 'act', 'unknown', 'partial']) {
+    const fixture = await make('missing-retired'), { child } = fixture
+    try {
+      child.stdin.write(JSON.stringify({ requestId: 1, op: op === 'partial' ? 'status' : op }) + '\n')
+      child.stdin.write('{"requestId":2,"op":"status"}\n')
+      await waitFor(async () => (await fixture.read()).filter(row => row.event === 'request').length === 2)
+      if (op === 'partial') child.stdin.write('{"requestId":3,"op":"act"')
+      await assert.rejects(retireMacCompanion(child), { code: 'NATIVE_CLEANUP_FAILED' })
+      assert.equal(child.exitCode, null, op)
+    } finally { await fixture.cleanup() }
+  }
+})
+
+test('Native Driver refreshes OS permission state on a new helper after an actual metadata-only system restart', async () => {
+  const result = await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/native.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', define: { 'process.platform': '"darwin"' } })
+  const module = join(directory, 'driver.mjs'); await writeFile(module, result.outputFiles[0].text)
+  const { NativeCompanionDriver } = await import(`file://${module}`)
+  const journal = join(directory, 'driver-restart.jsonl'), launchers = [], originalSpawn = childProcess.spawn
+  let launches = 0
+  childProcess.spawn = (command, args, options) => {
+    if (command !== '/usr/bin/open') return originalSpawn(command, args, options)
+    const launcher = originalSpawn(process.execPath, [fixture, ++launches === 1 ? 'system-restart-delayed' : 'normal', journal, ...args], options)
+    launchers.push(launcher); return launcher
+  }
+  syncBuiltinESMExports()
+  const driver = new NativeCompanionDriver()
+  try {
+    const initial = await driver.status()
+    assert.equal(initial.available, true)
+    assert.deepEqual(initial.permissions, { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false })
+    assert.deepEqual(await driver.applications(), [])
+    assert.deepEqual(await driver.targets(), [])
+    const oldChild = driver.child, closed = once(oldChild, 'close')
+    await driver.openSystemSettings('screenRecording')
+    await waitFor(() => oldChild.socketEnded)
+    assert.equal(oldChild.exitCode, null, 'The system quit is still awaiting launcher / PID proof')
+    const status = await driver.status()
+    await closed
+    assert.equal(status.available, true)
+    assert.deepEqual(status.permissions, { screenRecording: true, accessibility: true, postEvents: true, inputMonitoring: true })
+    assert.equal(launches, 2, 'Exactly one replacement helper is created, with no settings or input replay')
+    const rows = (await readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse)
+    assert.equal(rows.filter(row => row.event === 'request' && row.request.op === 'openSystemSettings').length, 1)
+    assert.ok(rows.filter(row => row.event === 'request').every(row => ['status', 'applications', 'targets', 'openSystemSettings'].includes(row.request.op)))
+    await driver.dispose()
+    launches = 0; await writeFile(journal, '')
+    const unsafe = new NativeCompanionDriver()
+    assert.equal((await unsafe.status()).available, true)
+    await unsafe.lease(1)
+    await unsafe.openSystemSettings('screenRecording')
+    await waitFor(() => unsafe.child === undefined)
+    assert.equal((await unsafe.status()).available, false, 'A worker that received a lease still requires the explicit native cleanup receipt')
+    assert.equal(launches, 1, 'Unknown cleanup cannot be bypassed by the status retry')
+    await assert.rejects(unsafe.dispose(), { code: 'NATIVE_CLEANUP_FAILED' })
+  } finally {
+    childProcess.spawn = originalSpawn; syncBuiltinESMExports()
+    for (const launcher of launchers) if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill('SIGKILL')
   }
 })
 

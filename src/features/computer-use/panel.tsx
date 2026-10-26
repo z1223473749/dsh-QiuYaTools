@@ -15,7 +15,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   const currentSeat = (ctx.get('uiSession') as { adapter?: { current?: { subscribe(listener: () => void): () => void; getSnapshot(): { key?: string } } } } | undefined)?.adapter?.current
   const activeSessionId = useSyncExternalStore(currentSeat ? listener => currentSeat.subscribe(listener) : noSubscribe, () => currentSeat?.getSnapshot().key, () => undefined)
   const [status, setStatus] = useState<Status>({ sessions: [], allowedApps: [], native: null })
-  const [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState(''), [statusError, setStatusError] = useState(''), [busy, setBusy] = useState(false)
   const [applications, setApplications] = useState<NativeApplication[]>([]), [addingApp, setAddingApp] = useState(false)
   const [applicationBusy, setApplicationBusy] = useState(false), applicationGeneration = useRef(0)
   const revision = useRef(0), mounted = useRef(true), performing = useRef(false)
@@ -38,8 +38,16 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     read.result = (async () => {
       const result = await call('status') as Status
       if (!mounted.current || generation !== revision.current || statusRead.current !== read) return
-      setStatus(result)
-    })().finally(() => { if (statusRead.current === read) statusRead.current = undefined })
+      setStatus(result); setStatusError('')
+    })().catch(error => {
+      if (mounted.current && generation === revision.current && statusRead.current === read) {
+        setStatusError((error as Error).message)
+        // A failed read cannot keep displaying a previous grant as a current
+        // OS result. Retain only the environment identity, not stale bits.
+        setStatus(previous => ({ ...previous, native: { available: false, platform: previous.native?.platform, mode: previous.native?.mode, message: '当前状态读取失败，恢复连接后会自动重新检查。' } }))
+      }
+      throw error
+    }).finally(() => { if (statusRead.current === read) statusRead.current = undefined })
     statusRead.current = read
     return read.result
   }
@@ -54,11 +62,13 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   useEffect(() => {
     // An asynchronous settings readback invalidates old replies but must not
     // erase the environment the owner has been preparing in the meantime.
-    revision.current++; performing.current = false; setMessage(''); setBusy(false)
+    revision.current++; performing.current = false; setMessage(''); setStatusError(''); setBusy(false)
     let disposed = false
-    const run = async () => { try { if (!disposed) await refresh() } catch (error) { if (!disposed) setMessage((error as Error).message) } }
+    const run = async () => { try { if (!disposed) await refresh() } catch {} }
+    const onReturn = () => { if (enabled && document.visibilityState !== 'hidden') void run() }
     void run(); const timer = window.setInterval(() => { void run() }, 1500)
-    return () => { disposed = true; window.clearInterval(timer) }
+    window.addEventListener('focus', onReturn); document.addEventListener('visibilitychange', onReturn)
+    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('focus', onReturn); document.removeEventListener('visibilitychange', onReturn) }
   }, [enabled, activeSessionId])
   useEffect(() => {
     applicationGeneration.current++; setApplicationBusy(false); setAddingApp(false)
@@ -88,7 +98,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
         if (!mounted.current || generation !== revision.current) return
       }
       await refresh(); return true
-    } catch (error) { if (mounted.current && generation === revision.current) setMessage((error as Error).message); return false }
+    } catch (error) { if (op !== 'refresh' && mounted.current && generation === revision.current) setMessage((error as Error).message); return false }
     finally { if (mounted.current && generation === revision.current) { performing.current = false; setBusy(false) } }
   }
   const native = status.native, mac = native?.platform === 'darwin'
@@ -103,7 +113,8 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     </section>
     {enabled && status.pendingRequests?.map(request => <div key={request.requestId}><SystemPermissionNotice native={request.preflight} busy={busy} onOpenSettings={kind => { void action('openSettings', { kind, sessionId: request.sessionId }) }} onRefresh={() => { void action('refresh') }}/><ComputerApprovalCard request={request} busy={busy} allowDisabled={computerApprovalNeedsSystemPermissions(request.preflight)} onDecision={decision => decide(request, decision)}/></div>)}
     <section className="qyt-card" aria-label="系统权限">
-      <div className="qyt-computer-section-heading"><div><h4>系统权限</h4><p className="qyt-muted">{!enabled ? '启用电脑操控后，可检查并设置系统权限。' : mac ? '授权在系统设置中完成，返回后重新检查即可。' : '检查这台电脑的可用状态。应用授权会在聊天中单独询问。'}</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('refresh') }}>重新检查</button></div>
+      <div className="qyt-computer-section-heading"><div><h4>系统权限</h4><p className="qyt-muted">{!enabled ? '启用电脑操控后，可检查并设置系统权限。' : mac ? '自动检测 macOS 权限，授权后返回这里会自动更新。' : '检查这台电脑的可用状态。应用授权会在聊天中单独询问。'}</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('refresh') }}>重新检查</button></div>
+      {enabled && statusError && <p className="qyt-computer-error" role="alert">{statusError}</p>}
       {!enabled ? null : mac ? <SystemPermissionNotice native={native} busy={busy} full onOpenSettings={kind => { void action('openSettings', { kind }) }} onRefresh={() => { void action('refresh') }}/>
         : <p className="qyt-muted">{native?.message || (native?.available ? '当前交互桌面已就绪。' : '正在检查本机状态…')}</p>}
     </section>

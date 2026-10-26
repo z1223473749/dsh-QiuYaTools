@@ -17,6 +17,8 @@ interface LaunchOptions {
   launch?: (command: string, args: string[]) => ChildProcessWithoutNullStreams
   launchTimeoutMs?: number
   retirementTimeoutMs?: number
+  /** Read-only exit probe for transport tests; production accepts only ESRCH. */
+  processAbsent?: (pid: number) => boolean
 }
 interface NativeBirth { startSeconds: string; startMicroseconds: string; uniqueId: string }
 function nativeBirth(value: unknown): value is NativeBirth {
@@ -42,13 +44,18 @@ class MacLaunch extends EventEmitter {
   private directory?: string
   private launchTimer?: ReturnType<typeof setTimeout>
   private retireTimer?: ReturnType<typeof setTimeout>
+  private exitProbeTimer?: ReturnType<typeof setTimeout>
   private queued: Buffer[] = []
   private queuedBytes = 0
   private authenticated = false
   private eofRequested = false
   private socketEnded = false
+  private socketClosed = false
   private launcherPassed = false
   private retiredReceipt = false
+  private permissionOnly = true
+  private outgoing = ''
+  private absentPermissionWorker = false
   private finished = false
   private failure?: ComputerError
   private retirement?: Promise<void>
@@ -58,8 +65,8 @@ class MacLaunch extends EventEmitter {
   constructor(private readonly appPath: string, private readonly options: LaunchOptions) {
     super()
     this.stdin.on('data', (chunk: Buffer) => {
-      if (this.finished) return
-      if (this.authenticated && this.socket && !this.eofRequested) { this.socket.write(chunk); return }
+      if (this.finished || this.socketEnded) return
+      if (this.authenticated && this.socket && !this.eofRequested) { this.write(chunk); return }
       this.queuedBytes += chunk.length
       if (this.queuedBytes > MAX_QUEUED_BYTES) { this.fail(new ComputerError('NATIVE_MESSAGE_LIMIT', '执行器启动队列超出限制。')); return }
       this.queued.push(Buffer.from(chunk))
@@ -118,11 +125,16 @@ class MacLaunch extends EventEmitter {
     socket.once('error', () => this.fail(new ComputerError('NATIVE_PIPE_FAILED', '电脑操控私有连接已中断。')))
     socket.once('end', () => {
       this.socketEnded = true
-      if (buffer.trim() || !this.authenticated || !this.retiredReceipt) { this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器未确认输入与画面已清理。')); return }
-      socket.end(); this.finishIfConfirmed()
+      if (buffer.trim() || !this.authenticated || !this.retiredReceipt && (!this.permissionOnly || this.outgoing.trim())) { this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器未确认输入与画面已清理。')); return }
+      this.startRetirementTimer()
+      socket.end()
+      if (!this.retiredReceipt) this.confirmAbsentPermissionWorker()
+      this.finishIfConfirmed()
     })
     socket.once('close', () => {
+      this.socketClosed = true
       if (!this.finished && !this.socketEnded) this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器连接退出状态未确认。'))
+      else this.finishIfConfirmed()
     })
   }
   private line(line: string): void {
@@ -137,7 +149,7 @@ class MacLaunch extends EventEmitter {
       this.pid = record.pid as number; this.authenticated = true; clearTimeout(this.launchTimer)
       this.server?.close()
       const queued = this.queued; this.queued = []; this.queuedBytes = 0
-      if (!this.eofRequested) for (const chunk of queued) this.socket!.write(chunk)
+      if (!this.eofRequested) for (const chunk of queued) this.write(chunk)
       if (this.eofRequested) this.socket!.end()
       return
     }
@@ -149,7 +161,49 @@ class MacLaunch extends EventEmitter {
       this.retiredReceipt = true; this.finishIfConfirmed(); return
     }
     if (this.retiredReceipt) { this.fail(new ComputerError('NATIVE_PROTOCOL', '执行器清理后仍返回操作数据。')); return }
+    if (typeof record.event === 'string') this.permissionOnly = false
     this.stdout.write(line + '\n')
+  }
+  private write(chunk: Buffer): void {
+    // Once this incarnation has received input, capture, a lease, or any RPC
+    // outside the metadata / permission whitelist, require its cleanup receipt.
+    if (this.permissionOnly) {
+      this.outgoing += chunk.toString('utf8')
+      if (Buffer.byteLength(this.outgoing) > MAX_QUEUED_BYTES) this.permissionOnly = false
+      let end: number
+      while (this.permissionOnly && (end = this.outgoing.indexOf('\n')) >= 0) {
+        const line = this.outgoing.slice(0, end); this.outgoing = this.outgoing.slice(end + 1)
+        let command: Record<string, unknown>
+        try { command = JSON.parse(line) } catch { this.permissionOnly = false; break }
+        const keys = command && typeof command === 'object' && !Array.isArray(command) ? Object.keys(command).sort().join('|') : ''
+        if (keys !== 'op|requestId' || typeof command.op !== 'string' || !['status', 'applications', 'targets'].includes(command.op)) {
+          if (keys !== 'kind|op|requestId' || command.op !== 'openSystemSettings' || typeof command.kind !== 'string' || !['screenRecording', 'accessibility', 'inputMonitoring'].includes(command.kind)) this.permissionOnly = false
+        }
+      }
+      if (!this.permissionOnly) this.outgoing = ''
+    }
+    this.socket!.write(chunk)
+  }
+  private confirmAbsentPermissionWorker(): void {
+    if (this.finished || this.retiredReceipt || !this.socketEnded || !this.socketClosed || !this.authenticated || !this.permissionOnly || this.outgoing.trim()) return
+    // System Settings can quit a permission-only app without running its EOF
+    // cleanup. This exemption applies only to status, Settings and application /
+    // window metadata RPCs, never a worker that could own input or capture.
+    // open -W and a closed socket are necessary but not sufficient: only an
+    // explicit OS "no such process" result proves this authenticated PID gone.
+    this.startRetirementTimer()
+    if (!this.launcherPassed) return
+    try {
+      this.absentPermissionWorker = this.options.processAbsent ? this.options.processAbsent(this.pid!) === true : (() => {
+        try { process.kill(this.pid!, 0); return false }
+        catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' }
+      })()
+    } catch { this.absentPermissionWorker = false }
+    if (this.absentPermissionWorker) { this.finishIfConfirmed(); return }
+    if (!this.exitProbeTimer) this.exitProbeTimer = setTimeout(() => { this.exitProbeTimer = undefined; this.confirmAbsentPermissionWorker() }, 25)
+  }
+  private startRetirementTimer(): void {
+    if (!this.retireTimer) this.retireTimer = setTimeout(() => this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器未确认退出，已阻止新的电脑输入。')), this.options.retirementTimeoutMs ?? 8_000)
   }
   private requestEOF(): void {
     if (this.eofRequested || this.finished) return
@@ -158,11 +212,12 @@ class MacLaunch extends EventEmitter {
     // Ending only this authenticated channel asks the app to revoke and release.
     // Never signal a numeric PID: it may have exited and been reused meanwhile.
     if (this.authenticated) this.socket?.end()
-    this.retireTimer = setTimeout(() => this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器未确认退出，已阻止新的电脑输入。')), this.options.retirementTimeoutMs ?? 8_000)
+    this.startRetirementTimer()
   }
   private finishIfConfirmed(): void {
-    if (this.finished || !this.authenticated || !this.retiredReceipt || !this.socketEnded || !this.launcherPassed) return
-    this.finished = true; clearTimeout(this.launchTimer); clearTimeout(this.retireTimer)
+    if (this.finished || !this.authenticated || !this.socketEnded || !this.socketClosed || !this.launcherPassed) return
+    if (!this.retiredReceipt && !this.absentPermissionWorker) { this.confirmAbsentPermissionWorker(); return }
+    this.finished = true; clearTimeout(this.launchTimer); clearTimeout(this.retireTimer); clearTimeout(this.exitProbeTimer)
     this.exitCode = 0
     this.stdout.end(); this.stderr.end()
     this.resolveRetirement?.()
@@ -172,7 +227,7 @@ class MacLaunch extends EventEmitter {
   private fail(error: ComputerError): void {
     if (this.finished) return
     this.finished = true; this.failure = error
-    clearTimeout(this.launchTimer); clearTimeout(this.retireTimer)
+    clearTimeout(this.launchTimer); clearTimeout(this.retireTimer); clearTimeout(this.exitProbeTimer)
     this.queued = []; this.queuedBytes = 0
     // The app's EOF/owner watchdog owns cleanup. An unconfirmed app is never
     // represented as dead merely because its launcher or socket disappeared.

@@ -213,6 +213,38 @@ test('missing OS permissions preserves the request without consuming its grant; 
   } finally { f.dispose() }
 })
 
+test('a failed pending permission read preserves its device identity, retires old grants and never exposes driver error details', async () => {
+  const f = fixture()
+  try {
+    f.backend.authorizationStatus = async () => ({ available: true, platform: 'darwin', mode: 'remote', permissions: { screenRecording: true, accessibility: true, postEvents: true } })
+    const item = await f.discover(); void f.coordinator.requestControl(item.execution, item.candidateId, '操作应用')
+    f.backend.authorizationStatus = async () => { throw new Error('/Users/private/helper endpoint=https://private/?token=credential') }
+    const [card] = await f.coordinator.pendingWithPreflight('chat-a')
+    assert.equal(card.preflight.platform, 'darwin'); assert.equal(card.preflight.mode, 'remote'); assert.equal(card.preflight.available, false)
+    assert.deepEqual(card.preflight.permissions, {}); assert.deepEqual(card.preflight.capabilities, {})
+    assert.match(card.preflight.message, /无法检查系统权限/u)
+    assert.doesNotMatch(JSON.stringify(card.preflight), /Users|endpoint|token|credential/u)
+    assert.equal(f.grants.size, 0); assert.equal(f.calls.some(row => row[0] === 'start'), false)
+  } finally { f.dispose() }
+})
+
+test('a disconnected executor is not reported as missing OS permission and its pending request can recover without a new grant', async () => {
+  const f = fixture(); let connected = true
+  try {
+    f.backend.authorizationStatus = async () => ({ available: connected, platform: 'darwin', mode: 'local', permissions: connected ? { screenRecording: true, accessibility: true, postEvents: true } : undefined, message: 'private local driver diagnostic' })
+    const item = await f.discover(), waiting = f.coordinator.requestControl(item.execution, item.candidateId, '操作应用'), [card] = f.coordinator.pending()
+    connected = false
+    await assert.rejects(f.coordinator.decide('chat-a', card.requestId, 1, 'always'), { code: 'NATIVE_UNAVAILABLE' })
+    assert.equal(f.coordinator.pending().length, 1); assert.equal(f.grants.size, 0); assert.equal(f.calls.some(row => row[0] === 'start'), false)
+    const [failed] = await f.coordinator.pendingWithPreflight('chat-a')
+    assert.equal(failed.preflight.available, false); assert.match(failed.preflight.message, /无法检查/u)
+    assert.doesNotMatch(JSON.stringify(failed.preflight), /private local/u)
+    connected = true
+    await f.coordinator.decide('chat-a', card.requestId, 1, 'once'); await waiting
+    assert.equal(f.grants.size, 0); assert.equal(f.coordinator.pending().length, 0)
+  } finally { f.dispose() }
+})
+
 test('approval policy changed to never before owner confirmation cannot create a new grant', async () => {
   const f = fixture()
   try {

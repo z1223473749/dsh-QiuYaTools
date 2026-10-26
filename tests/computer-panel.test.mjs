@@ -86,6 +86,72 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
 const macPermissionStatus = granted => ({ sessions: [], allowedApps: [], pendingRequests: [], native: { platform: 'darwin', permissions: { screenRecording: granted, accessibility: granted, postEvents: granted, inputMonitoring: granted } } })
 const permissionText = f => f.dom.window.document.querySelector('[aria-label="系统权限"]').textContent
 
+test('an unavailable Mac executor explains the failure without pretending its permissions are denied, and polling recovers automatically', async t => {
+  const f = await fixture(t, { native: { platform: 'darwin', available: false, message: '电脑操控应用未能连接。' }, manualClock: true }); await f.render()
+  assert.match(permissionText(f), /电脑操控执行器暂不可用.*电脑操控应用未能连接/u)
+  assert.equal((permissionText(f).match(/无法检查/gu) ?? []).length, 4)
+  assert.doesNotMatch(permissionText(f), /未允许|待检查|拖入权限列表/u)
+  assert.equal(f.button('前往开启屏幕录制').disabled, true)
+  assert.equal(f.button('重新检查').disabled, false)
+  f.status.native = macPermissionStatus(true).native
+  await f.advance(1500)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+  assert.doesNotMatch(permissionText(f), /无法检查|未能连接|未允许/u)
+  assert.equal(f.button('查看屏幕录制').disabled, false)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('unknown Mac permission readings remain pending until the OS returns explicit denial or approval', async t => {
+  const f = await fixture(t, { native: { platform: 'darwin', available: true, permissions: {} }, manualClock: true }); await f.render()
+  assert.equal((permissionText(f).match(/待检查/gu) ?? []).length, 3)
+  assert.doesNotMatch(permissionText(f), /未允许|已允许|执行器暂不可用/u)
+  f.status.native = macPermissionStatus(false).native; await f.advance(1500)
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+  f.status.native = macPermissionStatus(true).native; await f.advance(1500)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('returning from System Settings checks Mac permissions immediately without a manual refresh', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(false).native, manualClock: true }); await f.render()
+  Object.defineProperty(f.dom.window.document, 'visibilityState', { configurable: true, value: 'visible' })
+  f.status.native = macPermissionStatus(true).native
+  await act(async () => { f.dom.window.dispatchEvent(new f.dom.window.Event('focus')); await tick() })
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+  assert.equal(f.calls.filter(row => row.op === 'status').length, 2)
+  f.status.native = macPermissionStatus(false).native
+  await act(async () => { f.dom.window.document.dispatchEvent(new f.dom.window.Event('visibilitychange')); await tick() })
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+  await f.unmount(); const calls = f.calls.length
+  await act(async () => { f.dom.window.dispatchEvent(new f.dom.window.Event('focus')); f.dom.window.document.dispatchEvent(new f.dom.window.Event('visibilitychange')); await tick() })
+  assert.equal(f.calls.length, calls, 'focus and visibility listeners retire with the panel')
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('a failed status RPC retires stale grants, then a successful poll clears the read failure and restores actual permissions', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(true).native, manualClock: true }); await f.render()
+  const fail = f.plan('status'); await f.advance(1500)
+  await act(async () => { fail({ ok: false, error: { message: 'Harness 连接暂时中断' } }); await tick() })
+  assert.doesNotMatch(permissionText(f), /已允许|未允许/u)
+  assert.match(permissionText(f), /无法检查/u)
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /Harness 连接暂时中断/u)
+  await f.advance(1500)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+  assert.equal(f.dom.window.document.querySelector('[role="alert"]'), null)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('an enabled Accessibility switch with a failed post-event check explains the distinction and keeps control gated', async t => {
+  const native = { platform: 'darwin', available: true, permissions: { screenRecording: true, accessibility: true, postEvents: false, inputMonitoring: true } }
+  const f = await fixture(t, { native }); f.status.pendingRequests = [request('A', { preflight: native })]; await f.render()
+  assert.match(permissionText(f), /辅助功能已开启，但 macOS 的发送操作检查尚未通过/u)
+  const accessibility = [...f.dom.window.document.querySelectorAll('[aria-label="系统权限"] .qyt-computer-permission-row')].find(row => row.querySelector('strong')?.textContent === '辅助功能')
+  assert.match(accessibility.textContent, /需要重新确认/u); assert.doesNotMatch(accessibility.textContent, /未允许/u)
+  assert.equal(f.button('允许一次').disabled, true)
+  assert.equal(f.button('拒绝').disabled, false)
+  assert.deepEqual(f.mutations(), [])
+})
+
 test('slow permission status remains publishable while multiple 1.5-second polling intervals elapse', async t => {
   const f = await fixture(t, { native: macPermissionStatus(false).native, manualClock: true }); await f.render()
   const finish = f.plan('status')
@@ -378,7 +444,7 @@ test('browser overview cannot unlock a remote macOS native request with missing 
   const f = await fixture(t, { native: { platform: 'darwin', mode: 'browser', available: true, permissions: {} } })
   f.status.pendingRequests = [request('B', { preflight: { platform: 'darwin', mode: 'remote', available: true, permissions: {} } })]
   await f.render(); assert.equal(f.button('允许一次').disabled, true); assert.equal(f.button('始终允许').disabled, true)
-  assert.match(f.dom.window.document.body.textContent, /请在独立电脑上开启以下权限/u)
+  assert.match(f.dom.window.document.body.textContent, /正在读取独立电脑的系统权限/u)
   assert.equal(f.button('前往开启辅助功能'), undefined)
   await f.click('允许一次'); assert.deepEqual(f.mutations(), [])
 })

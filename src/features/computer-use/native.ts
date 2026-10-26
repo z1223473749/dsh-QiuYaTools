@@ -256,8 +256,20 @@ export class NativeCompanionDriver implements DeviceDriver {
     return this.rpc<T>(op, payload, signal, awaitIssuedReply)
   }
   async status(signal?: AbortSignal): Promise<ComputerStatus> {
-    try { signal?.throwIfAborted(); await this.compatible(); const value = await this.rpc<ComputerStatus>('status', {}, signal); if (this.foreground && typeof value.foregroundPhysicalSequence === 'string' && /^\d{1,20}$/u.test(value.foregroundPhysicalSequence)) this.updateForegroundSequence(value.foregroundPhysicalSequence); return value }
-    catch (error) { if (signal?.aborted) throw error; return { available: false, platform: process.platform, message: error instanceof Error ? error.message : '执行器不可用' } }
+    for (let attempt = 0; ; attempt++) {
+      try { signal?.throwIfAborted(); await this.compatible(); const value = await this.rpc<ComputerStatus>('status', {}, signal); if (this.foreground && typeof value.foregroundPhysicalSequence === 'string' && /^\d{1,20}$/u.test(value.foregroundPhysicalSequence)) this.updateForegroundSequence(value.foregroundPhysicalSequence); return value }
+      catch (error) {
+        if (signal?.aborted) throw error
+        // System Settings may quit and reopen the macOS app during a permission
+        // read. Retry only this read, once, after the exact old worker's cleanup
+        // has been confirmed. Never replay Settings, capture, leases or input.
+        if (attempt === 0 && process.platform === 'darwin' && this.options.executable === undefined && !this.disposed && error instanceof ComputerError && error.code === 'NATIVE_EXITED') {
+          try { await this.retiring; continue }
+          catch (cleanup) { error = cleanup }
+        }
+        return { available: false, platform: process.platform, message: error instanceof Error ? error.message : '执行器不可用' }
+      }
+    }
   }
   async targets(signal?: AbortSignal): Promise<NativeTarget[]> {
     const result = await this.checked<NativeTarget[] | { targets: NativeTarget[] }>('targets', {}, signal)
