@@ -63,13 +63,36 @@ export function NewWebsiteForm({ busy, onOpen, onCancel }: { busy: boolean; onOp
   let origin = ''; try { origin = website(url).origin } catch {}
   return <form className="qyt-workbench-new" aria-label="打开新网页" onSubmit={event => { event.preventDefault(); setError(''); try { const parsed = website(url); void onOpen(parsed.url, browser, decision).catch(() => setError('打开结果未能确认，请查看当前网页列表，不要重复提交。')) } catch { setError('请输入完整的 HTTP 或 HTTPS 网站地址。') } }}><strong>打开新网页</strong><input type="url" required aria-label="网站地址" placeholder="https://example.com" value={url} maxLength={8192} onChange={event => setUrl(event.target.value)}/><select aria-label="浏览器" value={browser} onChange={event => setBrowser(event.target.value as 'chrome' | 'edge')}><option value="chrome">Chrome</option><option value="edge">Edge</option></select><p>{origin ? <>允许模型在当前聊天中查看并操作 <strong>{origin}</strong>。</> : '填写网址后，确认这次任务允许访问的网站。'}</p><label><input type="radio" name="qyt-site-duration" value="once" checked={decision === 'once'} onChange={() => setDecision('once')}/>允许一次</label><label><input type="radio" name="qyt-site-duration" value="always" checked={decision === 'always'} onChange={() => setDecision('always')}/>始终允许这个网站</label><div className="qyt-computer-actions"><button className="qyt-button qyt-button-primary" disabled={busy || !origin} type="submit">允许并打开</button><button className="qyt-button" type="button" disabled={busy} onClick={onCancel}>取消</button></div>{error && <p role="alert">{error}</p>}</form>
 }
-export function WorkbenchControls({ target, busy, control, open, choose, choices }: { target: WorkbenchTarget; busy: boolean; control(operation: 'pause' | 'takeover' | 'resume' | 'stop'): void; open?(): void; choose?(id: string): void; choices?: WorkbenchTarget[] }) {
-  return <div className="qyt-workbench-controls" aria-label="电脑预览悬浮控件">
-    {choose && choices && choices.length > 1 && <span className="qyt-button qyt-workbench-target-picker" title={`切换预览任务（${choices.length} 个） · ${target.title || '未命名'}`}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="7" width="14" height="14" rx="2.5"/><path d="M16 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>
+export function WorkbenchIcon({ name }: { name: 'pages' | 'pause' | 'takeover' | 'resume' | 'stop' | 'open' | 'close' | 'inspect' | 'preview' }) {
+  const shapes = {
+    pages: <><rect x="7" y="7" width="14" height="14" rx="2.5"/><path d="M16 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></>,
+    pause: <><path d="M8 5v14M16 5v14" strokeWidth="2.8"/></>,
+    takeover: <path d="m5 3 14 9-7 1-3 7-4-17Z"/>,
+    resume: <path d="m8 5 11 7-11 7V5Z"/>,
+    stop: <rect x="6" y="6" width="12" height="12" rx="1.5"/>,
+    open: <><path d="M14 3h7v7m0-7L11 13"/><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></>,
+    close: <path d="m6 6 12 12M18 6 6 18"/>,
+    inspect: <><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M10 7v4m0 2h.01"/></>,
+    preview: <><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8 21h8m-4-4v4"/></>,
+  }
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shapes[name]}</svg>
+}
+export function WorkbenchControls({ target, busy, control, open, choose, choices, compact = false, hide }: { target: WorkbenchTarget; busy: boolean; control(operation: 'pause' | 'takeover' | 'resume' | 'stop'): void; open?(): void; choose?(id: string): void; choices?: WorkbenchTarget[]; compact?: boolean; hide?(): void }) {
+  const operations = [
+    { operation: 'pause', label: '暂停', disabled: busy || !['ready', 'running'].includes(target.state) },
+    { operation: 'takeover', label: '接管', disabled: busy || target.state === 'humanControl' },
+    { operation: 'resume', label: '继续', disabled: busy || !['paused', 'humanControl'].includes(target.state) },
+    { operation: 'stop', label: '停止', disabled: busy },
+  ] as const
+  const buttonClass = 'qyt-button' + (compact ? ' qyt-workbench-icon-button' : '')
+  return <div className={'qyt-workbench-controls' + (compact ? ' qyt-workbench-controls-compact' : '')} aria-label="电脑预览悬浮控件">
+    {choose && choices && choices.length > 1 && <span className={'qyt-button qyt-workbench-target-picker' + (compact ? ' qyt-workbench-icon-button' : '')} title={`切换预览任务（${choices.length} 个） · ${target.title || '未命名'}`}>
+      <WorkbenchIcon name="pages"/>
       <select aria-label="选择预览任务" value={target.workbenchTabId} onChange={event => choose(event.target.value)}>{choices.map(view => <option key={view.workbenchTabId} value={view.workbenchTabId}>{view.kind === 'browser' ? '网页' : '桌面'} · {view.title || '未命名'}</option>)}</select>
     </span>}
-    <button className="qyt-button" type="button" disabled={busy || !['ready', 'running'].includes(target.state)} onClick={() => control('pause')}>暂停</button><button className="qyt-button" type="button" disabled={busy || target.state === 'humanControl'} onClick={() => control('takeover')}>接管</button><button className="qyt-button" type="button" disabled={busy || !['paused', 'humanControl'].includes(target.state)} onClick={() => control('resume')}>继续</button><button className="qyt-button" type="button" disabled={busy} onClick={() => control('stop')}>停止</button>{open && <button className="qyt-button" type="button" disabled={busy} onClick={open}>弹出</button>}
+    {operations.map(({ operation, label, disabled }) => <button key={operation} className={buttonClass} type="button" disabled={disabled} aria-label={compact ? `${label}电脑任务` : undefined} title={compact ? label : undefined} onClick={() => control(operation)}>{compact ? <WorkbenchIcon name={operation}/> : label}</button>)}
+    {open && <button className={buttonClass} type="button" disabled={busy} aria-label={compact ? '弹出电脑预览' : undefined} title={compact ? '弹出' : undefined} onClick={open}>{compact ? <WorkbenchIcon name="open"/> : '弹出'}</button>}
+    {hide && <button className={buttonClass} type="button" aria-label="关闭电脑预览" title="关闭预览（任务继续运行）" onClick={hide}><WorkbenchIcon name="close"/></button>}
   </div>
 }
 export function SitePermissions({ api }: { api: WorkbenchAPI }) {

@@ -585,7 +585,7 @@ try {
       await card.hover()
       const overlay = card.locator('.qyt-workbench-small-overlay')
       await waitFor(() => overlay.evaluate(node => Number(getComputedStyle(node).opacity) >= .95 && getComputedStyle(node).pointerEvents !== 'none'), 'The actual preview controls did not appear on hover')
-      assert.equal(await card.getByRole('button', { name: '暂停', exact: true }).isEnabled(), true)
+      assert.equal(await card.getByRole('button', { name: '暂停电脑任务', exact: true }).isEnabled(), true)
       await screenshot(`same-chat-task-${task === a ? 'orders' : 'browser'}-${colorScheme}-hover`)
     }
     assert.notEqual(frames[0].imageSha256, frames[1].imageSha256, 'Switching task tabs must switch actual distinct fixture pixels')

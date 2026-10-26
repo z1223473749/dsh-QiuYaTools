@@ -69,7 +69,7 @@ async function mountInstalled(f, initialChat = 'chat-A', { delayedMounted = fals
   const root = createRoot(dom.window.document.getElementById('root'))
   const render = async next => { chat = next; mountedChat = next; await act(async () => { root.render(React.createElement(entry.component, { sessionId: chat })); await tick() }) }
   await act(async () => { root.render(React.createElement(entry.component, { sessionId: chat })); await tick() })
-  const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label)
+  const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label || node.getAttribute('title') === label)
   const click = async label => { const node = button(label); assert.ok(node, label); await act(async () => { node.click(); await tick() }) }
   return { dom, render, button, click, async setMountedChat(value) { await act(async () => { mountedChat = value; for (const callback of mountedListeners) callback(); await tick() }) }, async cleanup() { await act(async () => root.unmount()); dispose(); dom.window.close(); for (const [key, descriptor] of previous) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key] } }
 }

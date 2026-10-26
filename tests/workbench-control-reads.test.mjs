@@ -52,7 +52,7 @@ async function fixture(t, { detached = false, both = false, detachedEpoch = 1, h
     async tick(ms = 100) { await act(async () => { t.mock.timers.tick(ms); await turn() }) },
     async resolve(job, value) { await act(async () => { job.resolve(value); await turn() }) },
     async reject(job, error = Error('UNKNOWN_CONTROL_RESULT')) { await act(async () => { job.reject(error); await turn() }) },
-    async click(label, scope) { const root = scope ? dom.window.document.querySelector(scope) : dom.window.document; assert.ok(root, scope); const button = [...root.querySelectorAll('button')].find(node => node.textContent === label); assert.ok(button, label); assert.equal(button.disabled, false, label); await act(async () => { button.click(); await turn() }) },
+    async click(label, scope) { const root = scope ? dom.window.document.querySelector(scope) : dom.window.document; assert.ok(root, scope); const button = [...root.querySelectorAll('button')].find(node => node.textContent === label || node.getAttribute('title') === label); assert.ok(button, label); assert.equal(button.disabled, false, label); await act(async () => { button.click(); await turn() }) },
     async select(target) { const button = [...dom.window.document.querySelectorAll('[role="tab"]')].find(node => node.getAttribute('title') === target.title); assert.ok(button); assert.equal(button.disabled, false); await act(async () => { button.click(); await turn() }) },
     async chat(chat, target) { selectedChat = chat; if (target) resource = { status: 'live', value: { target } }; await render() },
     async resource(target) { resource = { status: 'live', value: { target } }; await render() },
