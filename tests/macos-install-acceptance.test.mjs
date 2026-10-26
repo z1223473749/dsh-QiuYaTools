@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
-import { spawn, execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { readFile } from 'node:fs/promises'
-import { stopMacInstallHost, makeMacInstallSource, assessMacInstallReport, prepareMacInstallAcceptance, MAC_INSTALL_CASES } from '../scripts/prepare-macos-install-acceptance.mjs'
+import { spawn } from 'node:child_process'
+import { lstat, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { stopMacInstallHost, makeMacInstallSource, assessMacInstallReport, MAC_INSTALL_CASES } from '../scripts/prepare-macos-install-acceptance.mjs'
+import { acceptanceFixtureHash, macAcceptancePolicyFixture } from './fixtures/macos-acceptance-policy.mjs'
 
 test('normal owned Mac child uses one SIGTERM and produces actual exit0 without escalation', async () => {
   const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>process.exit(0));process.stdout.write('READY');setInterval(()=>{},1000)"], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -50,11 +51,33 @@ test('frozen install source preserves package/settings assertions and removes hi
   assert.throws(() => makeMacInstallSource('unknown runner'), /anchor/)
 })
 
-test('current Mac candidate lifecycle prepares and plans without actual official CLI startup', async () => {
-  const made = await prepareMacInstallAcceptance()
+test('synthetic Mac lifecycle prepares and guards all package/runtime pins without official CLI or GUI startup', async t => {
+  const fixture = await macAcceptancePolicyFixture(t, 'install')
+  const made = await fixture.prepare()
   assert.equal(made.executed, false); assert.equal(made.guiStarted, false); assert.equal(made.nativeInput, false)
-  const execute = promisify(execFile), plan = JSON.parse((await execute(process.execPath, [made.entry, '--plan'], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 })).stdout)
+  const plan = await fixture.plan(made.entry)
   assert.equal(plan.actualExecution, false); assert.equal(plan.guiStarted, false); assert.equal(plan.userProfileChanged, false)
-  assert.equal(plan.candidateSHA256, '9b828d9bac4b08291bbdcef151096fcc2903b8fbbc87ae03a4f6ba26b3c5e6f3')
+  assert.equal(plan.candidate, fixture.candidate); assert.equal(plan.previous, fixture.previous)
+  assert.equal(plan.candidateSHA256, fixture.candidateSHA256); assert.equal(plan.previousSHA256, fixture.previousSHA256)
+  assert.equal(plan.helperSHA256, fixture.helperSHA256)
   assert.deepEqual(plan.checks, MAC_INSTALL_CASES)
+  assert.deepEqual(Object.keys(plan.cliHashes), fixture.runtimes)
+  for (const path of fixture.runtimes) assert.equal(plan.cliHashes[path], acceptanceFixtureHash(await readFile(path)))
+  await assert.rejects(lstat(fixture.marker), { code: 'ENOENT' })
+  await assert.rejects(lstat(made.output), { code: 'ENOENT' })
+  const runtime = fixture.runtimes[0], original = await readFile(runtime)
+  await writeFile(runtime, 'changed runtime')
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('Official CLI changed'))
+  await writeFile(runtime, original)
+  const frozen = join(made.base, 'test-harness-install.mjs'), frozenOriginal = await readFile(frozen)
+  await writeFile(frozen, Buffer.concat([frozenOriginal, Buffer.from('\n// changed frozen source')]))
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('Frozen source changed: test-harness-install.mjs'))
+  await writeFile(frozen, frozenOriginal)
+  await writeFile(fixture.previous, Buffer.concat([fixture.previousBytes, Buffer.from('changed previous')]))
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('AssertionError'))
+  await writeFile(fixture.previous, fixture.previousBytes)
+  await writeFile(fixture.candidate, Buffer.concat([fixture.candidateBytes, Buffer.from('changed candidate')]))
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('AssertionError'))
+  await assert.rejects(lstat(fixture.marker), { code: 'ENOENT' })
+  await assert.rejects(lstat(made.output), { code: 'ENOENT' })
 })

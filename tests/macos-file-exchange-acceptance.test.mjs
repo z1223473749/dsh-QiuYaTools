@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
-import { promisify } from 'node:util'
-import { execFile } from 'node:child_process'
-import { MAC_EXCHANGE_CANDIDATE, MAC_EXCHANGE_SHA256, MAC_EXCHANGE_CASES, MAC_EXCHANGE_IMAGES, assertMacExchangeExtraction, readMacExchangeBundle, makeMacFileExchangeSource, assessMacFileExchangeReport, prepareMacFileExchangeAcceptance } from '../scripts/prepare-macos-file-exchange-acceptance.mjs'
+import { lstat, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { MAC_EXCHANGE_CANDIDATE, MAC_EXCHANGE_SHA256, MAC_EXCHANGE_CASES, MAC_EXCHANGE_IMAGES, assertMacExchangeExtraction, makeMacFileExchangeSource, assessMacFileExchangeReport } from '../scripts/prepare-macos-file-exchange-acceptance.mjs'
+import { acceptanceFixtureHash, macAcceptancePolicyFixture } from './fixtures/macos-acceptance-policy.mjs'
 
 const approvedArgs = ['-xOf', MAC_EXCHANGE_CANDIDATE, 'package/lib/computer-agent.js']
 test('the command whitelist accepts only one exact read-only member in the reviewed Mac package', () => {
@@ -13,11 +13,18 @@ test('the command whitelist accepts only one exact read-only member in the revie
   ]) assert.throws(() => assertMacExchangeExtraction(command, args, candidate))
 })
 
-test('actual approved extraction reads the pinned file-server bundle, while other commands fail before execution', async () => {
-  const source = await readMacExchangeBundle('tar', approvedArgs, MAC_EXCHANGE_CANDIDATE)
+test('real tar extraction reads a digest-pinned synthetic archive; unapproved reads and changed bytes fail', async t => {
+  const fixture = await macAcceptancePolicyFixture(t, 'file-exchange')
+  const { readMacExchangeBundle } = fixture.policy
+  const args = ['-xOf', fixture.candidate, 'package/lib/computer-agent.js']
+  const source = await readMacExchangeBundle('tar', args, fixture.candidate)
+  assert.equal(source, fixture.bundle)
   assert(source.includes('createComputerAgentServer'))
   assert(source.includes('EXCHANGE_EXISTS'))
-  await assert.rejects(() => readMacExchangeBundle('osascript', approvedArgs, MAC_EXCHANGE_CANDIDATE))
+  await assert.rejects(() => readMacExchangeBundle('osascript', args, fixture.candidate))
+  await assert.rejects(() => readMacExchangeBundle('tar', [...args, 'package/README.md'], fixture.candidate))
+  await writeFile(fixture.candidate, Buffer.concat([fixture.candidateBytes, Buffer.from('changed after pinning')]))
+  await assert.rejects(() => readMacExchangeBundle('tar', args, fixture.candidate), /changed before read-only extraction/)
 })
 
 function evidence() {
@@ -51,11 +58,22 @@ test('frozen file supplement keeps actual Host/browser/FS assertions and adds ac
   assert(source.includes('await readMacExchangeBundle(command, args, candidate)'))
 })
 
-test('file supplement prepares a fresh closed dependency graph and plan without Host, model, browser or PD', async () => {
-  const made = await prepareMacFileExchangeAcceptance()
+test('synthetic file supplement prepares a closed source graph and guarded plan without actual acceptance execution', async t => {
+  const fixture = await macAcceptancePolicyFixture(t, 'file-exchange')
+  const made = await fixture.prepare()
   assert.equal(made.executed, false); assert.equal(made.guiStarted, false); assert.equal(made.pdCommandsExecuted, 0)
   assert.equal(made.snapshotImportSmoke.passed, true)
-  const execute = promisify(execFile), plan = JSON.parse((await execute(process.execPath, [made.entry, '--plan'], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 })).stdout)
+  const plan = await fixture.plan(made.entry)
   assert.equal(plan.actualExecution, false); assert.equal(plan.guiStarted, false); assert.equal(plan.nativeInput, false)
-  assert.equal(plan.candidateSHA256, MAC_EXCHANGE_SHA256); assert.deepEqual(plan.selectedCases, MAC_EXCHANGE_CASES)
+  assert.equal(plan.candidate, fixture.candidate); assert.equal(plan.candidateSHA256, fixture.candidateSHA256); assert.deepEqual(plan.selectedCases, MAC_EXCHANGE_CASES)
+  assert.equal(plan.policySHA256, acceptanceFixtureHash(await readFile(join(made.base, 'file-policy.mjs'))))
+  assert(plan.snapshotImportSmoke.inputs.length > 0)
+  await assert.rejects(lstat(fixture.marker), { code: 'ENOENT' })
+  const frozen = join(made.base, 'snapshot/scripts/e2e-harness.mjs'), original = await readFile(frozen)
+  await writeFile(frozen, Buffer.concat([original, Buffer.from('\n// changed frozen source')]))
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('Frozen source changed: scripts/e2e-harness.mjs'))
+  await writeFile(frozen, original)
+  await writeFile(fixture.candidate, Buffer.concat([fixture.candidateBytes, Buffer.from('changed candidate')]))
+  await assert.rejects(fixture.plan(made.entry), error => error.stderr.includes('AssertionError'))
+  await assert.rejects(lstat(fixture.marker), { code: 'ENOENT' })
 })

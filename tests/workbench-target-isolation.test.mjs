@@ -176,9 +176,15 @@ test('foreign public session header is rejected before the actual desktop regist
 })
 test('actual 2s query budget rejects a pending scope and safely disposes a late result without reviving authority', { timeout: 6000 }, async t => {
   const f = await fixture(t); await f.native(); const barrier = deferred(), entered = deferred(), own = await installed(t, f, { query: async () => { entered.resolve(); await barrier.promise } })
-  const status = own.call({ op: 'status', chatSessionId: 'chat-one' }); await entered.promise; const result = await status
-  assert.equal(result.result.ok, false); assert.equal(result.result.value, undefined); assert.equal(own.queries[0].options.signal.aborted, true); assert.deepEqual(own.disposals, [])
-  barrier.resolve(); await turn(); assert.deepEqual(own.disposals, ['chat-one']); assert.equal(f.desktops.get('chat-one').actions.length, 0)
+  // The real AbortSignal deadline is unreferenced; unlike a real Host query,
+  // this deferred fixture owns no I/O handle to keep the event loop running.
+  const keepalive = setInterval(() => {}, 1000); t.after(() => clearInterval(keepalive))
+  try {
+    const started = performance.now(), status = own.call({ op: 'status', chatSessionId: 'chat-one' }); await entered.promise; const result = await status, elapsed = performance.now() - started
+    assert(elapsed >= 1900 && elapsed < 6000, `The real 2s query deadline took ${elapsed}ms`)
+    assert.equal(result.result.ok, false); assert.equal(result.result.value, undefined); assert.equal(own.queries[0].options.signal.aborted, true); assert.deepEqual(own.disposals, [])
+    barrier.resolve(); await turn(); assert.deepEqual(own.disposals, ['chat-one']); assert.equal(f.desktops.get('chat-one').actions.length, 0)
+  } finally { barrier.resolve(); clearInterval(keepalive) }
 })
 
 
