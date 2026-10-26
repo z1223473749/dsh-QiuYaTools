@@ -25,6 +25,7 @@ export interface Config {
   sessionWindowsEnabled: Volatile<boolean>
   bulkArchiveEnabled: Volatile<boolean>
   planCommentsEnabled: Volatile<boolean>
+  conversationCommentsEnabled: Volatile<boolean>
   sidebarToolsEnabled: Volatile<boolean>
   promptSuggestionsEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
@@ -39,6 +40,7 @@ export const Config = z.object({
   sessionWindowsEnabled: z.boolean().default(true).description('在独立窗口中打开会话').volatile(),
   bulkArchiveEnabled: z.boolean().default(true).description('多选会话并批量归档，或归档工作区内的全部会话').volatile(),
   planCommentsEnabled: z.boolean().default(true).description('为计划添加批注并提交修改建议').volatile(),
+  conversationCommentsEnabled: z.boolean().default(true).description('为会话回复添加批注并提交修改建议').volatile(),
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),

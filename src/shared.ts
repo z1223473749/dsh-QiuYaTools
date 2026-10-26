@@ -8,6 +8,7 @@ export interface Preferences {
   sessionWindowsEnabled: boolean
   bulkArchiveEnabled: boolean
   planCommentsEnabled: boolean
+  conversationCommentsEnabled: boolean
   sidebarToolsEnabled: boolean
   promptSuggestionsEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
@@ -18,7 +19,7 @@ export interface Preferences {
 }
 
 export const FEATURE_FIELDS = [
-  'pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled',
+  'pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled',
 ] as const
 export type FeatureField = typeof FEATURE_FIELDS[number]
 
@@ -28,6 +29,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   sessionWindowsEnabled: true,
   bulkArchiveEnabled: true,
   planCommentsEnabled: true,
+  conversationCommentsEnabled: true,
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   qThemeEnabled: false,

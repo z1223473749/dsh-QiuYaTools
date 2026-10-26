@@ -66,10 +66,10 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, qThemeEnabled: false,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, conversationCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, qThemeEnabled: false,
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
-const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']
+const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']
 
 function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1-rc.2', minimumHarnessVersion: '0.2.1-rc.2', versionSupported: true, status: 'ready' }) {
   let snapshot = {
@@ -139,7 +139,7 @@ test('settings default every feature to on and atomically turn every feature off
     assert.equal(f.container.querySelector('.qyt-save-feedback'), null, 'there is no permanent save-explanation row')
     for (const label of ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab']) {
       f.select(label)
-      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 2)
+      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, label === 'planCommentsTab' ? 3 : 2)
     }
     f.select('pastedTextTab')
     assert.equal(f.container.querySelectorAll('input')[0].value, '1000')
@@ -160,19 +160,19 @@ test('settings default every feature to on and atomically turn every feature off
 test('each feature shows a mixed master when disabled and one master click restores all tools', async () => {
   for (const [field, label] of [
     ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
-    ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['sidebarToolsEnabled', 'sidebarTools'],
+    ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['conversationCommentsEnabled', 'conversationComments'], ['sidebarToolsEnabled', 'sidebarTools'],
     ['promptSuggestionsEnabled', 'promptSuggestions'],
   ]) {
     const f = mount({ ...defaults, unrelated: { preserve: true } })
     try {
-      f.select(`${label}Tab`)
+      f.select(label === 'conversationComments' ? 'planCommentsTab' : `${label}Tab`)
       await f.toggle(label)
       assert.deepEqual(f.mutations, [[
         { op: 'set', path: ['enabled'], value: true },
         { op: 'set', path: [field], value: false },
       ]])
       assert.equal(f.switch('enabled').getAttribute('aria-checked'), 'mixed')
-      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, 0)
+      assert.equal(f.container.querySelectorAll('[aria-checked="true"]').length, ['planComments', 'conversationComments'].includes(label) ? 1 : 0)
       for (const other of featureFields.filter(other => other !== field)) assert.equal(f.snapshot().value[other], true)
       assert.deepEqual(f.snapshot().value.unrelated, { preserve: true })
       await f.toggle('enabled')
@@ -185,6 +185,27 @@ test('each feature shows a mixed master when disabled and one master click resto
       assert.deepEqual(f.snapshot().value.unrelated, { preserve: true })
     } finally { f.dispose() }
   }
+})
+
+test('plan comments and conversation comments share a tab with independent controls and guides', async () => {
+  const f = mount({ planCommentsEnabled: false, conversationCommentsEnabled: true })
+  try {
+    f.select('planCommentsTab')
+    assert.equal(f.switch('planComments').getAttribute('aria-checked'), 'false')
+    assert.equal(f.switch('conversationComments').getAttribute('aria-checked'), 'true')
+    assert.equal([...f.container.querySelectorAll('[role="tab"]')].filter(tab => tab.textContent === 'planCommentsTab').length, 1)
+    assert.equal([...f.container.querySelectorAll('[role="tab"]')].some(tab => tab.textContent === 'conversationCommentsTab'), false)
+    const guides = [...f.container.querySelectorAll('.qyt-guide')]
+    assert.equal(guides.length, 2)
+    assert.match(guides[0].textContent, /planCommentsSelection.*planCommentsCard.*planCommentsSubmit/u)
+    assert.match(guides[1].textContent, /conversationCommentsSelection.*conversationCommentsMarkers.*conversationCommentsSubmit/u)
+    await f.toggle('conversationComments')
+    assert.equal(f.snapshot().value.planCommentsEnabled, false)
+    assert.equal(f.snapshot().value.conversationCommentsEnabled, false)
+    await f.toggle('planComments')
+    assert.equal(f.snapshot().value.planCommentsEnabled, true)
+    assert.equal(f.snapshot().value.conversationCommentsEnabled, false)
+  } finally { f.dispose() }
 })
 
 test('a legacy paused profile can be activated through an individual feature switch', async () => {

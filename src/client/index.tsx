@@ -56,12 +56,13 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
   { field: 'bulkArchiveEnabled', tab: 'bulkArchiveTab', label: 'bulkArchive', hint: 'bulkArchiveHint', steps: ['bulkArchiveSelect', 'bulkArchiveSelected', 'bulkArchiveWorkspace'] },
   { field: 'planCommentsEnabled', tab: 'planCommentsTab', label: 'planComments', hint: 'planCommentsHint', steps: ['planCommentsSelection', 'planCommentsCard', 'planCommentsSubmit'] },
+  { field: 'conversationCommentsEnabled', tab: 'planCommentsTab', label: 'conversationComments', hint: 'conversationCommentsHint', steps: ['conversationCommentsSelection', 'conversationCommentsMarkers', 'conversationCommentsSubmit'] },
   { field: 'sidebarToolsEnabled', tab: 'sidebarToolsTab', label: 'sidebarTools', hint: 'sidebarToolsHint', steps: ['sidebarToolsPin', 'sidebarToolsUnread', 'sidebarToolsCopy', 'sidebarToolsWorkspace'] },
   { field: 'promptSuggestionsEnabled', tab: 'promptSuggestionsTab', label: 'promptSuggestions', hint: 'promptSuggestionsHint', steps: ['promptSuggestionsWhen', 'promptSuggestionsAccept', 'promptSuggestionsModel'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   { id: 'computer', label: 'computerTab' },
-  ...FEATURES.map(feature => ({ id: feature.field, label: feature.tab })),
+  ...FEATURES.filter(feature => feature.field !== 'conversationCommentsEnabled').map(feature => ({ id: feature.field, label: feature.tab })),
   { id: 'qTheme', label: 'qThemeTab' },
   { id: 'about', label: 'aboutTab' },
   { id: 'updates', label: 'updatesTab' },
@@ -73,7 +74,7 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
     {name === 'pastedTextEnabled' ? <><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></>
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
         : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
-          : name === 'planCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
+          : name === 'planCommentsEnabled' || name === 'conversationCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
             : name === 'sidebarToolsEnabled' ? <><path d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="17" r="3"/><path d="m20.5 19.5 2 2"/></>
             : name === 'promptSuggestionsEnabled' ? <><path d="m4 20 4-1 11-11-3-3L5 16zM14 7l3 3M5 3v4M3 5h4M19 14v6M16 17h6"/></>
             : name === 'qTheme' ? <><path d="M12 3a9 9 0 1 0 0 18h1.4a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5h1a4 4 0 0 0 4-4C21 6.7 17 3 12 3Z"/><path d="M7.5 11h.01M9 7.5h.01M13 7h.01M16.5 9h.01" strokeWidth="3"/></>
@@ -217,7 +218,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 </div>
                 <div className="qyt-theme-caption"><p className="qyt-muted">{t('qThemePreviewHint')}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
               </div>
-            </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id).map(feature => <div className="qyt-feature-panel" key={feature.field}>
+            </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className="qyt-feature-panel" key={feature.field}>
           <div className="qyt-card qyt-feature-summary">
             <div className="qyt-toggle-row">
               <div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name={feature.field} /></span><h3>{t(feature.label)}</h3></div>

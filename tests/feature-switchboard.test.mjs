@@ -52,6 +52,7 @@ test('feature switchboard waits for configuration, inherits new flags, and honor
     await f.board.update({})
     assert.equal(f.count(), FEATURE_FIELDS.length, 'new and upgraded profiles inherit every feature as enabled')
     assert.equal(f.active.get('promptSuggestionsEnabled'), 1, 'upgrades enable prompt suggestions by default')
+    assert.equal(f.active.get('conversationCommentsEnabled'), 1, 'upgrades enable conversation comments independently from plan comments')
     await f.board.update({ enabled: false })
     assert.equal(f.count(), 0)
     await f.board.update({ enabled: true, bulkArchiveEnabled: false })

@@ -1,0 +1,30 @@
+.qyt-cc-dock { padding: 8px 12px; color: var(--dsw-alias-label-primary, #20242b); font-size: 13px; }
+.qyt-cc-dock:empty { padding: 0; }
+.qyt-cc-chip, .qyt-cc-action { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--dsw-alias-border-l1, #dce1e7); border-radius: 9px; padding: 6px 10px; background: var(--dsw-alias-button-floating-fill, #fff); color: inherit; font: inherit; cursor: pointer; }
+.qyt-cc-action[data-primary] { background: var(--dsw-alias-state-business-primary, #147d95); color: #fff; border-color: transparent; }
+.qyt-cc-action:disabled { opacity: .5; cursor: default; }
+.qyt-cc-panel { margin-top: 8px; border: 1px solid var(--dsw-alias-border-l1, #dce1e7); border-radius: 12px; padding: 12px; background: var(--dsw-alias-button-floating-fill, #fff); }
+.qyt-cc-panel header, .qyt-cc-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qyt-cc-panel h4 { margin: 0; font-size: 13px; }
+.qyt-cc-list { max-height: min(300px, 40vh); overflow: auto; margin: 10px 0; padding: 0; list-style: none; }
+.qyt-cc-item { display: flex; align-items: start; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--dsw-alias-border-l1, #dce1e7); }
+.qyt-cc-item-body { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qyt-cc-item blockquote, .qyt-cc-editor blockquote { margin: 0 0 6px; padding-left: 9px; border-left: 2px solid #7aa9ba; color: var(--dsw-alias-label-secondary, #666); max-height: 100px; overflow: auto; }
+.qyt-cc-item p { margin: 0; }
+.qyt-cc-icon { border: 0; background: transparent; padding: 3px; color: inherit; cursor: pointer; flex: none; }
+.qyt-cc-icon:disabled { opacity: .4; cursor: default; }
+.qyt-cc-hint { color: var(--dsw-alias-label-secondary, #666); font-size: 12px; margin: 8px 0; line-height: 1.6; }
+.qyt-cc-status { margin-top: 8px; font-size: 12px; overflow-wrap: anywhere; }
+[data-qyt-cc-root] { position: relative; }
+.qyt-cc-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.qyt-cc-highlight { position: absolute; border-radius: 3px; background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #2990b9) 16%, transparent); pointer-events: none; }
+.qyt-cc-number { position: absolute; display: grid; place-items: center; width: 23px; height: 23px; border: 2px solid var(--dsw-alias-button-floating-fill, white); border-radius: 50%; background: var(--dsw-alias-state-business-primary, #337af2); color: white; font: 600 11px/1 sans-serif; box-shadow: 0 1px 4px #0002; cursor: pointer; pointer-events: auto; padding: 0; }
+.qyt-cc-tooltip { position: absolute; max-width: min(320px, 85vw); padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l1, #dce1e7); border-radius: 9px; background: var(--dsw-alias-button-floating-fill, white); color: var(--dsw-alias-label-primary, #20242b); box-shadow: 0 3px 16px #0002; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; z-index: 3; }
+.qyt-cc-floating { position: fixed; z-index: 1000; color: var(--dsw-alias-label-primary, #20242b); font: 13px/1.6 system-ui, sans-serif; }
+.qyt-cc-floating .qyt-cc-action { box-shadow: 0 3px 12px #0002; }
+.qyt-cc-selection { display: flex; flex-wrap: wrap; gap: 4px; max-width: min(300px, calc(100vw - 24px)); }
+.qyt-cc-selection .qyt-cc-status { flex-basis: 100%; padding: 8px; border-radius: 8px; background: var(--dsw-alias-button-floating-fill, #fff); box-shadow: 0 3px 12px #0002; }
+.qyt-cc-editor { box-sizing: border-box; width: min(360px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 12px; border: 1px solid var(--dsw-alias-border-l1, #dce1e7); border-radius: 12px; background: var(--dsw-alias-button-floating-fill, #fff); box-shadow: 0 8px 30px #0003; }
+.qyt-cc-editor textarea { box-sizing: border-box; display: block; width: 100%; min-height: 84px; max-height: 200px; margin: 8px 0; padding: 8px; border: 1px solid var(--dsw-alias-border-l2, #cfd5df); border-radius: 8px; color: inherit; background: var(--dsw-specific-input-major, #fff); font: inherit; resize: vertical; }
+.qyt-cc-editor .qyt-cc-actions { justify-content: flex-end; }
+.qyt-cc-chip:focus-visible, .qyt-cc-action:focus-visible, .qyt-cc-number:focus-visible, .qyt-cc-icon:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #147d95); outline-offset: 2px; }

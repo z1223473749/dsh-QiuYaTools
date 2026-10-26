@@ -69,6 +69,7 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-tab-panel { flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--qyt-ocean-line) transparent; padding: 14px 2px 2px; }
 .qyt-tab-panel[hidden] { display: none; }
 .qyt-feature-panel { display: grid; gap: 12px; }
+.qyt-feature-panel + .qyt-feature-panel { margin-top: 16px; }
 .qyt-feature-heading { display: flex; align-items: center; gap: 9px; }
 .qyt-feature-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border-radius: 9px; color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
 .qyt-feature-icon svg { width: 18px; height: 18px; }

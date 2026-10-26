@@ -200,7 +200,7 @@ test('host schema provides a volatile default and rejects string booleans', () =
   const paused = host.Config({ enabled: false })
   assert.equal(paused.enabled.get(), false)
   assert.equal(host.Config.simplify(paused).enabled, false, 'persistence must contain plain data')
-  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']) assert.equal(paused[field].get(), true)
+  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']) assert.equal(paused[field].get(), true)
   assert.throws(() => host.Config({ enabled: 'false' }), /boolean/i)
   assert.throws(() => host.Config({ enabled: 'true' }), /boolean/i)
   assert.throws(() => host.Config({ promptSuggestionsEnabled: 'false' }), /boolean/i)

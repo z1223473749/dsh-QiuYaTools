@@ -9,7 +9,10 @@ export const SETTINGS_ACCEPTANCE_PAGES = [
   { id: 'pastedTextEnabled', label: '长文本', heading: '大文本粘贴转 TXT 附件', toggle: '大文本粘贴转 TXT 附件', kind: 'thresholds' },
   { id: 'sessionWindowsEnabled', label: '独立窗口', heading: '会话独立窗口', toggle: '会话独立窗口', steps: ['新窗口打开', '拖出列表'], kind: 'windows' },
   { id: 'bulkArchiveEnabled', label: '批量归档', heading: '会话多选与批量归档', toggle: '会话多选与批量归档', steps: ['Shift', '右键已选会话', '右键工作区'] },
-  { id: 'planCommentsEnabled', label: '计划批注', heading: '计划批注与修改建议', toggle: '计划批注与修改建议', steps: ['选中文字添加批注', '计划卡片', '原有内容会保留'] },
+  { id: 'planCommentsEnabled', label: '计划批注', heading: '计划批注与修改建议', toggle: '计划批注与修改建议', features: [
+    { heading: '计划批注与修改建议', toggle: '计划批注与修改建议', steps: ['选中文字添加批注', '计划卡片', '原有内容会保留'] },
+    { heading: '会话批注与修改建议', toggle: '会话批注与修改建议', steps: ['新会话提问', '批注编号常驻显示', '提交批注'] },
+  ] },
   { id: 'sidebarToolsEnabled', label: '会话菜单', heading: '会话与工作区菜单', toggle: '会话与工作区菜单', steps: ['置顶', '标记为未读', '会话 ID', '打开目录'] },
   { id: 'promptSuggestionsEnabled', label: '提示词', heading: '输入框提示词推荐', toggle: '输入框提示词推荐', steps: ['失焦后仍保留', 'Tab', '模型用量'] },
   { id: 'qTheme', label: 'Q 主题', heading: '启用 Q 主题', toggle: '启用 Q 主题', kind: 'theme' },
@@ -48,6 +51,22 @@ export function inspectSettingsTab(section, expected) {
     const steps = [...panel.querySelectorAll('ol > li')].map(text)
     require(steps.length === expected.steps.length && expected.steps.every((fragment, index) => steps[index].includes(fragment)), 'page-specific usage steps are missing or belong to another page')
     evidence.guideSteps = steps.length
+  }
+  if (expected.features) {
+    const cards = [...panel.querySelectorAll('.qyt-feature-panel')]
+    require(cards.length === expected.features.length, 'the shared page has missing or extra feature cards')
+    evidence.features = expected.features.map(feature => {
+      const matches = cards.filter(card => [...card.querySelectorAll('h3')].some(node => text(node) === feature.heading))
+      require(matches.length === 1, `feature ${feature.heading} has no unique card`)
+      const card = matches[0]
+      const toggles = [...card.querySelectorAll('[role="switch"]')]
+      const toggle = toggles.find(node => node.getAttribute('aria-label') === feature.toggle)
+      require(toggles.length === 1 && toggle && !toggle.disabled && ['true', 'false'].includes(toggle.getAttribute('aria-checked')), `feature ${feature.heading} has no independent writable switch`)
+      const steps = [...card.querySelectorAll('.qyt-guide ol > li')].map(text)
+      require(steps.length === feature.steps.length && feature.steps.every((fragment, index) => steps[index].includes(fragment)), `feature ${feature.heading} usage steps are missing or belong to another feature`)
+      return { heading: feature.heading, checked: toggle.getAttribute('aria-checked') === 'true', guideSteps: steps.length }
+    })
+    evidence.guideSteps = evidence.features.reduce((sum, feature) => sum + feature.guideSteps, 0)
   }
   if (expected.kind === 'windows') require(text(panel).includes('最低支持官方 HARNESS 版本：'), 'the minimum Host version explanation is missing')
   if (expected.kind === 'thresholds') {
@@ -124,7 +143,7 @@ export async function captureSettingsTabs(page, { screenshot }) {
   // Preserve the original case's initial long-text page for later functional
   // assertions, without writing a single preference during the visual tour.
   await page.getByRole('tab', { name: '长文本', exact: true }).click()
-  return { pages: results, boundary: 'Ten actual settings pages, page-specific semantic and writable-state checks, and cropped installed-UI screenshots. Browsing does not exercise every feature or prove real-model reasoning.' }
+  return { pages: results, boundary: 'Ten actual settings pages, feature-specific semantic and writable-state checks (including both independent comment cards), and cropped installed-UI screenshots. Browsing does not exercise every feature or prove real-model reasoning.' }
 }
 
 export function createHarnessImageLayout(output, requestedDirectory) {

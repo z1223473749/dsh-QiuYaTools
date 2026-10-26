@@ -103,6 +103,11 @@ test('all ten real React settings pages satisfy their own public semantics witho
   assert.deepEqual(pages.find(row => row.id === 'pastedTextEnabled').thresholds, { '字符数': 1000, '行数': 15 })
   assert.equal(pages.find(row => row.id === 'computer').checked, false, 'computer access is not enabled just to capture settings')
   assert.equal(pages.find(row => row.id === 'qTheme').checked, false, 'a saved false value is legitimate page state')
+  assert.deepEqual(pages.find(row => row.id === 'planCommentsEnabled').features, [
+    { heading: '计划批注与修改建议', checked: true, guideSteps: 3 },
+    { heading: '会话批注与修改建议', checked: true, guideSteps: 3 },
+  ])
+  assert.equal(pages.find(row => row.id === 'planCommentsEnabled').guideSteps, 6)
   assert.deepEqual(f.writes, [])
   assert.ok(f.calls.some(row => row.endpoint === 'qiuya-tools.workbench' && row.input?.op === 'permissions'), 'computer settings must read the current site-permission list')
   assert.ok(f.calls.every(isReadOnlySettingsCall), 'the visual tour must not check/install updates or perform input')
@@ -126,6 +131,31 @@ test('a correct selected tab and heading cannot hide missing feature instruction
   expected = await f.select('pastedTextEnabled')
   f.section.querySelector('[role="tabpanel"]:not([hidden]) input').value = '0'
   assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /invalid persisted value/u)
+})
+
+test('the shared comments page requires independent cards, switches, and matching usage guides', async t => {
+  const f = await settings(t), expected = await f.select('planCommentsEnabled')
+  const panel = f.section.querySelector('[role="tabpanel"]:not([hidden])')
+  const cards = [...panel.querySelectorAll('.qyt-feature-panel')]
+  assert.equal(cards.length, 2)
+  const conversationCard = cards[1]
+  const toggle = conversationCard.querySelector('[role="switch"]')
+  toggle.setAttribute('aria-checked', 'false')
+  assert.deepEqual(acceptance.inspectSettingsTab(f.section, expected).features.map(feature => feature.checked), [true, false], 'each card reports its own saved toggle value')
+  toggle.setAttribute('aria-label', '计划批注与修改建议')
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /independent writable switch/u)
+  toggle.setAttribute('aria-label', '会话批注与修改建议')
+  const guides = cards.map(card => card.querySelector('.qyt-guide ol'))
+  const conversationSteps = [...guides[1].children]
+  guides[1].replaceChildren(...[...guides[0].children].map(node => node.cloneNode(true)))
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /usage steps.*another feature/u)
+  guides[1].replaceChildren(...conversationSteps)
+  assert.equal(acceptance.inspectSettingsTab(f.section, expected).guideSteps, 6)
+  guides[1].lastElementChild.remove()
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /feature 会话批注与修改建议 usage steps/u, 'the second card must retain all three of its own steps')
+  guides[1].replaceChildren(...conversationSteps)
+  conversationCard.remove()
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /missing or extra feature cards/u)
 })
 
 test('the settings oracle rejects mixed panels and pending configuration instead of blessing tab presence', async t => {

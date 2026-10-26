@@ -19,6 +19,7 @@ const compiled = (await build({
         export function installBulkArchive() {}
         export function installSessionWindows() {}
         export function installPlanComments() {}
+        export function installConversationComments() {}
         export function installSidebarTools() {}
         export function installPromptSuggestions() {}
       ` }))
