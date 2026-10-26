@@ -50,7 +50,7 @@ Windows 选择与 Harness 进程架构一致的 **ARM64** 或 **x64** 包；Mac 
 
 - 目前适配 Harness **0.2.1-rc.2**。Mac 原生组件以 **macOS 13+** 为构建目标，提供 Apple Silicon / Intel universal 包；Windows 提供 **ARM64 / x64** 包，独立窗口需要 Microsoft Edge WebView2 Runtime。
 - Mac 首次使用需给 **DeepSeek Harness** 开启屏幕录制、辅助功能和输入监控。工具箱由 Harness Host 直接启动执行器，使用宿主的系统权限；授权卡会自动核验并显示当前宿主应用，返回工具箱后自动检测。无需为插件单独申请 Developer ID 或修改权限配置。
-- 电脑操控需要支持图片输入的模型。原生桌面操作需要可交互的桌面；Chrome / Edge 独立浏览器通道支持后台页面操作。
+- 原生桌面操作需要可交互的桌面；Chrome / Edge 独立浏览器通道支持后台页面操作。
 - 在 **QiuYaTools → 版本更新** 中检查更新。提示词建议使用当前会话模型，会产生少量额外模型用量。
 
 更多配置、权限说明与使用方法见[电脑操控指南](docs/computer-use-guide.md)。
