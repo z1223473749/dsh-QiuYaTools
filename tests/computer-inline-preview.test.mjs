@@ -204,7 +204,7 @@ test('pending-only public chat card presents plain text and routes exact request
 })
 
 test('Mac pending card opens fixed permission settings, reads refreshed permissions and gates grants while denial remains available', async t => {
-  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.native.value = { platform: 'darwin', permissions: { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false } }
+  const f = await fixture(t); f.states.clear(); f.requests.set('request-A', approval('A')); f.native.value = { platform: 'darwin', permissionOwner: { kind: 'host', appName: 'DeepSeek Harness', bundleIdentifier: 'com.deepseek.dsh' }, permissions: { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false } }
   await f.render({ seat: 'A' })
   for (const label of ['允许一次', '始终允许']) assert.equal(f.button('seat', label).disabled, true)
   assert.equal(f.button('seat', '拒绝').disabled, false)

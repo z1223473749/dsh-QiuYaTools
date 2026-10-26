@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
-import { ComputerError, requireIdentity, type ComputerSessionSnapshot, type ComputerStatus, type NativeApplication, type NativeTarget } from './contract.ts'
+import { ComputerError, requireIdentity, type ComputerPermissionOwner, type ComputerSessionSnapshot, type ComputerStatus, type NativeApplication, type NativeTarget } from './contract.ts'
 
 /** This context comes from the SDK, never from model-controlled arguments. */
 export interface ComputerEntryExecution { callId: string; agent?: { id: string; session?: unknown }; signal: AbortSignal; operationSessionId?: string }
@@ -16,7 +16,7 @@ export interface ComputerEntryBackend {
   launchApplicationFor?(sessionId: string, appId: string, signal?: AbortSignal): Promise<unknown>
   authorizationStart(sessionId: string, targetId: string, options: { allowOnce: boolean; signal: AbortSignal; expectedGeneration: number; expectedTarget: Pick<NativeTarget, 'id' | 'appId' | 'pid'> }): Promise<ComputerSessionSnapshot>
 }
-export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissions: Record<string, boolean>; capabilities: Record<string, boolean>; message?: string }
+export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissionOwner?: ComputerPermissionOwner; permissions: Record<string, boolean>; capabilities: Record<string, boolean>; message?: string }
 export interface ComputerPendingPermission {
   requestId: string; requestVersion: 1; sessionId: string; taskId?: string; appId: string; appName: string
   reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight: ComputerPermissionPreflight
@@ -45,11 +45,20 @@ function safeName(appId: string): string {
   return (leaf.replace(/\.exe$/iu, '').replace(/[\x00-\x1f\x7f]/gu, '').slice(0, 80) || '应用')
 }
 const unavailablePreflightMessage = '电脑操控连接暂不可用，当前无法检查系统权限。恢复连接后会自动重新检查。'
+function permissionOwnerProjection(value: unknown): ComputerPermissionPreflight['permissionOwner'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return
+  const owner = value as Record<string, unknown>
+  if (owner.kind !== 'host' && owner.kind !== 'companion') return
+  if (typeof owner.appName !== 'string' || !owner.appName.trim() || owner.appName.length > 640 || Array.from(owner.appName).length > 160 || /[\\/\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/u.test(owner.appName)) return
+  if (typeof owner.bundleIdentifier !== 'string' || owner.bundleIdentifier.length > 255 || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u.test(owner.bundleIdentifier)) return
+  return { kind: owner.kind, appName: owner.appName, bundleIdentifier: owner.bundleIdentifier }
+}
 function permissionProjection(status: ComputerStatus): ComputerPermissionPreflight {
   const permissions: Record<string, boolean> = {}, capabilities: Record<string, boolean> = {}
   for (const key of ['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring']) if (typeof status.permissions?.[key] === 'boolean') permissions[key] = status.permissions[key]
   if (status.capabilities && !Array.isArray(status.capabilities)) for (const key of ['capture', 'input', 'applications', 'launchApplication']) if (typeof status.capabilities[key] === 'boolean') capabilities[key] = status.capabilities[key]
-  return { available: status.available === true, ...(['darwin', 'win32', 'linux'].includes(String(status.platform)) ? { platform: String(status.platform) } : {}), ...(['local', 'remote', 'browser'].includes(String(status.mode)) ? { mode: String(status.mode) } : {}), permissions, capabilities, ...(status.available === false ? { message: unavailablePreflightMessage } : {}) }
+  const permissionOwner = permissionOwnerProjection(status.permissionOwner)
+  return { available: status.available === true, ...(['darwin', 'win32', 'linux'].includes(String(status.platform)) ? { platform: String(status.platform) } : {}), ...(['local', 'remote', 'browser'].includes(String(status.mode)) ? { mode: String(status.mode) } : {}), ...(permissionOwner ? { permissionOwner } : {}), permissions, capabilities, ...(status.available === false ? { message: unavailablePreflightMessage } : {}) }
 }
 /** Owner decisions are the only route from an opaque candidate to a grant.
  * No screenshot, AX text, title, executable path or pairing secret is disclosed

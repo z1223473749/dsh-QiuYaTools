@@ -1,17 +1,25 @@
 import Darwin
 import Foundation
 
-/// LaunchServices owns the application process; the authenticated socket owns
-/// its lifetime. Standard input remains the default for existing test helpers.
+/// The authenticated socket owns the application's lifetime. The hosted mode
+/// additionally proves that this same socket owner directly spawned the helper.
+/// Standard input remains the default for existing standalone test helpers.
 struct MacTransportArguments: Equatable {
     let socketPath: String
     let nonce: String
     let ownerPid: Int32
+    let hosted: Bool
+
+    init(socketPath: String, nonce: String, ownerPid: Int32, hosted: Bool = false) {
+        self.socketPath = socketPath; self.nonce = nonce; self.ownerPid = ownerPid; self.hosted = hosted
+    }
 
     static func parse(_ arguments: [String]) throws -> Self? {
         let names = ["--qiuya-control-socket", "--qiuya-control-nonce", "--qiuya-owner-pid"]
         guard arguments.contains(where: { $0.hasPrefix("--qiuya-") }) else { return nil }
-        guard arguments.count == 6 else { throw invalid() }
+        let hosted = arguments.contains("--qiuya-hosted")
+        guard arguments.count == (hosted ? 7 : 6), arguments.filter({ $0 == "--qiuya-hosted" }).count == (hosted ? 1 : 0) else { throw invalid() }
+        let arguments = arguments.filter { $0 != "--qiuya-hosted" }
         var values: [String: String] = [:]
         for index in stride(from: 0, to: arguments.count, by: 2) {
             guard names.contains(arguments[index]), values[arguments[index]] == nil else { throw invalid() }
@@ -24,7 +32,7 @@ struct MacTransportArguments: Equatable {
               nonce.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
               let rawPid = values[names[2]], !rawPid.isEmpty, rawPid.first != "0",
               rawPid.utf8.allSatisfy({ (48...57).contains($0) }), let pid = Int32(rawPid), pid > 1 else { throw invalid() }
-        return Self(socketPath: path, nonce: nonce, ownerPid: pid)
+        return Self(socketPath: path, nonce: nonce, ownerPid: pid, hosted: hosted)
     }
 
     private static func invalid() -> ComputerError {
@@ -130,6 +138,7 @@ final class MacControlTransport: @unchecked Sendable {
         guard let configuration = self.arguments else { owner = nil; ownIdentity = nil; connection = nil; return }
         guard Bundle.main.bundleIdentifier == "com.qiuya.tools.computer-use",
               configuration.ownerPid != getpid(), let owner = MacProcessIdentity.read(configuration.ownerPid),
+              !configuration.hosted || getppid() == owner.pid,
               let own = MacProcessIdentity.read(getpid()) else { throw Self.unavailable() }
         let original = try Self.validateSocket(configuration.socketPath)
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -169,11 +178,13 @@ final class MacControlTransport: @unchecked Sendable {
     }
 
     var isLaunchServices: Bool { arguments != nil }
+    var isHosted: Bool { arguments?.hosted == true }
     var output: FileHandle { connection ?? FileHandle.standardOutput }
 
     func ownerIsCurrent() -> Bool {
         guard let owner else { return true }
-        return MacOwnerPolicy.current(expected: owner, actual: MacProcessIdentity.read(owner.pid), alive: kill(owner.pid, 0) == 0)
+        return (!isHosted || getppid() == owner.pid)
+            && MacOwnerPolicy.current(expected: owner, actual: MacProcessIdentity.read(owner.pid), alive: kill(owner.pid, 0) == 0)
     }
 
     func ready() -> [String: Any]? {

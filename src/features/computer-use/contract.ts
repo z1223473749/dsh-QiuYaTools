@@ -19,7 +19,8 @@ export interface ComputerAction {
 }
 export interface ComputerActionRequest { actionId: string; frameId: string; action: ComputerAction }
 export interface ComputerActionResult { actionId: string; targetId: string; epoch: number; result: unknown }
-export interface ComputerStatus { available: boolean; platform?: string; permissions?: Record<string, boolean>; capabilities?: Record<string, boolean> | string[]; message?: string; [key: string]: unknown }
+export interface ComputerPermissionOwner { kind: 'host' | 'companion'; appName: string; bundleIdentifier: string }
+export interface ComputerStatus { available: boolean; platform?: string; permissionOwner?: ComputerPermissionOwner | null; permissions?: Record<string, boolean>; capabilities?: Record<string, boolean> | string[]; message?: string; [key: string]: unknown }
 /** Private native/FIFO vocabulary. These fields are never tool or renderer inputs. */
 export interface ForegroundWorkerIdentity {
   pid: number; createdAtTicks: string; executablePath: string; imageSHA256: string

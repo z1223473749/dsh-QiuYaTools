@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
-import { launchMacCompanion, retireMacCompanion } from './macos-launch.ts'
+import { launchHostedMacCompanion, retireMacCompanion } from './macos-launch.ts'
 import { createReadStream } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { ComputerActionCleanupError, ComputerError } from './contract.ts'
@@ -122,7 +122,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     const executable = this.options.executable ?? computerCompanionPath()
     const args = this.options.args ?? (process.platform === 'win32' ? ['--computer'] : [])
     const child = process.platform === 'darwin' && this.options.executable === undefined
-      ? launchMacCompanion(dirname(dirname(dirname(executable))))
+      ? launchHostedMacCompanion(dirname(dirname(dirname(executable))))
       : spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) } })
     this.child = child; this.backendGeneration++
     child.stdin.on('error', error => this.fail(new ComputerError('NATIVE_PIPE_FAILED', error.message), child))

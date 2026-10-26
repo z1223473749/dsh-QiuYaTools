@@ -45,6 +45,39 @@ test('discovery reveals application labels and opaque expiring IDs only, with no
   } finally { f.dispose() }
 })
 
+test('permission preflight projects only validated owner labels and never treats owner identity as a grant', async () => {
+  const f = fixture()
+  try {
+    const permissionOwner = { kind: 'host', appName: 'DeepSeek Harness', bundleIdentifier: 'com.deepseek.dsh' }
+    f.backend.authorizationStatus = async () => ({ available: true, platform: 'darwin', permissions: { screenRecording: false, accessibility: false }, permissionOwner: { ...permissionOwner, executablePath: '/Users/private/host', token: 'private-token' } })
+    const item = await f.discover()
+    assert.deepEqual(item.value.preflight.permissionOwner, permissionOwner)
+    assert.deepEqual(item.value.preflight.permissions, { screenRecording: false, accessibility: false })
+    assert.doesNotMatch(JSON.stringify(item.value), /Users|private|executablePath|token/u)
+    const waiting = f.coordinator.requestControl(item.execution, item.candidateId, '操作应用'), [card] = f.coordinator.pending()
+    assert.deepEqual(card.preflight.permissionOwner, permissionOwner)
+    await assert.rejects(f.coordinator.decide('chat-a', card.requestId, 1, 'once'), { code: 'SYSTEM_PERMISSION_REQUIRED' })
+    assert.equal(f.calls.some(row => row[0] === 'start'), false)
+    f.coordinator.cancelRequest('chat-a', card.requestId, 1); await assert.rejects(waiting, { code: 'REQUEST_CANCELLED' })
+  } finally { f.dispose() }
+})
+
+test('invalid or path-bearing permission owners are omitted from the preflight sent to models and pending cards', async () => {
+  const f = fixture()
+  try {
+    const valid = { kind: 'host', appName: 'DeepSeek Harness', bundleIdentifier: 'com.deepseek.dsh' }
+    for (const permissionOwner of [null, [], 'DeepSeek Harness', { ...valid, kind: 'system' }, { ...valid, appName: '' }, { ...valid, appName: ' ' }, { ...valid, appName: 'a'.repeat(161) }, { ...valid, appName: '/Users/private/host' }, { ...valid, appName: 'C:\\private\\host' }, { ...valid, appName: 'DeepSeek\nHarness' }, { ...valid, appName: 'DeepSeek\u0085Harness' }, { ...valid, bundleIdentifier: 'com.deepseek.dsh\0' }, { ...valid, bundleIdentifier: '/Users/private/app' }, { ...valid, bundleIdentifier: 'com.' + 'a'.repeat(256) }]) {
+      f.backend.authorizationStatus = async () => ({ available: true, permissions: {}, permissionOwner })
+      const { value } = await f.discover()
+      assert.equal(Object.hasOwn(value.preflight, 'permissionOwner'), false, JSON.stringify(permissionOwner))
+      assert.deepEqual(value.preflight.permissions, {})
+    }
+    f.backend.authorizationStatus = async () => ({ available: true, permissions: {}, permissionOwner: { kind: 'companion', appName: 'QiuYaTools Computer', bundleIdentifier: 'com.qiuya.tools.computer-use' } })
+    const { value } = await f.discover()
+    assert.equal(value.preflight.permissionOwner.kind, 'companion')
+  } finally { f.dispose() }
+})
+
 test('owner once starts only the requesting chat and never persists an application grant', async () => {
   const f = fixture()
   try {

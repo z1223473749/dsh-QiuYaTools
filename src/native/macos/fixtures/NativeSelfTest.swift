@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 @main struct NativeSelfTest {
     @MainActor static func main() async throws {
@@ -1213,11 +1214,14 @@ import Foundation
         let arguments = ["--qiuya-control-socket", "/private/tmp/qyt-test/control.sock", "--qiuya-control-nonce", nonce, "--qiuya-owner-pid", "123"]
         let parsed = try MacTransportArguments.parse(arguments)
         precondition(parsed == MacTransportArguments(socketPath: "/private/tmp/qyt-test/control.sock", nonce: nonce, ownerPid: 123), "The public LaunchServices argument schema parses exactly")
+        let hosted = try MacTransportArguments.parse(arguments + ["--qiuya-hosted"])
+        precondition(hosted == MacTransportArguments(socketPath: "/private/tmp/qyt-test/control.sock", nonce: nonce, ownerPid: 123, hosted: true), "Hosted mode is explicit and keeps the same authenticated socket fields")
         let standardInput = try MacTransportArguments.parse([]), fixture = try MacTransportArguments.parse(["--fixture"])
         precondition(standardInput == nil, "No transport arguments retains standard input")
         precondition(fixture == nil, "Existing nontransport fixture arguments retain standard input")
         var rejected = [Array(arguments.dropLast()), arguments + ["--extra", "x"], arguments + Array(arguments.prefix(2)),
-                        ["--qiuya-unknown", "x"], ["--qiuya-control-socket", "/private/tmp/own.sock"]]
+                        arguments + ["--qiuya-hosted", "--qiuya-hosted"], arguments + ["--qiuya-hosted", "true"],
+                        ["--qiuya-hosted"], ["--qiuya-unknown", "x"], ["--qiuya-control-socket", "/private/tmp/own.sock"]]
         for path in ["relative.sock", "/private/tmp/../other.sock", "/private/tmp/a\0b", "/private/tmp/a\nb", "//private/tmp/control.sock", "/private/tmp/./control.sock", "/private/tmp//control.sock", "/private/tmp/", "/" + String(repeating: "a", count: 103)] {
             var candidate = arguments; candidate[1] = path; rejected.append(candidate)
         }
@@ -1242,6 +1246,9 @@ import Foundation
         let liveSocket = try MacTransportArguments.parse(liveSocketArguments)
         precondition(liveSocket?.socketPath == socketPath, "An existing /private/tmp socket must not be rejected by Foundation's path abbreviation")
         let owner = MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 50, uniqueId: 80)
+        precondition(PermissionGuideApplication.parentIsCurrent(owner: owner, actual: owner, parentPid: 123), "Only the actual authenticated direct parent can own hosted authorization")
+        precondition(!PermissionGuideApplication.parentIsCurrent(owner: owner, actual: owner, parentPid: 1), "LaunchServices parentage cannot masquerade as hosted authorization")
+        precondition(!PermissionGuideApplication.parentIsCurrent(owner: owner, actual: nil, parentPid: 123), "An unavailable parent birth identity never inherits host authorization")
         precondition(MacOwnerPolicy.current(expected: owner, actual: owner, alive: true), "An unchanged live owner is accepted independently of launchd parentage")
         precondition(!MacOwnerPolicy.current(expected: owner, actual: owner, alive: false), "A retired owner cannot retain control")
         precondition(!MacOwnerPolicy.current(expected: owner, actual: nil, alive: true), "Unavailable birth information fails closed")
@@ -1251,6 +1258,7 @@ import Foundation
                         MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 51, uniqueId: 80),
                         MacProcessIdentity(pid: 123, uid: 501, startSeconds: 10, startMicroseconds: 50, uniqueId: 81)] {
             precondition(!MacOwnerPolicy.current(expected: owner, actual: changed, alive: true), "PID reuse and changed owner identities cannot inherit the connection")
+            precondition(!PermissionGuideApplication.parentIsCurrent(owner: owner, actual: changed, parentPid: 123), "Reused parent PIDs cannot nominate an authorization app")
         }
         var lifetime = MacTransportLifetime()
         precondition(!lifetime.markRetired(), "An unconnected process cannot issue a retirement receipt")
@@ -1304,6 +1312,17 @@ import Foundation
         let directory = fileManager.temporaryDirectory.appendingPathComponent("qiuya-permission-guide-selftest-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? fileManager.removeItem(at: directory) }
+        guard let requirement = PermissionGuideApplication.trustedHostRequirement() else { preconditionFailure("The official host signing policy must compile as a Security requirement") }
+        var requirementText: CFString?
+        precondition(SecRequirementCopyString(requirement, SecCSFlags(rawValue: 0), &requirementText) == errSecSuccess)
+        let signingPolicy = requirementText! as String
+        precondition(signingPolicy.components(separatedBy: " and ").count == 5 && !signingPolicy.contains(" or "),
+                     "Every official host constraint is mandatory, with no alternate identity or permissive fallback")
+        for term in ["identifier \"com.deepseek.dsh\"", "anchor apple generic",
+                     "certificate 1[field.1.2.840.113635.100.6.2.6]", "certificate leaf[field.1.2.840.113635.100.6.1.13]",
+                     "certificate leaf[subject.OU] = NAN929V4UM"] {
+            precondition(signingPolicy.contains(term), "The official Harness Developer ID, Apple authority, application certificate type and exact DeepSeek Team are all required")
+        }
         func application(_ name: String, id: String = PermissionGuideApplication.bundleIdentifier, packageType: String = "APPL", executableName: String = "qiuya-computer", binaryOutside: Bool = false) throws -> (URL, URL) {
             let app = directory.appendingPathComponent(name, isDirectory: true)
             let contents = app.appendingPathComponent("Contents", isDirectory: true)
@@ -1322,6 +1341,33 @@ import Foundation
                      "The authorization artifact is the actual executable's bundle")
         precondition(actual.pasteboardURL.isFileURL && actual.pasteboardURL.absoluteString == app.absoluteString,
                      "The drag source exports a native file URL rather than a display string")
+        precondition(actual.metadata["kind"] as? String == "companion" && actual.metadata["bundleIdentifier"] as? String == PermissionGuideApplication.bundleIdentifier
+            && Set(actual.metadata.keys) == ["kind", "appName", "bundleIdentifier"], "Permission owner metadata is explicit and contains no local paths")
+        let (spoofedHost, spoofedHostExecutable) = try application("DeepSeek Harness.app", id: PermissionGuideApplication.hostBundleIdentifier)
+        do { _ = try PermissionGuideApplication.validatedHost(bundleURL: spoofedHost, executableURL: spoofedHostExecutable, pid: getpid()); preconditionFailure("A named directory and copied Info.plist nominated a fake running host") }
+        catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        // Sign only a disposable copy of this test binary, never the installed
+        // application. A matching name/bundle ID and valid ad-hoc code seal are
+        // still insufficient to satisfy the official Developer ID policy.
+        try fileManager.removeItem(at: spoofedHostExecutable)
+        try fileManager.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[0]), to: spoofedHostExecutable)
+        let signer = Process(); signer.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        signer.arguments = ["--force", "--sign", "-", "--identifier", PermissionGuideApplication.hostBundleIdentifier, "--timestamp=none", spoofedHost.path]
+        signer.standardOutput = FileHandle.nullDevice; signer.standardError = FileHandle.nullDevice
+        try signer.run(); signer.waitUntilExit()
+        precondition(signer.terminationStatus == 0, "The forged-name fixture has a real valid local signature")
+        var spoofedCode: SecStaticCode?
+        precondition(SecStaticCodeCreateWithPath(spoofedHost as CFURL, SecCSFlags(rawValue: 0), &spoofedCode) == errSecSuccess)
+        precondition(SecStaticCodeCheckValidity(spoofedCode!, SecCSFlags(rawValue: kSecCSStrictValidate), nil) == errSecSuccess,
+                     "The test first proves the copied bundle's seal is valid")
+        precondition(SecStaticCodeCheckValidity(spoofedCode!, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) != errSecSuccess,
+                     "Even a valid locally signed com.deepseek.dsh app cannot impersonate the official Developer ID and Team")
+        do { _ = try PermissionGuideApplication.current(owner: nil, hosted: true); preconditionFailure("Missing hosted owner silently fell back to the companion") }
+        catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        if let ownIdentity = MacProcessIdentity.read(getpid()) {
+            do { _ = try PermissionGuideApplication.current(owner: ownIdentity, hosted: true); preconditionFailure("The helper itself masqueraded as its authenticated parent") }
+            catch { precondition((error as? ComputerError)?.code == "PERMISSION_APP_UNAVAILABLE") }
+        }
         for (name, id, packageType, outside) in [("Wrong.app", "com.example.other", "APPL", false),
                                               ("NotApplication", PermissionGuideApplication.bundleIdentifier, "APPL", false),
                                               ("NotAppPackage.app", PermissionGuideApplication.bundleIdentifier, "BNDL", false),
@@ -1347,11 +1393,14 @@ import Foundation
         for kind: Any in ["file:///tmp/app", "accessibility?redirect=x", "", NSNull(), 1] {
             do { _ = try PermissionGuideContent.validated(kind); preconditionFailure("An unsupported guide destination was accepted") } catch {}
         }
-        let guide = PermissionGuideController()
+        let guide = PermissionGuideController(application: { actual })
         precondition(guide.status["shown"] as? Bool == false && guide.status["kind"] == nil,
                      "Creating the guide does not open a window or select a permission")
-        precondition(guide.status["appName"] as? String == PermissionGuideApplication.appName && guide.status.keys.allSatisfy { ["shown", "kind", "appName"].contains($0) },
+        precondition(guide.status["appName"] as? String == actual.name && guide.status.keys.allSatisfy { ["shown", "kind", "appName"].contains($0) },
                      "Guide diagnostics never disclose local paths")
+        let unavailable = PermissionGuideController(application: { throw ComputerError("PERMISSION_APP_UNAVAILABLE", "test") })
+        precondition(unavailable.permissionOwner == nil && unavailable.status["appName"] == nil,
+                     "An unconfirmed permission owner has no guessed application name")
         do { _ = try guide.open("file:///tmp/app"); preconditionFailure("Invalid kind opened a permission guide") } catch {}
         guide.close(); guide.close()
         precondition(guide.status["shown"] as? Bool == false, "Closing an unused guide is harmless and opens no window")

@@ -51,7 +51,7 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
     private let outputQueue = DispatchQueue(label: "com.qiuya.tools.computer-use.capture", qos: .userInitiated)
 
     func targets() throws -> [NativeTarget] {
-        guard CGPreflightScreenCaptureAccess() else { throw ComputerError("SCREEN_RECORDING_REQUIRED", "Enable Screen Recording for QiuYaTools Computer in System Settings, then restart the helper.") }
+        guard CGPreflightScreenCaptureAccess() else { throw ComputerError("SCREEN_RECORDING_REQUIRED", "Enable Screen Recording for the application shown in the computer-use permission settings, then follow the system's restart prompt.") }
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             throw ComputerError("TARGETS_UNAVAILABLE", "The current window list is unavailable.")
         }

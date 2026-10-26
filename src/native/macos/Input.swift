@@ -278,7 +278,7 @@ enum CompletedKeyboardInputPolicy {
     private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)
         guard !aiPointer.restorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; no new input is permitted.") }
-        guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for QiuYaTools Computer in System Settings.") }
+        guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for the application shown in the computer-use permission settings.") }
         guard !busy else { throw ComputerError("INPUT_BUSY", "Another input action is still settling.") }
         guard target.frame == geometry.frame else { throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.") }
         guard let kind = action["kind"] as? String, ["click", "move", "drag", "scroll", "type", "key"].contains(kind) else { throw ComputerError("INVALID_ACTION", "Unsupported action kind.") }

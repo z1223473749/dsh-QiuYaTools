@@ -12,9 +12,9 @@ const MAX_READY_BYTES = 4096
 const MAX_MESSAGE_BYTES = 48 * 1024 * 1024
 const MAX_QUEUED_BYTES = 4 * 1024 * 1024
 const launches = new WeakMap<ChildProcessWithoutNullStreams, MacLaunch>()
-interface LaunchOptions {
-  /** Injectable launcher for transport tests; production always uses /usr/bin/open. */
-  launch?: (command: string, args: string[]) => ChildProcessWithoutNullStreams
+export interface MacLaunchOptions {
+  /** Injectable process launcher for private socket transport tests. */
+  launch?: (command: string, args: string[], options: { stdio: ['pipe', 'pipe', 'pipe']; windowsHide: boolean; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams
   launchTimeoutMs?: number
   retirementTimeoutMs?: number
   /** Read-only exit probe for transport tests; production accepts only ESRCH. */
@@ -29,7 +29,7 @@ function nativeBirth(value: unknown): value is NativeBirth {
     && typeof birth.uniqueId === 'string' && /^[1-9]\d{0,19}$/u.test(birth.uniqueId)
 }
 
-/** LaunchServices owns the app's privacy identity; its JSONL channel remains private to this Host. */
+/** Both launch modes use the same private, authenticated native channel and retirement proof. */
 class MacLaunch extends EventEmitter {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
@@ -62,7 +62,7 @@ class MacLaunch extends EventEmitter {
   private resolveRetirement?: () => void
   private rejectRetirement?: (error: Error) => void
 
-  constructor(private readonly appPath: string, private readonly options: LaunchOptions) {
+  constructor(private readonly appPath: string, private readonly options: MacLaunchOptions, private readonly mode: 'hosted' | 'standalone') {
     super()
     this.stdin.on('data', (chunk: Buffer) => {
       if (this.finished || this.socketEnded) return
@@ -93,17 +93,23 @@ class MacLaunch extends EventEmitter {
     })
     await chmod(socketPath, 0o600)
     if (this.finished) { await this.cleanup(); return }
-    const args = ['-n', '-g', '-W', '-a', this.appPath, '--args', '--qiuya-control-socket', socketPath,
-      '--qiuya-control-nonce', this.nonce, '--qiuya-owner-pid', String(process.pid)]
+    const transportArgs = ['--qiuya-control-socket', socketPath, '--qiuya-control-nonce', this.nonce, '--qiuya-owner-pid', String(process.pid)]
+    // Spawn the genuine helper as a Harness child so macOS can attribute its
+    // permission requests to the host. LaunchServices remains an explicit
+    // standalone transport for native acceptance, never a user configuration.
+    const command = this.mode === 'hosted' ? join(this.appPath, 'Contents/MacOS/qiuya-computer') : '/usr/bin/open'
+    const args = this.mode === 'hosted' ? [...transportArgs, '--qiuya-hosted'] : ['-n', '-g', '-W', '-a', this.appPath, '--args', ...transportArgs]
     this.launchTimer = setTimeout(() => this.fail(new ComputerError('NATIVE_LAUNCH_TIMEOUT', '电脑操控应用未确认启动。')), this.options.launchTimeoutMs ?? 15_000)
-    this.launcher = (this.options.launch ?? ((command, value) => spawn(command, value, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })) )('/usr/bin/open', args)
+    this.launcher = (this.options.launch ?? ((file, value, options) => spawn(file, value, options)))(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) },
+    })
     this.launcher.stdin.end(); this.launcher.stdout.resume(); this.launcher.stderr.resume()
     this.launcher.once('error', () => this.fail(new ComputerError('NATIVE_UNAVAILABLE', '系统未能启动电脑操控应用。')))
     this.launcher.once('exit', (code, signal) => {
       if (this.finished) return
       if (code !== 0 || signal !== null) { this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '系统未确认电脑操控应用正常退出。')); return }
       this.launcherPassed = true
-      // open -W exiting is never, by itself, evidence that native input retired.
+      // A child exit or open -W exit never replaces native input retirement.
       this.finishIfConfirmed()
     })
   }
@@ -143,7 +149,7 @@ class MacLaunch extends EventEmitter {
     if (!record || typeof record !== 'object' || Array.isArray(record)) { this.fail(new ComputerError('NATIVE_PROTOCOL', '电脑操控连接回执无效。')); return }
     if (!this.authenticated) {
       if (record.event !== 'launchReady' || record.nonce !== this.nonce || record.bundleIdentifier !== BUNDLE_ID || record.ownerPid !== process.pid
-        || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 1 || Number(record.pid) > 2_147_483_647 || record.pid === process.pid || !nativeBirth(record.nativeBirth)) {
+        || !Number.isSafeInteger(record.pid) || Number(record.pid) <= 1 || Number(record.pid) > 2_147_483_647 || record.pid === process.pid || (this.mode === 'hosted' && record.pid !== this.launcher?.pid) || !nativeBirth(record.nativeBirth)) {
         this.fail(new ComputerError('NATIVE_PROTOCOL', '电脑操控应用身份未通过验证。')); return
       }
       this.pid = record.pid as number; this.authenticated = true; clearTimeout(this.launchTimer)
@@ -189,8 +195,8 @@ class MacLaunch extends EventEmitter {
     // System Settings can quit a permission-only app without running its EOF
     // cleanup. This exemption applies only to status, Settings and application /
     // window metadata RPCs, never a worker that could own input or capture.
-    // open -W and a closed socket are necessary but not sufficient: only an
-    // explicit OS "no such process" result proves this authenticated PID gone.
+    // A successful launcher / direct child exit and a closed socket still need
+    // an explicit OS "no such process" result for this authenticated PID.
     this.startRetirementTimer()
     if (!this.launcherPassed) return
     try {
@@ -252,11 +258,16 @@ class MacLaunch extends EventEmitter {
   }
 }
 
-export function launchMacCompanion(appPath: string, options: LaunchOptions = {}): ChildProcessWithoutNullStreams {
-  const launch = new MacLaunch(appPath, options)
+function launchCompanion(appPath: string, options: MacLaunchOptions, mode: 'hosted' | 'standalone'): ChildProcessWithoutNullStreams {
+  const launch = new MacLaunch(appPath, options, mode)
   const child = launch as unknown as ChildProcessWithoutNullStreams
   launches.set(child, launch)
   return child
 }
+
+/** Harness-owned execution: retain the host's macOS responsibility chain. */
+export function launchHostedMacCompanion(appPath: string, options: MacLaunchOptions = {}): ChildProcessWithoutNullStreams { return launchCompanion(appPath, options, 'hosted') }
+/** Explicit standalone LaunchServices path for isolated native acceptance. */
+export function launchMacCompanion(appPath: string, options: MacLaunchOptions = {}): ChildProcessWithoutNullStreams { return launchCompanion(appPath, options, 'standalone') }
 /** Undefined means the original spawned-child retirement contract still applies. */
 export function retireMacCompanion(child: ChildProcessWithoutNullStreams): Promise<void> | undefined { return launches.get(child)?.retire() }

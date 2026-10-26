@@ -8,7 +8,7 @@ import ScreenCaptureKit
     private let capture = WindowCapture()
     private let input = NativeInput()
     private let applications = NativeApplicationCatalog()
-    private let permissionGuide = PermissionGuideController()
+    private let permissionGuide: PermissionGuideController
     private var preview: FloatingPreview?
     private var geometries: [String: FrameGeometry] = [:]
     private var observationBusy = false
@@ -18,7 +18,11 @@ import ScreenCaptureKit
     private var localInputMonitor: Any?
     private var signalSources: [DispatchSourceSignal] = []
 
-    init(transport: MacControlTransport) { self.transport = transport; super.init() }
+    init(transport: MacControlTransport) {
+        self.transport = transport
+        permissionGuide = PermissionGuideController { try PermissionGuideApplication.current(owner: transport.owner, hosted: transport.isHosted) }
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let ready = transport.ready() { Wire.send(ready) }
@@ -101,6 +105,7 @@ import ScreenCaptureKit
             Wire.success(requestId, ["platform": "darwin", "available": true, "protocolVersion": 1,
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
+                "permissionOwner": permissionGuide.permissionOwner as Any? ?? NSNull(),
                 "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,

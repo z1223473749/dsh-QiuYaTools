@@ -3,8 +3,24 @@
 Build with `node scripts/build-macos-computer.mjs --universal`. The generated app is
 `lib/QiuYaTools Computer.app`, with stable bundle identifier
 `com.qiuya.tools.computer-use`. Source compilation targets macOS 13. This is an
-unsigned local build; a production signing/notarization identity is still needed
-for a stable public distribution and permission continuity across updates.
+ad-hoc local build. The plugin starts this executable directly from Harness
+Host, preserving the host's macOS privacy responsibility. The helper's own
+bundle is not the default authorization target. Code-signing/notarization of
+independently distributed native binaries is a separate distribution concern;
+the plugin never copies or reuses Harness's signing private key.
+
+The default hosted transport authenticates its private socket, host PID, native
+PID and process birth. The native permission guide verifies the actual parent
+Harness process, app bundle and code signature before offering that app as a
+drag source. The accepted host is `com.deepseek.dsh`, signed with an Apple
+Developer ID Application certificate for DeepSeek Team `NAN929V4UM`. Both the
+Apple certificate chain and Team are checked; a matching app name or another
+developer's Apple signature is insufficient. A future official Team change
+fails closed until the plugin's host identity policy is reviewed and updated.
+It reports only owner metadata to the UI; all permission values
+remain fresh CoreGraphics/AX preflight results. An unrecognized host is never
+silently labelled Harness. Explicit LaunchServices launch remains available for
+standalone native diagnostics.
 
 The JSONL stdin/stdout protocol accepts bounded integer or string `requestId`
 values and echoes them unchanged. Supported operations are `status`, `targets`,

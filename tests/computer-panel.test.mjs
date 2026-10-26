@@ -83,7 +83,8 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
     mutations: () => calls.filter(row => !['status', 'applications'].includes(row.op)) }
 }
 
-const macPermissionStatus = granted => ({ sessions: [], allowedApps: [], pendingRequests: [], native: { platform: 'darwin', permissions: { screenRecording: granted, accessibility: granted, postEvents: granted, inputMonitoring: granted } } })
+const harnessPermissionOwner = { kind: 'host', appName: 'DeepSeek Harness', bundleIdentifier: 'com.deepseek.dsh' }
+const macPermissionStatus = granted => ({ sessions: [], allowedApps: [], pendingRequests: [], native: { platform: 'darwin', permissionOwner: harnessPermissionOwner, permissions: { screenRecording: granted, accessibility: granted, postEvents: granted, inputMonitoring: granted } } })
 const permissionText = f => f.dom.window.document.querySelector('[aria-label="系统权限"]').textContent
 
 test('an unavailable Mac executor explains the failure without pretending its permissions are denied, and polling recovers automatically', async t => {
@@ -235,12 +236,14 @@ test('computer toolbox keeps owner controls and points to the chat composer inst
 })
 
 test('system permission shortcuts never grant themselves, and Windows shows no fictitious macOS settings', async t => {
-  const f = await fixture(t, { native: { platform: 'darwin', permissions: { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false } } }); await f.render()
+  const f = await fixture(t, { native: macPermissionStatus(false).native }); await f.render()
   const guidance = f.dom.window.document.querySelector('[aria-label="系统权限引导"]')
-  assert.match(guidance.textContent, /QiuYaTools Computer\.app（工具箱电脑操控）/u)
-  assert.match(guidance.textContent, /系统设置旁会显示授权卡片/u)
+  assert.match(guidance.textContent, /授权对象：DeepSeek Harness。工具箱使用宿主应用的系统权限/u)
+  assert.doesNotMatch(guidance.textContent, /QiuYaTools Computer/u)
+  assert.match(guidance.textContent, /系统设置旁会显示此应用的授权卡片/u)
   assert.match(guidance.textContent, /将卡片中的应用图标拖入权限列表，再手动开启/u)
   for (const [name, kind] of [['屏幕录制', 'screenRecording'], ['辅助功能', 'accessibility'], ['输入监控', 'inputMonitoring']]) {
+    assert.match(f.button(`前往开启${name}`).title, new RegExp(`DeepSeek Harness 的${name}权限`, 'u'))
     await f.click(`前往开启${name}`); assert.deepEqual(f.mutations().at(-1), { op: 'openSettings', kind })
   }
   assert.equal(f.dom.window.document.querySelector('[aria-label="系统权限"]').textContent.includes('未允许'), true)
@@ -253,11 +256,40 @@ test('system permission shortcuts never grant themselves, and Windows shows no f
   assert.equal(f.mutations().length, 3)
 })
 
+test('the permission guide follows the verified owner after polling without changing actual OS grant readings', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(false).native, manualClock: true }); await f.render()
+  assert.match(permissionText(f), /授权对象：DeepSeek Harness/u)
+  f.status.native.permissionOwner = { kind: 'companion', appName: 'QiuYaTools Computer', bundleIdentifier: 'com.qiuya.tools.computer-use' }
+  await f.advance(1500)
+  assert.match(permissionText(f), /授权对象：QiuYaTools Computer/u)
+  assert.doesNotMatch(permissionText(f), /DeepSeek Harness|使用宿主应用的系统权限/u)
+  assert.match(f.button('前往开启屏幕录制').title, /QiuYaTools Computer/u)
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 0)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('a missing permission owner never names a guessed app and automatically enables guidance after verified identification', async t => {
+  const native = { ...macPermissionStatus(false).native }; delete native.permissionOwner
+  const f = await fixture(t, { native, manualClock: true }); await f.render()
+  assert.match(permissionText(f), /暂无法确认授权应用，识别完成后会自动更新授权指引/u)
+  assert.doesNotMatch(permissionText(f), /授权对象：|DeepSeek Harness|QiuYaTools Computer|拖入权限列表/u)
+  assert.equal(f.button('前往开启屏幕录制').disabled, true)
+  await f.click('前往开启屏幕录制'); assert.deepEqual(f.mutations(), [])
+  f.status.native.permissionOwner = harnessPermissionOwner
+  await f.advance(1500)
+  assert.match(permissionText(f), /授权对象：DeepSeek Harness/u)
+  assert.equal(f.button('前往开启屏幕录制').disabled, false)
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+  await f.click('前往开启屏幕录制')
+  assert.deepEqual(f.mutations(), [{ op: 'openSettings', kind: 'screenRecording' }])
+})
+
 test('showing the Mac application drag guide does not authorize a pending chat task', async t => {
-  const preflight = { platform: 'darwin', mode: 'local', permissions: { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false } }
+  const preflight = { ...macPermissionStatus(false).native, mode: 'local' }
   const f = await fixture(t); f.status.pendingRequests = [request('A', { preflight })]
   await f.render()
-  assert.match(f.dom.window.document.querySelector('[aria-label="系统权限引导"]').textContent, /QiuYaTools Computer\.app/u)
+  assert.match(f.dom.window.document.querySelector('[aria-label="系统权限引导"]').textContent, /DeepSeek Harness/u)
   assert.equal(f.button('允许一次').disabled, true); assert.equal(f.button('始终允许').disabled, true)
   await f.click('前往开启屏幕录制')
   assert.deepEqual(f.mutations(), [{ op: 'openSettings', kind: 'screenRecording', sessionId: 'A' }])
@@ -268,7 +300,7 @@ test('showing the Mac application drag guide does not authorize a pending chat t
 
 test('permission setup failures are visible while the pending task still awaits real OS authorization', async t => {
   const f = await fixture(t)
-  f.status.pendingRequests = [request('A', { preflight: { platform: 'darwin', permissions: { screenRecording: false, accessibility: false } } })]
+  f.status.pendingRequests = [request('A', { preflight: macPermissionStatus(false).native })]
   await f.render()
   const failed = f.plan('openSettings'); await f.click('前往开启辅助功能')
   await act(async () => { failed({ ok: false, error: { code: 'PERMISSION_GUIDE_UNAVAILABLE', message: '系统设置已打开，但授权卡片暂不可用，请重试。' } }); await tick() })
