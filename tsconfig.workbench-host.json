@@ -20,6 +20,7 @@
   },
   "files": [
     "src/features/workbench/integration.ts",
+    "tests/types/computer-routing-sdk.ts",
     "tests/types/workbench-host-sdk.ts",
     "tests/types/workbench-tools-sdk.ts",
     "tests/types/acceptance-runs-sdk.ts"

@@ -7,6 +7,7 @@ import { installPromptSuggestionsHost } from './features/prompt-suggestions/host
 import { PROJECT_REPOSITORY } from './project.ts'
 import { installComputerHost } from './features/computer-use/host.ts'
 import { installComputerTools, type ComputerToolsRecorder } from './features/computer-use/tools.ts'
+import { installComputerToolRouting } from './features/computer-use/tool-routing.ts'
 import { installComputerAcceptanceRuns } from './features/acceptance-runs/integration.ts'
 import { installAcceptanceWorkflows } from './features/acceptance-workflows/integration.ts'
 import { installAcceptanceTemplates } from './features/acceptance-templates/integration.ts'
@@ -60,6 +61,9 @@ export function apply(ctx: Context, config: Config): void {
         child.inject(['tools', 'attachments'], tools => {
           tools.effect(() => {
             const enabled = () => config.enabled.get() && config.computerUseEnabled.get()
+            const routing = tools.inject(['systemPrompt', 'agents'], routingContext => {
+              if (host.manager) routingContext.effect(() => installComputerToolRouting(routingContext, host.manager!, enabled))
+            })
             let recorder: ComputerToolsRecorder | undefined, modelTarget: ModelTargetRegistry | undefined
             const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, ...(host.manager ? { tasks: host.manager } : {}), onSelected: exec => modelTarget?.selectDesktop(exec), recorder: {
               observed: (...args) => recorder?.observed(...args) ?? Promise.resolve(undefined),
@@ -84,7 +88,7 @@ export function apply(ctx: Context, config: Config): void {
                 }
               })
             })
-            return async () => { recorder = undefined; unregister(); await integration.dispose() }
+            return async () => { recorder = undefined; unregister(); await routing.dispose(); await integration.dispose() }
           })
         })
       }).catch(error => child.logger.error('电脑操控初始化失败：%s', error instanceof Error ? error.message : '初始化失败'))
