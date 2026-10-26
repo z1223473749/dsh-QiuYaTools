@@ -55,10 +55,4 @@ Windows 选择与 Harness 进程架构一致的 **ARM64** 或 **x64** 包；Mac 
 
 更多配置、权限说明与使用方法见[电脑操控指南](docs/computer-use-guide.md)。
 
-## 演示视频
-
-聊天内选择环境、同会话多任务、实时预览与人工接管的实际界面演示。
-
-https://github.com/user-attachments/assets/e9d2b8f6-28ac-4406-8c9e-28be92e03556
-
 [npm](https://www.npmjs.com/package/dsh-qiuya-tools) · [发布版本](https://github.com/z1223473749/dsh-QiuYaTools/releases) · [问题反馈](https://github.com/z1223473749/dsh-QiuYaTools/issues) · [开发说明](docs/development.md) · [www.qiuya.cc](https://www.qiuya.cc)
