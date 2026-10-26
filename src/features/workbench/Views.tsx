@@ -65,7 +65,10 @@ export function NewWebsiteForm({ busy, onOpen, onCancel }: { busy: boolean; onOp
 }
 export function WorkbenchControls({ target, busy, control, open, choose, choices }: { target: WorkbenchTarget; busy: boolean; control(operation: 'pause' | 'takeover' | 'resume' | 'stop'): void; open?(): void; choose?(id: string): void; choices?: WorkbenchTarget[] }) {
   return <div className="qyt-workbench-controls" aria-label="电脑预览悬浮控件">
-    {choose && choices && choices.length > 1 && <select aria-label="选择预览任务" value={target.workbenchTabId} onChange={event => choose(event.target.value)}>{choices.map(view => <option key={view.workbenchTabId} value={view.workbenchTabId}>{view.kind === 'browser' ? '网页' : '桌面'} · {view.title || '未命名'}</option>)}</select>}
+    {choose && choices && choices.length > 1 && <span className="qyt-button qyt-workbench-target-picker" title={`切换预览任务（${choices.length} 个） · ${target.title || '未命名'}`}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="7" width="14" height="14" rx="2.5"/><path d="M16 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2"/></svg>
+      <select aria-label="选择预览任务" value={target.workbenchTabId} onChange={event => choose(event.target.value)}>{choices.map(view => <option key={view.workbenchTabId} value={view.workbenchTabId}>{view.kind === 'browser' ? '网页' : '桌面'} · {view.title || '未命名'}</option>)}</select>
+    </span>}
     <button className="qyt-button" type="button" disabled={busy || !['ready', 'running'].includes(target.state)} onClick={() => control('pause')}>暂停</button><button className="qyt-button" type="button" disabled={busy || target.state === 'humanControl'} onClick={() => control('takeover')}>接管</button><button className="qyt-button" type="button" disabled={busy || !['paused', 'humanControl'].includes(target.state)} onClick={() => control('resume')}>继续</button><button className="qyt-button" type="button" disabled={busy} onClick={() => control('stop')}>停止</button>{open && <button className="qyt-button" type="button" disabled={busy} onClick={open}>弹出</button>}
   </div>
 }
