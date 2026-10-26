@@ -1,5 +1,18 @@
 # 更新记录
 
+## 0.6.0
+
+- 新增聊天内电脑操控，支持 macOS、Windows、独立浏览器和配对远端电脑；AI 发现应用并取得授权后，可查看画面、点击、输入和拖动，用户可随时暂停、接管或停止。
+- 支持同一聊天中的多个具名电脑任务、实时小预览与独立大预览；操作环境可在输入框旁选择，各任务分别保存目标和授权。
+- 新增多标签电脑工作台、画面批注、网页诊断、自动验收清单与模板，保留各自的授权和会话隔离。
+- 新增 Windows ARM64 / x64 原生组件与独立会话窗口；macOS 提供 Apple Silicon / Intel universal 安装包。
+- 修复 Mac 系统权限识别与授权后连接恢复：执行器由 Harness Host 直接启动，沿用官方 DeepSeek Harness 的屏幕录制、辅助功能和输入监控权限，返回工具箱后自动检测。
+- 本机电脑任务优先使用工具箱电脑操控，减少与宿主同类工具的路由冲突；独立浏览器和远端环境继续按会话选择。
+- 完善会话分窗、预览刷新、输入结束与执行器退出的处理，保留长文本附件、批量归档、计划批注、提示词建议和 Q 主题。
+- GitHub 按平台提供安装包；npm 同步同版本 macOS universal 包。当前适配 Harness 0.2.1-rc.2，Windows 独立窗口需要 Microsoft Edge WebView2 Runtime。
+
+详细使用方法见[电脑操控指南](https://github.com/z1223473749/dsh-QiuYaTools/blob/v0.6.0/docs/computer-use-guide.md)，各候选的实际测试范围见[专项验收记录](https://github.com/z1223473749/dsh-QiuYaTools/blob/v0.6.0/docs/macos-permissions-and-multitask-acceptance.md)。
+
 ## 0.6.0-beta.1
 
 本轮权限与同聊天多任务的验证范围见[专项验收](docs/macos-permissions-and-multitask-acceptance.md)，新候选与历史候选的桌面输入、视觉模型结果分别记录。

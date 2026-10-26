@@ -17,12 +17,22 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: npm
-      - run: npm ci
-      - run: npm run check
       - uses: actions/setup-dotnet@v4
-        if: runner.os == 'Windows'
         with:
           dotnet-version: '8.0.426'
+      - name: Select the installed .NET executable for regression tests
+        shell: bash
+        run: |
+          node --input-type=module -e '
+            import { accessSync, appendFileSync } from "node:fs";
+            import { join } from "node:path";
+            if (!process.env.DOTNET_ROOT) throw new Error("setup-dotnet did not provide DOTNET_ROOT");
+            const executable = join(process.env.DOTNET_ROOT, process.platform === "win32" ? "dotnet.exe" : "dotnet");
+            accessSync(executable);
+            appendFileSync(process.env.GITHUB_ENV, `QIUYA_DOTNET=${executable}\n`);
+          '
+      - run: npm ci
+      - run: npm run check
       - name: 构建 Windows ARM64 与 x64 辅助程序
         if: runner.os == 'Windows'
         run: node scripts/build-windows-native.mjs

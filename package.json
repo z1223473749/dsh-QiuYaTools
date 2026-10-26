@@ -1,6 +1,6 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.6.0-beta.1",
+  "version": "0.6.0",
   "description": "长文本附件、会话分窗、批量归档、计划批注、提示词与 Q 主题；支持 Mac/Windows 电脑操控、悬浮实时预览、人工接管及浏览器通道。",
   "icon": "./assets/icon-color.webp",
   "type": "module",

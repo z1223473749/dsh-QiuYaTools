@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: npm
+      - name: Verify the tagged source before building
+        run: node scripts/release-source-guard.mjs --before-build
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.426'
@@ -52,7 +54,6 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: npm
-      - run: npm ci
       - name: Validate version and tag
         id: version
         run: |
@@ -62,9 +63,16 @@ jobs:
             if (process.env.GITHUB_REF !== `refs/tags/v${version}`) throw new Error("Run this workflow from the matching v<package version> tag");
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `stable=${!version.includes("-")}\n`);
           '
+      - name: Verify the tagged source before building
+        run: node scripts/release-source-guard.mjs --before-build
+      - run: npm ci
       - name: Read version notes from changelog
         run: node scripts/release-notes.mjs "$RUNNER_TEMP/qiuya-release-notes.md"
-      - run: npm run check
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.426'
+      - name: Check source and build the universal Mac helpers
+        run: QIUYA_DOTNET="$(command -v dotnet)" npm run check
       - uses: actions/download-artifact@v4
         with:
           name: windows-release-native

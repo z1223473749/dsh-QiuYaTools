@@ -2,9 +2,9 @@
 
 ## 安装与更新
 
-打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。设置入口为 **设置 → QiuYaTools**，左下角账号菜单也可进入。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。
+macOS 用户打开 Harness 的 **插件 → 添加插件**，输入 npm 包名 **`dsh-qiuya-tools`**，安装后点击 **立即启用**。设置入口为 **设置 → QiuYaTools**，左下角账号菜单也可进入。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。
 
-也可在“添加插件”中粘贴 GitHub 备用安装链接：
+Windows 用户从 [GitHub Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases) 选择与 Harness 进程架构一致的 ARM64 或 x64 安装包。macOS 也可在“添加插件”中粘贴 GitHub 安装链接：
 
 ```text
 https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz

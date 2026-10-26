@@ -2,7 +2,7 @@
 
 让 DeepSeek Harness 更顺手：长文本附件、会话分窗、计划批注，以及可在聊天中调用的电脑操控。
 
-电脑操控与 Windows 适配随 **0.6.0-beta.1 预览版**开发，公开版本与可下载的平台安装包请以 [Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases) 为准。
+**0.6.0** 新增电脑操控与 Windows 支持，提供 macOS universal、Windows ARM64 和 Windows x64 安装包，下载见 [Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)。
 
 ## 安装
 
@@ -13,7 +13,9 @@
 
 Windows 选择与 Harness 进程架构一致的 **ARM64** 或 **x64** 包；Mac 使用 **universal** 包。下载到本地后的安装步骤见[使用指南](docs/computer-use-guide.md)。
 
-### npm 安装
+### npm 安装（macOS）
+
+npm 提供 macOS universal 包；Windows 请使用上方对应架构的 GitHub 安装包。
 
 1. 打开 Harness 的 **插件 → 添加插件**。
 2. 输入 npm 包名 **`dsh-qiuya-tools`**，点击安装。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。

@@ -2,23 +2,16 @@ import { copyFile, readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { packageCandidate } from './package-candidates.mjs'
 import { verifyPackage } from './verify-package.mjs'
+import { verifyReleaseSources } from './release-source-guard.mjs'
 
 // Assemble only local assets. Publishing remains a separate workflow step.
 if (process.platform !== 'darwin') throw new Error('Assemble the universal Mac and Windows release on macOS')
 const root = fileURLToPath(new URL('../', import.meta.url))
 const output = join(root, 'artifacts')
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const run = promisify(execFile)
-// Test reports may be finalized after packaging; production/package inputs
-// must already be committed so the receipt identifies reproducible bytes.
-const inputs = ['src', 'lib', 'package.json', 'package-lock.json', 'cordis.patch.yml', 'locale', 'assets', 'LICENSE', 'NOTICE', 'README.md', 'docs/computer-use-guide.md', 'scripts/computer-agent.mjs', 'scripts/build.mjs', 'scripts/package-candidates.mjs', 'scripts/prepare-release.mjs', 'scripts/verify-package.mjs']
-const dirty = (await run('git', ['status', '--porcelain', '--', ...inputs], { cwd: root })).stdout.trim()
-if (dirty) throw new Error('Commit production and packaging inputs before release assembly: ' + dirty)
-const sourceCommit = (await run('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
+const { sourceCommit, productionSourceStatus } = await verifyReleaseSources({ root })
 const assets = []
 for (const [platform, architecture] of [['darwin', 'universal'], ['win32', 'arm64'], ['win32', 'x64']]) {
   // Validates platform manifests, native architecture, both Mac helpers and the
@@ -47,7 +40,7 @@ for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'p
 }
 await writeFile(join(output, 'delivery-manifest.json'), JSON.stringify({
   version: pkg.version, sourceCommit,
-  productionSourceStatus: 'committed production and packaging inputs; test reports are finalized separately',
+  productionSourceStatus,
   packages: assets,
   nativeManifests: {
     mac: JSON.parse(await readFile(join(root, 'lib/macos-manifest.json'), 'utf8')),
