@@ -25,9 +25,10 @@ test('public preparation actually builds/imports the complete same runtime closu
  assert.deepEqual(preparedGuest,expectedGuest,'Prepared guest must equal the complete independently built current source closure')
  assert.equal(r.guestSHA256,hash(expectedGuest));assert.equal(hash(preparedGuest),r.guestSHA256);assert.equal(manifest.guestSha256,r.guestSHA256)
  assert.equal(r.sourceClosureComplete,true)
- const runtimeSources=['src/features/computer-use/application-icon.ts','src/features/computer-use/contract.ts','src/features/computer-use/exchange.ts','src/features/computer-use/foreground-handoff.ts','src/features/computer-use/macos-launch.ts','src/features/computer-use/native-retirement.ts','src/features/computer-use/native.ts','src/features/computer-use/remote.ts']
+ const runtimeSources=['src/features/computer-use/application-icon.ts','src/features/computer-use/contract.ts','src/features/computer-use/exchange.ts','src/features/computer-use/foreground-handoff.ts','src/features/computer-use/macos-launch.ts','src/features/computer-use/native-retirement.ts','src/features/computer-use/native.ts','src/features/computer-use/remote.ts','src/native/runtime.ts','src/updates/archive.ts']
  assert.deepEqual(Object.keys(r.sourceBindings).filter(name=>name.startsWith('src/')).sort(),runtimeSources)
  for(const name of runtimeSources){const source=await readFile(join(repository,name));assert.equal(r.sourceBindings[name].changed,false);assert.equal(r.sourceBindings[name].originalSHA256,hash(source));assert.equal(r.sourceBindings[name].generatedSHA256,hash(source))}
+ const metadata=await readFile(join(repository,'package.json'));assert.equal(r.sourceBindings['package.json'].changed,false);assert.equal(r.sourceBindings['package.json'].originalSHA256,hash(metadata));assert.equal(r.sourceBindings['package.json'].generatedSHA256,hash(metadata))
  assert.equal(r.rootCapabilityCreated,false);assert.equal(r.guardArchiveCreated,false)
  for(const k of ['actualWindows','actualPD','actualHost','actualGUI','actualModel','actualOSInput'])assert.equal(r[k],0)
  assert.equal(r.importSmoke.length,3);assert(r.importSmoke.every(v=>v.status==='passed'&&v.actualImport&&v.windowsExecution===false))

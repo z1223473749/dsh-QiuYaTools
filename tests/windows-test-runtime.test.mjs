@@ -49,10 +49,10 @@ test('unsupported Windows test architectures cannot fall back to an ARM64 runtim
 test('portable overlays contain the exact native static import closure, and both architectures can compile it in isolation', async t => {
   const repository = fileURLToPath(new URL('../', import.meta.url)), directory = await mkdtemp(join(tmpdir(), 'qiuya-runtime-native-closure-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const expected = ['application-icon.ts', 'contract.ts', 'foreground-handoff.ts', 'macos-launch.ts', 'native-retirement.ts', 'native.ts'].map(name => 'src/features/computer-use/' + name)
+  const expected = ['package.json', ...['application-icon.ts', 'contract.ts', 'foreground-handoff.ts', 'macos-launch.ts', 'native-retirement.ts', 'native.ts'].map(name => 'src/features/computer-use/' + name), 'src/native/runtime.ts', 'src/updates/archive.ts']
   for (const architecture of ['arm64', 'x64']) {
     const plan = await windowsTestRuntimePlan(architecture), snapshot = join(directory, architecture)
-    const sources = plan.overlays.filter(name => name.startsWith('src/')).sort()
+    const sources = plan.overlays.filter(name => name.startsWith('src/') || name === 'package.json').sort()
     assert.deepEqual(sources, expected)
     for (const name of sources) {
       await mkdir(dirname(join(snapshot, name)), { recursive: true })
@@ -71,11 +71,11 @@ test('portable overlays contain the exact native static import closure, and both
 test('PD Harness source transfer and evidence hashes include every native dependency from the portable plan', async () => {
   const source = await readFile(new URL('../scripts/e2e-windows-harness-pd.mjs', import.meta.url), 'utf8')
   const plan = await windowsTestRuntimePlan()
-  for (const path of plan.overlays.filter(name => name.startsWith('src/'))) {
+  for (const path of plan.overlays.filter(name => name.startsWith('src/') || name === 'package.json')) {
     const name = path.split('/').at(-1)
     assert.ok(source.includes(`[${JSON.stringify(name).replaceAll('"', "'")}, await readFile('${path}')]`), 'Same-source read missing: ' + path)
     assert.ok(source.includes(`['${name}', '${path}']`), 'Guest download missing: ' + path)
-    const hashes = source.slice(source.indexOf('const testSourceHashes ='), source.indexOf('const testSourceHashes =') + 1500)
+    const hashStart = source.indexOf('const testSourceHashes ='), hashes = source.slice(hashStart, source.indexOf('\n', hashStart))
     assert.ok(hashes.includes(`'${name}'`), 'Final evidence binding missing: ' + path)
   }
 })

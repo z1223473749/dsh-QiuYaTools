@@ -16,10 +16,10 @@ export async function prepareWindowsVisionCarrier({output,repository=defaultRepo
  const auditSource='tests/fixtures/windows-remote-audit.cs',auditBytes=await readFile(join(repository,auditSource)),auditSha256=sha(auditBytes)
  sourceBytes.set(auditSource,auditBytes);await writeFile(join(directory,'windows-remote-audit.cs'),auditBytes)
  for(const[name,entry]of[['windows-carrier.mjs','scripts/live-vision-windows-carrier.mjs'],['windows-guest.mjs','scripts/live-vision-windows-guest.mjs'],['windows-cancel-smoke.mjs','scripts/test-windows-vision-cancel.mjs']]){
-  const result=await build({entryPoints:[join(repository,entry)],absWorkingDir:repository,bundle:true,write:false,platform:'node',format:'esm',target:'node22',metafile:true,plugins:[{name:'freeze-source-closure',setup(api){api.onLoad({filter:/\.(ts|mjs)$/},async({path})=>{
+  const result=await build({entryPoints:[join(repository,entry)],absWorkingDir:repository,bundle:true,write:false,platform:'node',format:'esm',target:'node22',metafile:true,plugins:[{name:'freeze-source-closure',setup(api){api.onLoad({filter:/\.(ts|mjs|json)$/},async({path})=>{
    const key=relative(repository,path);if(key.startsWith('..')||key.startsWith('/'))throw Error('Relay source outside repository')
    const bytes=await readFile(path),previous=sourceBytes.get(key);if(previous&&sha(previous)!==sha(bytes))throw Error('Relay source changed during bundle: '+key)
-   sourceBytes.set(key,bytes);return{contents:bytes,loader:path.endsWith('.ts')?'ts':'js'}
+   sourceBytes.set(key,bytes);return{contents:bytes,loader:path.endsWith('.ts')?'ts':path.endsWith('.json')?'json':'js'}
   })}}]})
   for(const input of Object.keys(result.metafile.inputs))if(!sourceBytes.has(input))throw Error('Uncaptured static import: '+input)
   for(const output of Object.values(result.metafile.outputs))for(const item of output.imports)if(!item.external||!builtins.has(item.path))throw Error('Unbundled non-builtin import: '+item.path)

@@ -225,7 +225,7 @@ export async function packageUniversal({ root = rootDirectory, output = join(roo
     for (const file of ['README.md', 'LICENSE', 'NOTICE', 'cordis.patch.yml']) await cp(join(root, file), join(stage, file))
     for (const file of ['index.js', 'client.js', 'computer-agent.js']) await cp(join(root, 'lib', file), join(stage, 'lib', file))
     for (const directory of ['assets', 'locale']) await cp(join(root, directory), join(stage, directory), { recursive: true, filter: path => !path.endsWith('.DS_Store') })
-    for (const file of ['scripts/computer-agent.mjs', 'docs/computer-use-guide.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
+    for (const file of ['scripts/computer-agent.mjs', 'docs/computer-use-guide.md', 'docs/git-guide.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
     return await pack(stage, join(output, 'dsh-qiuya-tools.tgz'), bytes => validateUniversalArchive(bytes, { version: parent.version }))
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }

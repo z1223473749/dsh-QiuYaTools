@@ -48,7 +48,7 @@ test('verified tag CI allows exactly the two rebuilt Mac outputs and retains the
 })
 
 test('CI rejects source, JavaScript and packaging changes even beside allowed native changes', async t => {
-  for (const path of ['src/index.ts', 'lib/index.js', 'scripts/new-packaging-input.mjs', 'CHANGELOG.md', '.github/workflows/release.yml']) {
+  for (const path of ['src/index.ts', 'lib/index.js', 'scripts/new-packaging-input.mjs', 'CHANGELOG.md', 'docs/git-guide.md', '.github/workflows/release.yml']) {
     const f = await fixture(t)
     await f.put(rebuiltMacOutputs[0], 'allowed native rebuild\n')
     await f.put(path, 'uncommitted input\n')

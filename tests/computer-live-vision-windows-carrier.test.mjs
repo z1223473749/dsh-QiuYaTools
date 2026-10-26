@@ -49,7 +49,7 @@ test('preparation freezes every static import and actually imports carrier, gues
   const result=await prepareWindowsVisionCarrier({output:join(scratch,'frozen')})
   assert.equal(result.actualWindowsExecution,false);assert.equal(result.sourceClosureComplete,true);assert.equal(result.nonBuiltinImportsBundled,true)
   assert.equal(result.importSmoke.length,3);assert.ok(result.importSmoke.every(x=>x.actualImport&&x.status==='passed'))
-  for(const key of['scripts/live-vision-external-core.mjs','scripts/live-vision-windows-carrier-core.mjs','src/features/computer-use/native.ts','src/features/computer-use/remote.ts'])assert.equal(typeof result.sourceHashes[key],'string')
+  for(const key of['scripts/live-vision-external-core.mjs','scripts/live-vision-windows-carrier-core.mjs','src/features/computer-use/native.ts','src/features/computer-use/remote.ts','src/native/runtime.ts','src/updates/archive.ts','package.json'])assert.equal(typeof result.sourceHashes[key],'string')
   for(const[path,hash]of Object.entries(result.sourceHashes))assert.equal(createHash('sha256').update(await readFile(join(result.directory,'source-snapshot',path))).digest('hex'),hash)
   await assert.rejects(prepareWindowsVisionCarrier({output:result.directory}),{code:'EEXIST'})
  }finally{await rm(scratch,{recursive:true,force:true})}

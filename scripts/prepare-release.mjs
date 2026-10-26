@@ -38,7 +38,7 @@ await writeFile(join(output, 'release-assets.json'), JSON.stringify({
   nativeAssets, assets, signed: false,
 }, null, 2) + '\n')
 const shippedFiles = {}
-for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'package.json', 'README.md', 'docs/computer-use-guide.md', 'scripts/computer-agent.mjs']) {
+for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'package.json', 'README.md', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'scripts/computer-agent.mjs']) {
   shippedFiles[file] = createHash('sha256').update(await readFile(join(root, file))).digest('hex')
 }
 await writeFile(join(output, 'delivery-manifest.json'), JSON.stringify({

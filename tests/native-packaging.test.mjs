@@ -39,6 +39,9 @@ test('the npm alias is a script-free universal wrapper with all native dependenc
   assert.deepEqual(packed.optionalDependencies, Object.fromEntries(nativeNames.map(name => [name, version])))
   assert.equal(packed.scripts, undefined); assert.equal(packed.devDependencies, undefined)
   assert.deepEqual(checked.files.filter(path => path.startsWith('package/lib/')).sort(), ['package/lib/client.js', 'package/lib/computer-agent.js', 'package/lib/index.js'])
+  assert.equal(readDistributionArchive(bytes).get('package/docs/git-guide.md').bytes.toString('utf8'), 'fixture data\n', 'The npm wrapper carries its linked Git guide')
+  const entries = [...readDistributionArchive(bytes)].map(([path, entry]) => [path, entry.bytes, entry.mode])
+  for (const path of ['package/lib/native/unreviewed.exe', 'package/lib/extra.js']) assert.throws(() => validateUniversalArchive(tarball([...entries, [path, 'must not ship']]), { version }), /must not carry native files/, 'Adding the Git guide does not widen the public lib entry allowlist')
   assert.deepEqual(nativeOptionalDependencies(version), rootPackage.optionalDependencies)
 })
 

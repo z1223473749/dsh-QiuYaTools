@@ -179,7 +179,7 @@ function PullRequests({ face, snapshot, zh, disabled }: { face: GitClientFace; s
 
 export function GitDetails(props: PropsRuntime<'sidebar.right.pane.tab'> & InjectFace<GitClientFace>) {
   const info = props.useTabInfo(), address = parseGitAddress(info.tab.navigation.address), zh = useChinese(props.ctx), enabled = useEnabled(props.form)
-  const [scope, setScope] = useState<GitScope>('working'), [target, setTarget] = useState(''), [split, setSplit] = useState(true), [filter, setFilter] = useState(''), [selected, setSelected] = useState<string>(), [message, setMessage] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [showPR, setShowPR] = useState(false)
+  const [scope, setScope] = useState<GitScope>('working'), [target, setTarget] = useState(''), [split, setSplit] = useState(false), [filter, setFilter] = useState(''), [selected, setSelected] = useState<string>(), [message, setMessage] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [showPR, setShowPR] = useState(false)
   const state = useGitState(props.store, props.sessionId, enabled && address?.sessionId === props.sessionId, scope, scope === 'branch' ? target || undefined : undefined), snapshot = state.snapshot, root = useRef<HTMLDivElement>(null), mounted = useRef(true), generation = useRef(0)
   const navigation = useSyncExternalStore(useCallback(listener => props.store.subscribeOpen(props.sessionId, listener), [props.store, props.sessionId]), useCallback(() => props.store.openRequest(props.sessionId), [props.store, props.sessionId]))
   const running = props.useSession(session => session.running || session.removed || session.subagent !== null || session.openState !== 'open')

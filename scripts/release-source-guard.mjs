@@ -8,7 +8,7 @@ const execute = promisify(execFile)
 const repository = 'z1223473749/dsh-QiuYaTools'
 // Local assembly still requires committed production/package inputs. Reports
 // outside this set may be finalized after the packages have been assembled.
-export const releaseSourceInputs = ['src', 'lib', 'package.json', 'package-lock.json', 'cordis.patch.yml', 'locale', 'assets', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'docs/computer-use-guide.md', 'scripts', '.github/workflows']
+export const releaseSourceInputs = ['src', 'lib', 'package.json', 'package-lock.json', 'cordis.patch.yml', 'locale', 'assets', 'LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'scripts', '.github/workflows']
 // Swift toolchains can change these native bytes even when the tagged source is
 // identical. No JavaScript, source, package metadata or other path is exempt.
 export const rebuiltMacOutputs = ['lib/QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', 'lib/macos-manifest.json']

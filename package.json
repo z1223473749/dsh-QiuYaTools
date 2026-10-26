@@ -1,6 +1,6 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "长文本附件、会话分窗、批量归档、计划批注、提示词与 Q 主题；支持 Mac/Windows 电脑操控、悬浮实时预览、人工接管及浏览器通道。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
@@ -83,9 +83,9 @@
     "test:templates": "node --test tests/acceptance-templates*.test.mjs"
   },
   "optionalDependencies": {
-    "dsh-qiuya-tools-native-darwin-universal": "0.6.1",
-    "dsh-qiuya-tools-native-win32-arm64": "0.6.1",
-    "dsh-qiuya-tools-native-win32-x64": "0.6.1"
+    "dsh-qiuya-tools-native-darwin-universal": "0.6.2",
+    "dsh-qiuya-tools-native-win32-arm64": "0.6.2",
+    "dsh-qiuya-tools-native-win32-x64": "0.6.2"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"

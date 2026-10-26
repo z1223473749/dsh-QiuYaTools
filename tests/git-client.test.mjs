@@ -222,7 +222,8 @@ test('closing a branch submenu aborts its read and a late list cannot populate a
 test('StrictMode effect replay restores read lifetimes, and details renders both sides without sharing Session data', async t => {
   const f = await fixture(t, { strict: true }); await f.render({ one: 'A' }, true)
   const pane = f.doc.querySelector('[data-qyt-git-details="A"]'); assert.ok(pane); assert.match(pane.textContent, /before/u); assert.match(pane.textContent, /after/u)
-  assert.equal(pane.querySelector('.qyt-git-diff-table').dataset.layout, 'split')
+  assert.equal(pane.querySelector('.qyt-git-diff-table').dataset.layout, 'unified', 'Git comparisons open in the unified view by default')
+  await f.click([...pane.querySelectorAll('button')].find(node => node.textContent === '统一视图')); assert.equal(pane.querySelector('.qyt-git-diff-table').dataset.layout, 'split')
   await f.click([...pane.querySelectorAll('button')].find(node => node.textContent === '左右对照')); assert.equal(pane.querySelector('.qyt-git-diff-table').dataset.layout, 'unified')
   await f.render({ one: 'B' }, true); assert.equal(f.doc.querySelector('[data-qyt-git-details="A"]'), null); assert.match(f.doc.querySelector('[data-qyt-git-details="B"]').textContent, /project-B/u)
 })

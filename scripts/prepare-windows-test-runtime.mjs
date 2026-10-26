@@ -19,7 +19,7 @@ function checkedArchitecture(architecture) {
   return architecture
 }
 const defaultOutput = architecture => join(root, architecture === 'arm64' ? 'artifacts/windows-test-runtime' : 'artifacts/windows-test-runtime-x64')
-const overlays = ['scripts/e2e-harness.mjs', 'scripts/test-harness-install.mjs', 'scripts/harness-host-readiness.mjs', 'scripts/harness-computer-pipeline.mjs', 'scripts/harness-feature-evidence.mjs', 'scripts/harness-pasted-text-evidence.mjs', 'tests/fixtures/harness-pasted-file-windows.ps1', 'tests/fixtures/harness-e2e-provider.mjs', 'tests/fixtures/harness-workspace-prerequisite.mjs', 'tests/fixtures/harness-preview-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1', 'tests/fixtures/harness-input-state-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1', 'tests/fixtures/harness-window-state-windows.ps1', 'tests/fixtures/harness-window-timeline-windows.ps1', 'src/features/computer-use/native.ts', 'src/features/computer-use/contract.ts', 'src/features/computer-use/application-icon.ts', 'src/features/computer-use/foreground-handoff.ts', 'src/features/computer-use/native-retirement.ts', 'src/features/computer-use/macos-launch.ts']
+const overlays = ['scripts/e2e-harness.mjs', 'scripts/test-harness-install.mjs', 'scripts/harness-host-readiness.mjs', 'scripts/harness-computer-pipeline.mjs', 'scripts/harness-feature-evidence.mjs', 'scripts/harness-pasted-text-evidence.mjs', 'tests/fixtures/harness-pasted-file-windows.ps1', 'tests/fixtures/harness-e2e-provider.mjs', 'tests/fixtures/harness-workspace-prerequisite.mjs', 'tests/fixtures/harness-preview-windows.ps1', 'tests/fixtures/harness-owned-windows.ps1', 'tests/fixtures/harness-input-state-windows.ps1', 'tests/fixtures/harness-activate-windows.ps1', 'tests/fixtures/harness-window-state-windows.ps1', 'tests/fixtures/harness-window-timeline-windows.ps1', 'src/features/computer-use/native.ts', 'src/features/computer-use/contract.ts', 'src/features/computer-use/application-icon.ts', 'src/features/computer-use/foreground-handoff.ts', 'src/features/computer-use/native-retirement.ts', 'src/features/computer-use/macos-launch.ts', 'src/native/runtime.ts', 'src/updates/archive.ts', 'package.json']
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const run = (executable, args, options = {}) => new Promise((done, reject) => {
   const child = spawn(executable, args, { stdio: 'inherit', ...options })
@@ -101,6 +101,9 @@ async function main() {
     const userconfig = join(work, 'isolated.npmrc')
     await writeFile(userconfig, 'registry=https://registry.npmjs.org\n')
     await run(process.execPath, [await npmCli(arg('--npm-cli')), 'ci', '--ignore-scripts', '--include=optional', '--os=win32', `--cpu=${plan.architecture}`, '--registry=https://registry.npmjs.org', `--userconfig=${userconfig}`, '--no-audit', '--no-fund'], { cwd: portable, env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1', npm_config_cache: join(output, 'npm-cache') } })
+    // Dependencies were installed from the separate integrity-locked fixture.
+    // The source overlay now includes product package.json so native resolution
+    // reads the exact product version, rather than the portable fixture version.
     const sources = {}
     for (const name of overlays) {
       const bytes = await readFile(join(root, name)); sources[name] = hash(bytes)
