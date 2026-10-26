@@ -32,7 +32,7 @@ function loadClient() {
   const plugin = registration.factory(id => {
     requestedModules.push(id)
     if (id === 'react') return React
-    if (id === 'react/jsx-runtime' || id === 'react-dom' || id === '@deepseek-ai/dsh-client-store') return require(id)
+    if (id === 'react/jsx-runtime' || id === 'react-dom' || id === '@deepseek-ai/dsh-client-store' || id === '@deepseek-ai/cordis') return require(id)
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
       return { Switch: ({ checked, disabled, label }) => React.createElement('button', {
         type: 'button', role: 'switch', 'aria-checked': checked, disabled, 'aria-label': label,
@@ -124,6 +124,7 @@ test('built client follows the Harness loader and settings contribution lifecycl
   assert.equal(registration.id, pkg.name)
   assert.deepEqual([...plugin.inject].sort(), ['configForms', 'connection', 'locale', 'slots'])
   assert.ok(requestedModules.includes('react'), 'React comes from the host to preserve hook identity')
+  assert.ok(requestedModules.includes('@deepseek-ai/cordis'), 'Cordis identity symbols come from the same Host runtime as its service trackers')
 
   const mounted = mountClient(plugin, { status: 'ready', writable: true, value: { enabled: true } })
   assert.deepEqual(mounted.injectedSlots, ['conversation.input.left', 'settings.section'])
@@ -200,7 +201,7 @@ test('host schema provides a volatile default and rejects string booleans', () =
   const paused = host.Config({ enabled: false })
   assert.equal(paused.enabled.get(), false)
   assert.equal(host.Config.simplify(paused).enabled, false, 'persistence must contain plain data')
-  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']) assert.equal(paused[field].get(), true)
+  for (const field of ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled', 'gitEnabled']) assert.equal(paused[field].get(), true)
   assert.throws(() => host.Config({ enabled: 'false' }), /boolean/i)
   assert.throws(() => host.Config({ enabled: 'true' }), /boolean/i)
   assert.throws(() => host.Config({ promptSuggestionsEnabled: 'false' }), /boolean/i)
@@ -229,10 +230,11 @@ test('host hides its generated form using the owner fiber and releases the overr
     },
   })
   assert.deepEqual(injections, [
+    ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
     ['connection', 'webServer'],
     ['connection'], ['settings'], ['connection', 'webServer'],
     ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
-  ], 'optional update, session and suggestion services must not block registration')
+  ], 'optional Git, update, session and suggestion services must not block registration')
   assert.deepEqual(overrides.get(fiber), { auto: false })
   for (const dispose of effects.reverse()) dispose()
   assert.equal(overrides.size, 0)

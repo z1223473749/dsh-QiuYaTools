@@ -11,6 +11,7 @@ export interface Preferences {
   conversationCommentsEnabled: boolean
   sidebarToolsEnabled: boolean
   promptSuggestionsEnabled: boolean
+  gitEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
   computerUseEnabled: boolean
@@ -19,7 +20,7 @@ export interface Preferences {
 }
 
 export const FEATURE_FIELDS = [
-  'pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled',
+  'pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled', 'gitEnabled',
 ] as const
 export type FeatureField = typeof FEATURE_FIELDS[number]
 
@@ -32,6 +33,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   conversationCommentsEnabled: true,
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
+  gitEnabled: true,
   qThemeEnabled: false,
   computerUseEnabled: false,
   pasteCharacterThreshold: 1000,

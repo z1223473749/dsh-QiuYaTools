@@ -22,6 +22,7 @@ const compiled = (await build({
         export function installConversationComments() {}
         export function installSidebarTools() {}
         export function installPromptSuggestions() {}
+        export function installGit() {}
       ` }))
     },
   }],

@@ -32,6 +32,7 @@ const expected = {
   conversationCommentsEnabled: true,
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
+  gitEnabled: true,
   qThemeEnabled: false,
   computerUseEnabled: true,
   pasteCharacterThreshold: 1000,
@@ -116,6 +117,7 @@ host.apply({
   },
 }, validated.value)
 assert.deepEqual(injections, [
+  ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
   ['connection', 'webServer'], ['connection'], ['settings'], ['connection', 'webServer'],
   ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
 ])
@@ -166,7 +168,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 12, invalidCases: 14, applied: true,
+    imported: true, standardSchema: true, volatileFields: 13, invalidCases: 14, applied: true,
   })
 })
 
@@ -197,8 +199,9 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), false)
-  assert.equal(Object.keys(fiber.config).length, 12)
+  assert.equal(Object.keys(fiber.config).length, 13)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
+  assert.equal(fiber.config.gitEnabled.get(), true)
   for (const [field, value] of Object.entries(fiber.config)) {
     assert.equal(isVolatile(value), true, field + ' must be recognized across bundled and Host library copies')
   }

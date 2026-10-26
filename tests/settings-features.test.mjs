@@ -66,10 +66,10 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true, conversationCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, qThemeEnabled: false,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, conversationCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, gitEnabled: true, qThemeEnabled: false,
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
-const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled']
+const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled', 'gitEnabled']
 
 function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1-rc.2', minimumHarnessVersion: '0.2.1-rc.2', versionSupported: true, status: 'ready' }) {
   let snapshot = {
@@ -162,6 +162,7 @@ test('each feature shows a mixed master when disabled and one master click resto
     ['pastedTextEnabled', 'pastedText'], ['sessionWindowsEnabled', 'sessionWindows'],
     ['bulkArchiveEnabled', 'bulkArchive'], ['planCommentsEnabled', 'planComments'], ['conversationCommentsEnabled', 'conversationComments'], ['sidebarToolsEnabled', 'sidebarTools'],
     ['promptSuggestionsEnabled', 'promptSuggestions'],
+    ['gitEnabled', 'git'],
   ]) {
     const f = mount({ ...defaults, unrelated: { preserve: true } })
     try {
@@ -379,14 +380,14 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('ten icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
+test('eleven icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 10)
-    assert.deepEqual(tabs.map(tab => tab.textContent), ['computerTab', 'pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    assert.equal(tabs.length, 11)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['computerTab', 'pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'gitTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
     const scrolled = []
     tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
@@ -407,16 +408,16 @@ test('ten icon tabs expose labelled panels and support roving focus and scrollin
       assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
-    key('ArrowLeft', 9)
+    key('ArrowLeft', 10)
     assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
-    key('ArrowLeft', 8)
+    key('ArrowLeft', 9)
     assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
-    key('ArrowLeft', 7)
-    key('ArrowRight', 8)
+    key('ArrowLeft', 8)
     key('ArrowRight', 9)
+    key('ArrowRight', 10)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 9)
+    key('End', 10)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }

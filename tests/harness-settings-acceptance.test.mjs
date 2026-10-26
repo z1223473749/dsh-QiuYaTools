@@ -60,8 +60,8 @@ async function settings(t) {
   } }
 }
 
-test('the installed-Harness settings case rejects ten tab labels with empty page content', async () => {
-  const labels = ['电脑操控', '长文本', '独立窗口', '批量归档', '计划批注', '会话菜单', '提示词', 'Q 主题', '关于我们', '版本更新']
+test('the installed-Harness settings case rejects eleven tab labels with empty page content', async () => {
+  const labels = ['电脑操控', '长文本', '独立窗口', '批量归档', '计划批注', '会话菜单', '提示词', 'Git', 'Q 主题', '关于我们', '版本更新']
   const dom = new JSDOM('<section class="qyt-settings"><button class="qyt-master-toggle"></button><span class="qyt-status" data-state="ready"></span>' + labels.map((label, index) => `<button role="tab" id="tab-${index}" aria-controls="panel-${index}" aria-selected="${index === 0}">${label}</button><div role="tabpanel" id="panel-${index}" aria-labelledby="tab-${index}" ${index === 0 ? '' : 'hidden'}></div>`).join('') + '</section>')
   const locator = nodes => ({
     async waitFor() { assert.equal(nodes.length, 1) },
@@ -92,13 +92,13 @@ test('the runner screenshot helper uses the explicitly selected image destinatio
   assert.deepEqual(paths, [join(images, 'settings-01-computer.png')])
 })
 
-test('all ten real React settings pages satisfy their own public semantics without changing preferences or checking updates', async t => {
+test('all eleven real React settings pages satisfy their own public semantics without changing preferences or checking updates', async t => {
   const f = await settings(t), pages = []
   for (const definition of acceptance.SETTINGS_ACCEPTANCE_PAGES) {
     const expected = await f.select(definition.id)
     pages.push(acceptance.inspectSettingsTab(f.section, expected))
   }
-  assert.equal(pages.length, 10)
+  assert.equal(pages.length, 11)
   assert.deepEqual(pages.map(row => row.id), acceptance.SETTINGS_ACCEPTANCE_PAGES.map(row => row.id))
   assert.deepEqual(pages.find(row => row.id === 'pastedTextEnabled').thresholds, { '字符数': 1000, '行数': 15 })
   assert.equal(pages.find(row => row.id === 'computer').checked, false, 'computer access is not enabled just to capture settings')
@@ -108,6 +108,8 @@ test('all ten real React settings pages satisfy their own public semantics witho
     { heading: '会话批注与修改建议', checked: true, guideSteps: 3 },
   ])
   assert.equal(pages.find(row => row.id === 'planCommentsEnabled').guideSteps, 6)
+  assert.equal(pages.find(row => row.id === 'gitEnabled').checked, true)
+  assert.equal(pages.find(row => row.id === 'gitEnabled').guideSteps, 3)
   assert.deepEqual(f.writes, [])
   assert.ok(f.calls.some(row => row.endpoint === 'qiuya-tools.workbench' && row.input?.op === 'permissions'), 'computer settings must read the current site-permission list')
   assert.ok(f.calls.every(isReadOnlySettingsCall), 'the visual tour must not check/install updates or perform input')
@@ -156,6 +158,22 @@ test('the shared comments page requires independent cards, switches, and matchin
   guides[1].replaceChildren(...conversationSteps)
   conversationCard.remove()
   assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /missing or extra feature cards/u)
+})
+
+test('Git settings require their own card, switch and all three usage steps', async t => {
+  const f = await settings(t), expected = await f.select('gitEnabled')
+  const panel = f.section.querySelector('[role="tabpanel"]:not([hidden])'), heading = [...panel.querySelectorAll('h3')].find(node => node.textContent === 'Git 分支与改动'), card = heading.closest('.qyt-feature-panel'), guide = card.querySelector('ol'), steps = [...guide.children], toggle = card.querySelector('[role="switch"]'), toggleParent = toggle.parentElement
+  assert.equal(steps.length, 3)
+  guide.lastElementChild.remove()
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /usage steps/u, 'a Git tab with an incomplete guide is not accepted')
+  guide.replaceChildren(...steps)
+  panel.append(toggle)
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /switch/u, 'a matching switch elsewhere in the tab cannot replace the Git card switch')
+  toggleParent.append(toggle)
+  assert.equal(acceptance.inspectSettingsTab(f.section, expected).guideSteps, 3)
+  card.remove()
+  assert.throws(() => acceptance.inspectSettingsTab(f.section, expected), /heading\/content/u, 'the Git feature card must actually exist')
+  assert.deepEqual(f.writes, [])
 })
 
 test('the settings oracle rejects mixed panels and pending configuration instead of blessing tab presence', async t => {

@@ -17,6 +17,7 @@ import { createWorkbenchAnnotationSource } from './features/workbench/annotation
 import { installWorkbench } from './features/workbench/integration.ts'
 import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
+import { installGitHost } from './features/git/host.ts'
 
 /** Preferences persisted by Harness in the active profile. */
 export interface Config {
@@ -28,6 +29,7 @@ export interface Config {
   conversationCommentsEnabled: Volatile<boolean>
   sidebarToolsEnabled: Volatile<boolean>
   promptSuggestionsEnabled: Volatile<boolean>
+  gitEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
   computerUseEnabled: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
@@ -43,6 +45,7 @@ export const Config = z.object({
   conversationCommentsEnabled: z.boolean().default(true).description('为会话回复添加批注并提交修改建议').volatile(),
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
+  gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
   computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
@@ -53,6 +56,12 @@ export const Config = z.object({
 
 /** QiuYaTools owns its settings page instead of a second generated form. */
 export function apply(ctx: Context, config: Config): void {
+  ctx.inject(['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'], child => {
+    child.effect(() => {
+      const host = installGitHost(child, () => config.enabled.get() && config.gitEnabled.get())
+      return () => host.dispose()
+    })
+  })
   ctx.inject(['connection', 'webServer'], child => {
     let stopped = false
     let cleanup: (() => Promise<void>) | undefined

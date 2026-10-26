@@ -59,6 +59,7 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'conversationCommentsEnabled', tab: 'planCommentsTab', label: 'conversationComments', hint: 'conversationCommentsHint', steps: ['conversationCommentsSelection', 'conversationCommentsMarkers', 'conversationCommentsSubmit'] },
   { field: 'sidebarToolsEnabled', tab: 'sidebarToolsTab', label: 'sidebarTools', hint: 'sidebarToolsHint', steps: ['sidebarToolsPin', 'sidebarToolsUnread', 'sidebarToolsCopy', 'sidebarToolsWorkspace'] },
   { field: 'promptSuggestionsEnabled', tab: 'promptSuggestionsTab', label: 'promptSuggestions', hint: 'promptSuggestionsHint', steps: ['promptSuggestionsWhen', 'promptSuggestionsAccept', 'promptSuggestionsModel'] },
+  { field: 'gitEnabled', tab: 'gitTab', label: 'git', hint: 'gitHint', steps: ['gitBranch', 'gitChanges', 'gitPullRequests'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
   { id: 'computer', label: 'computerTab' },
@@ -70,6 +71,7 @@ const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
 
 function SettingsIcon({ name }: { name: SettingsTab }) {
   if (name === 'computer') return <ComputerIcon/>
+  if (name === 'gitEnabled') return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v2a6 6 0 0 1-6 6H6"/></svg>
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     {name === 'pastedTextEnabled' ? <><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></>
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>

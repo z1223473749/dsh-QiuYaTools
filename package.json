@@ -28,7 +28,8 @@
     "LICENSE",
     "NOTICE",
     "scripts/computer-agent.mjs",
-    "docs/computer-use-guide.md"
+    "docs/computer-use-guide.md",
+    "docs/git-guide.md"
   ],
   "dsh": {
     "bundle": {

@@ -9,6 +9,7 @@ import { installPlanComments } from '../features/plan-comments/index.tsx'
 import { installConversationComments } from '../features/conversation-comments/index.tsx'
 import { installSidebarTools } from '../features/sidebar-tools/index.tsx'
 import { installPromptSuggestions } from '../features/prompt-suggestions/index.tsx'
+import { installGit } from '../features/git/index.tsx'
 import { effectiveSessionWindowPreferences, getSessionWindowSupport } from './session-window-support.ts'
 
 const dependencies: Record<FeatureField, string[]> = {
@@ -19,6 +20,7 @@ const dependencies: Record<FeatureField, string[]> = {
   conversationCommentsEnabled: ['slots', 'locale', 'sessions', 'conversation', 'uiSession', 'uiWorkspace', 'workspaces'],
   sidebarToolsEnabled: ['slots', 'sessions', 'workspaces', 'uiSession'],
   promptSuggestionsEnabled: ['slots', 'locale', 'connection', 'uiSession'],
+  gitEnabled: ['slots', 'locale', 'connection', 'uiSession', 'sessions', 'sidebarRight', 'sidebarRightTabs', 'resources', 'conversation', 'workspaces', 'uiWorkspace', 'remote', 'remote.session'],
 }
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
@@ -42,6 +44,7 @@ export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): vo
           else if (field === 'conversationCommentsEnabled') scope.effect(() => installConversationComments(scope))
           else if (field === 'sidebarToolsEnabled') scope.effect(() => installSidebarTools(scope))
           else if (field === 'promptSuggestionsEnabled') scope.effect(() => installPromptSuggestions(scope))
+          else if (field === 'gitEnabled') scope.effect(() => installGit(scope, form))
         },
       })
       return () => fiber.dispose()

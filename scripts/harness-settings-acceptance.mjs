@@ -15,6 +15,7 @@ export const SETTINGS_ACCEPTANCE_PAGES = [
   ] },
   { id: 'sidebarToolsEnabled', label: '会话菜单', heading: '会话与工作区菜单', toggle: '会话与工作区菜单', steps: ['置顶', '标记为未读', '会话 ID', '打开目录'] },
   { id: 'promptSuggestionsEnabled', label: '提示词', heading: '输入框提示词推荐', toggle: '输入框提示词推荐', steps: ['失焦后仍保留', 'Tab', '模型用量'] },
+  { id: 'gitEnabled', label: 'Git', heading: 'Git 分支与改动', toggle: 'Git 分支与改动', steps: ['支持自定义名称；会话开始后固定分支', '仓库名和文件列表，点击直接打开右侧 Git 对比', 'GitHub、GitLab 或 Gitee 的 PR'] },
   { id: 'qTheme', label: 'Q 主题', heading: '启用 Q 主题', toggle: '启用 Q 主题', kind: 'theme' },
   { id: 'about', label: '关于我们', heading: 'QiuYaTools.', kind: 'about' },
   { id: 'updates', label: '版本更新', heading: '版本更新', kind: 'updates' },
@@ -29,13 +30,17 @@ export function inspectSettingsTab(section, expected) {
   const panel = [...section.querySelectorAll('[role="tabpanel"]')].find(node => node.id === selected[0].getAttribute('aria-controls'))
   require(panel && !panel.hidden && panel.getAttribute('aria-labelledby') === selected[0].id, 'the selected tab does not own its visible panel')
   require([...section.querySelectorAll('[role="tabpanel"]')].filter(node => !node.hidden).length === 1, 'multiple panels are exposed')
-  require([...panel.querySelectorAll('h3')].some(node => text(node) === expected.heading), 'page-specific heading/content is missing')
+  const headings = [...panel.querySelectorAll('h3')].filter(node => text(node) === expected.heading)
+  require(headings.length === 1, 'page-specific heading/content is missing or duplicated')
+  const featurePanel = headings[0].closest('.qyt-feature-panel')
+  require(!(expected.steps || expected.features || expected.kind === 'thresholds' || expected.kind === 'theme') || featurePanel && panel.contains(featurePanel), 'the page-specific feature panel is missing')
   const master = section.querySelector('.qyt-master-toggle')
   require(master && !master.disabled && section.querySelector('.qyt-status')?.getAttribute('data-state') !== 'pending', 'the isolated writable settings have not loaded')
   const evidence = { id: expected.id, label: expected.label, heading: expected.heading }
   if (expected.toggle) {
-    const toggle = [...panel.querySelectorAll('[role="switch"]')].find(node => node.getAttribute('aria-label') === expected.toggle)
-    require(toggle && ['true', 'false'].includes(toggle.getAttribute('aria-checked')), 'the page-specific switch has no boolean state')
+    const toggles = [...(featurePanel ?? panel).querySelectorAll('[role="switch"]')].filter(node => node.getAttribute('aria-label') === expected.toggle)
+    const toggle = toggles[0]
+    require(toggles.length === 1 && ['true', 'false'].includes(toggle.getAttribute('aria-checked')), 'the page-specific switch has no unique boolean state')
     require(!toggle.disabled, 'the page-specific switch is unavailable in the supported writable Host')
     evidence.checked = toggle.getAttribute('aria-checked') === 'true'
   }
@@ -48,7 +53,7 @@ export function inspectSettingsTab(section, expected) {
     evidence.environmentEntry = 'conversation.input.left'
   }
   if (expected.steps) {
-    const steps = [...panel.querySelectorAll('ol > li')].map(text)
+    const steps = [...featurePanel.querySelectorAll('ol > li')].map(text)
     require(steps.length === expected.steps.length && expected.steps.every((fragment, index) => steps[index].includes(fragment)), 'page-specific usage steps are missing or belong to another page')
     evidence.guideSteps = steps.length
   }
@@ -143,7 +148,7 @@ export async function captureSettingsTabs(page, { screenshot }) {
   // Preserve the original case's initial long-text page for later functional
   // assertions, without writing a single preference during the visual tour.
   await page.getByRole('tab', { name: '长文本', exact: true }).click()
-  return { pages: results, boundary: 'Ten actual settings pages, feature-specific semantic and writable-state checks (including both independent comment cards), and cropped installed-UI screenshots. Browsing does not exercise every feature or prove real-model reasoning.' }
+  return { pages: results, boundary: 'Eleven actual settings pages, feature-specific semantic and writable-state checks (including both independent comment cards), and cropped installed-UI screenshots. Browsing does not exercise every feature or prove real-model reasoning.' }
 }
 
 export function createHarnessImageLayout(output, requestedDirectory) {
