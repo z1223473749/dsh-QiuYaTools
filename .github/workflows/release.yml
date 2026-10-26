@@ -88,7 +88,7 @@ jobs:
         run: |
           release_flags=()
           if [[ "${{ steps.version.outputs.stable }}" != "true" ]]; then release_flags+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" --verify-tag "${release_flags[@]}" --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/qiuya-release-notes.md" artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/dsh-qiuya-tools-win32-arm64.tgz artifacts/dsh-qiuya-tools-win32-x64.tgz artifacts/SHA256SUMS artifacts/release-assets.json
+          gh release create "$GITHUB_REF_NAME" --verify-tag "${release_flags[@]}" --title "QiuYa 增强工具箱 $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/qiuya-release-notes.md" artifacts/dsh-qiuya-tools.tgz artifacts/dsh-qiuya-tools-darwin-universal.tgz artifacts/dsh-qiuya-tools-win32-arm64.tgz artifacts/dsh-qiuya-tools-win32-x64.tgz artifacts/dsh-qiuya-tools-native-darwin-universal.tgz artifacts/dsh-qiuya-tools-native-win32-arm64.tgz artifacts/dsh-qiuya-tools-native-win32-x64.tgz artifacts/SHA256SUMS artifacts/release-assets.json
 
   publish-npm:
     needs: release
@@ -99,7 +99,8 @@ jobs:
         !github.event.release.draft && !github.event.release.prerelease) ||
        github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Four sequential packages can each spend 15 minutes in npm's public scan.
+    timeout-minutes: 75
     concurrency:
       group: npm-publish
       cancel-in-progress: false
@@ -118,7 +119,9 @@ jobs:
         run: npm install --global npm@11.21.0 --registry=https://registry.npmjs.org
       # GITHUB_TOKEN-created releases do not trigger another release workflow.
       # needs.release also publishes in the original successful tag-push run.
-      - name: Publish the verified GitHub release archive to npm
+      # Configure this workflow as the npm trusted publisher on all three
+      # native packages as well as dsh-qiuya-tools; no long-lived token fallback.
+      - name: Confirm native packages on npm, then publish the universal plugin
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/publish-npm.mjs

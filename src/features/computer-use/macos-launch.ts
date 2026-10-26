@@ -41,6 +41,9 @@ class MacLaunch extends EventEmitter {
   private server?: Server
   private socket?: Socket
   private launcher?: ChildProcessWithoutNullStreams
+  private launcherInvoked = false
+  private launcherSpawned = false
+  private provenNeverStarted = false
   private directory?: string
   private launchTimer?: ReturnType<typeof setTimeout>
   private retireTimer?: ReturnType<typeof setTimeout>
@@ -100,11 +103,19 @@ class MacLaunch extends EventEmitter {
     const command = this.mode === 'hosted' ? join(this.appPath, 'Contents/MacOS/qiuya-computer') : '/usr/bin/open'
     const args = this.mode === 'hosted' ? [...transportArgs, '--qiuya-hosted'] : ['-n', '-g', '-W', '-a', this.appPath, '--args', ...transportArgs]
     this.launchTimer = setTimeout(() => this.fail(new ComputerError('NATIVE_LAUNCH_TIMEOUT', '电脑操控应用未确认启动。')), this.options.launchTimeoutMs ?? 15_000)
+    this.launcherInvoked = true
     this.launcher = (this.options.launch ?? ((file, value, options) => spawn(file, value, options)))(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, QIUYA_TOOLS_PARENT_PID: String(process.pid) },
     })
     this.launcher.stdin.end(); this.launcher.stdout.resume(); this.launcher.stderr.resume()
-    this.launcher.once('error', () => this.fail(new ComputerError('NATIVE_UNAVAILABLE', '系统未能启动电脑操控应用。')))
+    this.launcher.once('spawn', () => { this.launcherSpawned = true })
+    this.launcher.once('error', () => {
+      // A hosted ENOENT/EACCES spawn failure never created a worker. A
+      // LaunchServices error or any child that did start still needs proof of
+      // native retirement, even when its ready handshake never arrived.
+      if (this.mode === 'hosted' && !this.launcherSpawned && this.launcher?.pid === undefined && !this.socket && !this.authenticated) this.provenNeverStarted = true
+      this.fail(new ComputerError('NATIVE_UNAVAILABLE', '系统未能启动电脑操控应用。'))
+    })
     this.launcher.once('exit', (code, signal) => {
       if (this.finished) return
       if (code !== 0 || signal !== null) { this.fail(new ComputerError('NATIVE_CLEANUP_FAILED', '系统未确认电脑操控应用正常退出。')); return }
@@ -232,6 +243,9 @@ class MacLaunch extends EventEmitter {
   }
   private fail(error: ComputerError): void {
     if (this.finished) return
+    // Preparation can fail before invoking a process at all. The finished
+    // checks in start() prevent a later continuation from launching one.
+    if (!this.launcherInvoked && !this.socket && !this.authenticated) this.provenNeverStarted = true
     this.finished = true; this.failure = error
     clearTimeout(this.launchTimer); clearTimeout(this.retireTimer); clearTimeout(this.exitProbeTimer)
     this.queued = []; this.queuedBytes = 0
@@ -239,7 +253,8 @@ class MacLaunch extends EventEmitter {
     // represented as dead merely because its launcher or socket disappeared.
     this.socket?.end(); this.socket?.destroy()
     this.stdout.end(); this.stderr.end()
-    this.rejectRetirement?.(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器退出状态未确认，已阻止新的电脑输入。'))
+    if (this.provenNeverStarted) this.resolveRetirement?.()
+    else this.rejectRetirement?.(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器退出状态未确认，已阻止新的电脑输入。'))
     this.emit('error', error)
     void this.cleanup()
   }
@@ -250,7 +265,7 @@ class MacLaunch extends EventEmitter {
   kill(_signal?: NodeJS.Signals | number): boolean { this.requestEOF(); this.stdin.end(); return true }
   retire(): Promise<void> {
     if (!this.retirement) {
-      this.retirement = this.failure ? Promise.reject(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器退出状态未确认，已阻止新的电脑输入。')) : this.exitCode === 0 ? Promise.resolve() : new Promise<void>((resolve, reject) => { this.resolveRetirement = resolve; this.rejectRetirement = reject })
+      this.retirement = this.provenNeverStarted || this.exitCode === 0 ? Promise.resolve() : this.failure ? Promise.reject(new ComputerError('NATIVE_CLEANUP_FAILED', '执行器退出状态未确认，已阻止新的电脑输入。')) : new Promise<void>((resolve, reject) => { this.resolveRetirement = resolve; this.rejectRetirement = reject })
       void this.retirement.catch(() => {})
       this.requestEOF(); this.stdin.end()
     }

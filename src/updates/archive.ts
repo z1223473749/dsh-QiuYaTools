@@ -144,7 +144,7 @@ function thinArchitecture(bytes: Buffer): Architecture {
   return architecture
 }
 
-function helperArchitectures(bytes: Buffer): Architecture[] {
+export function helperArchitectures(bytes: Buffer): Architecture[] {
   if (bytes.length < 8) invalid('invalid native helper')
   const magic = bytes.readUInt32BE(0)
   const fat64 = magic === 0xcafebabf || magic === 0xbfbafeca

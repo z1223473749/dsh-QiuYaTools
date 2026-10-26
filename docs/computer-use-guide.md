@@ -1,6 +1,8 @@
 # 电脑操控使用与分发说明
 
-本文介绍电脑操控的安装、授权和使用。电脑操控默认关闭，原有功能开关保留。本文适用于 `0.6.0`，平台安装包见 [GitHub Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)。
+本文介绍电脑操控的安装、授权和使用。`0.6.1` 开发版本的电脑操控默认开启，保留已经保存的功能开关设置；本版尚未发布。已发布的平台安装包见 [GitHub Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)。
+
+在 Harness 的 **插件 → 添加插件** 输入仓库地址 `https://github.com/z1223473749/dsh-QiuYaTools` 或 npm 包名 `dsh-qiuya-tools`，安装器会按当前系统和进程架构安装同版本的预编译组件。Mac 和 Windows 使用同一安装入口，无需安装开发工具或单独运行原生程序。安装策略需保留可选依赖；若组件下载失败或被跳过，重新安装，或改用下方已内置组件的完整平台包。
 
 ## 选择安装包
 

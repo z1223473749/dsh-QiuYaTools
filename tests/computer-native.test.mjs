@@ -105,6 +105,23 @@ test('one companion receives RPC and authenticated preview URL through stdin; na
   } finally { driver.dispose() }
 })
 
+test('installation preflight failure is rechecked after repair without restarting the Host', async () => {
+  let repaired = false
+  const driver = new NativeCompanionDriver({
+    get executable() {
+      if (!repaired) throw Object.assign(new Error('Fixture platform package is not installed'), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
+      return process.execPath
+    },
+    args: [script],
+  })
+  try {
+    await assert.rejects(driver.targets(), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
+    await assert.rejects(driver.targets(), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
+    repaired = true
+    assert.equal((await driver.status()).available, true)
+  } finally { await driver.dispose() }
+})
+
 test('abort releases local wait without killing companion, so service can fence native input with release', async () => {
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [script] }), abort = new AbortController()
   try {

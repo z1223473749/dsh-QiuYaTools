@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import { launchHostedMacCompanion, retireMacCompanion } from './macos-launch.ts'
 import { createReadStream } from 'node:fs'
@@ -9,13 +8,12 @@ import { ComputerActionCleanupError, ComputerError } from './contract.ts'
 import { applicationIconDataUrl } from './application-icon.ts'
 import { foregroundContext, foregroundGrant, foregroundRelease, foregroundTicket } from './foreground-handoff.ts'
 import { waitForComputerRetirement } from './native-retirement.ts'
+import { bundledNativePath, resolveNativeExecutable } from '../../native/runtime.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, ForegroundActionTicket, ForegroundHandoffDriver, ForegroundWorkerIdentity, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 
 export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[] }
 export function computerCompanionPath(platform: NodeJS.Platform = process.platform, architecture: string = process.arch, base = new URL('./', import.meta.url)): string {
-  if (platform === 'darwin') return fileURLToPath(new URL('./QiuYaTools Computer.app/Contents/MacOS/qiuya-computer', base))
-  if (platform === 'win32' && ['arm64', 'x64'].includes(architecture)) return fileURLToPath(new URL(`./native/win32-${architecture}/qiuya-windows.exe`, base))
-  throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无电脑操控执行器')
+  return bundledNativePath('computer', platform, architecture, base)
 }
 interface Pending { resolve: (value: unknown) => void; reject: (error: unknown) => void; clean: () => void; transportFailure?: (error: unknown) => void }
 interface CaptureWaiter { resolve: (value: ComputerObservation) => void; reject: (error: unknown) => void }
@@ -37,6 +35,7 @@ function ownedInputs(message: Record<string, unknown>): NativeHeldInputs | undef
 /** Bounded JSONL companion transport. Model requests and credentials never enter argv. */
 export class NativeCompanionDriver implements DeviceDriver {
   private child?: ChildProcessWithoutNullStreams
+  private executable?: string
   private readonly pending = new Map<number, Pending>()
   private readonly listeners = new Set<(event: NativeComputerEvent) => void>()
   private buffer = ''
@@ -108,7 +107,7 @@ export class NativeCompanionDriver implements DeviceDriver {
     const args = this.options.releaseInputArgs ?? (process.platform === 'win32' ? ['--release-input'] : undefined)
     if (!args || !held.keys.length && !held.mouseButtons.length && !held.unicodeUnits?.length) return
     await new Promise<void>((resolve, reject) => {
-      const cleanup = spawn(this.options.executable ?? computerCompanionPath(), args, { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
+      const cleanup = spawn(this.executable ?? this.options.executable ?? resolveNativeExecutable('computer'), args, { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
       const timer = setTimeout(() => { cleanup.kill(); reject(new ComputerError('NATIVE_CLEANUP_FAILED', '故障后的按键清理超时，已阻止新的电脑输入。')) }, 2000)
       timer.unref()
       cleanup.once('error', () => { clearTimeout(timer); reject(new ComputerError('NATIVE_CLEANUP_FAILED', '无法启动按键清理，已阻止新的电脑输入。')) })
@@ -119,7 +118,8 @@ export class NativeCompanionDriver implements DeviceDriver {
   private start(): ChildProcessWithoutNullStreams {
     if (this.disposed) throw new ComputerError('DISPOSED', '电脑操控执行器已停用')
     if (this.child) return this.child
-    const executable = this.options.executable ?? computerCompanionPath()
+    const executable = this.options.executable ?? resolveNativeExecutable('computer')
+    this.executable = executable
     const args = this.options.args ?? (process.platform === 'win32' ? ['--computer'] : [])
     const child = process.platform === 'darwin' && this.options.executable === undefined
       ? launchHostedMacCompanion(dirname(dirname(dirname(executable))))
@@ -195,22 +195,28 @@ export class NativeCompanionDriver implements DeviceDriver {
   }
   private compatible(): Promise<ComputerStatus> {
     if (this.disposed) return Promise.reject(new ComputerError('DISPOSED', '电脑操控执行器已停用'))
-    if (!this.protocol) this.protocol = this.rpc<ComputerStatus>('status').then(status => {
-      if (status?.protocolVersion !== 1) throw new ComputerError('NATIVE_PROTOCOL_VERSION', '执行器协议版本不匹配，请重新安装对应版本的插件。')
-      if (status.platform === 'win32' && !Array.isArray(status.capabilities) && status.capabilities?.foregroundHandoff === true && this.child) {
-        if (typeof status.foregroundPhysicalSequence !== 'string' || !/^\d{1,20}$/u.test(status.foregroundPhysicalSequence)) throw new ComputerError('NATIVE_PROTOCOL', '前台交接的物理输入状态无效')
-        this.foregroundSequence = status.foregroundPhysicalSequence; this.foreground = this.createForegroundHandoff(this.child, this.backendGeneration)
-      }
-      return status
-    })
+    if (!this.protocol) {
+      const protocol = this.rpc<ComputerStatus>('status').then(status => {
+        if (status?.protocolVersion !== 1) throw new ComputerError('NATIVE_PROTOCOL_VERSION', '执行器协议版本不匹配，请重新安装对应版本的插件。')
+        if (status.platform === 'win32' && !Array.isArray(status.capabilities) && status.capabilities?.foregroundHandoff === true && this.child) {
+          if (typeof status.foregroundPhysicalSequence !== 'string' || !/^\d{1,20}$/u.test(status.foregroundPhysicalSequence)) throw new ComputerError('NATIVE_PROTOCOL', '前台交接的物理输入状态无效')
+          this.foregroundSequence = status.foregroundPhysicalSequence; this.foreground = this.createForegroundHandoff(this.child, this.backendGeneration)
+        }
+        return status
+      })
+      this.protocol = protocol
+      // A pre-spawn installation failure has no child event to clear this
+      // cache. Recheck after repair; retirement failures still gate rpc().
+      void protocol.catch(() => { if (this.protocol === protocol && !this.child) this.protocol = undefined })
+    }
     return this.protocol
   }
   private createForegroundHandoff(child: ChildProcessWithoutNullStreams, generation: number): ForegroundHandoffDriver {
+    const executable = this.executable!
     let imageSHA256: Promise<string> | undefined
     const current = () => { if (this.child !== child || this.backendGeneration !== generation || this.disposed) throw new ComputerError('CONTROL_CHANGED', '前台交接执行器已经变化') }
     const identity = async (value: ForegroundWorkerIdentity) => {
       current()
-      const executable = this.options.executable ?? computerCompanionPath()
       if (value.pid !== child.pid || value.parentPid !== process.pid || value.executablePath.toLowerCase() !== executable.toLowerCase()) throw new ComputerError('NATIVE_PROTOCOL', '前台交接执行器与当前进程不一致')
       imageSHA256 ??= (async () => { const hash = createHash('sha256'); for await (const chunk of createReadStream(executable)) hash.update(chunk); return hash.digest('hex') })()
       if (await imageSHA256 !== value.imageSHA256) throw new ComputerError('NATIVE_PROTOCOL', '前台交接执行器文件不一致')

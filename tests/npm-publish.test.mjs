@@ -9,6 +9,8 @@ import test from 'node:test'
 import { promisify } from 'node:util'
 import { gzipSync } from 'node:zlib'
 import { publishNpmRelease } from '../scripts/publish-npm.mjs'
+import { readDistributionArchive } from '../scripts/package-native.mjs'
+import { nativeEntries, nativeNames, rootPackage, tarball as distributionTarball } from './fixtures/native-packaging.mjs'
 
 const exec = promisify(execFile)
 const sha = 'a'.repeat(40)
@@ -22,7 +24,7 @@ const release = { tagName: 'v0.5.2', isDraft: false, isPrerelease: false, publis
 const absent = { code: 1, stdout: JSON.stringify({ error: { code: 'E404' } }), stderr: '' }
 const ok = value => ({ code: 0, stdout: JSON.stringify(value), stderr: '' })
 const host = `
-const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:false,computerUseEnabled:false,pasteCharacterThreshold:1000,pasteLineThreshold:15};
+const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:false,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15};
 export const Config={['~standard']:{version:1,vendor:'schemastery',validate(input){
   if(input.pasteCharacterThreshold===0)return{issues:[{message:'Invalid threshold'}]};
   return{value:Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,{get:()=>value,[Symbol.for('cosmokit.volatile.write')]:()=>{}}]))};
@@ -193,7 +195,7 @@ test('the actual CLI runs fake gh/npm child processes and publishes only the dow
   const f = await fixture(t)
   const bin = join(f.root, 'bin'), scripts = join(f.root, 'scripts'), assets = join(f.root, 'assets')
   await Promise.all([mkdir(bin), mkdir(scripts), mkdir(assets)])
-  for (const name of ['publish-npm.mjs', 'verify-package.mjs']) await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(scripts, name))
+  for (const name of ['publish-npm.mjs', 'verify-package.mjs', 'package-native.mjs']) await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(scripts, name))
   await writeFile(join(assets, 'dsh-qiuya-tools.tgz'), f.bytes)
   await writeFile(join(assets, 'SHA256SUMS'), f.checksum)
   const fake = `#!${process.execPath}
@@ -322,4 +324,107 @@ test('post-publish malformed latest, lookup failures and different bytes still f
     assert.equal(f.waits.length, 0)
     assert.equal(f.published.length, 1)
   }
+})
+
+async function nativeReleaseFixture(t, options = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'qiuya-npm-native-test-')), temporaryRoot = join(root, 'temporary')
+  t.after(() => rm(root, { recursive: true, force: true })); await mkdir(temporaryRoot)
+  await writeFile(join(root, 'package.json'), JSON.stringify({ ...rootPackage, ...options.checkout }))
+  const env = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'z1223473749/dsh-QiuYaTools', GITHUB_EVENT_NAME: 'push', GITHUB_REF: `refs/tags/v${rootPackage.version}`, GITHUB_SHA: sha, ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.test/', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc', ...options.env }
+  const archives = new Map(nativeNames.map(name => [name, distributionTarball(nativeEntries(name, options.native?.[name]))]))
+  archives.set(rootPackage.name, distributionTarball([
+    ['package/package.json', JSON.stringify({ ...rootPackage, ...options.wrapper })], ['package/lib/index.js', host],
+    ['package/lib/client.js', 'public client'], ['package/lib/computer-agent.js', 'public agent'], ['package/cordis.patch.yml', '[]\n'],
+  ]))
+  const integrities = new Map([...archives].map(([name, bytes]) => [name, `sha512-${createHash('sha512').update(bytes).digest('base64')}`]))
+  const calls = [], events = [], published = [], waits = [], visible = new Set(options.existing ?? []), scans = new Map()
+  const run = async (command, args, execution) => {
+    calls.push({ command, args: [...args], execution })
+    if (command === 'git') return { code: 0, stdout: sha, stderr: '' }
+    if (command === 'npm' && args[0] === '--version') return { code: 0, stdout: '11.21.0', stderr: '' }
+    if (command === 'gh' && args[1] === 'view') return ok({ ...release, tagName: `v${rootPackage.version}` })
+    if (command === 'gh' && args[1] === 'download') {
+      const directory = args[args.indexOf('--dir') + 1], lines = []
+      for (const [name, bytes] of archives) {
+        const filename = `${name}.tgz`
+        await writeFile(join(directory, filename), bytes)
+        lines.push(`${options.badChecksum === name ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex')}  ${filename}`)
+      }
+      await writeFile(join(directory, 'SHA256SUMS'), lines.join('\n') + '\n')
+      return ok({})
+    }
+    if (command === 'tar') return { code: 0, ...await exec(command, args, { encoding: 'utf8' }) }
+    if (command === 'npm' && args[0] === 'view') {
+      const name = args[1].split('@')[0], field = args[2]
+      if (field === 'dist-tags.latest') return ok(visible.has(name) ? rootPackage.version : '0.6.0')
+      if (options.different === name) return ok(`sha512-${Buffer.alloc(64, 3).toString('base64')}`)
+      const waiting = scans.get(name)
+      if (waiting !== undefined) {
+        scans.set(name, waiting - 1)
+        if (waiting <= 0) { scans.delete(name); visible.add(name) }
+      }
+      if (visible.has(name)) { events.push(['confirmed', name]); return ok(integrities.get(name)) }
+      return absent
+    }
+    if (command === 'npm' && args[0] === 'publish') {
+      const bytes = await readFile(args[1]), metadata = JSON.parse(readDistributionArchive(bytes).get('package/package.json').bytes.toString('utf8'))
+      published.push(metadata.name); events.push(['publish', metadata.name])
+      assert.deepEqual(bytes, archives.get(metadata.name), 'publish the exact checksummed GitHub asset')
+      if (options.fail === metadata.name) return { code: 1, stdout: '', stderr: 'synthetic failed publish' }
+      if (options.delay?.[metadata.name]) scans.set(metadata.name, options.delay[metadata.name])
+      else visible.add(metadata.name)
+      return ok({})
+    }
+    throw Error(`Unexpected native release command: ${command} ${args[0]}`)
+  }
+  return { root, temporaryRoot, archives, integrities, calls, published, events, waits,
+    publish: () => publishNpmRelease({ root, env, run, temporaryRoot, wait: async value => { waits.push(value) }, report() {} }) }
+}
+
+test('all native packages are confirmed publicly in exact order before the universal parent is published', async t => {
+  const f = await nativeReleaseFixture(t, { delay: { [nativeNames[0]]: 2 } }), result = await f.publish()
+  assert.equal(result.status, 'published'); assert.deepEqual(f.published, [...nativeNames, rootPackage.name])
+  assert.deepEqual(result.nativePackages.map(value => value.name), nativeNames)
+  for (const [index, name] of nativeNames.entries()) {
+    const nextPublish = f.events.findIndex(event => event[0] === 'publish' && event[1] === [...nativeNames, rootPackage.name][index + 1])
+    assert.ok(f.events.slice(0, nextPublish).some(event => event[0] === 'confirmed' && event[1] === name))
+  }
+  assert.equal(f.waits.length, 2)
+  assert.equal(f.calls.some(call => call.args[0] === 'publish' && !call.args.includes('--ignore-scripts')), false)
+  assert.deepEqual(await readdir(f.temporaryRoot), [])
+})
+
+test('a corrupt or executable native package blocks the whole release before registry lookup or publication', async t => {
+  for (const options of [
+    { badChecksum: nativeNames[2] },
+    { native: { [nativeNames[2]]: { metadata: { scripts: { postinstall: 'unsafe' } } } } },
+    { native: { [nativeNames[2]]: { metadata: { cpu: ['arm64'] } } } },
+    { native: { [nativeNames[2]]: { manifest(value) { value.artifacts[0].sha256 = '0'.repeat(64) } } } },
+    { wrapper: { optionalDependencies: { ...rootPackage.optionalDependencies, [nativeNames[0]]: '^0.6.1' } } },
+  ]) {
+    const f = await nativeReleaseFixture(t, options)
+    await assert.rejects(f.publish()); assert.deepEqual(f.published, [])
+    assert.equal(f.calls.some(call => call.command === 'npm' && call.args[0] === 'view'), false)
+  }
+})
+
+test('existing native versions require matching bytes and allow a safe retry that only publishes the missing parent', async t => {
+  const f = await nativeReleaseFixture(t, { existing: nativeNames })
+  const result = await f.publish()
+  assert.deepEqual(f.published, [rootPackage.name]); assert.ok(result.nativePackages.every(value => value.status === 'already-published'))
+  const different = await nativeReleaseFixture(t, { different: nativeNames[2] })
+  await assert.rejects(different.publish(), /different release bytes/); assert.deepEqual(different.published, [])
+})
+
+test('a failed native publication never publishes the parent or blindly retries a package', async t => {
+  const f = await nativeReleaseFixture(t, { fail: nativeNames[1] })
+  await assert.rejects(f.publish(), /npm publish failed/)
+  assert.deepEqual(f.published, nativeNames.slice(0, 2)); assert.equal(f.published.includes(rootPackage.name), false)
+})
+
+test('the unified publisher rejects unpinned checkout dependencies and missing OIDC before any registry mutation', async t => {
+  const unpinned = await nativeReleaseFixture(t, { checkout: { optionalDependencies: {} } })
+  await assert.rejects(unpinned.publish(), /pin every native/); assert.deepEqual(unpinned.published, [])
+  const noOidc = await nativeReleaseFixture(t, { existing: nativeNames, env: { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' } })
+  await assert.rejects(noOidc.publish(), /OIDC is unavailable/); assert.deepEqual(noOidc.published, [])
 })

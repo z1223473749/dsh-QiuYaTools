@@ -6,11 +6,12 @@ import { constants } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { SESSION_WINDOW_CHANNEL, SESSION_WINDOW_STATUS_ENDPOINT, SESSION_WINDOW_OPEN_ENDPOINT, SESSION_WINDOW_QUERY, parseWindowRequest, type SessionWindowStatus } from './contract.ts'
 import { MINIMUM_SESSION_WINDOW_HARNESS_VERSION, sessionWindowVersionCompatibility } from './compatibility.ts'
+import { bundledNativePath, resolveNativeExecutable } from '../../native/runtime.ts'
 
 /** Resolve the running installation's API; bundling app-boot would report the build machine's version. */
 export async function getOfficialHarnessVersion(installAnchor: unknown): Promise<unknown> {
@@ -23,7 +24,7 @@ export async function getOfficialHarnessVersion(installAnchor: unknown): Promise
 }
 
 export function sessionWindowExecutable(base: string, platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
-  return fileURLToPath(new URL(platform === 'win32' ? `./native/win32-${arch === 'arm64' ? 'arm64' : 'x64'}/qiuya-windows.exe` : './QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', base))
+  return bundledNativePath('session-window', platform, arch, new URL('./', base))
 }
 
 interface SessionControllerReader { list(request: object, signal: AbortSignal): Promise<{ items: readonly { sessionId: string; title?: string; blank?: boolean }[] }> }
@@ -193,8 +194,16 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
   const services = ctx as unknown as HostServices
   // A normal .app bundle gives AppKit, LaunchServices and accessibility tools
   // one stable identity while stdin still carries the private launch facts.
-  const executable = companionOptions?.executable ?? sessionWindowExecutable(import.meta.url)
-  const companion = new SessionWindowCompanion(executable, companionOptions?.args)
+  // Resolve lazily so a missing optional dependency cannot prevent the plugin
+  // settings from loading, and an installation repair can be checked again.
+  let companion: SessionWindowCompanion | undefined
+  let executable: string | undefined
+  const native = () => {
+    const resolved = companionOptions?.executable ?? resolveNativeExecutable('session-window')
+    if (companion && executable !== resolved) throw new Error('窗口组件已经变化，请重新启用插件。')
+    executable = resolved
+    return companion ??= new SessionWindowCompanion(resolved, companionOptions?.args)
+  }
   const getHarnessVersion = companionOptions?.getHarnessVersion ?? (() => {
     const profile = services.get?.('profileContext') as Pick<ProfileContext, 'installAnchor'> | undefined
     return getOfficialHarnessVersion(profile?.installAnchor)
@@ -216,7 +225,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
     const compatibility = sessionWindowVersionCompatibility(version)
     if (!compatibility.versionSupported) return { ...compatibility, available: false, reason: compatibility.harnessVersion === undefined ? 'harness-version-unknown' : 'harness-version' }
     if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return { ...compatibility, available: false, reason: 'platform' }
-    try { await access(executable, constants.X_OK) }
+    try { const resolved = companionOptions?.executable ?? resolveNativeExecutable('session-window'); await access(resolved, constants.X_OK) }
     catch { return { ...compatibility, available: false, reason: 'helper-missing' } }
     if (!reader<SessionStoreReader>('sessions', peer) && !reader<SessionPersistenceReader>('sessionPersistence', peer) && !reader<SessionControllerReader>('sessionController', peer) && !reader<SessionQueryReader>('sessionQuery', peer)) return { ...compatibility, available: false, reason: 'reader-missing' }
     return { ...compatibility, available: true }
@@ -285,7 +294,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
       const request = parseWindowRequest(payload)
       if (request.action === 'cancel') {
         if (preparation?.id === request.sessionId) preparation = undefined
-        await companion.cancel(request.sessionId)
+        await companion?.cancel(request.sessionId)
         return { ok: true, value: { canceled: true } }
       }
       if (!enabled()) throw new Error('会话独立窗口功能已关闭。')
@@ -299,7 +308,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
       if (!availability.versionSupported) throw new Error(`会话独立窗口最低支持官方 HARNESS ${MINIMUM_SESSION_WINDOW_HARNESS_VERSION}，请先升级 HARNESS。`)
       if (!availability.available) throw new Error('当前系统没有可用的会话窗口组件。')
       if (request.action === 'prepare' && currentPreparation !== preparation) return { ok: true, value: { prepared: false } }
-      if (previousPreparation && previousPreparation.id !== request.sessionId) await companion.cancel(previousPreparation.id)
+      if (previousPreparation && previousPreparation.id !== request.sessionId) await companion?.cancel(previousPreparation.id)
       const title = await validateTarget(request.sessionId, signal, peer)
       if (signal.aborted) throw new Error('已取消打开窗口。')
       if (request.action === 'prepare' && currentPreparation !== preparation) return { ok: true, value: { prepared: false } }
@@ -313,10 +322,10 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
       url.searchParams.set(SESSION_WINDOW_QUERY, request.sessionId)
       const nativeRequest = { sessionId: request.sessionId, storeIdentifier, url: url.href, title: title || 'DeepSeek Harness', source: request.source, position: request.position }
       if (request.action === 'prepare') {
-        await companion.prepare(nativeRequest)
+        await native().prepare(nativeRequest)
         return { ok: true, value: { prepared: true } }
       }
-      await companion.open(nativeRequest)
+      await native().open(nativeRequest)
       return { ok: true, value: { opened: true } }
     } catch (error) {
       return { ok: false, error: { code: 'qiuya-tools/session-window', message: error instanceof Error ? error.message : '无法打开会话窗口。', details: {} } }
@@ -341,7 +350,7 @@ export function installSessionWindowsHost(ctx: Context, enabled: () => boolean, 
       },
     }))
   return async () => {
-    const retirement = companion.dispose()
+    const retirement = companion?.dispose()
     try { await Promise.all(unregister.map(dispose => dispose())) }
     finally { await retirement }
   }

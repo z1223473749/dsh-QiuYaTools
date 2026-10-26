@@ -42,7 +42,7 @@ export const Config = z.object({
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
-  computerUseEnabled: z.boolean().default(false).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
+  computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
     .description('粘贴内容达到此字符数时转为 TXT 附件').volatile(),
   pasteLineThreshold: z.number().step(1).min(1).max(100_000).default(15)

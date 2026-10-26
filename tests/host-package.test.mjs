@@ -32,7 +32,7 @@ const expected = {
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   qThemeEnabled: false,
-  computerUseEnabled: false,
+  computerUseEnabled: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 }

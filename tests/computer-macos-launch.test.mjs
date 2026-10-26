@@ -4,9 +4,9 @@ import { build } from 'esbuild'
 import { spawn } from 'node:child_process'
 import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -16,6 +16,27 @@ const { launchHostedMacCompanion, launchMacCompanion, retireMacCompanion } = awa
 const directory = await mkdtemp(join(tmpdir(), 'qyt-ls-tests-'))
 test.after(() => rm(directory, { recursive: true, force: true }))
 const fixture = join(directory, 'launch.cjs')
+async function transportDriverBundle() {
+  return build({
+    entryPoints: [fileURLToPath(new URL('../src/features/computer-use/native.ts', import.meta.url))],
+    bundle: true, write: false, platform: 'node', format: 'esm', define: { 'process.platform': '"darwin"' },
+    plugins: [{ name: 'transport-only-native-resolver', setup(builder) {
+      builder.onLoad({ filter: /[\\/]native[\\/]runtime\.ts$/ }, async ({ path }) => {
+        // These fixtures execute a Node worker behind the real Mac socket
+        // transport, not a distributable Mach-O. Keep the production path
+        // mapping but bypass only package verification in this test bundle.
+        // tests/native-runtime.test.mjs covers the actual resolver and repair.
+        const runtime = await readFile(path, 'utf8'), declaration = 'export function resolveNativeExecutable('
+        assert.ok(runtime.includes(declaration))
+        return { loader: 'ts', resolveDir: dirname(path), contents: runtime.replace(declaration, 'function verifiedNativeExecutable(') + `
+export function resolveNativeExecutable(component: NativeComponent, options: NativeRuntimeOptions = {}): string {
+  return bundledNativePath(component, options.platform ?? process.platform, options.architecture ?? process.arch, options.base ?? new URL('./', import.meta.url))
+}
+` }
+      })
+    } }],
+  })
+}
 await writeFile(fixture, `const fs=require('node:fs'),net=require('node:net');
 const [mode,journal,...args]=process.argv.slice(2),get=key=>args[args.indexOf(key)+1],nonce=get('--qiuya-control-nonce'),ownerPid=Number(get('--qiuya-owner-pid')),path=get('--qiuya-control-socket');
 const log=value=>fs.appendFileSync(journal,JSON.stringify(value)+'\\n');
@@ -181,7 +202,7 @@ test('partial or formerly hazardous commands keep requiring the exact cleanup re
 })
 
 test('Native Driver refreshes OS permission state on a new helper after an actual metadata-only system restart', async () => {
-  const result = await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/native.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', define: { 'process.platform': '"darwin"' } })
+  const result = await transportDriverBundle()
   const module = join(directory, 'driver.mjs'); await writeFile(module, result.outputFiles[0].text)
   const { NativeCompanionDriver } = await import(`file://${module}`)
   const journal = join(directory, 'driver-restart.jsonl'), launchers = [], originalSpawn = childProcess.spawn
@@ -241,16 +262,69 @@ test('kill only requests authenticated EOF; an unresponsive helper remains uncon
   } finally { await fixture.cleanup() }
 })
 
-test('invalid app paths and system launcher errors never claim the app exited safely', async () => {
-  for (const mode of ['invalid-path', 'spawn-error']) {
-    const child = launchMacCompanion(mode === 'invalid-path' ? '/Applications/Other.app' : '/Applications/QiuYaTools Computer.app', {
-      launch: () => spawn('/this-launcher-does-not-exist', [], { stdio: ['pipe', 'pipe', 'pipe'] }), launchTimeoutMs: 100,
-    })
-    const errors = []; child.on('error', error => errors.push(error))
+test('pre-launch preparation failure can retire without claiming a successful app exit', async () => {
+  for (const launch of [launchMacCompanion, launchHostedMacCompanion]) {
+    let invoked = false, exited = false
+    const child = launch('/Applications/Other.app', { launch: () => { invoked = true; throw new Error('Unexpected launcher invocation') } })
+    const errors = []; child.on('error', error => errors.push(error)); child.on('exit', () => { exited = true })
     await waitFor(() => errors[0])
     assert.equal(errors[0].code, 'NATIVE_UNAVAILABLE')
-    await assert.rejects(retireMacCompanion(child), { code: 'NATIVE_CLEANUP_FAILED' })
-    assert.equal(child.exitCode, null)
+    await retireMacCompanion(child)
+    assert.equal(invoked, false); assert.equal(exited, false); assert.equal(child.exitCode, null)
+  }
+})
+
+test('a failed standalone launcher still cannot prove that its app never started', async () => {
+  const child = launchMacCompanion('/Applications/QiuYaTools Computer.app', {
+    launch: () => spawn('/this-launcher-does-not-exist', [], { stdio: ['pipe', 'pipe', 'pipe'] }), launchTimeoutMs: 100,
+  })
+  const errors = []; child.on('error', error => errors.push(error))
+  await waitFor(() => errors[0])
+  assert.equal(errors[0].code, 'NATIVE_UNAVAILABLE')
+  await assert.rejects(retireMacCompanion(child), { code: 'NATIVE_CLEANUP_FAILED' })
+  assert.equal(child.exitCode, null)
+})
+
+for (const failure of ['ENOENT', 'EACCES']) test(`hosted ${failure} does not leave the Native Driver permanently fenced after the executable is repaired`, async () => {
+  const result = await transportDriverBundle()
+  const module = join(directory, `driver-spawn-${failure}.mjs`); await writeFile(module, result.outputFiles[0].text)
+  const { NativeCompanionDriver } = await import(`file://${module}`)
+  const root = await mkdtemp(join(directory, 'repair-')), executable = join(root, 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer')
+  const journal = join(root, 'requests.jsonl'), launchers = [], errors = [], originalSpawn = childProcess.spawn
+  const quote = value => `'${value.replaceAll("'", "'\\''")}'`
+  const worker = `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fixture)} normal ${quote(journal)} "$@"\n`
+  await mkdir(join(root, 'QiuYaTools Computer.app/Contents/MacOS'), { recursive: true })
+  if (failure === 'EACCES') await writeFile(executable, worker, { mode: 0o600 })
+  childProcess.spawn = (command, args, options) => {
+    assert.ok(command.endsWith('/QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'))
+    const launcher = originalSpawn(executable, args, options)
+    launcher.once('error', error => errors.push(error))
+    launchers.push(launcher); return launcher
+  }
+  syncBuiltinESMExports()
+  const driver = new NativeCompanionDriver()
+  try {
+    const first = await driver.status()
+    assert.equal(first.available, false); assert.equal(errors[0].code, failure)
+    const absent = launchers[0], transport = driver.retiring
+    assert.equal(absent.pid, undefined, 'The OS rejected creation of the worker')
+    await transport
+    const second = await driver.status()
+    assert.equal(second.available, false); assert.equal(second.message, first.message)
+    assert.equal(launchers.length, 2, 'A missing executable remains unavailable without a permanent cleanup fence')
+    assert.equal(errors[1].code, failure)
+    await writeFile(executable, worker); await chmod(executable, 0o700)
+    const repaired = await driver.status()
+    assert.equal(repaired.available, true); assert.equal(launchers.length, 3)
+    assert.deepEqual(await driver.applications(), []); assert.deepEqual(await driver.targets(), [])
+    await driver.dispose()
+    const rows = (await readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse)
+    assert.equal(rows.filter(row => row.event === 'launch').length, 1, 'Failed spawns never ran the native worker')
+    assert.deepEqual(rows.filter(row => row.event === 'request').map(row => row.request.op), ['status', 'status', 'applications', 'targets'])
+    assert.ok(rows.some(row => row.event === 'eof'))
+  } finally {
+    childProcess.spawn = originalSpawn; syncBuiltinESMExports()
+    for (const launcher of launchers) if (launcher.pid && launcher.exitCode === null && launcher.signalCode === null) launcher.kill('SIGKILL')
   }
 })
 
@@ -346,7 +420,7 @@ test('hosted metadata-only system exit preserves the exact PID proof and hazardo
 })
 
 test('hosted status retries at most once after confirmed metadata-only exit without replaying commands', async () => {
-  const result = await build({ entryPoints: [fileURLToPath(new URL('../src/features/computer-use/native.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm', define: { 'process.platform': '"darwin"' } })
+  const result = await transportDriverBundle()
   const module = join(directory, 'driver-repeated-status-exit.mjs'); await writeFile(module, result.outputFiles[0].text)
   const { NativeCompanionDriver } = await import(`file://${module}`)
   const journal = join(directory, 'driver-repeated-status-exit.jsonl'), launchers = [], originalSpawn = childProcess.spawn

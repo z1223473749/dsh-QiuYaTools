@@ -2,20 +2,20 @@
 
 让 DeepSeek Harness 更顺手：长文本附件、会话分窗、计划批注，以及可在聊天中调用的电脑操控。
 
-**0.6.0** 新增电脑操控与 Windows 支持，提供 macOS universal、Windows ARM64 和 Windows x64 安装包，下载见 [Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)。
+**0.6.1 开发中，尚未发布。** 本版统一修复 Mac / Windows 从仓库地址或 npm 安装时缺少原生组件的问题，电脑操控默认开启。已发布的完整平台安装包见 [Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)。
 
 ## 安装
 
 ### GitHub 安装
 
-1. 打开 [GitHub Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases)，选择所需版本和对应系统的 `.tgz` 安装包。
-2. 在 Harness 的 **插件 → 添加插件** 中粘贴安装包的下载链接，点击安装。
+1. 在 Harness 的 **插件 → 添加插件** 中输入 `https://github.com/z1223473749/dsh-QiuYaTools`，点击安装。
+2. 安装器根据 Harness 所在系统和进程架构，安装同版本的预编译原生组件。无需编译、安装 SDK 或手动启动执行器。
 
-Windows 选择与 Harness 进程架构一致的 **ARM64** 或 **x64** 包；Mac 使用 **universal** 包。下载到本地后的安装步骤见[使用指南](docs/computer-use-guide.md)。
+也可从 [GitHub Releases](https://github.com/z1223473749/dsh-QiuYaTools/releases) 安装完整 `.tgz`：Windows 选择与 Harness 进程架构一致的 **ARM64** 或 **x64** 包，Mac 使用 **universal** 包。完整包内置原生组件，不重复下载平台依赖。下载到本地后的安装步骤见[使用指南](docs/computer-use-guide.md)。
 
-### npm 安装（macOS）
+### npm 安装（Mac / Windows）
 
-npm 提供 macOS universal 包；Windows 请使用上方对应架构的 GitHub 安装包。
+npm 与仓库地址安装使用相同的平台组件依赖。安装时请保留可选依赖；若网络或安装策略跳过了组件，设置页会明确提示安装不完整，可重新安装或使用对应系统的完整 `.tgz`。
 
 1. 打开 Harness 的 **插件 → 添加插件**。
 2. 输入 npm 包名 **`dsh-qiuya-tools`**，点击安装。[查看 npm 包](https://www.npmjs.com/package/dsh-qiuya-tools)。
