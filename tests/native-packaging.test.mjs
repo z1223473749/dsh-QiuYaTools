@@ -49,6 +49,7 @@ test('complete Windows archives retain their executable and omit universal optio
   const { root } = await nativeSource(t), output = join(root, 'out')
   const result = await packageCandidate('win32', 'x64', output, { sourceRoot: root }), bytes = await readFile(join(output, result.name)), files = readDistributionArchive(bytes)
   assert.equal(metadata(bytes).optionalDependencies, undefined)
+  assert.deepEqual(metadata(bytes).scripts, { test: 'node consumer-test.mjs' }, 'Compiled platform packages omit pack lifecycle hooks while preserving other commands')
   assert.ok(files.has('package/lib/native/win32-x64/qiuya-windows.exe'))
   assert.equal(files.has('package/lib/native/win32-arm64/qiuya-windows.exe'), false)
 })

@@ -19,6 +19,13 @@ export async function packageCandidate(platform, architecture, output = join(roo
     // Complete platform archives already carry their native payload. Do not
     // install the universal wrapper's optional packages a second time.
     const metadata = { ...pkg }; delete metadata.optionalDependencies
+    // npm 10 still invokes prepare during pack with --ignore-scripts. These
+    // archives contain compiled outputs and must not run checkout pack hooks.
+    if (metadata.scripts) {
+      metadata.scripts = { ...metadata.scripts }
+      for (const hook of ['prepare', 'prepack', 'postpack']) delete metadata.scripts[hook]
+      if (!Object.keys(metadata.scripts).length) delete metadata.scripts
+    }
     await writeFile(join(stage, 'package.json'), JSON.stringify(metadata, null, 2) + '\n')
     for (const file of ['cordis.patch.yml', 'README.md', 'LICENSE', 'NOTICE']) await cp(join(sourceRoot, file), join(stage, file))
     await mkdir(join(stage, 'scripts'))

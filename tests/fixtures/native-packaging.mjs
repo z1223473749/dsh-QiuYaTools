@@ -72,7 +72,7 @@ export async function nativeSource(t) {
   }
   const windows = { version, protocolVersion: 1, artifacts: ['arm64', 'x64'].map(architecture => { const bytes = windowsBinary(architecture); return { file: `win32-${architecture}/qiuya-windows.exe`, platform: 'win32', architecture, protocolVersion: 1, selfContained: true, bytes: bytes.length, sha256: digest(bytes) } }) }
   await put('lib/native/windows-manifest.json', JSON.stringify(windows))
-  await put('package.json', JSON.stringify({ ...rootPackage, scripts: { prepare: 'node should-never-run.mjs', prepack: 'node should-never-run.mjs' }, devDependencies: { 'not-installed-build-tool': '1.0.0' } }))
+  await put('package.json', JSON.stringify({ ...rootPackage, scripts: { prepare: 'node should-never-run.mjs', prepack: 'node should-never-run.mjs', postpack: 'node should-never-run.mjs', test: 'node consumer-test.mjs' }, devDependencies: { 'not-installed-build-tool': '1.0.0' } }))
   for (const file of ['README.md', 'cordis.patch.yml', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'scripts/computer-agent.mjs', 'lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'assets/icon-color.webp', 'locale/zh.json']) await put(file, file.endsWith('.json') ? '{}' : file.endsWith('.yml') ? '[]\n' : 'fixture data\n')
   await put('lib/SessionWindow.swift', 'must never ship in native package')
   await put('lib/QiuYaTools Sessions.app/Contents/Info.plist', '<plist/>')

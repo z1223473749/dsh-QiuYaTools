@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "QiuYa 增强工具箱",
-    "description": "长文本附件、会话分窗、批量归档、计划批注和提示词建议，配合菜单增强与手绘 Q 主题，让 Harness 更顺手。"
+    "description": "为 DeepSeek Harness 提供 Git 分支、改动对比与 PR 管理，会话和计划批注、长文本附件、独立窗口、批量归档、提示词建议与 Q 主题，并支持 Mac/Windows 电脑操控和实时预览。"
   }
 }

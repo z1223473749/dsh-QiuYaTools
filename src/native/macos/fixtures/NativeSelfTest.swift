@@ -14,7 +14,7 @@ import Security
         let edge = AICursorOverlay.clippedFrame(at: CGPoint(x: -1279, y: 101), target: geometry.frame)
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
         try approvedSmallGlyph()
-        try cursorSuppressionStateMachine()
+        try await cursorSuppressionStateMachine()
         try exactWindowReadiness()
         try exactPointerRouting()
         try exactKeyboardFocus()
@@ -1019,7 +1019,24 @@ import Security
         }
     }
 
-    @MainActor private static func cursorSuppressionStateMachine() throws {
+    /// Observe actual main-runloop work, not a fixed sleep that assumes a timer ran.
+    /// The deadline only bounds the test; production restoration keeps its own 500ms limit.
+    @MainActor private static func awaitCursorEvent(timeout: TimeInterval, install: (@escaping () -> Void) -> Void) async -> Bool {
+        await withCheckedContinuation { continuation in
+            var finished = false
+            let expiry = Timer(timeInterval: timeout, repeats: false) { _ in MainActor.assumeIsolated {
+                guard !finished else { return }
+                finished = true; continuation.resume(returning: false)
+            } }
+            RunLoop.main.add(expiry, forMode: .common)
+            install {
+                guard !finished else { return }
+                finished = true; expiry.invalidate(); continuation.resume(returning: true)
+            }
+        }
+    }
+
+    @MainActor private static func cursorSuppressionStateMachine() async throws {
         final class Fake {
             var calls = [String](), propertyValue: Bool? = false, connection = true, setWorks = true
             var readOverride: ((Bool?) -> Bool?)?, onHide: (() -> Void)?
@@ -1123,21 +1140,42 @@ import Security
             precondition(c.activate(a, eligible: { true })); f.setWorks = false
             overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
             precondition(!overlay.hide() && c.ownsProperty && f.unhides == 1)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { f.setWorks = true }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            precondition(c.clear && overlay.restorationComplete && f.unhides == 1, "Independent restoration timer survives panel/target teardown and never repeats Unhide")
+            var independentRetryObserved = false
+            let restored = await awaitCursorEvent(timeout: 0.1) { observed in
+                overlay.onSuppressionTransition = { value in
+                    if value["phase"] as? String == "restoring" && value["reason"] as? String == "pending-restoration" { independentRetryObserved = true }
+                    if independentRetryObserved && c.clear && overlay.restorationComplete { observed() }
+                }
+                // Recover on a later main-queue turn; only the independent
+                // production timer may complete the pending property reset.
+                DispatchQueue.main.async { f.setWorks = true }
+            }
+            overlay.onSuppressionTransition = nil
+            precondition(restored && independentRetryObserved && c.clear && overlay.restorationComplete && f.unhides == 1, "Independent restoration timer survives panel/target teardown and never repeats Unhide")
             precondition(c.activate(b, eligible: { true }))
-            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
-            precondition(c.owner == b && c.ownsHide && f.unhides == 1, "A retired restoration timer cannot touch a later owner")
+            let witness = await awaitCursorEvent(timeout: 0.1) { observed in
+                let nextTurn = Timer(timeInterval: 0.04, repeats: false) { _ in MainActor.assumeIsolated { observed() } }
+                RunLoop.main.add(nextTurn, forMode: .common)
+            }
+            precondition(witness && c.owner == b && c.ownsHide && f.unhides == 1, "A retired restoration timer cannot touch a later owner")
             precondition(c.restore("test-end"))
         }
         do {
             let f = Fake(), c = SystemCursorSuppression(backend: f.backend), overlay = AICursorOverlay(suppression: c); var failures = 0
-            overlay.onRestorationFailure = { failures += 1 }
             precondition(c.activate(a, eligible: { true })); f.readOverride = { _ in false }
-            overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.65))
-            precondition(failures == 1 && c.ownsHide && c.ownsProperty && f.unhides == 0, "Bounded recovery reports failure once without forgetting owned counter/property")
+            let failureDeadline = ProcessInfo.processInfo.systemUptime + 0.65
+            let failureObserved = await awaitCursorEvent(timeout: 0.65) { observed in
+                overlay.onRestorationFailure = { failures += 1; observed() }
+                overlay.withdrawForPointerReadback(epoch: 10, targetId: a.targetId)
+            }
+            let failureSettled = await awaitCursorEvent(timeout: max(0, failureDeadline - ProcessInfo.processInfo.systemUptime)) { observed in
+                // Keep observing beyond another production timer period so a
+                // repeated failure callback cannot masquerade as exactly once.
+                let nextTurn = Timer(timeInterval: 0.04, repeats: false) { _ in MainActor.assumeIsolated { observed() } }
+                RunLoop.main.add(nextTurn, forMode: .common)
+            }
+            overlay.onRestorationFailure = nil
+            precondition(failureObserved && failureSettled && failures == 1 && c.ownsHide && c.ownsProperty && f.unhides == 0, "Bounded recovery reports failure once without forgetting owned counter/property")
             f.readOverride = nil; precondition(overlay.hide() && f.unhides == 1)
         }
         do {
