@@ -165,12 +165,16 @@ export function apply(ctx) {
       assert.equal((await uploaded).status(), 200); await readyAttachment(); console.log('INFO worktree synthetic TXT ready')
     }
     await page.locator('[data-qyt-git-branch]:visible button').first().click()
-    const dialog = page.locator('.qyt-git-branch-popover:visible'), worktree = dialog.getByRole('radio', { name: '独立工作树', exact: true })
+    const dialog = page.locator('.qyt-git-branch-popover:visible'), worktree = dialog.getByRole('switch', { name: '新建工作树', exact: true })
     await dialog.waitFor()
+    assert.equal(await dialog.getAttribute('data-view'), 'environment'); assert.equal(await dialog.getByRole('searchbox').count(), 0); assert.equal(await dialog.locator('form').count(), 0)
     const capabilities = await page.evaluate(() => globalThis.__qytGitSmokeCapabilities?.() ?? { probeUnavailable: true })
     await writeFile(join(output, 'actual-sdk-capabilities.json'), JSON.stringify(capabilities, null, 2)); console.log('INFO actual SDK capabilities ' + JSON.stringify(capabilities))
-    assert.equal(await worktree.isEnabled(), true, 'The actual installed SDK did not expose complete worktree migration capabilities'); console.log('INFO actual worktree radio is enabled')
-    await worktree.check(); await dialog.getByLabel('新分支名称', { exact: true }).fill('feature/worktree-draft')
+    assert.equal(await worktree.isEnabled(), true, 'The actual installed SDK did not expose complete worktree migration capabilities'); console.log('INFO actual worktree switch is enabled')
+    assert.equal(await worktree.getAttribute('aria-checked'), 'false'); await worktree.click(); assert.equal(await worktree.getAttribute('aria-checked'), 'true')
+    await dialog.getByRole('button', { name: '选择分支', exact: true }).click(); assert.equal(await dialog.getAttribute('data-view'), 'branches'); await dialog.getByRole('searchbox', { name: '搜索分支', exact: true }).waitFor(); assert.equal(await dialog.locator('form').count(), 0)
+    await dialog.getByRole('button', { name: '新建分支…', exact: true }).click(); assert.equal(await dialog.getAttribute('data-view'), 'create'); assert.equal(await dialog.getByRole('searchbox').count(), 0)
+    await dialog.getByLabel('新分支名称', { exact: true }).fill('feature/worktree-draft')
     let receipt
     const onResponse = async response => { if (new URL(response.url()).pathname !== '/api/qiuya-tools.git.control') return; const payload = response.request().postDataJSON()?.payload; if (payload?.op !== 'createWorktree' || payload.sessionId !== sourceId) return; const envelope = await response.json().catch(() => undefined); receipt = envelope?.result }
     page.on('response', onResponse)
