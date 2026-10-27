@@ -98,7 +98,19 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-theme-accent: var(--qyt-theme-col
 .qyt-button-primary, .qyt-button-primary:hover:enabled { background: var(--qyt-theme-solid); color: #fff; border-color: var(--qyt-theme-solid); }
 .qyt-button-primary:hover:enabled { opacity: .88; }
 .qyt-number-field input:disabled, .qyt-button:disabled { opacity: .5; cursor: default; }
-.qyt-theme-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.qyt-theme-panel { container: qyt-themes / inline-size; }
+.qyt-theme-layout { display: grid; grid-template-columns: minmax(0, 1fr) 144px; gap: 12px; align-items: start; min-width: 0; }
+.qyt-theme-card { min-width: 0; }
+.qyt-theme-picker { align-self: stretch; min-width: 0; padding: 10px; }
+.qyt-theme-picker > h4 { margin: 0 0 10px; font-size: 12px; }
+.qyt-theme-choices { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.qyt-theme-picker .qyt-theme-choice { min-height: 102px; padding: 8px 34px 8px 7px; border-radius: 10px; }
+.qyt-theme-picker .qyt-theme-choice-name { max-width: 100%; padding: 2px 3px; font-size: 11px; }
+.qyt-theme-picker .qyt-theme-choice-circle { top: 8px; right: 7px; width: 21px; height: 21px; box-shadow: 0 0 0 3px var(--qyt-art-paper); }
+@container qyt-themes (max-width: 460px) {
+  .qyt-theme-layout { grid-template-columns: minmax(0, 1fr); }
+  .qyt-theme-picker .qyt-theme-choice { min-height: 112px; }
+}
 .qyt-theme-choice { --qyt-theme-accent: var(--qyt-theme-color); position: relative; isolation: isolate; display: flex; align-items: flex-start; min-width: 0; min-height: 124px; overflow: hidden; padding: 13px 44px 13px 14px; border: 1px solid var(--qyt-theme-line); border-radius: 13px; color: var(--dsw-alias-label-primary); background: var(--qyt-surface); text-align: left; font: inherit; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
 .qyt-theme-thumbnail { position: absolute; inset: 0; z-index: -1; background-image: linear-gradient(120deg, var(--qyt-art-paper), transparent 65%), var(--qyt-theme-art); background-position: center, right center; background-size: cover; background-repeat: no-repeat; }
 .qyt-theme-choice-name { padding: 2px 4px; border-radius: 5px; background: var(--qyt-art-paper); font-size: 13px; font-weight: 600; line-height: 1.5; }

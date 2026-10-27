@@ -254,27 +254,32 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
         {tab.id === 'computer' ? activeTab === 'computer' && <><ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/><SitePermissions api={workbenchAPI}/></>
           : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
           : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} automatic={{ enabled: preferences.autoCheckUpdates !== false, disabled, label: t('autoCheckUpdates'), hint: t('autoCheckUpdatesHint'), onChange: value => { void persist([{ op: 'set', path: ['autoCheckUpdates'], value }]) } }} />
-            : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel">
+            : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel qyt-theme-panel">
               <div className="qyt-card qyt-feature-summary">
                 <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name="qTheme"/></span><h3>{t('qTheme')}</h3></div><Switch className="qyt-switch" checked={preferences.qThemeEnabled === true} label={t('qTheme')} disabled={disabled} onChange={value => { void setThemeEnabled(value) }}/></div>
                 <p className="qyt-muted">{t('qThemeHint')}</p>
               </div>
-              <div className="qyt-card qyt-theme-card" data-theme={themeId} style={themeStyle(theme)}>
-                <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t(theme.name)}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t(theme.motionLabel)}>
-                  {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-${themeId}-motion`} value={motion} checked={themeMotion === motion} disabled={disabled} onChange={() => { void setThemeMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
-                </div></div><span className="qyt-theme-name">{theme.label}</span></div>
-                <div className="qyt-theme-preview" role="img" aria-label={t(theme.description)}>
-                  <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)}/>
+              <div className="qyt-theme-layout">
+                <div className="qyt-card qyt-theme-card" data-theme={themeId} style={themeStyle(theme)}>
+                  <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t(theme.name)}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t(theme.motionLabel)}>
+                    {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-${themeId}-motion`} value={motion} checked={themeMotion === motion} disabled={disabled} onChange={() => { void setThemeMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
+                  </div></div><span className="qyt-theme-name">{theme.label}</span></div>
+                  <div className="qyt-theme-preview" role="img" aria-label={t(theme.description)}>
+                    <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)}/>
+                  </div>
+                  <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
                 </div>
-                <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
-              </div>
-              <div className="qyt-theme-choices" role="radiogroup" aria-label={t('qThemeChoose')}>
-                {Q_THEMES.map((option, index) => <button key={option.id} ref={element => { themeCards.current[index] = element }} type="button" role="radio" className="qyt-theme-choice" data-theme={option.id} style={themeStyle(option)} aria-label={t(option.name)} aria-checked={themeId === option.id} tabIndex={themeId === option.id ? 0 : -1} disabled={disabled} onClick={() => { void selectTheme(option.id) }} onKeyDown={event => { navigateThemes(event, index) }}>
-                  <span className="qyt-theme-thumbnail" aria-hidden="true"/>
-                  <span className="qyt-theme-choice-name">{t(option.name)}</span>
-                  <span className="qyt-theme-choice-circle" aria-hidden="true">{themeId === option.id && <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 8 3 3 5-6"/></svg>}</span>
-                  <span className="qyt-sr-only">{themeId === option.id ? t('qThemeSelected') : ''}</span>
-                </button>)}
+                <aside className="qyt-card qyt-theme-picker" aria-labelledby={`${id}-theme-picker-title`}>
+                  <h4 id={`${id}-theme-picker-title`}>{t('qThemePickerTitle')}</h4>
+                  <div className="qyt-theme-choices" role="radiogroup" aria-label={t('qThemeChoose')}>
+                    {Q_THEMES.map((option, index) => <button key={option.id} ref={element => { themeCards.current[index] = element }} type="button" role="radio" className="qyt-theme-choice" data-theme={option.id} style={themeStyle(option)} aria-label={t(option.name)} aria-checked={themeId === option.id} tabIndex={themeId === option.id ? 0 : -1} disabled={disabled} onClick={() => { void selectTheme(option.id) }} onKeyDown={event => { navigateThemes(event, index) }}>
+                      <span className="qyt-theme-thumbnail" aria-hidden="true"/>
+                      <span className="qyt-theme-choice-name">{t(option.name)}</span>
+                      <span className="qyt-theme-choice-circle" aria-hidden="true">{themeId === option.id && <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 8 3 3 5-6"/></svg>}</span>
+                      <span className="qyt-sr-only">{themeId === option.id ? t('qThemeSelected') : ''}</span>
+                    </button>)}
+                  </div>
+                </aside>
               </div>
             </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className="qyt-feature-panel" key={feature.field}>
           <div className="qyt-card qyt-feature-summary">

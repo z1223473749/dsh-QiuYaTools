@@ -98,12 +98,19 @@ if (process.argv.includes('--generate-only')) {
     assert.ok(geometry.control.left >= geometry.heading.right && geometry.control.left - geometry.heading.right <= 16, 'Motion selector must immediately follow the left heading')
     assert.ok(geometry.name.left > geometry.control.right, 'Original theme name must remain at the far right')
     assert.ok(Math.abs((geometry.heading.top + geometry.heading.bottom) / 2 - (geometry.control.top + geometry.control.bottom) / 2) < 2, 'Heading and motion selector must align vertically')
-    const choicePlacement = await page.locator('.qyt-feature-panel').evaluate(panel => {
-      const preview = panel.querySelector('.qyt-theme-card').getBoundingClientRect()
-      const choices = panel.querySelector('.qyt-theme-choices').getBoundingClientRect()
-      return { previewBottom: preview.bottom, choicesTop: choices.top, gap: choices.top - preview.bottom }
+    const readThemeLayout = () => page.locator('.qyt-theme-layout').evaluate(layout => {
+      const bounds = element => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width } }
+      return { width: layout.getBoundingClientRect().width, preview: bounds(layout.querySelector('.qyt-theme-card')), picker: bounds(layout.querySelector('.qyt-theme-picker')), cards: [...layout.querySelectorAll('.qyt-theme-choice')].map(bounds) }
     })
-    assert.ok(choicePlacement.choicesTop >= choicePlacement.previewBottom, 'Theme selection cards sit below the complete preview and its caption')
+    const assertRightPicker = layout => {
+      assert.ok(layout.picker.left >= layout.preview.right, 'Theme picker sits beside the preview on its right')
+      assert.ok(Math.abs(layout.picker.top - layout.preview.top) < 1, 'Preview and theme picker start on the same row')
+      assert.ok(layout.picker.width >= 130 && layout.picker.width <= 160, 'The theme picker stays narrow so the preview receives the main space')
+      assert.ok(layout.cards[1].top >= layout.cards[0].bottom, 'The two theme cards stack vertically')
+    }
+    await page.getByRole('heading', { name: '主题', exact: true }).waitFor()
+    const choicePlacement = await readThemeLayout()
+    assertRightPicker(choicePlacement)
     await page.locator('.qyt-settings').screenshot({ path: join(output, 'ocean-settings.png') })
     await page.locator('.qyt-theme-card').screenshot({ path: join(output, 'ocean-settings-card.png') })
     await group.getByText('静态', { exact: true }).click()
@@ -162,7 +169,18 @@ if (process.argv.includes('--generate-only')) {
       return state
     }
     const oceanSelection = await checkSelection('ocean', 'rgb(17, 109, 131)')
-    await captureCompleteThemeLayout('ocean-selection-below-preview.png')
+    await captureCompleteThemeLayout('ocean-selection-right.png')
+    const componentLayouts = []
+    for (const width of [560, 520, 461, 420]) {
+      await page.locator('.qyt-theme-panel').evaluate((panel, width) => { panel.style.width = `${width}px` }, width)
+      const layout = await readThemeLayout()
+      if (width > 460) assertRightPicker(layout)
+      else assert.ok(layout.picker.top >= layout.preview.bottom, 'A narrow component stacks the picker below the preview')
+      assert.ok(layout.preview.width > 0 && layout.picker.right <= layout.preview.left + width + 1)
+      componentLayouts.push({ requestedWidth: width, ...layout })
+      if (width > 460) await page.locator('.qyt-theme-layout').screenshot({ path: join(output, `ocean-theme-component-${width}.png`) })
+    }
+    await page.locator('.qyt-theme-panel').evaluate(panel => { panel.style.width = '' })
     await begonia.click()
     await page.waitForFunction(() => window.__oceanSettingsFixture.getSnapshot().value.qThemeId === 'begonia')
     assert.equal(await page.locator('body').getAttribute('data-qyt-q-theme'), 'begonia', 'The real theme installer follows the accepted card selection')
@@ -186,7 +204,7 @@ if (process.argv.includes('--generate-only')) {
     await page.locator('.qyt-tab-panel:not([hidden])').evaluate(element => { element.scrollTop = 0 })
     await page.locator('.qyt-settings').screenshot({ path: join(output, 'begonia-settings.png') })
     await page.locator('.qyt-theme-card').screenshot({ path: join(output, 'begonia-settings-card.png') })
-    await captureCompleteThemeLayout('begonia-selection-below-preview.png')
+    await captureCompleteThemeLayout('begonia-selection-right.png')
     await page.reload(); await page.getByRole('tab', { name: 'Q 主题', exact: true }).click()
     await page.locator('[data-shortcut-modal="settings"]').evaluate(element => { element.style.height = '980px' })
     assert.equal(await begonia.getAttribute('aria-checked'), 'true', 'Selected theme survives reopening')
@@ -225,6 +243,8 @@ if (process.argv.includes('--generate-only')) {
     await page.setViewportSize({ width: 420, height: 900 })
     await choices.scrollIntoViewIfNeeded()
     const narrow = await choices.evaluate(element => ({ width: element.clientWidth, scrollWidth: element.scrollWidth, cards: [...element.children].map(card => ({ left: card.getBoundingClientRect().left, right: card.getBoundingClientRect().right })), viewport: window.innerWidth }))
+    const narrowLayout = await readThemeLayout()
+    assert.ok(narrowLayout.picker.top >= narrowLayout.preview.bottom, 'The 420px window uses a stacked theme layout')
     assert.equal(narrow.scrollWidth, narrow.width, 'The two theme cards fit their narrow grid')
     for (const card of narrow.cards) assert.ok(card.left >= 0 && card.right <= narrow.viewport, 'Both theme cards remain within the narrow viewport')
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Begonia narrow settings must not overflow horizontally')
@@ -239,7 +259,7 @@ if (process.argv.includes('--generate-only')) {
     assert.equal(await page.locator('iframe[data-qyt-theme-preview]').count(), 0)
     assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
     assert.deepEqual(errors, [])
-    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-below-preview.png', 'begonia-selection-below-preview.png'] }
+    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png'] }
     await writeFile(join(output, 'settings-preview-result.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
   } finally {
