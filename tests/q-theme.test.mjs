@@ -278,10 +278,12 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
     for (const rule of allRules(sheet.sheet.cssRules)) {
       if (!rule.style) continue
       if (rule.style.getPropertyValue('position') || rule.style.getPropertyValue('z-index') || rule.style.getPropertyValue('backdrop-filter') || rule.style.getPropertyValue('-webkit-backdrop-filter')) {
+        const phase = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase]'
+        const illustration = `${phase} > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash])`
         const seat = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]'
         const dock = '[data-slot="conversation.input.dock"] > [data-testid="todo-panel"]'
         const todo = `${seat} ${dock}`
-        assert.ok([`${seat}::before`, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the canvas decoration and the native task dock')
+        assert.ok([phase, illustration, `${seat}::before`, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
       }
     }
   } finally { dom.window.close() }
@@ -291,4 +293,24 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
   assert.match(css, /\[data-composer-card\]/u)
   assert.match(css, /\[data-slot="sidebar"\]/u)
   assert.doesNotMatch(css, /body\[data-qyt-q-theme="ocean"\]\s+\[role="tab"\]/u)
+})
+
+test('live illustration layers stay behind native content and preserve the static fallback until ready', t => {
+  const f = fixture(t, { enabled: true })
+  f.install()
+  const rules = allRules(f.styles()[0].sheet.cssRules)
+  const phase = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase]'
+  const decoration = rules.find(rule => rule.selectorText === `${phase} > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash])`)
+  assert.ok(decoration)
+  for (const [property, value] of [['position', 'absolute'], ['z-index', '-1'], ['pointer-events', 'none'], ['visibility', 'hidden']]) {
+    assert.equal(decoration.style.getPropertyValue(property), value)
+  }
+  const baseline = rules.find(rule => rule.selectorText === phase)
+  assert.equal(baseline.style.getPropertyValue('isolation'), 'isolate')
+  assert.equal(baseline.style.getPropertyValue('background-image'), 'var(--qyt-q-canvas-image)')
+  const live = rules.find(rule => rule.selectorText === `${phase}[data-qyt-ocean-live]`)
+  assert.equal(live.style.getPropertyValue('background-image'), 'none')
+  const ready = rules.find(rule => rule.selectorText === `${phase}[data-qyt-ocean-live] > :is(canvas[data-qyt-ocean-scene][data-ready="true"], [data-qyt-ocean-wash])`)
+  assert.equal(ready.style.getPropertyValue('visibility'), 'visible')
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/u)
 })

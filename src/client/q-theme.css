@@ -161,8 +161,8 @@ body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
   --dsw-alias-menu-group-header-fill: rgba(44, 50, 55, .99);
 }
 
-/* The native roots own layout and scrolling. These are background layers only:
-   no positioned overlays, listeners or images that can intercept a drag. */
+/* The native roots own layout and scrolling. Every illustration layer is
+   decorative and ignores pointer events, so native clicks and drags pass through. */
 body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child {
   --dsw-alias-label-secondary: var(--qyt-q-sidebar-caption);
   --dsw-alias-label-tertiary: var(--qyt-q-sidebar-caption);
@@ -187,10 +187,13 @@ body[data-qyt-q-theme="ocean"] [data-slot="sidebar.workspaces"] [data-row-key^="
   border-radius: 10px;
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
-  --qyt-q-canvas-image: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 65%), radial-gradient(ellipse at 90% 10%, var(--qyt-q-sand-glow), transparent 58%), linear-gradient(var(--qyt-q-art-wash), var(--qyt-q-art-wash)), var(--qyt-ocean-art);
+  --qyt-q-canvas-wash: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 65%), radial-gradient(ellipse at 90% 10%, var(--qyt-q-sand-glow), transparent 58%), linear-gradient(var(--qyt-q-art-wash), var(--qyt-q-art-wash));
+  --qyt-q-canvas-image: var(--qyt-q-canvas-wash), var(--qyt-ocean-art);
   /* Fixed backgrounds use the viewport; cover it at every window size. The
      composer fade inherits this size to keep both copies of the art aligned. */
   --qyt-q-canvas-size: 100% 100%, 100% 100%, 100% 100%, cover;
+  position: relative;
+  isolation: isolate;
   background-color: var(--qyt-q-base);
   background-image: var(--qyt-q-canvas-image);
   background-position: center, center, center, right bottom;
@@ -199,7 +202,31 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
   background-attachment: fixed;
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="hero"] {
-  background-image: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 68%), radial-gradient(ellipse at 90% 12%, var(--qyt-q-sand-glow), transparent 60%), linear-gradient(180deg, transparent 0%, var(--qyt-q-hero-wash) 55%, var(--qyt-q-art-wash) 100%), var(--qyt-ocean-art);
+  --qyt-q-canvas-wash: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 68%), radial-gradient(ellipse at 90% 12%, var(--qyt-q-sand-glow), transparent 60%), linear-gradient(180deg, transparent 0%, var(--qyt-q-hero-wash) 55%, var(--qyt-q-art-wash) 100%);
+}
+/* A successfully drawn frame replaces the illustration only. The wash follows
+   the native color scheme in CSS and remains above the moving picture. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] {
+  background-image: none;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  visibility: hidden;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-qyt-ocean-wash] {
+  background-image: var(--qyt-q-canvas-wash);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] > :is(canvas[data-qyt-ocean-scene][data-ready="true"], [data-qyt-ocean-wash]) {
+  visibility: visible;
 }
 /* A quiet paper column follows the native content width. Art stays visible in
    the side margins; even the smallest viewport keeps opaque text surfaces. */
@@ -246,6 +273,12 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   background-repeat: no-repeat;
   -webkit-mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
   mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
+}
+/* The moving canvas is shared by the whole phase. A paper fade covers text at
+   the dock without introducing a second, frozen copy of the illustration. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"][data-qyt-ocean-live] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
+  background-color: var(--qyt-q-base);
+  background-image: none;
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
   background: var(--qyt-q-composer-fill);
@@ -366,7 +399,19 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
   outline-offset: -2px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] {
+    background-image: var(--qyt-q-canvas-image);
+  }
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+    display: none;
+  }
+}
+
 @media (forced-colors: active) {
+  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+    display: none;
+  }
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"],
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
     background: Canvas;

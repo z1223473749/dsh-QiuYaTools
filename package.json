@@ -53,6 +53,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
+    "preview:ocean": "node scripts/preview-ocean-scene.mjs --serve",
+    "test:ocean": "node scripts/preview-ocean-scene.mjs",
     "test": "npm run build && node --test tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
     "prepack": "npm run check",
