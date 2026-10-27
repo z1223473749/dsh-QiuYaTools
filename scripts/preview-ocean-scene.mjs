@@ -10,12 +10,16 @@ import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import { installOceanPerformanceProbe } from './ocean-performance.mjs'
 import { inspectSceneMotion, inspectWakeMotion, recordOceanUi } from './ocean-perception.mjs'
+import { inspectFaceShape } from './ocean-face-shape.mjs'
+import { inspectBodyShape } from './ocean-body-shape.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = resolve(root, 'artifacts/ocean-scene')
 const serve = process.argv.includes('--serve')
 const motionOnly = process.argv.includes('--motion-only')
 const wakeOnly = process.argv.includes('--wake-only')
+const faceOnly = process.argv.includes('--face-only')
+const shapeOnly = process.argv.includes('--shape-only')
 const portArgument = process.argv.find(argument => argument.startsWith('--port='))
 const requestedPort = portArgument ? Number(portArgument.split('=')[1]) : serve ? 4317 : 0
 assert.ok(Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535, 'Use --port=0..65535')
@@ -85,6 +89,7 @@ main{flex:1;min-width:0;height:100%;overflow:hidden}main>section{width:100%;heig
 `
 const html = `<!doctype html><html data-platform="darwin" lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ocean · 动态背景预览</title><style>${css}</style></head><body><div class="app"><div data-slot="sidebar" class="sidebar-shell"><aside class="sidebar"><div class="traffic"><i></i><i></i><i></i></div><div class="logo">◕ deepseek <small>HARNESS</small></div><button class="new-chat">⊕ 新会话</button><button id="open-theme-settings" class="nav-row">♧ 插件</button><button class="nav-row">◷ 自动化任务</button><button class="nav-row">▤ 上下文洞察</button><button class="nav-row">⁙ 更多</button><div class="workspaces"><span>工作区</span><span>⌕　⚙　⊞</span></div><div class="workspace">▱ whats-page</div><div class="session">查看浏览器已打开的页面 <small>1天</small></div><div class="session">分析 WhatsApp 唤起链接生… <small>5天</small></div><div class="workspace">▱ whatsapp-page-local</div><div class="session">复制 ovruliz 站点并保持一致 <small>18小时</small></div><div class="workspace">▱ go-whatsapp-web-multidevice</div><div class="workspace">▱ attest</div><div class="session selected">新会话</div><div class="session">Unclear message fragment <small>21小时</small></div><div class="session">测试上下文 <small>6天</small></div><div class="session">本地通过但服务器报 503 原因 <small>26天</small></div><div class="session">Vasama 搭建梯子教程 <small>1个月</small></div><div class="workspace">▱ whatsApp_yw</div><div class="session">待办清单网页实现方案 <small>6天</small></div><div class="session">审查最后一个提交 <small>6天</small></div><div class="sidebar-foot"><span class="avatar">Q</span>QiuYa</div></aside></div><main data-slot="main.conversation"></main></div><script type="module">${js.replaceAll('</script', '<\\/script')}</script></body></html>`
 await writeFile(join(output, 'preview.html'), html)
+if (process.argv.includes('--generate-only')) { console.log(join(output, 'preview.html')); process.exit(0) }
 const server = createServer(async (request, response) => {
   if (request.url === '/favicon.ico') { response.writeHead(204); response.end(); return }
   response.setHeader('Content-Type', 'text/html; charset=utf-8')
@@ -180,22 +185,35 @@ if (serve) {
     })
     assert.ok(initial.width > 0 && initial.height > 0, 'Scene must have a real drawing buffer')
     assert.equal(initial.pointerEvents, 'none', 'Background cannot intercept the composer')
-    if (wakeOnly) {
+    if (shapeOnly) {
+      const bodyShape = await inspectBodyShape(page, output)
+      const faceShape = await inspectFaceShape(page, output)
+      await page.evaluate(() => window.__oceanFixture.dispose())
+      await context.close()
+      console.log(JSON.stringify({ passed: true, fidelity: faceShape.fidelity, faceDistanceChangePx: faceShape.maxPairDistanceChangePx, bodyResidualsArtPx: bodyShape.normalResidualsArtPx, bodyLocalShape: bodyShape.localShape, bodyConcerns: bodyShape.concerns }, null, 2))
+    } else if (faceOnly) {
+      const faceShape = await inspectFaceShape(page, output)
+      await page.evaluate(() => window.__oceanFixture.dispose())
+      await context.close()
+      console.log(JSON.stringify({ passed: true, fidelity: faceShape.fidelity, maxPairDistanceChangePx: faceShape.maxPairDistanceChangePx }, null, 2))
+    } else if (wakeOnly) {
       const wakeMotion = await inspectWakeMotion(page, output)
       await page.evaluate(() => window.__oceanFixture.dispose())
       await context.close()
       console.log(JSON.stringify({ passed: true, fin: wakeMotion.fin.relative, coreLengthVariationPx: wakeMotion.fin.coreLengthVariationPx, foam: wakeMotion.foam }, null, 2))
     } else if (motionOnly) {
+      const bodyShape = await inspectBodyShape(page, output)
+      const faceShape = await inspectFaceShape(page, output)
       const wakeMotion = await inspectWakeMotion(page, output)
       const sceneMotion = await inspectSceneMotion(page, output)
       await page.screenshot({ path: join(output, 'ocean-home.png') })
       const uiRecording = await recordOceanUi(page, output)
       await copyFile(join(output, 'ocean-ui-motion.webm'), join(output, 'ocean-motion.webm'))
       assert.deepEqual(errors, [])
-      const supplement = { passed: true, wakeMotion, sceneMotion, uiRecording, errors, warnings, evidenceBoundary: 'Supplemental motion validation after a shader-only change: fin movement, contact phase screenshots, direction, visible cloud/body/tail movement, fixed 60/180/600 second screenshots, and a fresh 16-second recording of the normal UI. Performance and lifecycle results are retained from the preceding full three-pass browser suite.' }
+      const supplement = { passed: true, bodyShape, faceShape, wakeMotion, sceneMotion, uiRecording, errors, warnings, evidenceBoundary: 'Supplemental motion validation after a shader-only change: original face fidelity and rigid landmark distances, body bending/local cross-section diagnostics, fin movement, contact phase screenshots, direction, visible cloud/body/tail movement, fixed 60/180/600 second screenshots, and a fresh 16-second recording of the normal UI. Performance and lifecycle results are retained from the preceding full three-pass browser suite.' }
       await writeFile(join(output, 'motion-final.json'), JSON.stringify(supplement, null, 2) + '\n')
       const previous = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
-      await writeFile(join(output, 'report.json'), JSON.stringify({ ...previous, wakeMotion, sceneMotion, uiRecording, supplementalValidation: supplement.evidenceBoundary }, null, 2) + '\n')
+      await writeFile(join(output, 'report.json'), JSON.stringify({ ...previous, bodyShape, faceShape, wakeMotion, sceneMotion, uiRecording, supplementalValidation: supplement.evidenceBoundary }, null, 2) + '\n')
       await page.evaluate(() => window.__oceanFixture.dispose())
       await context.close()
       console.log(JSON.stringify({ passed: true, cloudDirection: sceneMotion.cloudDriftDirection, ranges: sceneMotion.ranges, longTermEpochs: sceneMotion.longTermEpochs, uiRecording, errors, warnings }, null, 2))
@@ -207,6 +225,8 @@ if (serve) {
     await writeFile(join(output, 'performance-current.json'), JSON.stringify(performance, null, 2) + '\n')
     assert.ok(performance.webglDraws.fps >= performance.browserRaf.fps * .85, `The background must follow browser refresh: ${performance.webglDraws.fps} actual WebGL FPS / ${performance.browserRaf.fps} browser rAF FPS`)
     assert.ok(performance.webglDraws.p95Ms <= performance.browserRaf.p95Ms * 1.8 + 4, `The background frame interval is uneven: P95 ${performance.webglDraws.p95Ms}ms`)
+    const bodyShape = await inspectBodyShape(page, output)
+    const faceShape = await inspectFaceShape(page, output)
     const wakeMotion = await inspectWakeMotion(page, output)
     const sceneMotion = await inspectSceneMotion(page, output)
     const hairMotion = await inspectHairMotion(page)
@@ -285,11 +305,11 @@ if (serve) {
     await fallback.close()
     assert.deepEqual(errors, [], 'Preview cannot log browser errors')
     await context.close()
-    const report = { passed: true, browser: await browser.version(), initial, performance, hairMotion, wakeMotion, sceneMotion, uiRecording, checks: ['live rendering', 'actual WebGL frame cadence', 'hair motion relative to the face', 'fin stroke relative to the body', 'rigid body core', 'contact-phase screenshots for visual review', 'visible monotonic cloud drift', 'visible body buoyancy', 'tail motion relative to the body', 'normal UI continuous recording', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: 'ocean-ui-motion.webm', warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video continuously records the actual composed UI, including the text, input controls and CSS color wash; mouse movement is tested after recording. Does not assert installation in the live Harness app or physical display presentation timing.' }
+    const report = { passed: true, browser: await browser.version(), initial, performance, faceShape, bodyShape, hairMotion, wakeMotion, sceneMotion, uiRecording, checks: ['live rendering', 'actual WebGL frame cadence', 'original face skin coverage', 'face and ear shape preservation', 'body spine bend diagnostics', 'local cross-section shape diagnostics', 'hair motion relative to the face', 'fin stroke relative to the body', 'contact-phase screenshots for visual review', 'visible monotonic cloud drift', 'visible body buoyancy', 'tail motion relative to the body', 'normal UI continuous recording', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: 'ocean-ui-motion.webm', warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video continuously records the actual composed UI, including the text, input controls and CSS color wash; mouse movement is tested after recording. Does not assert installation in the live Harness app or physical display presentation timing.' }
     await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify({
       passed: report.passed, browser: report.browser, checks: report.checks.length,
-      performance, finStroke: { inner: { x: wakeMotion.fin.relative.inner.x, y: wakeMotion.fin.relative.inner.y }, tip: { x: wakeMotion.fin.relative.tip.x, y: wakeMotion.fin.relative.tip.y }, coreLengthVariationPx: wakeMotion.fin.coreLengthVariationPx },
+      performance, faceShape: { fidelity: faceShape.fidelity, maxPairDistanceChangePx: faceShape.maxPairDistanceChangePx }, bodyBend: bodyShape.normalResidualsArtPx, bodyConcerns: bodyShape.concerns, finStroke: { inner: { x: wakeMotion.fin.relative.inner.x, y: wakeMotion.fin.relative.inner.y }, tip: { x: wakeMotion.fin.relative.tip.x, y: wakeMotion.fin.relative.tip.y }, coreLengthVariationPx: wakeMotion.fin.coreLengthVariationPx },
       cloudDirection: sceneMotion.cloudDriftDirection, sceneRanges: sceneMotion.ranges, uiRecording,
       video: report.video, report: join(output, 'report.json'), warnings, errors,
     }, null, 2))

@@ -1,5 +1,5 @@
 /** Coordinates belong to the packaged 1600 × 900 illustration, not the UI.
- * R: water, G: rider/whale, B: flexible details. Soft mask edges let the
+ * R: rider attachment, G: rider/whale, B: flexible details. Soft edges let the
  * original brush strokes move together without cutting the painting apart. */
 export function createOceanMask(doc: Document, matte = false): HTMLCanvasElement | null {
   const win = doc.defaultView
@@ -11,20 +11,12 @@ export function createOceanMask(doc: Document, matte = false): HTMLCanvasElement
   if (!ctx) return null
   ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, 1600, 900)
-  // Feather the horizon, then paint the silhouettes over the water channel.
-  const horizon = ctx.createLinearGradient(0, 507, 0, 552)
-  horizon.addColorStop(0, '#000')
-  horizon.addColorStop(1, '#f00')
-  if (!matte) {
-    ctx.fillStyle = horizon
-    ctx.fillRect(0, 507, 1600, 393)
-  }
   // The transition must be wider than the largest displacement. Otherwise
   // clouds and a thin fin can sample opposite sides of the same outline and
   // fold the tip inward. This is a motion field, not a hard cutout alpha mask.
-  ctx.filter = matte ? 'blur(.4px)' : 'blur(18px)'
-  const paint = (color: string, path: string, edgeWidth = 1.2): void => {
+  const paint = (color: string, path: string, edgeWidth = 1.2, motionBlur = 18): void => {
     const outline = new win.Path2D(path)
+    ctx.filter = matte ? 'blur(.4px)' : `blur(${motionBlur}px)`
     ctx.fillStyle = matte ? '#fff' : color
     ctx.fill(outline)
     if (matte) {
@@ -48,21 +40,24 @@ export function createOceanMask(doc: Document, matte = false): HTMLCanvasElement
     C 1480 813 1484 815 1483 819 C 1482 823 1475 827 1462 831
     C 1437 840 1388 847 1349 843 C 1281 840 1242 807 1207 780
     C 1136 788 1072 779 1001 753 C 919 724 852 660 827 592 Z`)
-  paint('#00ff00', `M 1011 510 L 1030 487 C 1038 477 1039 447 1053 435
-    L 1067 428 L 1066 416 C 1049 410 1055 392 1058 387
+  paint('#ffff00', `M 1011 510 L 1030 487 C 1038 477 1039 447 1053 435
+    L 1078 434 C 1079 432 1076 429 1073 427
+    C 1068 425 1062 426 1059 423 C 1056 420 1055 416 1055 412
+    C 1054 409 1055 406 1056 404 L 1056 401
+    C 1059 399 1060 396 1058 392 L 1058 387
     L 1052 373 L 1073 362 L 1077 351 L 1094 356 L 1117 353
     L 1115 360 L 1134 368 L 1130 379 L 1144 394 L 1136 401
     L 1148 409 L 1138 416 L 1141 424 L 1117 433 L 1117 440
     C 1142 444 1138 477 1174 495 L 1185 506 C 1229 520 1239 555 1237 582
     L 1233 602 L 1230 639 L 1256 662 C 1257 673 1240 679 1228 669
     L 1205 655 L 1200 635 L 1178 601 C 1144 605 1122 582 1118 562
-    L 1080 528 L 1035 518 Z`, 2)
-  paint('#00ffff', `M 1055 388 L 1053 374 L 1069 370 L 1067 360 L 1080 363
+    L 1080 528 L 1035 518 Z`, 2, 6)
+  paint('#ffffff', `M 1055 388 L 1053 374 L 1069 370 L 1067 360 L 1080 363
     L 1080 352 L 1098 359 L 1120 354 L 1114 365 L 1134 369 L 1127 378
     L 1144 395 L 1134 403 L 1148 409 L 1137 417 L 1141 424 L 1121 432
-    L 1102 427 L 1108 414 L 1103 401 L 1093 390 L 1080 379 L 1066 388 Z`, 2)
-  paint('#00ffff', `M 1157 510 C 1195 492 1222 495 1244 506
-    L 1273 528 C 1235 531 1218 510 1200 519 L 1170 528 Z`)
+    L 1102 427 L 1108 414 L 1103 401 L 1093 390 L 1080 379 L 1066 388 Z`, 2, 6)
+  paint('#ffffff', `M 1157 510 C 1195 492 1222 495 1244 506
+    L 1273 528 C 1235 531 1218 510 1200 519 L 1170 528 Z`, 1.2, 6)
   paint('#00ffff', `M 1387 503 C 1366 470 1299 469 1270 413
     C 1255 384 1246 348 1242 323 C 1268 326 1267 365 1307 375
     C 1355 381 1390 417 1402 445 C 1411 408 1462 405 1484 370
@@ -75,9 +70,8 @@ export function createOceanMask(doc: Document, matte = false): HTMLCanvasElement
     // The distal fin moves by 30px at the strongest upstroke. Its motion
     // support extends beyond the visible alpha so the tip rotates as one
     // surface instead of folding back where the original feather fades.
-    ctx.filter = 'blur(10px)'
     paint('#00ffff', `M 1390 788 C 1430 774 1498 774 1516 797
-      C 1534 831 1504 862 1467 868 L 1390 858 Z`)
+      C 1534 831 1504 862 1467 868 L 1390 858 Z`, 1.2, 10)
   }
   return mask
 }
@@ -104,8 +98,8 @@ export function createOceanMesh(doc: Document): OceanMesh | null {
     for (const [start, stop, step] of details) for (let n = start; n <= stop; n += step) values.add(n)
     return [...values].sort((a, b) => a - b)
   }
-  const xs = axis(1600, [[1040, 1160, 3], [1080, 1512, 8], [1390, 1482, 4], [1432, 1490, 2]], [1110, 1482, 1483])
-  const ys = axis(900, [[336, 450, 3], [656, 856, 8], [632, 768, 4], [804, 842, 2]], [683, 815, 818, 822, 831])
+  const xs = axis(1600, [[1040, 1160, 3], [1000, 1280, 4], [1080, 1512, 8], [1390, 1482, 4], [1432, 1490, 2]], [1048, 1052, 1066, 1086, 1104, 1110, 1118, 1120, 1122, 1136, 1482, 1483])
+  const ys = axis(900, [[336, 450, 3], [480, 684, 4], [656, 856, 8], [632, 768, 4], [804, 842, 2]], [374, 376, 377, 379, 391, 404, 418, 432, 438, 446, 683, 815, 818, 822, 831])
   const vertices = new Float32Array(xs.length * ys.length * 9)
   const smooth = (low: number, high: number, value: number): number => {
     const t = Math.max(0, Math.min(1, (value - low) / (high - low)))
@@ -117,13 +111,19 @@ export function createOceanMesh(doc: Document): OceanMesh | null {
   for (const y of ys) for (const x of xs) {
     const pixel = (Math.round(Math.max(0, Math.min(899, y))) * 1600 + Math.round(Math.max(0, Math.min(1599, x)))) * 4
     const subject = pixels[pixel + 1] / 255
-    // Three anchored hair regions: crown, rear tufts and the little fringe.
-    // These weights deliberately do not use the broad silhouette feather.
-    const crown = lobe(x, y, 1097, 359, 65, 40) * (1 - smooth(368, 391, y))
-    const back = lobe(x, y, 1128, 403, 40, 47) * smooth(1103, 1140, x)
-    const fringe = lobe(x, y, 1062, 374, 20, 20) * (1 - smooth(376, 392, y))
+    const attachment = smooth(.03, .28, pixels[pixel] / 255) * smooth(.03, .28, subject)
+    // The face and ears share the rider's rigid frame even at hair/skin
+    // boundaries; the eight-pixel collar lies outside the protected plateau.
+    const headAttachment = smooth(1040, 1048, x) * (1 - smooth(1122, 1130, x)) *
+      smooth(366, 374, y) * (1 - smooth(438, 446, y))
+    // Pin the scalp roots before the forehead and outside the ear. The exact
+    // zero-weight grid lines keep interpolated hair motion out of the face;
+    // outer crown, rear tufts and the fringe retain their full tip weights.
+    const crown = lobe(x, y, 1097, 359, 65, 40) * (1 - smooth(364, 377, y))
+    const back = lobe(x, y, 1128, 403, 40, 47) * smooth(1118, 1136, x)
+    const fringe = lobe(x, y, 1062, 374, 20, 20) * (1 - smooth(365, 376, y))
     const ribbon = lobe(x, y, 1224, 513, 79, 36) * smooth(1165, 1245, x)
-    vertices.set([x, y, pixels[pixel] / 255 * (1 - subject), subject, pixels[pixel + 2] / 255, crown, back, fringe, ribbon], offset)
+    vertices.set([x, y, Math.max(attachment, headAttachment), subject, pixels[pixel + 2] / 255, crown, back, fringe, ribbon], offset)
     offset += 9
   }
   const indices = new Uint16Array((xs.length - 1) * (ys.length - 1) * 6)
@@ -157,11 +157,50 @@ float softNoise(float time) {
 float swimPhase(float time) { return time * 1.12 + sin(time * .27) * .16; }
 float finBend(float phase) { return -sin(phase - 1.05) * .073 + sin(phase * 2. - .5) * .011; }
 vec2 bodyShift(float phase) { return vec2(sin(phase - .5) * 3., sin(phase - .55) * 8.5 + sin(phase * 2. + .4) * 1.2); }
-vec2 whalePose(vec2 point, float phase, float amount) {
+vec2 bodyGlobal(vec2 point, float phase, float amount) {
   return turn(point, vec2(1135., 650.), sin(phase - .9) * .0065 * amount) + bodyShift(phase) * amount;
 }
+// Lift and its analytic derivative describe a low-amplitude travelling spine.
+// Each cross-section turns as a unit, preserving thickness instead of scaling
+// the belly or dragging the entire animal as a single rigid card.
+vec2 spineLiftSlope(float x, float phase) {
+  if (x <= 1030.) return vec2(0.);
+  float s = clamp((x - 1030.) / 430., 0., 1.);
+  float w = s * s * (3. - 2. * s);
+  float ds = x < 1460. ? 1. / 430. : 0.;
+  float dw = 6. * s * (1. - s) * ds;
+  float q = phase - .65 - s * 1.35, r = phase * 2. - s * .8;
+  float wave = sin(q) * 10.5 + sin(r) * .8;
+  float slope = dw * wave - w * ds * (cos(q) * 14.175 + cos(r) * .64);
+  return vec2(w * wave, slope);
+}
+float spineRestY(float x) { return 636. - (x - 1100.) * .17; }
+vec2 spineFrame(vec2 point, float anchorX, float phase, float amount) {
+  vec2 bend = spineLiftSlope(anchorX, phase) * amount;
+  float c = inversesqrt(1. + bend.y * bend.y), s = bend.y * c;
+  float y = spineRestY(anchorX);
+  vec2 d = point - vec2(anchorX, y);
+  return vec2(anchorX, y + bend.x) + vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+}
+vec2 whalePose(vec2 point, float phase, float amount) {
+  return bodyGlobal(spineFrame(point, point.x, phase, amount), phase, amount);
+}
+vec2 finPose(vec2 point, float phase, float amount) {
+  vec2 bent = turn(point, vec2(1110., 683.), finBend(phase) * amount);
+  return bodyGlobal(spineFrame(bent, 1110., phase, amount), phase, amount);
+}
 vec2 inverseWhalePose(vec2 point, float phase, float amount) {
-  return turn(point - bodyShift(phase) * amount, vec2(1135., 650.), -sin(phase - .9) * .0065 * amount);
+  vec2 local = turn(point - bodyShift(phase) * amount, vec2(1135., 650.), -sin(phase - .9) * .0065 * amount);
+  float x = local.x;
+  for (int i = 0; i < 2; i++) {
+    vec2 bend = spineLiftSlope(x, phase) * amount;
+    float c = inversesqrt(1. + bend.y * bend.y);
+    float d = (local.y - spineRestY(x) - bend.x) / c;
+    x = local.x + bend.y * c * d;
+  }
+  vec2 bend = spineLiftSlope(x, phase) * amount;
+  float c = inversesqrt(1. + bend.y * bend.y);
+  return vec2(x, spineRestY(x) + (local.y - spineRestY(x) - bend.x) / c);
 }`
 
 // Large-scene motion runs per mesh vertex; local collision foam is evaluated
@@ -213,22 +252,26 @@ void main() {
     flow.y += water * nearWater * sin(p.x * 9. - u_time * .62) * 2.;
     flow += u_pointer * vec2(2., 1.1) * (.3 + nearWater * .5);
   } else {
-    // The whole whale/rider keeps one rigid parent transform. Tail and fin
-    // rotations happen around their own roots before that parent transform.
+    // The torso bends gently along its spine. The tail, flipper and rider
+    // inherit rigid attachment frames, so faces and appendages never shear.
     float tail = (1. - smoothstep(480., 555., a_position.y)) * smoothstep(1200., 1230., a_position.x);
     tail *= max(1. - smoothstep(445., 485., a_position.y), smoothstep(1300., 1380., a_position.x));
     float tailAngle = (sin(stroke) + sin(stroke * 2. + .5) * .1) * .066 * amount;
-    position = mix(position, turn(position, vec2(1395., 525.), tailAngle), tail);
     float fin = smoothstep(.025, .25, a_region.b) * smoothstep(630., 660., a_position.y - (a_position.x - 1100.) * .36);
     fin *= smoothstep(1070., 1110., a_position.x) * smoothstep(645., 680., a_position.y);
     float finAngle = finBend(phase) * amount;
-    position = mix(position, turn(position, vec2(1110., 683.), finAngle), fin);
     flow += a_detail.x * vec2(wind * 10., sin(u_time * 1.9 + p.x * 23.) * 2.4 - wind * 2.);
     flow += a_detail.y * vec2(wind * 12., sin(u_time * 2.1 - a_position.y * .06) * 3.4 - wind * 2.5);
     flow += a_detail.z * vec2(wind * 3.5, sin(u_time * 1.9) * 1.7);
     flow += a_detail.w * vec2(wind * 3., sin(u_time * 2. - a_position.x * .028) * (8. + gust * 3.) + wind * 3.);
-    position += flow * amount;
-    position = whalePose(position, phase, amount);
+    vec2 bentBody = spineFrame(a_position, a_position.x, phase, amount);
+    vec2 bentTail = spineFrame(turn(a_position, vec2(1395., 525.), tailAngle), 1395., phase, amount);
+    vec2 bentFin = spineFrame(turn(a_position, vec2(1110., 683.), finAngle), 1110., phase, amount);
+    vec2 rider = spineFrame(a_position + flow * amount, 1105., phase, amount);
+    position = mix(bentBody, bentTail, tail);
+    position = mix(position, bentFin, fin);
+    position = mix(position, rider, a_region.r);
+    position = bodyGlobal(position, phase, amount);
     position += u_pointer * vec2(7., 3.2) * u_amount;
     flow = vec2(0.);
   }
@@ -301,7 +344,8 @@ void main() {
     float phase = swimPhase(u_time);
     float pressure = pow(max(0., cos(phase - .9)), 2.);
     vec2 viewShift = u_pointer * vec2(7., 3.2) * u_amount;
-    vec2 hull = inverseWhalePose(art - viewShift, phase, amount);
+    vec2 hull = art;
+    if (art.x > 1300.) hull = inverseWhalePose(art - viewShift, phase, amount);
 
     // A fixed sea-surface strip establishes the front/back relation. The
     // collision foam below rises at contact, then leaves a broken aft trail.
@@ -334,7 +378,7 @@ void main() {
     waterAlpha = max(waterAlpha, rightFilm * (.2 + pressure * .24));
     float rightFoam = (1. - smoothstep(2., 10., abs(edgeDistance - 1.))) * rightGate;
 
-    vec2 finTip = whalePose(turn(vec2(1466., 820.), vec2(1110., 683.), finBend(phase) * amount), phase, amount) + viewShift;
+    vec2 finTip = finPose(vec2(1466., 820.), phase, amount) + viewShift;
     vec2 finWakeDelta = art - finTip - vec2(10., 5.);
     float kick = pow(max(0., cos(phase - 4.8)), 4.);
     float finWake = 1. - smoothstep(.55, 1.14, length(finWakeDelta / vec2(55., 13.)));

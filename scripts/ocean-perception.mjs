@@ -55,11 +55,17 @@ export async function inspectWakeMotion(page, output) {
     return { epochs, measurements, relative, coreLengthVariationPx: Math.max(...lengths) - Math.min(...lengths) }
   }, { frames: baseFrames, epochs })
   await page.evaluate(() => window.__oceanFixture.resumeTime())
-  const report = { fin, foam, evidenceBoundary: 'Fin registration uses actual GPU frames with only the foreground-water pass skipped. Foam energy compares complete and skipped-layer-2 frames at the same shader epoch. Phase screenshots retain the normal UI and all passes. Brightness difference supports timing review; visual contact and edge quality still require human inspection.' }
+  const references = {
+    finDisplacement: 'Tip and inner displacements are relative to the distant whale-eye patch. With a flexible spine, the inner-fin value can be reduced by the local attachment frame and is diagnostic only.',
+    coreDistance: 'coreLengthVariationPx compares two distant patches and is expected to vary with body bending. It is not a local thickness or rigid-core pass criterion.',
+  }
+  const report = { fin, foam, references, evidenceBoundary: 'Fin registration uses actual GPU frames with only the foreground-water pass skipped. Foam energy compares complete and skipped-layer-2 frames at the same shader epoch. Phase screenshots retain the normal UI and all passes. Brightness difference supports timing review; visual contact and edge quality still require human inspection.' }
   await writeFile(join(output, 'wake-motion.json'), JSON.stringify(report, null, 2) + '\n')
   assert.ok(fin.relative.tip.y >= 30, `Fin tip must visibly stroke relative to the body: ${fin.relative.tip.y}px`)
-  assert.ok(Math.hypot(fin.relative.inner.x, fin.relative.inner.y) >= 10, 'Fin inner section must visibly stroke relative to the body')
-  assert.ok(fin.coreLengthVariationPx <= 4, `Whale core must retain its shape: ${fin.coreLengthVariationPx}px anchor-distance variation`)
+  // Inner-fin displacement against the distant eye is diagnostic once the
+  // spine flexes: the local attachment frame can counter that global motion.
+  // The torso now intentionally flexes. This old pairwise-length metric is
+  // diagnostic; spine curvature and local thickness are checked separately.
   return report
 }
 
