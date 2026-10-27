@@ -59,18 +59,63 @@ export function createOceanMask(doc: Document): HTMLCanvasElement | null {
   return mask
 }
 
-export const OCEAN_VERTEX_SHADER = `
-attribute vec2 a_position;
-varying vec2 v_uv;
-void main() {
-  v_uv = vec2(a_position.x * .5 + .5, .5 - a_position.y * .5);
-  gl_Position = vec4(a_position, 0., 1.);
-}`
+export interface OceanMesh {
+  vertices: Float32Array
+  indices: Uint16Array
+}
 
-export const OCEAN_FRAGMENT_SHADER = `
+/** Build the motion mesh once. The extra vertices around the hair retain each
+ * tuft's outline; moving tips have separate weights from the pinned roots and
+ * the face. Nothing reads pixels or rebuilds geometry in the animation loop. */
+export function createOceanMesh(doc: Document): OceanMesh | null {
+  const mask = createOceanMask(doc)
+  const ctx = mask?.getContext('2d')
+  if (!ctx) return null
+  const pixels = ctx.getImageData(0, 0, 1600, 900).data
+  const axis = (end: number, detailStart: number, detailEnd: number): number[] => {
+    const values = new Set<number>([-32, end + 32, end])
+    for (let n = 0; n < end; n += 16) values.add(n)
+    for (let n = detailStart; n <= detailEnd; n += 3) values.add(n)
+    return [...values].sort((a, b) => a - b)
+  }
+  const xs = axis(1600, 1040, 1160), ys = axis(900, 336, 450)
+  const vertices = new Float32Array(xs.length * ys.length * 9)
+  const smooth = (low: number, high: number, value: number): number => {
+    const t = Math.max(0, Math.min(1, (value - low) / (high - low)))
+    return t * t * (3 - 2 * t)
+  }
+  const lobe = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): number =>
+    1 - smooth(.25, 1, ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2)
+  let offset = 0
+  for (const y of ys) for (const x of xs) {
+    const pixel = (Math.round(Math.max(0, Math.min(899, y))) * 1600 + Math.round(Math.max(0, Math.min(1599, x)))) * 4
+    const subject = pixels[pixel + 1] / 255
+    // Three anchored hair regions: crown, rear tufts and the little fringe.
+    // These weights deliberately do not use the broad silhouette feather.
+    const crown = lobe(x, y, 1097, 359, 65, 40) * (1 - smooth(368, 391, y))
+    const back = lobe(x, y, 1128, 403, 40, 47) * smooth(1103, 1140, x)
+    const fringe = lobe(x, y, 1062, 374, 20, 20) * (1 - smooth(376, 392, y))
+    const ribbon = lobe(x, y, 1224, 513, 79, 36) * smooth(1165, 1245, x)
+    vertices.set([x, y, pixels[pixel] / 255 * (1 - subject), subject, pixels[pixel + 2] / 255, crown, back, fringe, ribbon], offset)
+    offset += 9
+  }
+  const indices = new Uint16Array((xs.length - 1) * (ys.length - 1) * 6)
+  offset = 0
+  for (let y = 0; y < ys.length - 1; y++) for (let x = 0; x < xs.length - 1; x++) {
+    const a = y * xs.length + x, b = a + 1, c = a + xs.length, d = c + 1
+    indices.set([a, c, b, b, c, d], offset)
+    offset += 6
+  }
+  return { vertices, indices }
+}
+
+// All wind/water calculations run per mesh vertex. The old shader did this
+// work for every pixel, including the three ripple exponentials while idle.
+export const OCEAN_VERTEX_SHADER = `
 precision highp float;
-uniform sampler2D u_art;
-uniform sampler2D u_mask;
+attribute vec2 a_position;
+attribute vec3 a_region;
+attribute vec4 a_detail;
 uniform vec2 u_viewport;
 uniform vec4 u_bounds;
 uniform vec2 u_pointer;
@@ -78,52 +123,59 @@ uniform vec3 u_ripples[3];
 uniform float u_time;
 uniform float u_amount;
 varying vec2 v_uv;
+varying float v_light;
 const vec2 ART = vec2(1600., 900.);
 void main() {
   float fit = max(u_viewport.x / ART.x, u_viewport.y / ART.y);
-  vec2 p = (u_bounds.xy + v_uv * u_bounds.zw - u_viewport + ART * fit) / (ART * fit);
-  // A small overscan reserves room for parallax at all four edges.
-  p = (p - .5) / 1.035 + .5;
-  vec3 region = texture2D(u_mask, p).rgb;
-  float water = region.r * (1. - region.g);
-  float subject = region.g;
+  vec2 p = a_position / ART;
+  float water = a_region.r;
+  float subject = a_region.g;
   float sky = (1. - smoothstep(.47, .58, p.y)) * (1. - subject);
   float nearWater = smoothstep(.57, 1., p.y);
-  float wind = sin(u_time * .43) * .65 + sin(u_time * .91 + .7) * .35;
+  float wind = .55 + sin(u_time * .7) * .36 + sin(u_time * 1.3 + 1.) * .12;
   vec2 flow = vec2(0.);
-  // Coherent wind, with a different scale and response for each material.
-  flow += sky * vec2(sin(u_time * .12 + p.y * 5.) * .007, sin(u_time * .19 + p.x * 6.) * .0014);
+  // Displacements are in original-art pixels, before cover and overscan.
+  float hairArea = max(a_detail.x, max(a_detail.y, a_detail.z));
+  flow += sky * (1. - hairArea) * vec2(sin(u_time * .12 + p.y * 5.) * 9., sin(u_time * .19 + p.x * 6.) * 1.1);
   flow += water * vec2(
-    sin(p.y * 57. - u_time * 1.15 + sin(p.x * 12. + u_time * .35)) * (.001 + nearWater * .003),
-    sin(p.x * 33. + p.y * 20. - u_time * .95) * (.0005 + nearWater * .0024));
-  float bob = sin(u_time * .72) * .0027 + sin(u_time * 1.13) * .0006;
-  flow += subject * vec2(sin(u_time * .36) * .0011, bob);
-  vec2 detail = p * ART;
-  float hair = region.b * (1. - smoothstep(424., 445., detail.y)) * (1. - smoothstep(1140., 1170., detail.x));
-  float ribbon = region.b * smoothstep(1168., 1220., detail.x) *
-    (1. - smoothstep(1270., 1290., detail.x)) *
-    (1. - smoothstep(530., 551., detail.y)) * smoothstep(468., 490., detail.y);
-  float tail = region.b * smoothstep(1235., 1375., detail.x) * (1. - smoothstep(489., 550., detail.y));
-  float fin = region.b * smoothstep(655., 713., detail.y);
-  flow += hair * vec2(wind * .0015 * smoothstep(1070., 1143., detail.x), sin(u_time * 1.6 + detail.x * .025) * .0009);
-  flow.y += ribbon * (wind * .0034 + sin(u_time * 2. + detail.x * .024) * .0015);
-  flow += tail * vec2(sin(u_time * .72 - .7) * .0015, sin(u_time * .72 - .7) * .0035);
-  flow.y += fin * sin(u_time * .72 - 1.1) * .0028 * smoothstep(1100., 1460., detail.x);
-  vec2 parallax = u_pointer * vec2(.005, .0032) * (.22 + subject * .5 + water * nearWater * .8);
+    sin(p.y * 49. - u_time * 1.05 + sin(p.x * 10. + u_time * .3)) * (.8 + nearWater * 3.),
+    sin(p.x * 29. + p.y * 17. - u_time * .9) * (.35 + nearWater * 2.));
+  float bob = sin(u_time * .72) * 2.1 + sin(u_time * 1.13) * .4;
+  flow += subject * vec2(sin(u_time * .36) * 1.2, bob);
+  flow += a_detail.x * vec2(wind * 7.5, sin(u_time * 1.8 + p.x * 23.) * 1.6 - wind * 1.5);
+  flow += a_detail.y * vec2(wind * 9., sin(u_time * 1.8 - a_position.y * .055) * 2.4 - wind * 2.);
+  flow += a_detail.z * vec2(wind * 2.8, sin(u_time * 1.8) * 1.2);
+  flow += a_detail.w * vec2(wind * 2., sin(u_time * 1.8 - a_position.x * .024) * 7. + wind * 2.);
+  float tail = a_region.b * smoothstep(1235., 1375., a_position.x) * (1. - smoothstep(489., 550., a_position.y));
+  float fin = a_region.b * smoothstep(655., 713., a_position.y);
+  flow += tail * vec2(sin(u_time * .72 - .7) * 1.8, sin(u_time * .72 - .7) * 3.);
+  flow.y += fin * sin(u_time * .72 - 1.1) * 2.1 * smoothstep(1100., 1460., a_position.x);
+  vec2 parallax = u_pointer * vec2(7., 2.8) * (.22 + subject * .5 + water * nearWater * .8);
   float glint = 0.;
   for (int i = 0; i < 3; i++) {
     vec3 ripple = u_ripples[i];
-    vec2 delta = (p - ripple.xy) * vec2(ART.x / ART.y, 1.);
-    float radius = length(delta);
-    float ring = radius - ripple.z * .042;
-    float life = smoothstep(0., .18, ripple.z) * (1. - smoothstep(.8, 2.5, ripple.z));
-    float wave = sin(ring * 240.) * exp(-abs(ring) * 95.) * life;
-    flow += water * normalize(delta + vec2(.0001)) * wave * .00085;
-    glint += wave * .025 * water;
+    if (ripple.z < 2.5 && water > .01) {
+      vec2 delta = (p - ripple.xy) * vec2(ART.x / ART.y, 1.);
+      float ring = length(delta) - ripple.z * .042;
+      float life = smoothstep(0., .18, ripple.z) * (1. - smoothstep(.8, 2.5, ripple.z));
+      float wave = sin(ring * 240.) * exp(-abs(ring) * 95.) * life;
+      flow += water * normalize(delta + vec2(.0001)) * wave * .8;
+      glint += wave * .012 * water;
+    }
   }
-  vec2 uv = clamp(p + (flow + parallax) * u_amount, .001, .999);
-  vec3 color = texture2D(u_art, uv).rgb;
-  float light = sin(p.x * 73. + p.y * 121. - u_time * .8) * sin(p.y * 93. + u_time * .53);
-  color += (light * .012 * water * nearWater + glint) * u_amount;
-  gl_FragColor = vec4(color, 1.);
+  vec2 screen = u_viewport - ART * fit + ((p - .5) * 1.035 + .5) * ART * fit;
+  screen += (flow + parallax) * u_amount * 1.035 * fit;
+  vec2 clip = (screen - u_bounds.xy) / u_bounds.zw;
+  gl_Position = vec4(clip.x * 2. - 1., 1. - clip.y * 2., 0., 1.);
+  v_uv = clamp(p, .001, .999);
+  v_light = glint * u_amount;
+}`
+
+export const OCEAN_FRAGMENT_SHADER = `
+precision mediump float;
+uniform sampler2D u_art;
+varying vec2 v_uv;
+varying float v_light;
+void main() {
+  gl_FragColor = vec4(texture2D(u_art, v_uv).rgb + v_light, 1.);
 }`

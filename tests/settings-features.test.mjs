@@ -91,11 +91,11 @@ function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1
     async mutate(operations) {
       mutations.push(structuredClone(operations))
       if (failure) throw failure
-      const next = { ...snapshot.value }
+      const next = structuredClone(snapshot.value)
       for (const operation of operations) {
         assert.equal(operation.op, 'set')
-        assert.equal(operation.path.length, 1)
-        next[operation.path[0]] = operation.value
+        const parent = operation.path.slice(0, -1).reduce((current, key) => current[key] ??= {}, next)
+        parent[operation.path.at(-1)] = operation.value
       }
       snapshot = { ...snapshot, value: next, revision: snapshot.revision + 1 }
       for (const listener of listeners) listener()
@@ -492,6 +492,75 @@ test('Q Theme save failures retain the current preference and allow retry withou
     assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'true')
     assert.equal(f.snapshot().value.enabled, false)
   } finally { f.dispose() }
+})
+
+test('Ocean motion belongs to its theme card and writes only its nested setting while tools or Q Theme are off', async () => {
+  const initial = {
+    ...defaults, enabled: false,
+    qThemeSettings: { ocean: { palette: 'sea-glass' }, futureTheme: { motion: 'static' } },
+  }
+  const f = mount(initial)
+  let saved
+  try {
+    f.select('qThemeTab')
+    const group = f.container.querySelector('[role="radiogroup"][aria-label="qThemeOceanMotion"]')
+    assert.ok(group.closest('.qyt-theme-card[data-theme="ocean"] .qyt-theme-title'))
+    assert.equal(group.previousElementSibling.tagName, 'H4', 'motion follows the Whale and sea heading directly')
+    assert.equal(group.parentElement.nextElementSibling.className, 'qyt-theme-name', 'the theme name stays separately aligned at the far right')
+    const dynamic = group.querySelector('input[value="dynamic"]'), still = group.querySelector('input[value="static"]')
+    assert.equal(dynamic.checked, true, 'older profiles inherit the existing dynamic appearance')
+    assert.equal(still.checked, false)
+    assert.equal(still.disabled, false, 'motion can be configured before enabling the theme')
+    await act(async () => Simulate.change(still))
+    assert.equal(still.checked, true)
+    assert.equal(dynamic.checked, false)
+    assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeSettings', 'ocean', 'motion'], value: 'static' }]])
+    assert.deepEqual(f.snapshot().value, {
+      ...initial, qThemeSettings: { ...initial.qThemeSettings, ocean: { palette: 'sea-glass', motion: 'static' } },
+    }, 'saving Ocean leaves other themes, Ocean options, and feature settings intact')
+    await f.toggle('qTheme')
+    await f.toggle('qTheme')
+    assert.equal(still.checked, true, 'disabling the theme retains the selected motion mode')
+    saved = structuredClone(f.snapshot().value)
+  } finally { f.dispose() }
+  const restored = mount(saved)
+  try {
+    restored.select('qThemeTab')
+    const group = restored.container.querySelector('[role="radiogroup"][aria-label="qThemeOceanMotion"]')
+    assert.equal(group.querySelector('input[value="static"]').checked, true)
+    await act(async () => Simulate.change(group.querySelector('input[value="dynamic"]')))
+    assert.deepEqual(restored.mutations, [[{ op: 'set', path: ['qThemeSettings', 'ocean', 'motion'], value: 'dynamic' }]])
+    assert.equal(group.querySelector('input[value="dynamic"]').checked, true)
+  } finally { restored.dispose() }
+})
+
+test('Ocean motion save errors keep the accepted selection and allow retry', async () => {
+  const f = mount({ ...defaults, qThemeSettings: { ocean: { motion: 'static' } } })
+  try {
+    f.select('qThemeTab')
+    const group = f.container.querySelector('[role="radiogroup"][aria-label="qThemeOceanMotion"]')
+    f.failWith(Error('offline'))
+    await act(async () => Simulate.change(group.querySelector('input[value="dynamic"]')))
+    assert.equal(group.querySelector('input[value="static"]').checked, true)
+    assert.match(f.container.querySelector('[role="alert"]').textContent, /saveError/)
+    f.failWith(null)
+    await act(async () => Simulate.change(group.querySelector('input[value="dynamic"]')))
+    assert.equal(group.querySelector('input[value="dynamic"]').checked, true)
+    assert.equal(f.snapshot().value.qThemeEnabled, false)
+  } finally { f.dispose() }
+})
+
+test('Ocean motion respects unavailable and read-only form states', () => {
+  for (const policy of [{ writable: false }, { status: 'loading' }, { status: 'unavailable' }]) {
+    const f = mount(defaults, policy)
+    try {
+      f.select('qThemeTab')
+      const inputs = [...f.container.querySelectorAll('.qyt-theme-motion input')]
+      assert.equal(inputs.length, 2)
+      for (const input of inputs) assert.equal(input.disabled, true)
+      assert.equal(f.mutations.length, 0)
+    } finally { f.dispose() }
+  }
 })
 
 test('scroll containment applies only to our native outlet and keeps header, master and tabs outside the scrolling panel', () => {

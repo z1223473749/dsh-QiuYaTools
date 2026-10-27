@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { Preferences } from '../shared.ts'
+import { getOceanMotion, type Preferences } from '../shared.ts'
 import css from './q-theme.css'
 import { OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
@@ -11,7 +11,7 @@ interface ThemeMount {
   style: HTMLStyleElement
   previous: string | null
   owners: Set<symbol>
-  disposeScene: () => void
+  disposeScene?: () => void
 }
 const mounts = new WeakMap<Document, ThemeMount>()
 
@@ -33,7 +33,7 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>): () 
     active = false
     const mount = mounts.get(doc)
     if (!mount || !mount.owners.delete(owner) || mount.owners.size > 0) return
-    mount.disposeScene()
+    mount.disposeScene?.()
     mount.style.remove()
     // Restore only our marker. Another actor's later attribute change is
     // outside this layer's ownership, just like the body's inline styles.
@@ -48,21 +48,25 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>): () 
     if (disposed) return
     const snapshot = form.getSnapshot()
     if (snapshot.status !== 'ready' || snapshot.value?.qThemeEnabled !== true) { remove(); return }
-    if (active) return
     let mount = mounts.get(doc)
     if (!mount) {
       const style = doc.createElement('style')
       style.dataset.plugin = 'dsh-qiuya-tools'
       style.dataset.qytQTheme = 'ocean'
       style.textContent = css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
-      mount = { body: doc.body, style, previous: doc.body.getAttribute(ATTRIBUTE), owners: new Set(), disposeScene: () => {} }
+      mount = { body: doc.body, style, previous: doc.body.getAttribute(ATTRIBUTE), owners: new Set() }
       doc.head.append(style)
       doc.body.setAttribute(ATTRIBUTE, 'ocean')
       mounts.set(doc, mount)
-      mount.disposeScene = installOceanScene(doc)
     }
     mount.owners.add(owner)
     active = true
+    if (getOceanMotion(snapshot.value) === 'static') {
+      mount.disposeScene?.()
+      mount.disposeScene = undefined
+    } else {
+      mount.disposeScene ??= installOceanScene(doc)
+    }
   }
 
   const unsubscribe = form.subscribe(sync)

@@ -1,9 +1,8 @@
 import { OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
-import { createOceanMask, OCEAN_FRAGMENT_SHADER, OCEAN_VERTEX_SHADER } from './ocean-scene-art.ts'
+import { createOceanMesh, OCEAN_FRAGMENT_SHADER, OCEAN_VERTEX_SHADER, type OceanMesh } from './ocean-scene-art.ts'
 
 const HOST = '[data-slot="main.conversation"] > [data-phase]'
 const LIVE = 'data-qyt-ocean-live'
-const FRAME_MS = 1000 / 30
 const MAX_PIXELS = 1_800_000
 const ART_WIDTH = 1600
 const ART_HEIGHT = 900
@@ -15,19 +14,19 @@ interface Painter {
 
 /** Each installation owns one low-power GPU context. All failure paths leave
  * the CSS illustration in place; no animation is necessary to use the app. */
-function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mask: HTMLCanvasElement): Painter | null {
+function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mesh: OceanMesh): Painter | null {
   const gl = canvas.getContext('webgl', {
-    alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power',
+    alpha: false, antialias: false, depth: false, stencil: false,
   })
   if (!gl) return null
   const shaders: WebGLShader[] = []
   const textures: WebGLTexture[] = []
+  const buffers: WebGLBuffer[] = []
   let program: WebGLProgram | null = null
-  let buffer: WebGLBuffer | null = null
   const dispose = (): void => {
     textures.forEach(texture => gl.deleteTexture(texture))
     shaders.forEach(shader => gl.deleteShader(shader))
-    if (buffer) gl.deleteBuffer(buffer)
+    buffers.forEach(buffer => gl.deleteBuffer(buffer))
     if (program) gl.deleteProgram(program)
     gl.getExtension('WEBGL_lose_context')?.loseContext()
   }
@@ -50,30 +49,32 @@ function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mask:
     gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error('Ocean program linking failed')
     gl.useProgram(program)
-    buffer = gl.createBuffer()
-    if (!buffer) throw new Error('Ocean vertex allocation failed')
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW)
-    const position = gl.getAttribLocation(program, 'a_position')
-    gl.enableVertexAttribArray(position)
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0)
-    for (const [index, source] of [image, mask].entries()) {
-      const texture = gl.createTexture()
-      if (!texture) throw new Error('Ocean texture allocation failed')
-      textures.push(texture)
-      gl.activeTexture(gl.TEXTURE0 + index)
-      gl.bindTexture(gl.TEXTURE_2D, texture)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+    for (const [target, data] of [[gl.ARRAY_BUFFER, mesh.vertices], [gl.ELEMENT_ARRAY_BUFFER, mesh.indices]] as const) {
+      const buffer = gl.createBuffer()
+      if (!buffer) throw new Error('Ocean mesh allocation failed')
+      buffers.push(buffer)
+      gl.bindBuffer(target, buffer)
+      gl.bufferData(target, data, gl.STATIC_DRAW)
     }
+    for (const [name, size, offset] of [['a_position', 2, 0], ['a_region', 3, 8], ['a_detail', 4, 20]] as const) {
+      const location = gl.getAttribLocation(program, name)
+      gl.enableVertexAttribArray(location)
+      gl.vertexAttribPointer(location, size, gl.FLOAT, false, 36, offset)
+    }
+    const texture = gl.createTexture()
+    if (!texture) throw new Error('Ocean texture allocation failed')
+    textures.push(texture)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
     const uniform = (name: string): WebGLUniformLocation | null => gl.getUniformLocation(program!, name)
     const viewport = uniform('u_viewport'), boundsUniform = uniform('u_bounds'), pointerUniform = uniform('u_pointer')
     const timeUniform = uniform('u_time'), ripplesUniform = uniform('u_ripples[0]'), amountUniform = uniform('u_amount')
     gl.uniform1i(uniform('u_art'), 0)
-    gl.uniform1i(uniform('u_mask'), 1)
     if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('Ocean texture initialization failed')
     const win = canvas.ownerDocument.defaultView!
     let firstDraw = true
@@ -89,7 +90,7 @@ function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mask:
         gl.uniform1f(timeUniform, time)
         gl.uniform1f(amountUniform, amount)
         gl.uniform3fv(ripplesUniform, ripples)
-        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_SHORT, 0)
         if (firstDraw) {
           firstDraw = false
           if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('Ocean first frame failed')
@@ -114,7 +115,7 @@ export function installOceanScene(doc: Document): () => void {
   let host: HTMLElement | null = null
   let canvas: HTMLCanvasElement | null = null, wash: HTMLDivElement | null = null
   let painter: Painter | null = null
-  let mask: HTMLCanvasElement | null = null
+  let mesh: OceanMesh | null = null
   let bounds: DOMRect | null = null
   let frame = 0, lastDraw = 0, time = 0, inView = true, measure = true
   let pointerTarget = [0, 0], pointer = [0, 0]
@@ -158,8 +159,9 @@ export function installOceanScene(doc: Document): () => void {
     frame = 0
     if (!allowed() || !painter || !host || doc.hidden || !inView) { lastDraw = 0; return }
     if (!host.isConnected) { sync(); return }
-    if (lastDraw && now - lastDraw < FRAME_MS - 1) { schedule(); return }
-    const dt = lastDraw ? Math.min((now - lastDraw) / 1000, .08) : FRAME_MS / 1000
+    // Draw once per display refresh, including 120 Hz. A 30 fps timestamp gate
+    // made mouse motion visibly step and could skip an extra refresh.
+    const dt = lastDraw ? Math.min((now - lastDraw) / 1000, .08) : 0
     lastDraw = now
     time += dt
     if (measure || !bounds) { bounds = host.getBoundingClientRect(); measure = false }
@@ -199,13 +201,13 @@ export function installOceanScene(doc: Document): () => void {
       if (!loading) { loading = true; image.src = OCEAN_SCENE_DATA_URL }
       return
     }
-    try { mask ??= createOceanMask(doc) } catch { mask = null }
-    if (!mask) { failed = true; return }
+    try { mesh ??= createOceanMesh(doc) } catch { mesh = null }
+    if (!mesh) { failed = true; return }
     canvas = doc.createElement('canvas')
     canvas.dataset.qytOceanScene = ''
     canvas.setAttribute('aria-hidden', 'true')
     canvas.addEventListener('webglcontextlost', onContextLost)
-    try { painter = createPainter(canvas, image, mask) } catch { painter = null }
+    try { painter = createPainter(canvas, image, mesh) } catch { painter = null }
     if (!painter) { failed = true; release(); return }
     host = next
     wash = doc.createElement('div')
@@ -269,6 +271,6 @@ export function installOceanScene(doc: Document): () => void {
     win.removeEventListener('blur', resetPointer)
     image.onload = null; image.onerror = null
     release()
-    mask = null
+    mesh = null
   }
 }

@@ -11,8 +11,8 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import pkg from '../../package.json' with { type: 'json' }
 import {
-  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold,
-  type FeatureField, type Preferences,
+  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold, getOceanMotion,
+  type FeatureField, type Preferences, type OceanMotion,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
 import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation, consumeUpdatesSettingsNavigation, subscribeUpdatesSettingsNavigation, openUpdatesSettings } from './account-menu.ts'
@@ -107,6 +107,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const id = useId()
   const ready = snapshot.status === 'ready'
   const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
+  const oceanMotion = getOceanMotion(preferences)
   const availableFeatures = FEATURE_FIELDS.filter(field => field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)
   const allEnabled = availableFeatures.every(field => isFeatureEnabled(preferences, field))
   const anyEnabled = availableFeatures.some(field => isFeatureEnabled(preferences, field))
@@ -169,6 +170,11 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     await persist([{ op: 'set', path: ['qThemeEnabled'], value }])
   }
 
+  async function setOceanMotion(value: OceanMotion): Promise<void> {
+    if (value === oceanMotion) return
+    await persist([{ op: 'set', path: ['qThemeSettings', 'ocean', 'motion'], value }])
+  }
+
   function editThreshold(field: keyof ThresholdDraft, value: string): void {
     setThresholdDraft({ ...draft, [field]: value })
     setThresholdError(null)
@@ -217,8 +223,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name="qTheme"/></span><h3>{t('qTheme')}</h3></div><Switch className="qyt-switch" checked={preferences.qThemeEnabled === true} label={t('qTheme')} disabled={disabled} onChange={value => { void setThemeEnabled(value) }}/></div>
                 <p className="qyt-muted">{t('qThemeHint')}</p>
               </div>
-              <div className="qyt-card qyt-theme-card">
-                <div className="qyt-theme-title"><h4>{t('qThemePreview')}</h4><span className="qyt-theme-name">Q Ocean · 鲸与海</span></div>
+              <div className="qyt-card qyt-theme-card" data-theme="ocean">
+                <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t('qThemePreview')}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t('qThemeOceanMotion')}>
+                  {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-ocean-motion`} value={motion} checked={oceanMotion === motion} disabled={disabled} onChange={() => { void setOceanMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
+                </div></div><span className="qyt-theme-name">Q Ocean · 鲸与海</span></div>
                 <div className="qyt-theme-preview" role="img" aria-label={t('qThemePreviewDescription')}>
                   <div className="qyt-theme-scene" aria-hidden="true"><div className="qyt-preview-sidebar"><span className="qyt-preview-brand" style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }}/><i/><i/><i/></div><div className="qyt-preview-main"><div className="qyt-preview-top"><span/><i/></div><div className="qyt-preview-bubble qyt-preview-user"><span/><span/></div><div className="qyt-preview-bubble qyt-preview-answer"><span/><span/><span/></div><div className="qyt-preview-composer"><span/><i/></div></div></div>
                 </div>

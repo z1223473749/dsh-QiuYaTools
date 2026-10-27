@@ -7,15 +7,26 @@ import { build } from 'esbuild'
 import { JSDOM } from 'jsdom'
 
 const root = new URL('../', import.meta.url)
-const source = (await build({
+const buildOptions = {
   entryPoints: [fileURLToPath(new URL('src/client/q-theme.ts', root))],
   bundle: true, write: false, platform: 'node', format: 'cjs', loader: { '.css': 'text' },
-})).outputFiles[0].text
+}
+const [source, motionMockSource] = (await Promise.all([
+  build(buildOptions),
+  build({ ...buildOptions, plugins: [{
+    name: 'observe-ocean-motion-lifecycle',
+    setup(build) {
+      build.onLoad({ filter: /[/\\]ocean-scene\.ts$/ }, () => ({
+        contents: 'export function installOceanScene(doc) { return globalThis.__scene.install(doc) }', loader: 'js',
+      }))
+    },
+  }] }),
+])).map(result => result.outputFiles[0].text)
 const css = await readFile(new URL('src/client/q-theme.css', root), 'utf8')
 
-function moduleFor(document) {
+function moduleFor(document, scene) {
   const module = { exports: {} }
-  vm.runInNewContext(source, { module, exports: module.exports, document })
+  vm.runInNewContext(scene ? motionMockSource : source, { module, exports: module.exports, document, __scene: scene })
   return module.exports
 }
 
@@ -29,14 +40,14 @@ function formFixture(value = { qThemeEnabled: false }, status = 'ready') {
   }
 }
 
-function fixture(t, { enabled = false, marker, dark = false, sharedForm } = {}) {
+function fixture(t, { enabled = false, marker, dark = false, sharedForm, scene } = {}) {
   const dom = new JSDOM('<!doctype html><html data-platform="darwin"><head><style data-native-theme>body{--dsw-alias-bg-base:#fff;--dsw-alias-state-error-primary:#d31d34;--dsw-alias-state-success-primary:#198251;--dsw-alias-state-warn-primary:#9b640a;--dsw-alias-code-diff-added:#d4f4dd;--dsw-alias-markdown-code-block:#f8f8f8}body[data-ds-dark-theme]{--dsw-alias-markdown-code-block:#191919}.shiki span{color:#7851a9}</style></head><body style="--host-layer: preserved; color: rgb(11, 22, 33)"><div id="root"><div data-slot="sidebar"><aside>Sidebar</aside></div><main data-slot="main.conversation"><section data-phase="active"><div data-conversation-scroll>Conversation</div></section></main><div data-composer-card>Composer</div><pre class="shiki"><span>highlighted</span></pre></div></body></html>')
   t.after(() => dom.window.close())
   const doc = dom.window.document
   if (marker !== undefined) doc.body.setAttribute('data-qyt-q-theme', marker)
   if (dark) doc.body.setAttribute('data-ds-dark-theme', '')
   const form = sharedForm ?? formFixture({ qThemeEnabled: enabled })
-  const plugin = moduleFor(doc)
+  const plugin = moduleFor(doc, scene)
   const cleanups = []
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup() })
   return {
@@ -46,6 +57,71 @@ function fixture(t, { enabled = false, marker, dark = false, sharedForm } = {}) 
     token: name => dom.window.getComputedStyle(doc.body).getPropertyValue(name).trim(),
   }
 }
+
+function motionFixture() {
+  return {
+    installs: 0, cleanups: 0, active: 0,
+    install(doc) {
+      assert.ok(doc.querySelector('style[data-qyt-q-theme="ocean"]'), 'theme styles exist before motion installation')
+      assert.equal(doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+      this.installs++; this.active++
+      let stopped = false
+      return () => { if (!stopped) { stopped = true; this.cleanups++; this.active-- } }
+    },
+  }
+}
+
+test('the Ocean static preference enables its palette without installing the motion runtime', t => {
+  const scene = motionFixture()
+  const sharedForm = formFixture({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  const f = fixture(t, { sharedForm, scene })
+  const cleanup = f.install()
+  assert.equal(f.styles().length, 1)
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(f.token('--qyt-q-base'), '#fafaf8')
+  assert.equal(scene.installs, 0)
+  cleanup()
+  assert.equal(scene.cleanups, 0)
+})
+
+test('changing Ocean motion stops and resumes only animation while preserving the shared theme', t => {
+  const scene = motionFixture()
+  const f = fixture(t, { enabled: true, scene })
+  const first = f.install(), second = f.install()
+  const style = f.styles()[0]
+  assert.equal(scene.installs, 1, 'shared theme consumers install one scene')
+  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  assert.equal(scene.active, 0)
+  assert.equal(scene.cleanups, 1)
+  assert.equal(f.styles()[0], style)
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(f.token('--qyt-q-base'), '#fafaf8')
+  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  assert.equal(scene.cleanups, 1, 'repeated static updates do not dispose twice')
+  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'dynamic' } } })
+  assert.equal(scene.installs, 2)
+  assert.equal(scene.active, 1)
+  assert.equal(f.styles()[0], style)
+  first()
+  assert.equal(scene.active, 1, 'one owner cannot stop another consumer\'s scene')
+  second()
+  assert.equal(scene.active, 0)
+  assert.equal(scene.cleanups, 2)
+  assert.equal(f.styles().length, 0)
+})
+
+test('legacy Ocean preferences and an explicit dynamic preference start motion by default', t => {
+  for (const qThemeSettings of [undefined, {}, { ocean: {} }, { ocean: { motion: 'dynamic' } }]) {
+    const scene = motionFixture()
+    const sharedForm = formFixture({ qThemeEnabled: true, ...(qThemeSettings === undefined ? {} : { qThemeSettings }) })
+    const f = fixture(t, { sharedForm, scene })
+    const cleanup = f.install()
+    assert.equal(scene.installs, 1)
+    assert.equal(scene.active, 1)
+    cleanup()
+    assert.equal(scene.active, 0)
+  }
+})
 
 test('stays off until an accepted explicit setting and ignores the legacy feature master switch', t => {
   const f = fixture(t)

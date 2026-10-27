@@ -34,6 +34,7 @@ const expected = {
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: false,
+  qThemeSettings: { ocean: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -51,7 +52,7 @@ assert.equal(typeof validated.then, 'undefined', 'Cordis requires synchronous co
 assert.equal(validated.issues, undefined, 'default configuration must validate')
 for (const [field, value] of Object.entries(expected)) {
   assert.equal(typeof validated.value[field].get, 'function', field + ' must remain volatile')
-  assert.equal(validated.value[field].get(), value, field + ' must preserve its default')
+  assert.deepEqual(validated.value[field].get(), value, field + ' must preserve its default')
 }
 assert.equal(host.Config.simplify(validated.value), null, 'default-valued fields are omitted from persistence')
 assert.deepEqual(unwrap(host.Config({})), expected,
@@ -61,6 +62,7 @@ for (const input of [
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: true, autoCheckUpdates: false },
+  { qThemeSettings: { ocean: { motion: 'static' } } },
 ]) {
   const result = await standard.validate(input)
   assert.equal(result.issues, undefined, 'valid boundary or explicit settings must validate')
@@ -71,7 +73,14 @@ for (const input of [
   assert.equal(restored.issues, undefined)
   assert.deepEqual(unwrap(restored.value), { ...expected, ...input },
     'plain persisted data must restore volatile references and omitted defaults')
-  for (const [field, value] of Object.entries(input)) assert.equal(result.value[field].get(), value)
+  for (const [field, value] of Object.entries(input)) assert.deepEqual(result.value[field].get(), value)
+}
+
+for (const input of [{ qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }]) {
+  const result = await standard.validate(input)
+  assert.equal(result.issues, undefined)
+  assert.deepEqual(result.value.qThemeSettings.get(), expected.qThemeSettings)
+  assert.equal(host.Config.simplify(result.value), null)
 }
 
 const invalid = [
@@ -90,6 +99,8 @@ const invalid = [
   { enabled: 'false' },
   { promptSuggestionsEnabled: 'true' },
   { autoCheckUpdates: 'false' },
+  { qThemeSettings: { ocean: { motion: 'off' } } },
+  { qThemeSettings: { ocean: { motion: false } } },
 ]
 for (const input of invalid) {
   const result = await standard.validate(input)
@@ -170,7 +181,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 14, invalidCases: 15, applied: true,
+    imported: true, standardSchema: true, volatileFields: 15, invalidCases: 17, applied: true,
   })
 })
 
@@ -201,7 +212,8 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), false)
-  assert.equal(Object.keys(fiber.config).length, 14)
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' } })
+  assert.equal(Object.keys(fiber.config).length, 15)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
   assert.equal(fiber.config.gitEnabled.get(), true)

@@ -12,9 +12,15 @@ const source = (await build({
 
 function graphics({ initializationError = 0, firstDrawError = 0 } = {}) {
   const live = new Set()
-  const calls = { contexts: 0, draws: 0, allocations: 0 }
+  const calls = { contexts: 0, draws: 0, allocations: 0, bufferUploads: 0, textureUploads: 0, times: [] }
   const constants = new Map()
   let pendingError = initializationError
+  let sceneTime = 0
+  const draw = () => {
+    calls.draws++
+    calls.times.push(sceneTime)
+    if (calls.draws === 1) pendingError = firstDrawError
+  }
   const gl = new Proxy({
     canvas: null,
     NO_ERROR: 0,
@@ -23,12 +29,18 @@ function graphics({ initializationError = 0, firstDrawError = 0 } = {}) {
     getShaderInfoLog: () => '',
     getProgramInfoLog: () => '',
     getAttribLocation: () => 0,
-    getUniformLocation: () => ({}),
+    getUniformLocation: (_program, name) => ({ name }),
+    uniform1f(location, value) { if (location?.name === 'u_time') sceneTime = value },
+    bufferData() { calls.bufferUploads++ },
+    bufferSubData() { calls.bufferUploads++ },
+    texImage2D() { calls.textureUploads++ },
+    texSubImage2D() { calls.textureUploads++ },
     getParameter: () => 4096,
     getError() { const error = pendingError; pendingError = 0; return error },
     isContextLost: () => false,
     getExtension: () => null,
-    drawArrays() { calls.draws++; if (calls.draws === 1) pendingError = firstDrawError },
+    drawArrays: draw,
+    drawElements: draw,
   }, {
     get(target, name) {
       if (name in target) return target[name]
@@ -80,7 +92,10 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
     disconnect() { resizeObservers.delete(this) }
   }
   win.Path2D = class { constructor(path) { this.path = path } }
-  const maskContext = { fillRect() {}, fill() {}, createLinearGradient: () => ({ addColorStop() {} }) }
+  const maskContext = {
+    fillRect() {}, fill() {}, createLinearGradient: () => ({ addColorStop() {} }),
+    getImageData(_x, _y, width, height) { return { data: new Uint8ClampedArray(width * height * 4), width, height } },
+  }
   win.HTMLElement.prototype.getBoundingClientRect = function () {
     return { left: 280, top: 0, right: 1280, bottom: 900, width: 1000, height: 900, x: 280, y: 0, toJSON() { return {} } }
   }
@@ -130,11 +145,11 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
       frames.clear()
       for (const [, callback] of current) callback(time)
     },
-    async ready() {
+    async ready(time = 1000) {
       await this.tick()
       for (const image of [...images]) image.load()
       await this.tick()
-      this.frame()
+      this.frame(time)
       await this.tick()
     },
   }
@@ -233,6 +248,28 @@ test('destroy after rendering releases every graphics allocation and registered 
   assert.ok([...f.media.values()].every(state => state.listeners.size === 0))
 })
 
+test('60 Hz and 120 Hz displays receive a draw on every animation frame at the same real-time speed', async t => {
+  for (const hz of [60, 120]) {
+    const f = fixture(t)
+    await f.ready()
+    const initialDraws = f.gpu.calls.draws
+    const initialTime = f.gpu.calls.times.at(-1)
+    const initialAllocations = f.gpu.calls.allocations
+    const initialBufferUploads = f.gpu.calls.bufferUploads
+    const initialTextureUploads = f.gpu.calls.textureUploads
+    for (let index = 1; index <= 12; index++) {
+      f.frame(1000 + index * 1000 / hz)
+      assert.equal(f.gpu.calls.draws, initialDraws + index, `${hz} Hz frame ${index} must not be skipped by a 30 fps gate`)
+      assert.equal(f.frames.size, 1, 'only one next-frame callback may remain scheduled')
+    }
+    const elapsed = f.gpu.calls.times.at(-1) - initialTime
+    assert.ok(Math.abs(elapsed - 12 / hz) < .00001, `${hz} Hz must advance animation using elapsed time`)
+    assert.equal(f.gpu.calls.allocations, initialAllocations, 'animation frames reuse graphics allocations')
+    assert.equal(f.gpu.calls.bufferUploads, initialBufferUploads, 'animation frames reuse uploaded mesh geometry')
+    assert.equal(f.gpu.calls.textureUploads, initialTextureUploads, 'animation frames reuse uploaded artwork')
+  }
+})
+
 test('changing a motion preference withdraws live graphics and can resume with one scene', async t => {
   const f = fixture(t)
   await f.ready()
@@ -257,6 +294,7 @@ test('a hidden document pauses rendering and resumes without starting another co
   await f.ready()
   const contexts = f.gpu.calls.contexts
   const draws = f.gpu.calls.draws
+  const beforePause = f.gpu.calls.times.at(-1)
   Object.defineProperty(f.doc, 'hidden', { configurable: true, value: true })
   f.doc.dispatchEvent(new f.win.Event('visibilitychange'))
   f.frame(3000)
@@ -264,9 +302,13 @@ test('a hidden document pauses rendering and resumes without starting another co
   assert.equal(f.gpu.calls.draws, draws)
   Object.defineProperty(f.doc, 'hidden', { configurable: true, value: false })
   f.doc.dispatchEvent(new f.win.Event('visibilitychange'))
-  f.frame(4000)
+  f.frame(60_000)
   assert.ok(f.gpu.calls.draws > draws)
   assert.equal(f.gpu.calls.contexts, contexts)
+  const afterResume = f.gpu.calls.times.at(-1)
+  assert.ok(afterResume >= beforePause && afterResume - beforePause <= 1 / 30, 'resuming must not add the hidden minute to the animation clock')
+  f.frame(60_000 + 1000 / 120)
+  assert.ok(Math.abs(f.gpu.calls.times.at(-1) - afterResume - 1 / 120) < .00001, 'normal frame timing resumes immediately after the pause')
 })
 
 test('context loss withdraws the live marker and returns to the static fallback', async t => {

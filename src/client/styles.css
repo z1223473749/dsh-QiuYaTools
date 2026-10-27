@@ -93,6 +93,16 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-ocean: var(--qyt-q-sea, #8ec6d2);
 .qyt-number-field input:disabled, .qyt-button:disabled { opacity: .5; cursor: default; }
 .qyt-theme-title, .qyt-theme-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .qyt-theme-name { color: var(--qyt-ocean); font-size: 11px; font-weight: 500; letter-spacing: .4px; }
+.qyt-theme-title { flex-wrap: wrap; }
+.qyt-theme-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.qyt-theme-title > .qyt-theme-name { margin-left: auto; }
+.qyt-theme-motion { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--qyt-ocean-line); border-radius: 8px; background: var(--qyt-surface-muted); }
+.qyt-theme-motion > label { position: relative; cursor: pointer; }
+.qyt-theme-motion input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.qyt-theme-motion label > span { display: block; border: 1px solid transparent; border-radius: 5px; padding: 3px 9px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.qyt-theme-motion input:checked + span { border-color: var(--qyt-ocean-line); color: var(--qyt-ocean); background: var(--qyt-surface); box-shadow: 0 1px 3px rgba(32,40,44,.06); }
+.qyt-theme-motion input:focus-visible + span { outline: 2px solid var(--qyt-ocean); outline-offset: 1px; }
+.qyt-theme-motion input:disabled + span { opacity: .5; cursor: default; }
 .qyt-theme-preview { margin-top: 14px; border: 1px solid var(--qyt-ocean-line); border-radius: 11px; overflow: hidden; background: var(--dsw-alias-bg-layer-2); }
 .qyt-theme-scene { display: grid; grid-template-columns: 70px minmax(0,1fr); min-height: 224px; background-image: linear-gradient(100deg, var(--qyt-art-paper), var(--qyt-art-wash) 60%, transparent), var(--qyt-ocean-art); background-size: cover; background-position: center; }
 .qyt-preview-sidebar { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 10px; border-right: 1px solid var(--qyt-ocean-line); background: var(--qyt-ocean-soft); }

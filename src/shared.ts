@@ -1,5 +1,13 @@
 export const SETTINGS_ID = 'qiuya-tools'
 
+export type OceanMotion = 'dynamic' | 'static'
+export interface QThemeSettings {
+  ocean: { motion: OceanMotion }
+}
+export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
+  ocean: Object.freeze({ motion: 'dynamic' }),
+})
+
 /** Serialized values projected by the Host configuration form. */
 export interface Preferences {
   /** Legacy master switch, retained so an existing paused profile stays paused. */
@@ -14,6 +22,8 @@ export interface Preferences {
   gitEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
+  /** Each theme owns its options; Ocean motion does not affect other themes. */
+  qThemeSettings: QThemeSettings
   computerUseEnabled: boolean
   /** Background checks only; installation always requires an explicit action. */
   autoCheckUpdates: boolean
@@ -37,11 +47,17 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: false,
+  qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
   computerUseEnabled: false,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
 })
+
+/** Older profiles retain Ocean's dynamic default when theme options are absent. */
+export function getOceanMotion(preferences: Partial<Preferences> | undefined): OceanMotion {
+  return preferences?.qThemeSettings?.ocean?.motion === 'static' ? 'static' : 'dynamic'
+}
 
 /** Missing feature fields inherit the defaults when upgrading an older profile. */
 export function isFeatureEnabled(preferences: Partial<Preferences> | undefined, field: FeatureField): boolean {
