@@ -8,8 +8,8 @@ import { chromium } from 'playwright'
 /** Stringified into the browser fixture; keep this function self-contained. */
 export function installOceanPerformanceProbe() {
   if (window.__oceanPerformance) return window.__oceanPerformance
-  const win = window, started = performance.now(), rolling = { draws: [], rafs: [] }, sample = { draws: [], rafs: [] }, restorers = []
-  let capturing = false, frame = 0, sampleStarted = 0, disposed = false
+  const win = window, started = performance.now(), rolling = { draws: [], calls: [], rafs: [] }, sample = { draws: [], calls: [], rafs: [] }, restorers = []
+  let capturing = false, frame = 0, sampleStarted = 0, disposed = false, rafEpoch = 0, lastDrawEpoch = -1
   function append(kind, time) {
     rolling[kind].push(time)
     if (rolling[kind].length > 2400) rolling[kind].splice(0, rolling[kind].length - 2400)
@@ -21,14 +21,18 @@ export function installOceanPerformanceProbe() {
       const native = type.prototype[operation]
       const wrapped = function(...args) {
         const value = native.apply(this, args)
-        if (this.canvas?.hasAttribute('data-qyt-ocean-scene')) append('draws', performance.now())
+        if (this.canvas?.hasAttribute('data-qyt-ocean-scene')) {
+          const time = performance.now()
+          append('calls', time)
+          if (lastDrawEpoch !== rafEpoch) { lastDrawEpoch = rafEpoch; append('draws', time) }
+        }
         return value
       }
       type.prototype[operation] = wrapped
       restorers.push(() => { if (type.prototype[operation] === wrapped) type.prototype[operation] = native })
     }
   }
-  function tick(time) { if (disposed) return; append('rafs', time); frame = win.requestAnimationFrame(tick) }
+  function tick(time) { if (disposed) return; rafEpoch++; append('rafs', time); frame = win.requestAnimationFrame(tick) }
   frame = win.requestAnimationFrame(tick)
   function summarize(times, elapsed) {
     const intervals = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b)
@@ -36,9 +40,9 @@ export function installOceanPerformanceProbe() {
     return { frames: times.length, fps: Number((times.length / (elapsed / 1000)).toFixed(2)), p50Ms: percentile(.5), p95Ms: percentile(.95), maxMs: intervals.at(-1) ?? null, over25Ms: intervals.filter(value => value > 25).length, over50Ms: intervals.filter(value => value > 50).length }
   }
   const probe = {
-    start() { sample.draws.length = 0; sample.rafs.length = 0; sampleStarted = performance.now(); capturing = true; return sampleStarted },
-    stop() { capturing = false; const ended = performance.now(), durationMs = ended - sampleStarted; return { durationMs, webglDraws: summarize(sample.draws, durationMs), browserRaf: summarize(sample.rafs, durationMs) } },
-    snapshot(windowMs = 2000) { const now = performance.now(), durationMs = Math.max(1, Math.min(windowMs, now - started)); return { durationMs, webglDraws: summarize(rolling.draws.filter(time => time > now - windowMs), durationMs), browserRaf: summarize(rolling.rafs.filter(time => time > now - windowMs), durationMs) } },
+    start() { sample.draws.length = 0; sample.calls.length = 0; sample.rafs.length = 0; sampleStarted = performance.now(); capturing = true; return sampleStarted },
+    stop() { capturing = false; const ended = performance.now(), durationMs = ended - sampleStarted; return { durationMs, webglDraws: summarize(sample.draws, durationMs), drawCalls: sample.calls.length, passesPerFrame: sample.calls.length / Math.max(1, sample.draws.length), browserRaf: summarize(sample.rafs, durationMs) } },
+    snapshot(windowMs = 2000) { const now = performance.now(), durationMs = Math.max(1, Math.min(windowMs, now - started)), draws = rolling.draws.filter(time => time > now - windowMs), calls = rolling.calls.filter(time => time > now - windowMs); return { durationMs, webglDraws: summarize(draws, durationMs), drawCalls: calls.length, passesPerFrame: calls.length / Math.max(1, draws.length), browserRaf: summarize(rolling.rafs.filter(time => time > now - windowMs), durationMs) } },
     dispose() { disposed = true; win.cancelAnimationFrame(frame); restorers.reverse().forEach(restore => restore()) },
   }
   win.__oceanPerformance = probe
@@ -65,7 +69,7 @@ try {
   await page.evaluate(() => window.__oceanPerformance.start())
   await page.waitForTimeout(duration)
   const sample = await page.evaluate(() => ({ ...window.__oceanPerformance.stop(), renderer: (() => { const canvas = document.querySelector('canvas[data-qyt-ocean-scene]'), gl = canvas.getContext('webgl') ?? canvas.getContext('webgl2'); if (!gl) return null; const debug = gl.getExtension('WEBGL_debug_renderer_info'); return debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) })() }))
-  const report = { browser: await browser.version(), url, viewport: { width: 1440, height: 1000 }, ...sample, evidenceBoundary: 'Counts actual scene WebGL draw submissions and an independent browser rAF probe. Does not claim GPU completion or display presentation timing. No screenshot, readPixels, recording, or synchronous GPU finish runs during the sampling window.' }
+  const report = { browser: await browser.version(), url, viewport: { width: 1440, height: 1000 }, ...sample, evidenceBoundary: 'Groups actual scene WebGL draw calls by browser rAF epoch into scene frames, retaining raw drawCalls and passesPerFrame alongside an independent rAF probe. Does not claim GPU completion or display presentation timing. No screenshot, readPixels, recording, or synchronous GPU finish runs during the sampling window.' }
   await writeFile(destination, JSON.stringify(report, null, 2) + '\n')
   console.log(JSON.stringify(report, null, 2))
 } finally { await browser?.close() }

@@ -1,0 +1,6 @@
+{
+  "source": "q-ocean-scene.webp",
+  "method": "Built-in imagegen precise-object-edit, followed by JPEG format conversion at 1600 × 900",
+  "purpose": "Scenery behind the independently animated original whale and rider; the original theme illustration remains the static fallback.",
+  "prompt": "Use case: precise-object-edit. Edit target: the provided 1600 by 900 watercolor ocean illustration. Create a clean background plate for layered animation. Remove ONLY the large blue whale, the white-haired boy riding it, the red waist ribbon, and the bright splash/wake directly caused by the whale. Fill their former area with the same continuous soft distant clouds, turquoise sea, and natural ocean waves. Preserve the source composition, exact horizon height (approximately y=516/900), the cloud formations, pastel ivory sky, sunlight, distant mountains, brush texture, color palette, and all other scenery as faithfully as possible. This is a technical inpainting plate intended to sit directly beneath the original character cutout; maintain exact alignment and landscape 16:9 framing, ideally output 1600 x 900. The result must be scenery only: no whale, no boy, no human, no animal, no boats, no added objects, no text, no border, no watermark. Do not redesign the painting or change the lighting."
+}

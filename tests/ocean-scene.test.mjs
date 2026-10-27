@@ -10,30 +10,38 @@ const source = (await build({
   bundle: true, write: false, platform: 'node', format: 'cjs',
 })).outputFiles[0].text
 
-function graphics({ initializationError = 0, firstDrawError = 0 } = {}) {
+function graphics({ initializationError = 0, firstDrawError = 0, errorDraw = 1 } = {}) {
   const live = new Set()
-  const calls = { contexts: 0, draws: 0, allocations: 0, bufferUploads: 0, textureUploads: 0, times: [] }
+  const calls = { contexts: 0, draws: 0, allocations: 0, bufferUploads: 0, textureUploads: 0, times: [], passes: [], blendFunctions: [] }
   const constants = new Map()
+  const boundTextures = new Map(), textureSources = new Map()
   let pendingError = initializationError
-  let sceneTime = 0
-  const draw = () => {
+  let sceneTime = 0, layer = 0, blending = false, activeUnit = 33984, indexBuffer
+  const draw = (_mode, count) => {
     calls.draws++
     calls.times.push(sceneTime)
-    if (calls.draws === 1) pendingError = firstDrawError
+    calls.passes.push({ time: sceneTime, layer, blending, count, indexBuffer, art: textureSources.get(boundTextures.get(33984)), matte: textureSources.get(boundTextures.get(33985)), ready: gl.canvas?.dataset.ready })
+    if (calls.draws === errorDraw) pendingError = firstDrawError
   }
   const gl = new Proxy({
     canvas: null,
-    NO_ERROR: 0,
+    NO_ERROR: 0, TEXTURE0: 33984, TEXTURE1: 33985, BLEND: 3042, ELEMENT_ARRAY_BUFFER: 34963,
     getShaderParameter: () => true,
     getProgramParameter: () => true,
     getShaderInfoLog: () => '',
     getProgramInfoLog: () => '',
     getAttribLocation: () => 0,
     getUniformLocation: (_program, name) => ({ name }),
-    uniform1f(location, value) { if (location?.name === 'u_time') sceneTime = value },
+    uniform1f(location, value) { if (location?.name === 'u_time') sceneTime = value; if (location?.name === 'u_layer') layer = value },
+    activeTexture(unit) { activeUnit = unit },
+    bindTexture(_target, texture) { boundTextures.set(activeUnit, texture) },
+    bindBuffer(target, buffer) { if (target === 34963) indexBuffer = buffer },
+    enable(capability) { if (capability === 3042) blending = true },
+    disable(capability) { if (capability === 3042) blending = false },
+    blendFunc(source, destination) { calls.blendFunctions.push([source, destination]) },
     bufferData() { calls.bufferUploads++ },
     bufferSubData() { calls.bufferUploads++ },
-    texImage2D() { calls.textureUploads++ },
+    texImage2D(...args) { calls.textureUploads++; textureSources.set(boundTextures.get(activeUnit), args.at(-1)) },
     texSubImage2D() { calls.textureUploads++ },
     getParameter: () => 4096,
     getError() { const error = pendingError; pendingError = 0; return error },
@@ -56,11 +64,11 @@ function graphics({ initializationError = 0, firstDrawError = 0 } = {}) {
   return { gl, live, calls }
 }
 
-function fixture(t, { reduced = false, forced = false, context = true, raf = true, missing, initializationError = 0, firstDrawError = 0 } = {}) {
+function fixture(t, { reduced = false, forced = false, context = true, raf = true, missing, initializationError = 0, firstDrawError = 0, errorDraw = 1 } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body data-qyt-q-theme="ocean"><main data-slot="main.conversation"><section data-phase="hero"><button>Native action</button></section></main></body></html>', { pretendToBeVisual: true })
   const win = dom.window
   const doc = win.document
-  const gpu = graphics({ initializationError, firstDrawError })
+  const gpu = graphics({ initializationError, firstDrawError, errorDraw })
   const frames = new Map()
   const images = []
   const media = new Map()
@@ -93,7 +101,7 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
   }
   win.Path2D = class { constructor(path) { this.path = path } }
   const maskContext = {
-    fillRect() {}, fill() {}, createLinearGradient: () => ({ addColorStop() {} }),
+    fillRect() {}, fill() {}, stroke() {}, createLinearGradient: () => ({ addColorStop() {} }),
     getImageData(_x, _y, width, height) { return { data: new Uint8ClampedArray(width * height * 4), width, height } },
   }
   win.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -121,6 +129,11 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
       this.complete = true
       const event = new win.Event('load')
       this.onload?.(event)
+      this.dispatchEvent(event)
+    }
+    fail() {
+      const event = new win.Event('error')
+      this.onerror?.(event)
       this.dispatchEvent(event)
     }
   }
@@ -192,12 +205,91 @@ test('unavailable WebGL keeps the static fallback and has no animation loop', as
   assert.equal(f.frames.size, 0)
 })
 
+test('both embedded images must load before background, matte foreground and waterline are submitted in order', async t => {
+  for (const first of [0, 1]) {
+    const f = fixture(t)
+    await f.tick()
+    assert.equal(f.images.length, 2)
+    const original = f.images.find(image => image.src.startsWith('data:image/webp;base64,'))
+    const plate = f.images.find(image => image.src.startsWith('data:image/jpeg;base64,'))
+    assert.ok(original && plate, 'both illustration assets are embedded in the client')
+    f.images[first].load()
+    await f.tick()
+    f.frame()
+    assert.equal(f.gpu.calls.contexts, 0, 'a single decoded image cannot initialize the layered scene')
+    assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), false)
+    f.images[1 - first].load()
+    await f.tick()
+    f.frame()
+    assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), true)
+    assert.equal(f.gpu.calls.bufferUploads, 3, 'the vertex buffer and both index buffers are uploaded once')
+    assert.equal(f.gpu.calls.textureUploads, 3, 'original, clean plate and matte are separate textures')
+    const [background, foreground, waterline] = f.gpu.calls.passes
+    assert.equal(f.gpu.calls.passes.length, 3)
+    assert.equal(background.layer, 0)
+    assert.equal(background.blending, false)
+    assert.equal(background.art, plate)
+    assert.equal(foreground.layer, 1)
+    assert.equal(foreground.blending, true)
+    assert.equal(foreground.art, original)
+    assert.equal(waterline.layer, 2)
+    assert.equal(waterline.blending, true)
+    assert.equal(waterline.art, plate)
+    assert.ok(background.count > 0 && foreground.count > 0)
+    assert.notEqual(background.indexBuffer, foreground.indexBuffer)
+    assert.equal(waterline.indexBuffer, foreground.indexBuffer, 'waterline reuses the foreground index buffer')
+    assert.ok(background.matte instanceof f.win.HTMLCanvasElement)
+    assert.equal(foreground.matte, background.matte)
+    assert.equal(waterline.matte, background.matte)
+    assert.equal(background.time, foreground.time, 'all layers share one frame clock')
+    assert.equal(waterline.time, foreground.time)
+    assert.equal(background.ready, undefined)
+    assert.equal(foreground.ready, undefined)
+    assert.equal(waterline.ready, undefined, 'readiness is announced only after all three first-frame passes succeed')
+    assert.deepEqual(f.gpu.calls.blendFunctions[0], [f.gpu.gl.SRC_ALPHA, f.gpu.gl.ONE_MINUS_SRC_ALPHA])
+  }
+})
+
+test('failure of either image retains the static illustration and ignores the other late image', async t => {
+  for (const failure of [0, 1]) {
+    const f = fixture(t)
+    await f.tick()
+    f.images[failure].fail()
+    f.images[1 - failure].load()
+    await f.tick()
+    f.frame()
+    f.doc.body.append(f.doc.createElement('div'))
+    await f.tick()
+    assert.equal(f.gpu.calls.contexts, 0)
+    assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), false)
+    assert.equal(f.frames.size, 0)
+    assert.equal(f.images.length, 2, 'an image failure cannot create a retry loop')
+  }
+})
+
+test('images that finish while motion is disabled are reused when motion resumes', async t => {
+  const f = fixture(t)
+  await f.tick()
+  f.images[0].load()
+  const reduced = f.media.get('(prefers-reduced-motion: reduce)')
+  reduced.change(true)
+  f.images[1].load()
+  await f.tick()
+  assert.equal(f.gpu.calls.contexts, 0)
+  assert.equal(f.frames.size, 0)
+  reduced.change(false)
+  f.frame()
+  assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), true)
+  assert.equal(f.gpu.calls.passes.length, 3)
+  assert.equal(f.images.length, 2, 'resuming motion does not decode the same assets again')
+})
+
 test('WebGL errors without JavaScript exceptions never replace the static illustration', async t => {
-  for (const options of [{ initializationError: 1281 }, { firstDrawError: 1282 }]) {
+  for (const options of [{ initializationError: 1281 }, { firstDrawError: 1282 }, { firstDrawError: 1282, errorDraw: 2 }, { firstDrawError: 1282, errorDraw: 3 }]) {
     const f = fixture(t, options)
     await f.ready()
     assert.ok(f.gpu.calls.allocations > 0, 'the failure occurs after a real initialization attempt')
-    if (options.firstDrawError) assert.equal(f.gpu.calls.draws, 1, 'a failed first frame must be checked before declaring the scene ready')
+    if (options.firstDrawError) assert.equal(f.gpu.calls.draws, options.errorDraw ?? 1, 'any failed first-frame pass must be checked before declaring the scene ready')
     assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), false)
     assert.equal(f.canvas(), null)
     assert.equal(f.gpu.live.size, 0)
@@ -227,6 +319,11 @@ test('destroy before image load cancels work and ignores an image arriving late'
   assert.equal(f.gpu.live.size, 0)
   assert.equal(f.resizeObservers.size, 0)
   assert.ok([...f.media.values()].every(state => state.listeners.size === 0))
+  assert.equal(pendingImages.length, 2)
+  for (const image of pendingImages) {
+    assert.equal(image.onload, null)
+    assert.equal(image.onerror, null)
+  }
 })
 
 test('destroy after rendering releases every graphics allocation and registered observer', async t => {
@@ -259,7 +356,13 @@ test('60 Hz and 120 Hz displays receive a draw on every animation frame at the s
     const initialTextureUploads = f.gpu.calls.textureUploads
     for (let index = 1; index <= 12; index++) {
       f.frame(1000 + index * 1000 / hz)
-      assert.equal(f.gpu.calls.draws, initialDraws + index, `${hz} Hz frame ${index} must not be skipped by a 30 fps gate`)
+      assert.equal(f.gpu.calls.draws, initialDraws + index * 3, `${hz} Hz frame ${index} must submit all three layers without being skipped by a 30 fps gate`)
+      const [background, foreground, waterline] = f.gpu.calls.passes.slice(-3)
+      assert.equal(background.layer, 0)
+      assert.equal(foreground.layer, 1)
+      assert.equal(waterline.layer, 2)
+      assert.equal(background.time, foreground.time)
+      assert.equal(waterline.time, foreground.time)
       assert.equal(f.frames.size, 1, 'only one next-frame callback may remain scheduled')
     }
     const elapsed = f.gpu.calls.times.at(-1) - initialTime

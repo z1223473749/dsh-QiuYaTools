@@ -1,4 +1,4 @@
-import { OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
+import { OCEAN_SCENE_DATA_URL, OCEAN_CLEAN_PLATE_DATA_URL } from './brand-assets.ts'
 import { createOceanMesh, OCEAN_FRAGMENT_SHADER, OCEAN_VERTEX_SHADER, type OceanMesh } from './ocean-scene-art.ts'
 
 const HOST = '[data-slot="main.conversation"] > [data-phase]'
@@ -14,7 +14,7 @@ interface Painter {
 
 /** Each installation owns one low-power GPU context. All failure paths leave
  * the CSS illustration in place; no animation is necessary to use the app. */
-function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mesh: OceanMesh): Painter | null {
+function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, cleanPlateImage: HTMLImageElement, mesh: OceanMesh): Painter | null {
   const gl = canvas.getContext('webgl', {
     alpha: false, antialias: false, depth: false, stencil: false,
   })
@@ -49,32 +49,43 @@ function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mesh:
     gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error('Ocean program linking failed')
     gl.useProgram(program)
-    for (const [target, data] of [[gl.ARRAY_BUFFER, mesh.vertices], [gl.ELEMENT_ARRAY_BUFFER, mesh.indices]] as const) {
+    const uploadBuffer = (target: number, data: Float32Array | Uint16Array): WebGLBuffer => {
       const buffer = gl.createBuffer()
       if (!buffer) throw new Error('Ocean mesh allocation failed')
       buffers.push(buffer)
       gl.bindBuffer(target, buffer)
       gl.bufferData(target, data, gl.STATIC_DRAW)
+      return buffer
     }
+    uploadBuffer(gl.ARRAY_BUFFER, mesh.vertices)
+    const backgroundIndices = uploadBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices)
+    const foregroundIndices = uploadBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.foregroundIndices)
     for (const [name, size, offset] of [['a_position', 2, 0], ['a_region', 3, 8], ['a_detail', 4, 20]] as const) {
       const location = gl.getAttribLocation(program, name)
       gl.enableVertexAttribArray(location)
       gl.vertexAttribPointer(location, size, gl.FLOAT, false, 36, offset)
     }
-    const texture = gl.createTexture()
-    if (!texture) throw new Error('Ocean texture allocation failed')
-    textures.push(texture)
-    gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, texture)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
+    const uploadTexture = (source: HTMLImageElement | HTMLCanvasElement, unit: number): WebGLTexture => {
+      const texture = gl.createTexture()
+      if (!texture) throw new Error('Ocean texture allocation failed')
+      textures.push(texture)
+      gl.activeTexture(unit)
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+      return texture
+    }
+    const originalTexture = uploadTexture(image, gl.TEXTURE0)
+    const backgroundTexture = uploadTexture(cleanPlateImage, gl.TEXTURE0)
+    uploadTexture(mesh.matte, gl.TEXTURE1)
     const uniform = (name: string): WebGLUniformLocation | null => gl.getUniformLocation(program!, name)
     const viewport = uniform('u_viewport'), boundsUniform = uniform('u_bounds'), pointerUniform = uniform('u_pointer')
-    const timeUniform = uniform('u_time'), ripplesUniform = uniform('u_ripples[0]'), amountUniform = uniform('u_amount')
+    const timeUniform = uniform('u_time'), ripplesUniform = uniform('u_ripples[0]'), amountUniform = uniform('u_amount'), layerUniform = uniform('u_layer')
     gl.uniform1i(uniform('u_art'), 0)
+    gl.uniform1i(uniform('u_matte'), 1)
     if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('Ocean texture initialization failed')
     const win = canvas.ownerDocument.defaultView!
     let firstDraw = true
@@ -90,10 +101,26 @@ function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, mesh:
         gl.uniform1f(timeUniform, time)
         gl.uniform1f(amountUniform, amount)
         gl.uniform3fv(ripplesUniform, ripples)
+        gl.disable(gl.BLEND)
+        gl.uniform1f(layerUniform, 0)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, backgroundTexture)
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, backgroundIndices)
         gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_SHORT, 0)
+        if (firstDraw && (gl.isContextLost() || gl.getError() !== gl.NO_ERROR)) throw new Error('Ocean background frame failed')
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+        gl.uniform1f(layerUniform, 1)
+        gl.bindTexture(gl.TEXTURE_2D, originalTexture)
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, foregroundIndices)
+        gl.drawElements(gl.TRIANGLES, mesh.foregroundIndices.length, gl.UNSIGNED_SHORT, 0)
+        if (firstDraw && (gl.isContextLost() || gl.getError() !== gl.NO_ERROR)) throw new Error('Ocean foreground frame failed')
+        gl.uniform1f(layerUniform, 2)
+        gl.bindTexture(gl.TEXTURE_2D, backgroundTexture)
+        gl.drawElements(gl.TRIANGLES, mesh.foregroundIndices.length, gl.UNSIGNED_SHORT, 0)
         if (firstDraw) {
           firstDraw = false
-          if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('Ocean first frame failed')
+          if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('Ocean waterline frame failed')
         }
       },
       dispose,
@@ -111,7 +138,7 @@ export function installOceanScene(doc: Document): () => void {
   if (!doc.body || !win?.requestAnimationFrame || !win.matchMedia || !win.ResizeObserver || !win.MutationObserver) return () => {}
   const reduced = win.matchMedia('(prefers-reduced-motion: reduce)')
   const forced = win.matchMedia('(forced-colors: active)')
-  let disposed = false, failed = false, loaded = false, loading = false
+  let disposed = false, failed = false, imageLoaded = false, plateLoaded = false, loading = false
   let host: HTMLElement | null = null
   let canvas: HTMLCanvasElement | null = null, wash: HTMLDivElement | null = null
   let painter: Painter | null = null
@@ -123,6 +150,7 @@ export function installOceanScene(doc: Document): () => void {
   const ripples: { x: number; y: number; born: number }[] = []
   const rippleUniform = new Float32Array([0, 0, 10, 0, 0, 10, 0, 0, 10])
   const image = new win.Image()
+  const cleanPlateImage = new win.Image()
   const allowed = (): boolean => !disposed && !failed && !reduced.matches && !forced.matches
   const cancel = (): void => {
     if (frame) win.cancelAnimationFrame(frame)
@@ -197,8 +225,12 @@ export function installOceanScene(doc: Document): () => void {
     })
     release()
     if (!next) return
-    if (!loaded) {
-      if (!loading) { loading = true; image.src = OCEAN_SCENE_DATA_URL }
+    if (!imageLoaded || !plateLoaded) {
+      if (!loading) {
+        loading = true
+        image.src = OCEAN_SCENE_DATA_URL
+        cleanPlateImage.src = OCEAN_CLEAN_PLATE_DATA_URL
+      }
       return
     }
     try { mesh ??= createOceanMesh(doc) } catch { mesh = null }
@@ -207,7 +239,7 @@ export function installOceanScene(doc: Document): () => void {
     canvas.dataset.qytOceanScene = ''
     canvas.setAttribute('aria-hidden', 'true')
     canvas.addEventListener('webglcontextlost', onContextLost)
-    try { painter = createPainter(canvas, image, mesh) } catch { painter = null }
+    try { painter = createPainter(canvas, image, cleanPlateImage, mesh) } catch { painter = null }
     if (!painter) { failed = true; release(); return }
     host = next
     wash = doc.createElement('div')
@@ -218,13 +250,21 @@ export function installOceanScene(doc: Document): () => void {
     intersection?.observe(host)
     schedule()
   }
-  image.onload = () => {
-    if (!allowed()) { loading = false; return }
-    loaded = image.naturalWidth > 0
-    if (!loaded) failed = true
-    sync()
+  const loaded = (asset: HTMLImageElement, ready: () => void): void => {
+    if (disposed || failed) return
+    if (asset.naturalWidth <= 0 || asset.naturalHeight <= 0) { failed = true; release(); return }
+    ready()
+    if (allowed()) sync()
   }
-  image.onerror = () => { failed = true; release() }
+  const failedImage = (): void => {
+    if (disposed || failed) return
+    failed = true
+    release()
+  }
+  image.onload = () => loaded(image, () => { imageLoaded = true })
+  cleanPlateImage.onload = () => loaded(cleanPlateImage, () => { plateLoaded = true })
+  image.onerror = failedImage
+  cleanPlateImage.onerror = failedImage
   const onPointer = (event: PointerEvent): void => {
     if (!allowed() || !host || event.pointerType === 'touch' || !event.isPrimary) return
     const rect = bounds ?? host.getBoundingClientRect()
@@ -270,6 +310,7 @@ export function installOceanScene(doc: Document): () => void {
     win.removeEventListener('resize', onResize)
     win.removeEventListener('blur', resetPointer)
     image.onload = null; image.onerror = null
+    cleanPlateImage.onload = null; cleanPlateImage.onerror = null
     release()
     mesh = null
   }

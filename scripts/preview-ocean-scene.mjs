@@ -2,17 +2,19 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import { installOceanPerformanceProbe } from './ocean-performance.mjs'
+import { inspectSceneMotion, recordOceanUi } from './ocean-perception.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = resolve(root, 'artifacts/ocean-scene')
 const serve = process.argv.includes('--serve')
+const motionOnly = process.argv.includes('--motion-only')
 const portArgument = process.argv.find(argument => argument.startsWith('--port='))
 const requestedPort = portArgument ? Number(portArgument.split('=')[1]) : serve ? 4317 : 0
 assert.ok(Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535, 'Use --port=0..65535')
@@ -23,7 +25,7 @@ const fixture = `
 import {installQTheme} from ${JSON.stringify(join(root, 'src/client/q-theme.ts'))};
 const performanceProbe=(${installOceanPerformanceProbe.toString()})();
 const uniformNames=new WeakMap(), captureRestorers=[];
-let heldTime=null,pendingCapture=null;
+let heldTime=null,pendingCapture=null,captureQueued=false;
 for(const type of [window.WebGLRenderingContext,window.WebGL2RenderingContext]){
   if(!type)continue;
   for(const operation of ['getUniformLocation','uniform1f','drawArrays','drawElements']){
@@ -32,7 +34,7 @@ for(const type of [window.WebGLRenderingContext,window.WebGL2RenderingContext]){
       if(operation==='uniform1f'&&uniformNames.get(args[0])==='u_time'&&heldTime!==null)args[1]=heldTime;
       const value=native.apply(this,args);
       if(operation==='getUniformLocation'&&value)uniformNames.set(value,args[1]);
-      if((operation==='drawArrays'||operation==='drawElements')&&pendingCapture&&this.canvas?.hasAttribute('data-qyt-ocean-scene')){const capture=pendingCapture;pendingCapture=null;clearTimeout(capture.timer);capture.resolve(this.canvas.toDataURL('image/png'))}
+      if((operation==='drawArrays'||operation==='drawElements')&&pendingCapture&&!captureQueued&&this.canvas?.hasAttribute('data-qyt-ocean-scene')){captureQueued=true;const canvas=this.canvas;queueMicrotask(()=>{captureQueued=false;if(pendingCapture){const capture=pendingCapture;pendingCapture=null;clearTimeout(capture.timer);capture.resolve(canvas.toDataURL('image/png'))}})}
       return value;
     };
     type.prototype[operation]=wrapped;
@@ -118,7 +120,7 @@ async function inspectHairMotion(page) {
         if (Math.abs(reference[offset] - reference[offset + 4]) + Math.abs(reference[offset] - reference[offset + width * 4]) > 8) edgePixels.push([x, y, offset])
       }
       let best = { dx: 0, dy: 0, meanError: Infinity, edgePixels: edgePixels.length }
-      for (let dy = -16; dy <= 16; dy++) for (let dx = -16; dx <= 16; dx++) {
+      for (let dy = -24; dy <= 24; dy++) for (let dx = -24; dx <= 24; dx++) {
         let error = 0
         for (const [x, y, offset] of edgePixels) {
           const shifted = ((y + dy) * width + x + dx) * 4
@@ -175,6 +177,20 @@ if (serve) {
     })
     assert.ok(initial.width > 0 && initial.height > 0, 'Scene must have a real drawing buffer')
     assert.equal(initial.pointerEvents, 'none', 'Background cannot intercept the composer')
+    if (motionOnly) {
+      const sceneMotion = await inspectSceneMotion(page, output)
+      await page.screenshot({ path: join(output, 'ocean-home.png') })
+      const uiRecording = await recordOceanUi(page, output)
+      await copyFile(join(output, 'ocean-ui-motion.webm'), join(output, 'ocean-motion.webm'))
+      assert.deepEqual(errors, [])
+      const supplement = { passed: true, sceneMotion, uiRecording, errors, warnings, evidenceBoundary: 'Supplemental motion validation after a shader-only change: direction, visible cloud/body/tail movement, fixed 60/180/600 second screenshots, and a fresh 16-second recording of the normal UI. Performance and lifecycle results are retained from the preceding full three-pass browser suite.' }
+      await writeFile(join(output, 'motion-final.json'), JSON.stringify(supplement, null, 2) + '\n')
+      const previous = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
+      await writeFile(join(output, 'report.json'), JSON.stringify({ ...previous, sceneMotion, uiRecording, supplementalValidation: supplement.evidenceBoundary }, null, 2) + '\n')
+      await page.evaluate(() => window.__oceanFixture.dispose())
+      await context.close()
+      console.log(JSON.stringify({ passed: true, cloudDirection: sceneMotion.cloudDriftDirection, ranges: sceneMotion.ranges, longTermEpochs: sceneMotion.longTermEpochs, uiRecording, errors, warnings }, null, 2))
+    } else {
     await page.waitForTimeout(500)
     await page.evaluate(() => window.__oceanFixture.performance.start())
     await page.waitForTimeout(6000)
@@ -182,48 +198,18 @@ if (serve) {
     await writeFile(join(output, 'performance-current.json'), JSON.stringify(performance, null, 2) + '\n')
     assert.ok(performance.webglDraws.fps >= performance.browserRaf.fps * .85, `The background must follow browser refresh: ${performance.webglDraws.fps} actual WebGL FPS / ${performance.browserRaf.fps} browser rAF FPS`)
     assert.ok(performance.webglDraws.p95Ms <= performance.browserRaf.p95Ms * 1.8 + 4, `The background frame interval is uneven: P95 ${performance.webglDraws.p95Ms}ms`)
+    const sceneMotion = await inspectSceneMotion(page, output)
     const hairMotion = await inspectHairMotion(page)
     await page.screenshot({ path: join(output, 'ocean-home.png') })
     const scene = page.locator('[data-phase="hero"]')
     const firstFrame = await scene.screenshot()
-    // Capture the real background canvas in-browser. This keeps the preview
-    // self-contained and does not require Playwright's optional ffmpeg binary.
-    const recording = page.evaluate(async () => {
-      const canvas = document.querySelector('canvas[data-qyt-ocean-scene]')
-      if (!canvas?.captureStream || typeof MediaRecorder === 'undefined') return null
-      const stream = canvas.captureStream(60), chunks = []
-      const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type))
-      if (!mimeType) { stream.getTracks().forEach(track => track.stop()); return null }
-      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_500_000 })
-      recorder.addEventListener('dataavailable', event => { if (event.data.size) chunks.push(event.data) })
-      const stopped = new Promise((resolve, reject) => { recorder.addEventListener('stop', resolve, { once: true }); recorder.addEventListener('error', reject, { once: true }) })
-      recorder.start()
-      await new Promise(resolve => setTimeout(resolve, 10_000))
-      recorder.stop(); await stopped
-      stream.getTracks().forEach(track => track.stop())
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result).split(',')[1])
-        reader.onerror = reject
-        reader.readAsDataURL(new Blob(chunks, { type: mimeType }))
-      })
-    })
-    const detailFrames = (async () => {
-      // A full buoyancy cycle helps reveal discontinuities at flexible edges.
-      for (let index = 1; index <= 4; index++) {
-        await page.waitForTimeout(2000)
-        await page.screenshot({ path: join(output, `tail-detail-${index}.png`), clip: { x: 1030, y: 320, width: 360, height: 180 } })
-      }
-    })()
+    const uiRecording = await recordOceanUi(page, output)
+    await copyFile(join(output, 'ocean-ui-motion.webm'), join(output, 'ocean-motion.webm'))
     await page.mouse.move(900, 750, { steps: 35 }); await page.waitForTimeout(1300)
     const secondFrame = await scene.screenshot()
     assert.equal(firstFrame.equals(secondFrame), false, 'The scene must change across live frames')
     await page.mouse.move(1290, 340, { steps: 40 }); await page.waitForTimeout(900)
     await page.mouse.move(540, 720, { steps: 40 }); await page.waitForTimeout(900)
-    const video = await recording
-    await detailFrames
-    if (video) await writeFile(join(output, 'ocean-motion.webm'), Buffer.from(video, 'base64'))
-    else warnings.push('The browser does not support recording the background canvas.')
     const composer = page.getByRole('textbox', { name: '描述你想构建的内容' })
     await composer.fill('海风、云朵和鲸鱼，都在慢慢呼吸。')
     assert.equal(await composer.inputValue(), '海风、云朵和鲸鱼，都在慢慢呼吸。')
@@ -289,11 +275,13 @@ if (serve) {
     await fallback.close()
     assert.deepEqual(errors, [], 'Preview cannot log browser errors')
     await context.close()
-    const report = { passed: true, browser: await browser.version(), initial, performance, hairMotion, checks: ['live rendering', 'actual WebGL frame cadence', 'hair motion relative to the face', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: video ? 'ocean-motion.webm' : null, warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video records the background canvas, without the fixture UI or CSS color wash. Does not assert installation in the live Harness app or physical display presentation timing.' }
+    const report = { passed: true, browser: await browser.version(), initial, performance, hairMotion, sceneMotion, uiRecording, checks: ['live rendering', 'actual WebGL frame cadence', 'hair motion relative to the face', 'visible monotonic cloud drift', 'visible body buoyancy', 'tail motion relative to the body', 'normal UI continuous recording', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: 'ocean-ui-motion.webm', warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video continuously records the actual composed UI, including the text, input controls and CSS color wash; mouse movement is tested after recording. Does not assert installation in the live Harness app or physical display presentation timing.' }
     await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
+    }
   } finally {
     await browser?.close()
+    server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
   }
 }
