@@ -222,6 +222,8 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > 
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-qyt-ocean-wash] {
   background-image: var(--qyt-q-canvas-wash);
+  background-attachment: fixed;
+  background-position: center;
   background-size: 100% 100%;
   background-repeat: no-repeat;
 }
@@ -274,11 +276,37 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   -webkit-mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
   mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
 }
-/* The moving canvas is shared by the whole phase. A paper fade covers text at
-   the dock without introducing a second, frozen copy of the illustration. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"][data-qyt-ocean-live] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
-  background-color: var(--qyt-q-base);
-  background-image: none;
+/* The dock uses a crop of the same animated frame. Keep the original static
+   decoration until that crop is ready, with the same wash and 36px fade. */
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] > [data-qyt-ocean-dock] {
+  position: absolute;
+  inset: -36px 0 0;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  visibility: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
+  mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
+}
+body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > :is(canvas[data-qyt-ocean-dock-frame], [data-qyt-ocean-wash]) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > [data-qyt-ocean-wash] {
+  background-image: var(--qyt-q-canvas-wash);
+  background-attachment: fixed;
+  background-position: center;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat][data-qyt-ocean-dock-live]::before {
+  content: none;
+}
+body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat][data-qyt-ocean-dock-live] > [data-qyt-ocean-dock] {
+  visibility: visible;
 }
 body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
   background: var(--qyt-q-composer-fill);
@@ -400,6 +428,7 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
 }
 
 @media (prefers-reduced-motion: reduce) {
+  body[data-qyt-q-theme="ocean"] [data-qyt-ocean-dock] { display: none; }
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] {
     background-image: var(--qyt-q-canvas-image);
   }
@@ -409,6 +438,7 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
 }
 
 @media (forced-colors: active) {
+  body[data-qyt-q-theme="ocean"] [data-qyt-ocean-dock] { display: none; }
   body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
     display: none;
   }

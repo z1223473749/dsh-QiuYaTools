@@ -64,8 +64,8 @@ function graphics({ initializationError = 0, firstDrawError = 0, errorDraw = 1 }
   return { gl, live, calls }
 }
 
-function fixture(t, { reduced = false, forced = false, context = true, raf = true, missing, initializationError = 0, firstDrawError = 0, errorDraw = 1 } = {}) {
-  const dom = new JSDOM('<!doctype html><html><head></head><body data-qyt-q-theme="ocean"><main data-slot="main.conversation"><section data-phase="hero"><button>Native action</button></section></main></body></html>', { pretendToBeVisual: true })
+function fixture(t, { reduced = false, forced = false, context = true, raf = true, missing, initializationError = 0, firstDrawError = 0, errorDraw = 1, phase = 'hero', dockContext = true, dockDrawError = false, dpr = 1, viewport = [1280, 900], hostRect = [280, 0, 1000, 900], dockRect = [280, 664, 1000, 236] } = {}) {
+  const dom = new JSDOM(`<!doctype html><html><head></head><body data-qyt-q-theme="ocean"><main data-slot="main.conversation"><section data-phase="${phase}"><button>Native action</button><div data-conversation-content><div data-conversation-scroll><div data-composer-seat><textarea></textarea></div></div></div></section></main></body></html>`, { pretendToBeVisual: true })
   const win = dom.window
   const doc = win.document
   const gpu = graphics({ initializationError, firstDrawError, errorDraw })
@@ -73,6 +73,9 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
   const images = []
   const media = new Map()
   const resizeObservers = new Set()
+  const rectangles = { host: hostRect, dock: dockRect }
+  const mirrors = { contexts: [], draws: [], clears: [], measurements: 0 }
+  Object.defineProperties(win, { devicePixelRatio: { configurable: true, value: dpr }, innerWidth: { configurable: true, value: viewport[0] }, innerHeight: { configurable: true, value: viewport[1] } })
   let frameId = 0
   let destroyed = false
   win.requestAnimationFrame = raf ? callback => { frames.set(++frameId, callback); return frameId } : undefined
@@ -94,10 +97,10 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
     return media.get(query)
   }
   win.ResizeObserver = class {
-    constructor(callback) { this.callback = callback; resizeObservers.add(this) }
-    observe() {}
-    unobserve() {}
-    disconnect() { resizeObservers.delete(this) }
+    constructor(callback) { this.callback = callback; this.targets = new Set(); resizeObservers.add(this) }
+    observe(target) { this.targets.add(target); resizeObservers.add(this) }
+    unobserve(target) { this.targets.delete(target) }
+    disconnect() { this.targets.clear(); resizeObservers.delete(this) }
   }
   win.Path2D = class { constructor(path) { this.path = path } }
   const maskContext = {
@@ -105,16 +108,33 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
     getImageData(_x, _y, width, height) { return { data: new Uint8ClampedArray(width * height * 4), width, height } },
   }
   win.HTMLElement.prototype.getBoundingClientRect = function () {
-    return { left: 280, top: 0, right: 1280, bottom: 900, width: 1000, height: 900, x: 280, y: 0, toJSON() { return {} } }
+    const mirror = this.hasAttribute('data-qyt-ocean-dock')
+    if (mirror) mirrors.measurements++
+    const [left, top, width, height] = mirror ? rectangles.dock : rectangles.host
+    return { left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON() { return {} } }
   }
   win.HTMLElement.prototype.getClientRects = function () { return [this.getBoundingClientRect()] }
   win.HTMLCanvasElement.prototype.getContext = function (kind) {
-    if (kind === '2d') return maskContext
+    if (kind === '2d') {
+      if (!this.hasAttribute('data-qyt-ocean-dock-frame')) return maskContext
+      mirrors.contexts.push(this)
+      if (!dockContext) return null
+      const target = this
+      return {
+        clearRect(...args) { mirrors.clears.push({ target, args }) },
+        drawImage(source, ...args) {
+          if (typeof dockDrawError === 'function' ? dockDrawError() : dockDrawError) throw new Error('Mirror copy failed')
+          mirrors.draws.push({ source, target, args, sceneDraws: gpu.calls.draws, passes: gpu.calls.passes.slice(-3), sourceWidth: source.width, sourceHeight: source.height, width: target.width, height: target.height, readyBeforeCopy: target.parentElement?.parentElement?.hasAttribute('data-qyt-ocean-dock-live') })
+        },
+        getImageData() { throw new Error('A dock must never read back pixels') },
+      }
+    }
     if (!kind.includes('webgl')) return null
     gpu.calls.contexts++
     gpu.gl.canvas = this
     return context ? gpu.gl : null
   }
+  win.HTMLCanvasElement.prototype.toDataURL = function () { throw new Error('A dock must never serialize a frame') }
   win.Image = class extends win.EventTarget {
     onload = null
     onerror = null
@@ -149,9 +169,11 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
   const cleanup = () => { if (destroyed) return; destroyed = true; stop(); stop() }
   t.after(() => { cleanup(); win.close() })
   return {
-    dom, win, doc, gpu, frames, images, media, resizeObservers, stop, cleanup,
+    dom, win, doc, gpu, frames, images, media, resizeObservers, mirrors, rectangles, stop, cleanup,
     host: () => doc.querySelector('[data-phase]'),
     canvas: () => doc.querySelector('canvas[data-qyt-ocean-scene]'),
+    seat: () => doc.querySelector('[data-composer-seat]'),
+    mirror: () => doc.querySelector('canvas[data-qyt-ocean-dock-frame]'),
     async tick() { await new Promise(resolve => setImmediate(resolve)) },
     frame(time = 1000) {
       const current = [...frames]
@@ -429,4 +451,167 @@ test('context loss withdraws the live marker and returns to the static fallback'
   assert.equal(f.gpu.calls.draws, draws)
   f.cleanup()
   assert.equal(f.canvas(), null)
+})
+
+test('an active dock copies the exact completed WebGL frame and reuses one 2D context', async t => {
+  const f = fixture(t, { phase: 'active' })
+  await f.tick()
+  for (const image of f.images) image.load()
+  await f.tick()
+  const seat = f.seat(), mirror = f.mirror(), wrapper = mirror.parentElement
+  assert.equal(wrapper.parentElement, seat)
+  assert.equal(wrapper.getAttribute('aria-hidden'), 'true')
+  assert.equal(wrapper.firstElementChild, mirror)
+  assert.equal(wrapper.lastElementChild.hasAttribute('data-qyt-ocean-wash'), true)
+  assert.equal(seat.hasAttribute('data-qyt-ocean-dock-live'), false, 'fallback stays until an actual frame has been copied')
+  assert.equal(f.mirrors.draws.length, 0)
+  f.frame(1000)
+  assert.equal(seat.hasAttribute('data-qyt-ocean-dock-live'), true)
+  const first = f.mirrors.draws[0]
+  assert.equal(first.source, f.canvas())
+  assert.equal(first.target, mirror)
+  assert.equal(first.sceneDraws, 3, 'the copy follows all three passes in the same callback')
+  assert.equal(first.readyBeforeCopy, false)
+  assert.deepEqual(first.args, [0, 664, 1000, 236, 0, 0, 1000, 236])
+  assert.equal(mirror.width, 1000)
+  assert.equal(mirror.height, 236)
+  const measured = f.mirrors.measurements
+  for (let frame = 1; frame <= 12; frame++) {
+    f.frame(1000 + frame * 1000 / 60)
+    const copy = f.mirrors.draws.at(-1)
+    assert.equal(copy.source, f.canvas())
+    assert.equal(copy.sceneDraws, (frame + 1) * 3)
+    assert.deepEqual(copy.passes.map(pass => pass.layer), [0, 1, 2])
+    assert.equal(copy.passes[0].time, copy.passes[2].time)
+    assert.equal(f.mirrors.draws.length, frame + 1, 'one synchronous mirror copy per completed scene frame')
+  }
+  assert.equal(f.gpu.calls.contexts, 1, 'the dock never opens another WebGL context')
+  assert.equal(f.mirrors.contexts.length, 1, 'animation frames reuse the same 2D context')
+  assert.equal(f.mirrors.measurements, measured, 'stable frames reuse the measured viewport bounds')
+})
+
+test('dock cropping maps viewport CSS pixels through the actual source backing scale and remeasures only on layout changes', async t => {
+  const f = fixture(t, { phase: 'active', dpr: 2, viewport: [1100, 800], hostRect: [200, -40, 1000, 1000], dockRect: [100, 700, 1200, 200] })
+  await f.ready()
+  const source = f.canvas(), target = f.mirror()
+  assert.equal(source.width, 1342, 'the scene pixel cap, rather than window DPR, owns the actual backing size')
+  assert.equal(target.width, Math.round(1200 * source.width / 1000))
+  assert.equal(target.height, Math.round(200 * source.height / 1000))
+  const expected = [0, 740 * source.height / 1000, 900 * source.width / 1000, 100 * source.height / 1000,
+    100 * target.width / 1200, 0, 900 * target.width / 1200, 100 * target.height / 200]
+  f.mirrors.draws.at(-1).args.forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < .000001, `clipped drawImage argument ${index}`))
+  const measurements = f.mirrors.measurements
+  f.rectangles.dock = [300, 620, 700, 180]
+  const observer = [...f.resizeObservers].find(value => value.targets.has(target.parentElement))
+  assert.ok(observer, 'the dock wrapper participates in the existing ResizeObserver')
+  observer.callback([{ target: target.parentElement }])
+  f.frame(1017)
+  assert.equal(target.width, Math.round(700 * source.width / 1000))
+  assert.equal(target.height, Math.round(180 * source.height / 1000))
+  assert.equal(f.mirrors.measurements, measurements + 1)
+  f.rectangles.dock = [300, 580, 700, 180]
+  f.doc.dispatchEvent(new f.win.Event('scroll'))
+  f.frame(1034)
+  assert.ok(Math.abs(f.mirrors.draws.at(-1).args[1] - 620 * source.height / 1000) < .000001)
+  assert.equal(f.mirrors.contexts.length, 1)
+})
+
+test('only the active direct composer hierarchy receives a mirror and replacement seats retire their old frame', async t => {
+  const f = fixture(t, { phase: 'active' })
+  f.seat().parentElement.innerHTML = '<div><div data-composer-seat><textarea></textarea></div></div>'
+  await f.ready()
+  assert.equal(f.mirror(), null, 'a nested lookalike must not acquire the dock styling or frame')
+  assert.equal(f.mirrors.contexts.length, 0)
+  const scroll = f.doc.querySelector('[data-conversation-scroll]')
+  scroll.innerHTML = '<div data-composer-seat><textarea></textarea></div>'
+  await f.tick()
+  const originalSeat = f.seat(), originalWrapper = f.mirror().parentElement
+  assert.equal(originalSeat.hasAttribute('data-qyt-ocean-dock-live'), false)
+  f.frame(1017)
+  assert.equal(originalSeat.hasAttribute('data-qyt-ocean-dock-live'), true)
+  const replacement = f.doc.createElement('div')
+  replacement.dataset.composerSeat = ''
+  originalSeat.replaceWith(replacement)
+  await f.tick()
+  assert.equal(originalSeat.hasAttribute('data-qyt-ocean-dock-live'), false)
+  assert.equal(originalWrapper.isConnected, false)
+  assert.equal(replacement.hasAttribute('data-qyt-ocean-dock-live'), false)
+  f.frame(1034)
+  assert.equal(replacement.hasAttribute('data-qyt-ocean-dock-live'), true)
+  assert.equal(f.doc.querySelectorAll('[data-qyt-ocean-dock]').length, 1)
+  assert.equal(f.gpu.calls.contexts, 1, 'seat replacement keeps the original WebGL painter')
+  f.host().dataset.phase = 'hero'
+  await f.tick()
+  assert.equal(replacement.hasAttribute('data-qyt-ocean-dock-live'), false)
+  assert.equal(f.mirror(), null)
+  f.host().dataset.phase = 'active'
+  await f.tick()
+  f.frame(1051)
+  assert.equal(replacement.hasAttribute('data-qyt-ocean-dock-live'), true)
+  assert.equal(f.doc.querySelectorAll('[data-qyt-ocean-dock]').length, 1)
+})
+
+test('replacing the whole phase withdraws the disconnected dock and copies only from the new scene', async t => {
+  const f = fixture(t, { phase: 'active' })
+  await f.ready()
+  const oldHost = f.host(), oldSeat = f.seat(), oldSource = f.canvas(), oldWrapper = f.mirror().parentElement
+  const next = oldHost.cloneNode(false)
+  next.innerHTML = '<div data-conversation-content><div data-conversation-scroll><div data-composer-seat><textarea></textarea></div></div></div>'
+  oldHost.replaceWith(next)
+  await f.tick()
+  assert.equal(oldSeat.hasAttribute('data-qyt-ocean-dock-live'), false)
+  assert.equal(oldWrapper.isConnected, false)
+  assert.equal(oldSource.isConnected, false)
+  assert.equal(oldHost.hasAttribute('data-qyt-ocean-live'), false)
+  f.frame(1017)
+  assert.equal(f.seat().hasAttribute('data-qyt-ocean-dock-live'), true)
+  assert.notEqual(f.mirrors.draws.at(-1).source, oldSource)
+  assert.equal(f.mirrors.draws.at(-1).source, f.canvas())
+  assert.equal(f.doc.querySelectorAll('[data-qyt-ocean-dock]').length, 1)
+})
+
+test('unavailable or failed dock copies return the entire installation to matching static art', async t => {
+  for (const options of [{ dockContext: false }, { dockDrawError: true }]) {
+    const f = fixture(t, { phase: 'active', ...options })
+    await f.ready()
+    assert.equal(f.canvas(), null)
+    assert.equal(f.mirror(), null)
+    assert.equal(f.host().hasAttribute('data-qyt-ocean-live'), false)
+    assert.equal(f.seat().hasAttribute('data-qyt-ocean-dock-live'), false)
+    assert.equal(f.frames.size, 0)
+    assert.equal(f.gpu.live.size, 0)
+    f.host().append(f.doc.createElement('div'))
+    await f.tick()
+    f.frame(2000)
+    assert.equal(f.mirrors.contexts.length, 1, 'a failed copy cannot allocate contexts in a retry loop')
+  }
+  let fail = false
+  const f = fixture(t, { phase: 'active', dockDrawError: () => fail })
+  await f.ready()
+  assert.equal(f.seat().hasAttribute('data-qyt-ocean-dock-live'), true)
+  fail = true
+  f.frame(1017)
+  assert.equal(f.canvas(), null)
+  assert.equal(f.mirror(), null)
+  assert.equal(f.seat().hasAttribute('data-qyt-ocean-dock-live'), false, 'a previously ready mirror must also withdraw on failure')
+})
+
+test('dock markers and resources are withdrawn on accessibility changes, either context loss and theme disposal', async t => {
+  for (const action of ['reduced', 'forced', 'webgl-context', '2d-context', 'dispose']) {
+    const f = fixture(t, { phase: 'active' })
+    await f.ready()
+    const seat = f.seat(), wrapper = f.mirror().parentElement
+    assert.equal(seat.hasAttribute('data-qyt-ocean-dock-live'), true)
+    if (action === 'reduced') f.media.get('(prefers-reduced-motion: reduce)').change(true)
+    else if (action === 'forced') f.media.get('(forced-colors: active)').change(true)
+    else if (action === 'webgl-context') f.canvas().dispatchEvent(new f.win.Event('webglcontextlost'))
+    else if (action === '2d-context') f.mirror().dispatchEvent(new f.win.Event('contextlost'))
+    else f.cleanup()
+    assert.equal(seat.hasAttribute('data-qyt-ocean-dock-live'), false, action)
+    assert.equal(wrapper.isConnected, false, action)
+    assert.equal(f.canvas(), null, action)
+    assert.equal(f.mirror(), null, action)
+    assert.equal(f.frames.size, 0, action)
+    assert.equal(f.gpu.live.size, 0, action)
+  }
 })

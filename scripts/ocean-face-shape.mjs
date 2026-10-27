@@ -9,9 +9,9 @@ export async function inspectFaceShape(page,output,{enforce=true}={}){
   const result = await page.evaluate(async ({ frames, epochs, original }) => {
     async function decode(source) { const image = new Image(); image.src = source; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; const ctx = canvas.getContext('2d', { willReadFrequently: true }); ctx.drawImage(image, 0, 0); return { canvas, pixels: ctx.getImageData(0, 0, image.width, image.height).data } }
     const decoded = await Promise.all(frames.map(decode)), source = await decode(original), scene = document.querySelector('canvas[data-qyt-ocean-scene]'), bounds = scene.getBoundingClientRect(), fit = Math.max(innerWidth / 1600, innerHeight / 900)
-    const point = (x, y) => [(innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scene.width / bounds.width, (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scene.height / bounds.height]
+    const point = (x, y) => [(innerWidth - 1600 * fit + x * fit - bounds.left) * scene.width / bounds.width, (innerHeight - 900 * fit + y * fit - bounds.top) * scene.height / bounds.height]
     const landmarks = { nose: [1057, 405, 5], eye: [1077, 397, 5], mouth: [1065, 411, 5], ear: [1107, 411, 6], temple: [1098, 402, 5] }
-    const regions = Object.fromEntries(Object.entries(landmarks).map(([name, [x, y, radius]]) => { const p = point(x, y); return [name, { x: p[0], y: p[1], radius: radius * fit * 1.035 }] }))
+    const regions = Object.fromEntries(Object.entries(landmarks).map(([name, [x, y, radius]]) => { const p = point(x, y); return [name, { x: p[0], y: p[1], radius: radius * fit }] }))
     function sample(data, x, y, channel) {
       const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, width = scene.width
       const at = (a, b) => data[(b * width + a) * 4 + channel]

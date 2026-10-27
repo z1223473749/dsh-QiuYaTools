@@ -3,6 +3,8 @@ import { createOceanMesh, OCEAN_FRAGMENT_SHADER, OCEAN_VERTEX_SHADER, type Ocean
 
 const HOST = '[data-slot="main.conversation"] > [data-phase]'
 const LIVE = 'data-qyt-ocean-live'
+const DOCK_LIVE = 'data-qyt-ocean-dock-live'
+const DOCK_SEAT = ':scope > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]'
 const MAX_PIXELS = 1_800_000
 const ART_WIDTH = 1600
 const ART_HEIGHT = 900
@@ -10,6 +12,13 @@ const ART_HEIGHT = 900
 interface Painter {
   draw(bounds: DOMRect, time: number, pointer: number[], ripples: Float32Array, amount: number): void
   dispose(): void
+}
+interface DockMirror {
+  seat: HTMLElement
+  element: HTMLDivElement
+  canvas: HTMLCanvasElement
+  context: CanvasRenderingContext2D
+  bounds: DOMRect | null
 }
 
 /** Each installation owns one low-power GPU context. All failure paths leave
@@ -142,6 +151,7 @@ export function installOceanScene(doc: Document): () => void {
   let host: HTMLElement | null = null
   let canvas: HTMLCanvasElement | null = null, wash: HTMLDivElement | null = null
   let painter: Painter | null = null
+  let dock: DockMirror | null = null
   let mesh: OceanMesh | null = null
   let bounds: DOMRect | null = null
   let frame = 0, lastDraw = 0, time = 0, inView = true, measure = true
@@ -170,8 +180,18 @@ export function installOceanScene(doc: Document): () => void {
     if (inView) schedule()
     else cancel()
   }) : null
+  const releaseDock = (): void => {
+    if (!dock) return
+    dock.seat.removeAttribute(DOCK_LIVE)
+    resize.unobserve(dock.element)
+    dock.canvas.removeEventListener('contextlost', onContextLost)
+    dock.element.remove()
+    dock.canvas.width = dock.canvas.height = 1
+    dock = null
+  }
   const release = (): void => {
     cancel()
+    releaseDock()
     resize.disconnect()
     intersection?.disconnect()
     host?.removeAttribute(LIVE)
@@ -183,16 +203,69 @@ export function installOceanScene(doc: Document): () => void {
     pointer = [0, 0]; pointerTarget = [0, 0]; ripples.length = 0
     inView = true; measure = true
   }
+  const syncDock = (): void => {
+    const seat = host?.dataset.phase === 'active' ? host.querySelector<HTMLElement>(DOCK_SEAT) : null
+    if (dock?.seat === seat && dock.element.parentElement === seat) return
+    releaseDock()
+    if (!seat) return
+    const element = doc.createElement('div')
+    element.dataset.qytOceanDock = ''
+    element.setAttribute('aria-hidden', 'true')
+    const mirror = doc.createElement('canvas')
+    mirror.dataset.qytOceanDockFrame = ''
+    let context: CanvasRenderingContext2D | null = null
+    try { context = mirror.getContext('2d') } catch {}
+    // If one surface cannot follow the shared frame, both surfaces retain
+    // the original static art rather than showing two different moments.
+    if (!context) { onContextLost(); return }
+    const overlay = doc.createElement('div')
+    overlay.dataset.qytOceanWash = ''
+    element.append(mirror, overlay)
+    dock = { seat, element, canvas: mirror, context, bounds: null }
+    mirror.addEventListener('contextlost', onContextLost)
+    seat.prepend(element)
+    resize.observe(element)
+    measure = true
+  }
+  const drawDock = (): void => {
+    if (!dock || !canvas || !bounds || !dock.bounds) return
+    const rect = dock.bounds
+    if (rect.width <= 0 || rect.height <= 0) { dock.seat.removeAttribute(DOCK_LIVE); return }
+    const width = Math.max(1, Math.round(rect.width * canvas.width / bounds.width))
+    const height = Math.max(1, Math.round(rect.height * canvas.height / bounds.height))
+    if (dock.canvas.width !== width || dock.canvas.height !== height) { dock.canvas.width = width; dock.canvas.height = height }
+    const left = Math.max(bounds.left, rect.left, 0), top = Math.max(bounds.top, rect.top, 0)
+    const right = Math.min(bounds.right, rect.right, win.innerWidth), bottom = Math.min(bounds.bottom, rect.bottom, win.innerHeight)
+    dock.context.clearRect(0, 0, width, height)
+    if (right <= left || bottom <= top) { dock.seat.removeAttribute(DOCK_LIVE); return }
+    // Copy while the WebGL drawing buffer still contains this exact frame.
+    // Source and destination share viewport CSS coordinates, even when only
+    // part of the seat is inside the phase or the visible viewport.
+    dock.context.drawImage(canvas,
+      (left - bounds.left) * canvas.width / bounds.width, (top - bounds.top) * canvas.height / bounds.height,
+      (right - left) * canvas.width / bounds.width, (bottom - top) * canvas.height / bounds.height,
+      (left - rect.left) * width / rect.width, (top - rect.top) * height / rect.height,
+      (right - left) * width / rect.width, (bottom - top) * height / rect.height)
+    if (!dock.seat.hasAttribute(DOCK_LIVE)) dock.seat.setAttribute(DOCK_LIVE, '')
+  }
   const draw = (now: number): void => {
     frame = 0
     if (!allowed() || !painter || !host || doc.hidden || !inView) { lastDraw = 0; return }
     if (!host.isConnected) { sync(); return }
+    if (dock && (!dock.seat.isConnected || dock.element.parentElement !== dock.seat || host.dataset.phase !== 'active')) {
+      syncDock()
+      if (!painter || !host) return
+    }
     // Draw once per display refresh, including 120 Hz. A 30 fps timestamp gate
     // made mouse motion visibly step and could skip an extra refresh.
     const dt = lastDraw ? Math.min((now - lastDraw) / 1000, .08) : 0
     lastDraw = now
     time += dt
-    if (measure || !bounds) { bounds = host.getBoundingClientRect(); measure = false }
+    if (measure || !bounds) {
+      bounds = host.getBoundingClientRect()
+      if (dock) dock.bounds = dock.element.getBoundingClientRect()
+      measure = false
+    }
     if (bounds.width <= 0 || bounds.height <= 0) { cancel(); return }
     const ease = 1 - Math.exp(-dt * 3.7)
     pointer = pointer.map((value, index) => value + (pointerTarget[index] - value) * ease)
@@ -202,6 +275,7 @@ export function installOceanScene(doc: Document): () => void {
     }
     try {
       painter.draw(bounds, time, pointer, rippleUniform, host.dataset.phase === 'hero' ? 1 : .38)
+      drawDock()
       if (canvas!.dataset.ready !== 'true') {
         canvas!.dataset.ready = 'true'
         host.setAttribute(LIVE, '')
@@ -218,7 +292,7 @@ export function installOceanScene(doc: Document): () => void {
   }
   function sync(): void {
     if (!allowed()) { release(); return }
-    if (host?.isConnected && !host.hidden && host.getClientRects().length > 0) { measure = true; schedule(); return }
+    if (host?.isConnected && !host.hidden && host.getClientRects().length > 0) { syncDock(); measure = true; schedule(); return }
     const next = [...doc.querySelectorAll<HTMLElement>(HOST)].find(element => {
       const rect = element.getBoundingClientRect()
       return !element.hidden && rect.width > 0 && rect.height > 0
@@ -248,6 +322,7 @@ export function installOceanScene(doc: Document): () => void {
     host.prepend(canvas, wash)
     resize.observe(host)
     intersection?.observe(host)
+    syncDock()
     schedule()
   }
   const loaded = (asset: HTMLImageElement, ready: () => void): void => {
@@ -273,8 +348,8 @@ export function installOceanScene(doc: Document): () => void {
     const target = event.target as Element | null
     if (target?.closest?.('button,a,input,textarea,select,[contenteditable="true"],[role="menu"],[role="dialog"]')) return
     const fit = Math.max(win.innerWidth / ART_WIDTH, win.innerHeight / ART_HEIGHT)
-    const x = ((event.clientX - win.innerWidth + ART_WIDTH * fit) / (ART_WIDTH * fit) - .5) / 1.035 + .5
-    const y = ((event.clientY - win.innerHeight + ART_HEIGHT * fit) / (ART_HEIGHT * fit) - .5) / 1.035 + .5
+    const x = (event.clientX - win.innerWidth + ART_WIDTH * fit) / (ART_WIDTH * fit)
+    const y = (event.clientY - win.innerHeight + ART_HEIGHT * fit) / (ART_HEIGHT * fit)
     if (y < .58 || time - lastRipple < .18 || Math.hypot(event.clientX - lastX, event.clientY - lastY) < 22) return
     ripples[rippleIndex++ % 3] = { x, y, born: time }
     lastRipple = time; lastX = event.clientX; lastY = event.clientY
@@ -284,8 +359,12 @@ export function installOceanScene(doc: Document): () => void {
   const onScroll = (): void => { measure = true }
   const mutations = new win.MutationObserver(records => {
     // Streaming message text also mutates the body. Only host replacement,
-    // phase changes and an absent host need a new scene discovery pass.
+    // phase changes or composer hierarchy replacement need discovery.
     if (!host?.isConnected || records.some(record => record.type === 'attributes' && record.target === host)) sync()
+    else if (host.dataset.phase === 'active' && records.some(record => record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(node => {
+      const element = node.nodeType === 1 ? node as Element : null
+      return element?.matches('[data-conversation-content], [data-conversation-scroll], [data-composer-seat]') || element?.querySelector('[data-composer-seat]')
+    }))) { syncDock(); measure = true; schedule() }
   })
   mutations.observe(doc.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-phase', 'hidden'] })
   reduced.addEventListener('change', sync)

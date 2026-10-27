@@ -28,7 +28,7 @@ export async function inspectWakeMotion(page, output) {
   const fin = await page.evaluate(async ({ frames, epochs }) => {
     const scene = document.querySelector('canvas[data-qyt-ocean-scene]'), bounds = scene.getBoundingClientRect(), fit = Math.max(innerWidth / 1600, innerHeight / 900)
     const images = await Promise.all(frames.map(async source => { const image = new Image(); image.src = source; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; const ctx = canvas.getContext('2d', { willReadFrequently: true }); ctx.drawImage(image, 0, 0); return ctx.getImageData(0, 0, image.width, image.height).data }))
-    const point = (x, y) => [(innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scene.width / bounds.width, (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scene.height / bounds.height]
+    const point = (x, y) => [(innerWidth - 1600 * fit + x * fit - bounds.left) * scene.width / bounds.width, (innerHeight - 900 * fit + y * fit - bounds.top) * scene.height / bounds.height]
     const regions = Object.fromEntries(Object.entries({ body: [1008, 600, 1050, 631], torso: [1335, 620, 1375, 650], inner: [1190, 725, 1260, 775], tip: [1420, 800, 1485, 840] }).map(([name, r]) => { const [x, y] = point(r[0], r[1]), [right, bottom] = point(r[2], r[3]); return [name, { x: Math.round(x), y: Math.round(y), width: Math.round(right - x), height: Math.round(bottom - y) }] }))
     function match(target, roi, expected = null) {
       const reference = images[0], pixels = [], width = scene.width
@@ -85,8 +85,8 @@ export async function inspectSceneMotion(page, output) {
       return { canvas, pixels: ctx.getImageData(0, 0, canvas.width, canvas.height).data }
     }))
     const point = (x, y) => [
-      (innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scene.width / bounds.width,
-      (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scene.height / bounds.height,
+      (innerWidth - 1600 * fit + x * fit - bounds.left) * scene.width / bounds.width,
+      (innerHeight - 900 * fit + y * fit - bounds.top) * scene.height / bounds.height,
     ]
     const rectangle = ([x1, y1, x2, y2]) => { const [x, y] = point(x1, y1), [right, bottom] = point(x2, y2); return { x: Math.round(x), y: Math.round(y), width: Math.round(right - x), height: Math.round(bottom - y) } }
     const regions = Object.fromEntries(Object.entries({ highCloud: [1120, 198, 1228, 280], lowCloud: [880, 400, 950, 435], bodyEye: [1008, 600, 1050, 631], leftTail: [1248, 336, 1287, 382], rightTail: [1430, 390, 1475, 440], frontFin: [1190, 725, 1260, 775] }).map(([name, values]) => [name, rectangle(values)]))
@@ -127,7 +127,7 @@ export async function inspectSceneMotion(page, output) {
       decoded.forEach((frame, index) => { ctx.drawImage(frame.canvas, roi.x - padding, roi.y - padding, width, height, index * width * zoom, 28, width * zoom, height * zoom); ctx.fillText(`${epochs[index]}s`, index * width * zoom + 7, 20) })
       strips[name] = strip.toDataURL('image/png')
     }
-    return { epochs, fit, screenPixelsPerArtPixel: fit * 1.035, regions, measurements, ranges, relativeTail, cloudDriftIsMonotonic, cloudDriftDirection: clouds.at(-1) > 0 ? 'right' : 'left', strips }
+    return { epochs, fit, screenPixelsPerArtPixel: fit, regions, measurements, ranges, relativeTail, cloudDriftIsMonotonic, cloudDriftDirection: clouds.at(-1) > 0 ? 'right' : 'left', strips }
   }, { frames, epochs })
   const longTermEpochs = [60, 180, 600]
   for (const epoch of longTermEpochs) {

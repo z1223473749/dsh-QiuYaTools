@@ -1,6 +1,6 @@
 {
   "protocolVersion": 1,
-  "version": "0.6.5",
+  "version": "0.6.6",
   "artifacts": [
     {
       "file": "QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window",
@@ -10,7 +10,7 @@
     {
       "file": "QiuYaTools Computer.app/Contents/MacOS/qiuya-computer",
       "bytes": 2172896,
-      "sha256": "221d1eb6f0fb90518a9a7b76c788ecf320c704cd38d40de6df73379f6af5942c"
+      "sha256": "deffe07287368ec176b615fb68a47fc0201b6e5b3fd020c3116460b46ffaea17"
     }
   ]
 }

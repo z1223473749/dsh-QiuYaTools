@@ -401,7 +401,8 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
         const seat = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]'
         const dock = '[data-slot="conversation.input.dock"] > [data-testid="todo-panel"]'
         const todo = `${seat} ${dock}`
-        assert.ok([phase, illustration, `${seat}::before`, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
+        const mirror = 'body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > :is(canvas[data-qyt-ocean-dock-frame], [data-qyt-ocean-wash])'
+        assert.ok([phase, illustration, `${seat}::before`, `${seat} > [data-qyt-ocean-dock]`, mirror, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
       }
     }
   } finally { dom.window.close() }
@@ -430,5 +431,12 @@ test('live illustration layers stay behind native content and preserve the stati
   assert.equal(live.style.getPropertyValue('background-image'), 'none')
   const ready = rules.find(rule => rule.selectorText === `${phase}[data-qyt-ocean-live] > :is(canvas[data-qyt-ocean-scene][data-ready="true"], [data-qyt-ocean-wash])`)
   assert.equal(ready.style.getPropertyValue('visibility'), 'visible')
+  const wash = rules.find(rule => rule.selectorText === `${phase} > [data-qyt-ocean-wash]`)
+  const dockWash = rules.find(rule => rule.selectorText.endsWith('[data-qyt-ocean-dock] > [data-qyt-ocean-wash]'))
+  for (const property of ['background-image', 'background-attachment', 'background-position', 'background-size']) {
+    assert.equal(dockWash.style.getPropertyValue(property), wash.style.getPropertyValue(property), 'both pieces of the same frame use the same viewport wash')
+  }
+  assert.equal(wash.style.getPropertyValue('background-attachment'), 'fixed')
+  assert.ok(!rules.some(rule => rule.selectorText?.includes('[data-qyt-ocean-live]') && rule.selectorText?.includes('[data-composer-seat]') && rule.style?.getPropertyValue('background-image') === 'none'), 'live mode must not turn the composer backdrop into an opaque plain panel')
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/u)
 })

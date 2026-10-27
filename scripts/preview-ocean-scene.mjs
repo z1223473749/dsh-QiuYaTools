@@ -20,6 +20,7 @@ const motionOnly = process.argv.includes('--motion-only')
 const wakeOnly = process.argv.includes('--wake-only')
 const faceOnly = process.argv.includes('--face-only')
 const shapeOnly = process.argv.includes('--shape-only')
+const parityOnly = process.argv.includes('--parity-only')
 const portArgument = process.argv.find(argument => argument.startsWith('--port='))
 const requestedPort = portArgument ? Number(portArgument.split('=')[1]) : serve ? 4317 : 0
 assert.ok(Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535, 'Use --port=0..65535')
@@ -57,14 +58,14 @@ const form={getSnapshot:()=>({status:'ready',value:preferences}),subscribe:fn=>{
 let cleanup;
 const main=document.querySelector('[data-slot="main.conversation"]');
 const hero=()=>'<section data-phase="hero"><div class="hero-copy"><h1><span class="brand-whale">◕</span> 探索未知之境 <small>预览版</small></h1><div class="composer-meta"><span>▱ attest⌄</span><span>♧ 创造模式⌄</span><span>⑂ main⌄</span></div><div class="preview-composer" data-composer-card><textarea aria-label="描述你想构建的内容" placeholder="描述你想构建的内容，/ 调用指令，@ 文件或对话"></textarea><footer><div><button aria-label="添加附件">＋</button><span>♧ 工作区内修改⌄</span><span>▣ 这台电脑⌄</span></div><div class="model">DeepSeek-V4.1-Flash <em>1017</em> High⌄ <button class="send" aria-label="发送">↑</button></div></footer></div></div></section>';
-const reading=()=>'<section data-phase="active"><div data-slot="conversation.header"><header>让背景像海风一样呼吸</header></div><div class="reading-content" data-conversation-content><div class="reading-scroll" data-conversation-scroll><article><div class="user-message">让天上的云、海水、鲸鱼和人物的细节都动起来。</div><p>微风掠过海面，远处的云缓慢舒展。少年坐在鲸鱼背上，衣角与发梢轻轻摆动。</p><p>移动鼠标，可以感受画面不同距离之间的细微变化。聊天区域保持安静，让注意力自然留在文字上。</p><h2>一片始终流动的海</h2><p>海水有自己的节奏。鲸鱼随浪轻轻起伏，近处的浪花更鲜明，远处的水面更平缓。</p><pre><code>const ocean = { wind: "gentle", waves: "slow" };</code></pre><p>这是本地效果预览。输入框和按钮仍然可以正常使用。</p></article><div data-composer-seat><div class="preview-composer" data-composer-card><textarea aria-label="描述你想构建的内容" placeholder="继续聊聊你的想法…"></textarea><footer><div><button aria-label="添加附件">＋</button><span>♧ 工作区内修改⌄</span></div><button class="send" aria-label="发送">↑</button></footer></div></div></div></div></section>';
+const reading=()=>'<section data-phase="active"><div data-slot="conversation.header"><header>让背景像海风一样呼吸</header></div><div class="reading-content" data-conversation-content><div class="reading-scroll" data-conversation-scroll><article><div class="user-message">让天上的云、海水、鲸鱼和人物的细节都动起来。</div><p>微风掠过海面，远处的云缓慢舒展。少年坐在鲸鱼背上，衣角与发梢轻轻摆动。</p><p>移动鼠标，可以感受画面不同距离之间的细微变化。聊天区域保持安静，让注意力自然留在文字上。</p><h2>一片始终流动的海</h2><p>海水有自己的节奏。鲸鱼随浪轻轻起伏，近处的浪花更鲜明，远处的水面更平缓。</p><pre><code>const ocean = { wind: "gentle", waves: "slow" };</code></pre><p>这是本地效果预览。输入框和按钮仍然可以正常使用。</p>'+'<p>海风掠过书页，远处的鲸鱼与海浪继续起伏。文字沿着原来的阅读区域滚动，输入区保持在窗口底部。</p>'.repeat(10)+'</article><div data-composer-seat><div class="preview-composer" data-composer-card><textarea aria-label="描述你想构建的内容" placeholder="继续聊聊你的想法…"></textarea><footer><div><button aria-label="添加附件">＋</button><span>♧ 工作区内修改⌄</span></div><button class="send" aria-label="发送">↑</button></footer></div><div data-composer-dock><div class="preview-dock" data-slot="conversation.composer.dock"><span data-composer-stat="activity"><span>1 轮 2 步 · 147 tok/s</span></span><span data-composer-stat="usage"><button>88.8K tok · 缓存命中 76%</button></span></div></div></div></div></div></section>';
 function rebuild(mode='hero'){main.innerHTML=mode==='active'?reading():hero()}
 function notify(){for(const listener of [...listeners])listener()}
 function persist(){localStorage.setItem(settingsKey,JSON.stringify(preferences));notify()}
 function setTheme(value){preferences={...preferences,qThemeEnabled:value};persist()}
 function setMotion(value){preferences={...preferences,qThemeSettings:{...preferences.qThemeSettings,ocean:{...preferences.qThemeSettings?.ocean,motion:value?'dynamic':'static'}}};persist()}
 function setDark(value){document.body.toggleAttribute('data-ds-dark-theme',value)}
-rebuild();cleanup=installQTheme({},form);
+rebuild(new URLSearchParams(location.search).get('view')==='conversation'?'active':'hero');cleanup=installQTheme({},form);
 function syncStoredSettings(event){if(event.key===settingsKey){preferences=storedSettings();notify()}}
 window.addEventListener('storage',syncStoredSettings);
 document.getElementById('open-theme-settings').addEventListener('click',()=>location.assign('/settings'));
@@ -83,7 +84,7 @@ const css = `
 *{box-sizing:border-box}body{margin:0;color:var(--qyt-q-ink,#24282b);overflow:hidden}button,textarea{font:inherit}button{color:inherit;cursor:pointer;border:0;background:transparent}button:focus-visible,textarea:focus-visible{outline:2px solid #116d83;outline-offset:3px}
 .app{display:flex;width:100vw;height:100vh;overflow:hidden}.sidebar-shell{width:280px;flex:none;border-right:1px solid rgba(40,55,50,.08);z-index:1}.sidebar{height:100%;padding:18px 14px;display:flex;flex-direction:column;overflow:hidden}.traffic{display:flex;gap:8px;height:35px}.traffic i{width:13px;height:13px;border-radius:50%;background:#ff6059;border:1px solid #e5443d}.traffic i:nth-child(2){background:#ffbf2f;border-color:#e3a51e}.traffic i:nth-child(3){background:#2bca41;border-color:#1aaf30}.logo{font-size:19px;font-weight:700;letter-spacing:.4px;padding:7px 2px 20px}.logo small{font-size:10px;background:#24282b;color:white;letter-spacing:.5px;padding:1px 4px;border-radius:2px}.new-chat{border:1px solid var(--qyt-q-line,#d9dedc);background:rgba(255,255,255,.6);border-radius:10px;height:38px;margin-bottom:12px}.nav-row{padding:9px 8px;display:block;text-align:left}.workspaces{margin-top:17px;color:var(--qyt-q-secondary,#53595f);display:flex;justify-content:space-between}.workspace{padding:15px 7px 7px}.session{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:7px 13px 7px 24px;min-height:33px}.session small{float:right;color:#81918c;font-size:10px}.session.selected{background:var(--qyt-q-selected,#d6e7e1);border-radius:8px;box-shadow:inset 3px 0 #116d83}.sidebar-foot{margin-top:auto;padding-top:20px}.avatar{display:inline-flex;justify-content:center;align-items:center;width:23px;height:23px;background:#d6c7a7;border-radius:50%;margin-right:6px;font-size:11px}
 main{flex:1;min-width:0;height:100%;overflow:hidden}main>section{width:100%;height:100%;overflow:hidden;display:flex;flex-direction:column}section[data-phase="hero"]{justify-content:center;padding:0 clamp(28px,5vw,70px) 1.5vh}.hero-copy{margin-top:3vh}.hero-copy h1{font-size:25px;font-weight:650;line-height:1.4;text-align:center;letter-spacing:1px;margin:0 0 26px}.brand-whale{font-size:30px;vertical-align:-1px}.hero-copy h1 small{font-size:11px;font-weight:500;letter-spacing:0;color:#225e6d;background:#d7eced;border-radius:20px;vertical-align:middle;padding:3px 8px;display:inline-block}.composer-meta{display:flex;gap:23px;font-size:13px;margin:0 12px 12px}.preview-composer{padding:11px 13px 10px;border:1px solid var(--qyt-q-line,#d9dedc);min-height:116px;display:flex;flex-direction:column}.preview-composer textarea{resize:none;background:transparent;border:0;outline:none;min-height:55px;width:100%;color:var(--qyt-q-ink,#24282b);font-size:13px;padding:2px 0}.preview-composer textarea::placeholder{color:var(--qyt-q-secondary,#53595f)}.preview-composer footer{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--qyt-q-secondary,#53595f)}.preview-composer footer>div{display:flex;gap:17px;align-items:center}.preview-composer footer button:first-child{font-size:21px;background:var(--qyt-q-selected,#d6e7e1);width:28px;height:28px;border-radius:50%;padding:0;line-height:28px}.preview-composer footer .send{border-radius:50%;background:#a8c9ce;color:white;font-size:28px;width:33px;height:33px;line-height:30px;padding:0}.model{white-space:nowrap}.model em{font-style:normal;font-size:10px;background:var(--qyt-q-selected,#d6e7e1);color:#116d83;border-radius:10px;padding:2px 7px;margin-left:-11px}
-[data-slot="conversation.header"] header{padding:17px 25px;font-size:13px}.reading-content{flex:1;min-height:0}.reading-scroll{height:100%;overflow:auto;padding:30px 24px}.reading-scroll article{max-width:700px;margin:0 auto;padding:0 18px;font-size:15px;line-height:1.9}.reading-scroll article p{margin:24px 0}.reading-scroll article h2{font-size:21px;margin-top:35px}.user-message{padding:13px 18px;background:var(--qyt-q-selected,#d6e7e1);border-radius:16px;max-width:88%;margin-left:auto}.reading-scroll pre{padding:18px;background:var(--qyt-q-raised,#f1f2f1);border-radius:12px;overflow:auto;font-size:13px}[data-composer-seat]{position:relative;isolation:isolate;max-width:736px;margin:50px auto 0}
+[data-slot="conversation.header"] header{padding:17px 25px;font-size:13px}.reading-content{flex:1;min-height:0}.reading-scroll{position:relative;isolation:isolate;height:100%;overflow:auto;padding:30px 0 0}.reading-scroll article{max-width:700px;margin:0 auto;padding:0 18px;font-size:15px;line-height:1.9}.reading-scroll article p{margin:24px 0}.reading-scroll article h2{font-size:21px;margin-top:35px}.user-message{padding:13px 18px;background:var(--qyt-q-selected,#d6e7e1);border-radius:16px;max-width:88%;margin-left:auto}.reading-scroll pre{padding:18px;background:var(--qyt-q-raised,#f1f2f1);border-radius:12px;overflow:auto;font-size:13px}[data-composer-seat]{position:sticky;bottom:0;isolation:isolate;z-index:7;width:100%;margin:50px auto 0;padding:16px 24px 6px}.reading-scroll [data-composer-card]{max-width:940px;margin:0 auto}.preview-dock{display:flex;justify-content:center;gap:8px;margin:7px auto 0;font-size:11px;color:var(--qyt-q-secondary)}
 @media(max-width:800px){.sidebar-shell{width:225px}.preview-composer footer .model{display:none}.composer-meta{gap:15px}.hero-copy h1{font-size:21px}}
 @media(max-width:560px){.sidebar-shell{display:none}section[data-phase="hero"]{padding:0 18px}.hero-copy{margin-top:7vh}.reading-scroll{padding:25px 12px}.reading-scroll article{padding:0 8px}}
 `
@@ -116,8 +117,8 @@ async function inspectHairMotion(page) {
     }))
     const fit = Math.max(innerWidth / 1600, innerHeight / 900), scaleX = scene.width / bounds.width, scaleY = scene.height / bounds.height
     const point = (x, y) => [
-      (innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scaleX,
-      (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scaleY,
+      (innerWidth - 1600 * fit + x * fit - bounds.left) * scaleX,
+      (innerHeight - 900 * fit + y * fit - bounds.top) * scaleY,
     ]
     const region = ([x1, y1, x2, y2]) => { const [x, y] = point(x1, y1), [right, bottom] = point(x2, y2); return { x: Math.round(x), y: Math.round(y), width: Math.round(right - x), height: Math.round(bottom - y) } }
     const rois = { face: region([1065, 395, 1093, 418]), crown: region([1070, 350, 1120, 378]), back: region([1120, 398, 1145, 425]) }
@@ -185,7 +186,14 @@ if (serve) {
     })
     assert.ok(initial.width > 0 && initial.height > 0, 'Scene must have a real drawing buffer')
     assert.equal(initial.pointerEvents, 'none', 'Background cannot intercept the composer')
-    if (shapeOnly) {
+    if (parityOnly) {
+      const { inspectOceanStyleParity } = await import('./ocean-style-parity.mjs')
+      const styleParity = await inspectOceanStyleParity(page, output)
+      assert.deepEqual(errors, [])
+      await page.evaluate(() => window.__oceanFixture.dispose())
+      await context.close()
+      console.log(JSON.stringify({ passed: true, styleParity, errors, warnings }, null, 2))
+    } else if (shapeOnly) {
       const bodyShape = await inspectBodyShape(page, output)
       const faceShape = await inspectFaceShape(page, output)
       await page.evaluate(() => window.__oceanFixture.dispose())

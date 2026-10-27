@@ -15,11 +15,11 @@ export async function inspectBodyShape(page, output) {
       const scene = document.querySelector('canvas[data-qyt-ocean-scene]')
       if (!scene) throw Error('Body inspection requires the live Ocean canvas')
       const bounds = scene.getBoundingClientRect(), fit = Math.max(innerWidth / 1600, innerHeight / 900)
-      const scaleX = fit * 1.035 * scene.width / bounds.width, scaleY = fit * 1.035 * scene.height / bounds.height
+      const scaleX = fit * scene.width / bounds.width, scaleY = fit * scene.height / bounds.height
       // This is only the documented art-to-canvas placement, not the motion.
       const point = (x, y) => ({
-        x: (innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scene.width / bounds.width,
-        y: (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scene.height / bounds.height,
+        x: (innerWidth - 1600 * fit + x * fit - bounds.left) * scene.width / bounds.width,
+        y: (innerHeight - 900 * fit + y * fit - bounds.top) * scene.height / bounds.height,
       })
       const anchors = {
         head: [900, 560], headRear: [1000, 575], mid: [1100, 605], rear: [1280, 650], caudal: [1415, 600],

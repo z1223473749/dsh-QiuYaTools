@@ -92,14 +92,19 @@ export function createOceanMesh(doc: Document): OceanMesh | null {
   const ctx = mask?.getContext('2d')
   if (!ctx || !matte) return null
   const pixels = ctx.getImageData(0, 0, 1600, 900).data
+  // Extend the scenery mesh beyond the source edges instead of enlarging the
+  // entire illustration. This 32px gutter exceeds the background displacement;
+  // texture edge sampling already clamps Y and mirrors/wraps X as appropriate.
+  const gutter = 32
   const axis = (end: number, details: [number, number, number][], anchors: number[]): number[] => {
-    const values = new Set<number>([-32, end + 32, end, ...anchors])
+    const values = new Set<number>([-gutter, end + gutter, end, ...anchors])
     for (let n = 0; n < end; n += 16) values.add(n)
     for (const [start, stop, step] of details) for (let n = start; n <= stop; n += step) values.add(n)
     return [...values].sort((a, b) => a - b)
   }
   const xs = axis(1600, [[1040, 1160, 3], [1000, 1280, 4], [1080, 1512, 8], [1390, 1482, 4], [1432, 1490, 2]], [1048, 1052, 1066, 1086, 1104, 1110, 1118, 1120, 1122, 1136, 1482, 1483])
   const ys = axis(900, [[336, 450, 3], [480, 684, 4], [656, 856, 8], [632, 768, 4], [804, 842, 2]], [374, 376, 377, 379, 391, 404, 418, 432, 438, 446, 683, 815, 818, 822, 831])
+  if (xs.length * ys.length > 0x10000) return null
   const vertices = new Float32Array(xs.length * ys.length * 9)
   const smooth = (low: number, high: number, value: number): number => {
     const t = Math.max(0, Math.min(1, (value - low) / (high - low)))
@@ -287,8 +292,10 @@ void main() {
       glint += wave * .012 * water;
     }
   }
-  vec2 screen = u_viewport - ART * fit + ((position / ART - .5) * 1.035 + .5) * ART * fit;
-  screen += flow * amount * 1.035 * fit;
+  // Match the static CSS viewport-fixed cover image at right bottom. The
+  // scenery gutter supplies overscan without changing the picture's scale.
+  vec2 screen = u_viewport - ART * fit + position * fit;
+  screen += flow * amount * fit;
   vec2 clip = (screen - u_bounds.xy) / u_bounds.zw;
   gl_Position = vec4(clip.x * 2. - 1., 1. - clip.y * 2., 0., 1.);
   v_light = glint * u_amount;
