@@ -12,6 +12,7 @@ export const gitStyles = `
 .qyt-git-added{color:var(--dsw-alias-state-success-primary,#16944b)}.qyt-git-deleted{color:var(--dsw-alias-state-danger-primary,#d64b45)}
 .qyt-git-counts{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-variant-numeric:tabular-nums;flex-shrink:0}
 .qyt-git-branch{display:inline-flex;min-width:0;align-items:center}
+[data-slot="sidebar.workspaces"] [data-row-key^="session:"]>.qyt-git-worktree-indicator{display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;height:20px;margin-inline-start:6px;color:var(--dsw-alias-label-tertiary,#68757b)}
 div:has(> [data-slot="conversation.hero.options"] [data-qyt-git-branch]){flex:1;margin-inline-start:0}
 [data-slot="conversation.hero.options"] [data-qyt-git-branch]{margin-inline-end:auto}
 .qyt-git-branch-trigger{font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:inherit;padding:4px 8px;border-radius:7px;max-width:240px;cursor:pointer}
