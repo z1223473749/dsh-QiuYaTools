@@ -2,6 +2,7 @@
 export const UPDATES_CHANNEL = '/api'
 export const UPDATES_CHECK_ENDPOINT = 'qiuya-tools.updates.check'
 export const UPDATES_INSTALL_ENDPOINT = 'qiuya-tools.updates.install'
+export const UPDATES_PROGRESS_ENDPOINT = 'qiuya-tools.updates.progress'
 
 export type UpdateErrorCode = 'network' | 'timeout' | 'rate-limited' | 'invalid-release'
   | 'manager-unavailable' | 'profile-unavailable' | 'platform-unsupported' | 'asset-unavailable'
@@ -36,3 +37,13 @@ export interface UpdateInstallResult {
   version?: string
   problem?: UpdateProblem
 }
+
+/** A snapshot of the active installation; byte progress comes only from the download stream. */
+export interface UpdateInstallProgress {
+  version: string
+  stage: 'checking' | 'downloading' | 'verifying' | 'installing'
+  downloadedBytes: number
+  totalBytes: number | null
+  percentage: number | null
+}
+export interface UpdateProgressResult { progress: UpdateInstallProgress | null }

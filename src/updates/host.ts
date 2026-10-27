@@ -7,7 +7,7 @@ import { GitHubReleaseChecker, type GitHubCheckResult } from './check.ts'
 import { validateUpdateArchive } from './archive.ts'
 import type { ReleaseAsset } from './release.ts'
 import { parseSemanticVersion } from './version.ts'
-import { UPDATES_CHANNEL, UPDATES_CHECK_ENDPOINT, UPDATES_INSTALL_ENDPOINT, type UpdateCheckResult, type UpdateInstallResult, type UpdateProblem } from './contract.ts'
+import { UPDATES_CHANNEL, UPDATES_CHECK_ENDPOINT, UPDATES_INSTALL_ENDPOINT, UPDATES_PROGRESS_ENDPOINT, type UpdateCheckResult, type UpdateInstallProgress, type UpdateInstallResult, type UpdateProblem, type UpdateProgressResult } from './contract.ts'
 
 interface ChangeResult {
   application: 'applied' | 'restart-required' | 'failed' | 'cancelled' | 'overridden'
@@ -50,7 +50,7 @@ export function isGitHubAssetRedirect(value: string): boolean {
   } catch { return false }
 }
 
-async function downloadAsset(asset: ReleaseAsset, request: typeof fetch, lifetime: AbortSignal): Promise<Uint8Array> {
+async function downloadAsset(asset: ReleaseAsset, request: typeof fetch, lifetime: AbortSignal, onProgress: (downloadedBytes: number) => void): Promise<Uint8Array> {
   const deadline = AbortSignal.timeout(60_000)
   const abort = new AbortController()
   const signal = AbortSignal.any([lifetime, deadline, abort.signal])
@@ -82,6 +82,7 @@ async function downloadAsset(asset: ReleaseAsset, request: typeof fetch, lifetim
         if (size > asset.size || size > MAX_ASSET_BYTES) fail('integrity-failed', '安装包大小异常，已停止更新。')
         digest.update(chunk.value)
         chunks.push(chunk.value)
+        onProgress(size)
       }
     } finally { reader.releaseLock() }
     if (size !== asset.size || digest.digest('hex') !== asset.sha256) fail('integrity-failed', '安装包完整性校验失败，已停止更新，请重试。')
@@ -129,6 +130,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
   let disposed = false
   let pendingVersion: string | undefined
   let installing: { version: string; promise: Promise<UpdateInstallResult> } | undefined
+  let progress: UpdateInstallProgress | null = null
   let requestId: string | undefined
   const manager = (): PluginManager | undefined => services.get?.('pluginManager') as PluginManager | undefined
   const profile = (): { dir?: unknown } | undefined => services.get?.('profileContext') as { dir?: unknown } | undefined
@@ -154,6 +156,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
     const operation = (async (): Promise<UpdateInstallResult> => {
       try {
         if (disposed) fail('disposed', '插件已停止，请重新打开设置后重试。')
+        progress = { version, stage: 'checking', downloadedBytes: 0, totalBytes: null, percentage: null }
         const fresh = await checker.check({ force: true })
         if (fresh.status === 'error') throw new UpdateFailure(fresh.problem!)
         if (fresh.status === 'up-to-date') return { status: 'already-current', currentVersion: checker.currentVersion, version: fresh.release?.version }
@@ -161,7 +164,12 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
         const problem = eligibility(fresh)
         if (problem !== undefined) throw new UpdateFailure(problem)
         const asset = fresh.release.asset!
-        const bytes = await downloadAsset(asset, request, lifetime.signal)
+        const updateProgress = (stage: UpdateInstallProgress['stage'], downloadedBytes: number): void => {
+          if (!disposed) progress = { version, stage, downloadedBytes, totalBytes: asset.size, percentage: downloadedBytes / asset.size * 100 }
+        }
+        updateProgress('downloading', 0)
+        const bytes = await downloadAsset(asset, request, lifetime.signal, downloadedBytes => updateProgress('downloading', downloadedBytes))
+        updateProgress('verifying', bytes.byteLength)
         try { validateUpdateArchive(bytes, { packageName: options.packageName, version, architecture, platform }) }
         catch { fail('archive-invalid', '安装包内容或系统架构不匹配，已停止更新。') }
         if (disposed) fail('disposed', '插件已停止，更新没有继续。')
@@ -172,6 +180,7 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
         const pluginManager = manager()
         if (pluginManager?.installBundle === undefined) fail('manager-unavailable', 'Harness 插件管理服务尚未就绪，请稍后重试。')
         requestId = randomUUID()
+        updateProgress('installing', bytes.byteLength)
         const result = await pluginManager.installBundle(pathToFileURL(path).href, { enabled: true, requestId, saveExact: true })
         if (!['applied', 'restart-required'].includes(result.application) || result.bundle !== options.packageName || result.version !== version) fail('install-failed', 'Harness 未能完成插件更新，原有功能设置已保留，请重试。')
         pendingVersion = version
@@ -179,13 +188,13 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
         return { status: 'restart-required', currentVersion: checker.currentVersion, version }
       } catch (error) {
         return { status: 'failed', currentVersion: checker.currentVersion, version, problem: error instanceof UpdateFailure ? error.problem : { code: 'install-failed', message: '更新没有完成，原有插件设置已保留，请检查网络后重试。' } }
-      } finally { requestId = undefined }
+      } finally { requestId = undefined; progress = null }
     })()
     const promise = operation.finally(() => { if (installing?.promise === promise) installing = undefined })
     installing = { version, promise }
     return promise
   }
-  const unregister = ([UPDATES_CHECK_ENDPOINT, UPDATES_INSTALL_ENDPOINT] as const).map(endpoint => services.connection.fetch.register({
+  const unregister = ([UPDATES_CHECK_ENDPOINT, UPDATES_INSTALL_ENDPOINT, UPDATES_PROGRESS_ENDPOINT] as const).map(endpoint => services.connection.fetch.register({
     path: `${UPDATES_CHANNEL}/${endpoint}`, methods: ['POST'], requestBody: 'buffered',
     fetch: async incoming => {
       if (services.connection.browserPeer?.principal.kind !== 'owner') return new Response('Forbidden', { status: 403 })
@@ -198,13 +207,17 @@ export function installPluginUpdatesHost(ctx: Context, options: PluginUpdateHost
       const payload = envelope.payload as Record<string, unknown>
       if (endpoint === UPDATES_CHECK_ENDPOINT && (Object.keys(payload).some(key => key !== 'force') || payload.force !== undefined && typeof payload.force !== 'boolean')) return new Response('Invalid check request', { status: 400 })
       if (endpoint === UPDATES_INSTALL_ENDPOINT && (Object.keys(payload).some(key => key !== 'version') || typeof payload.version !== 'string' || parseSemanticVersion(payload.version) === undefined)) return new Response('Invalid install request', { status: 400 })
-      const value = endpoint === UPDATES_CHECK_ENDPOINT ? await check(payload.force === true) : await install(payload.version as string)
+      if (endpoint === UPDATES_PROGRESS_ENDPOINT && (Object.keys(payload).some(key => key !== 'version') || typeof payload.version !== 'string' || parseSemanticVersion(payload.version) === undefined)) return new Response('Invalid progress request', { status: 400 })
+      const value = endpoint === UPDATES_CHECK_ENDPOINT ? await check(payload.force === true)
+        : endpoint === UPDATES_INSTALL_ENDPOINT ? await install(payload.version as string)
+        : { progress: !disposed && installing?.version === payload.version ? progress : null } satisfies UpdateProgressResult
       return Response.json({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value } })
     },
   }))
   return () => {
     if (disposed) return
     disposed = true
+    progress = null
     lifetime.abort()
     checker.dispose()
     const id = requestId

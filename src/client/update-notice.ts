@@ -40,6 +40,7 @@ export class UpdateNoticeStore implements UpdateNoticeSource {
   private pending: Promise<UpdateCheckResult | null> | undefined
   private pendingForce = false
   private manualRefresh: Promise<UpdateCheckResult | null> | undefined
+  private refreshManual = false
   private manualPending = false
   private closed = false
   constructor(private readonly ctx: Context, private readonly now: () => number = Date.now) {}
@@ -50,18 +51,28 @@ export class UpdateNoticeStore implements UpdateNoticeSource {
     this.value = Object.freeze({ ...this.value, ...value })
     for (const listener of this.listeners) listener()
   }
-  check(force = true, accept: () => boolean = () => true): Promise<UpdateCheckResult | null> {
+  check(force = true, options: { background?: boolean; accept?: () => boolean } = {}): Promise<UpdateCheckResult | null> {
     if (this.closed) return Promise.resolve(null)
+    const manual = options.background !== true
+    const accept = options.accept ?? (() => true)
     if (this.pending) {
-      if (!force || this.pendingForce) return this.pending
-      if (this.manualRefresh) return this.manualRefresh
+      if (!force || this.pendingForce) {
+        // A user may join an already fresh background check even if its
+        // scheduler is disabled or disconnected before the reply arrives.
+        if (manual) this.manualPending = true
+        return this.pending
+      }
+      if (this.manualRefresh) { if (manual) this.refreshManual = true; return this.manualRefresh }
       // An automatic check may be served from the Host's daily cache. A
       // manual refresh behind it must still issue one fresh request.
-      const refresh = this.pending.then(() => this.check(true)).finally(() => { if (this.manualRefresh === refresh) this.manualRefresh = undefined })
+      this.refreshManual = manual
+      const refresh = this.pending.then(() => this.check(true, { ...options, background: !this.refreshManual })).finally(() => {
+        if (this.manualRefresh === refresh) { this.manualRefresh = undefined; this.refreshManual = false }
+      })
       this.manualRefresh = refresh
       return refresh
     }
-    this.manualPending = force
+    this.manualPending = manual
     this.pendingForce = force
     this.publish({ checking: true, error: null })
     const operation = (async (): Promise<UpdateCheckResult | null> => {
@@ -111,13 +122,13 @@ interface SchedulerOptions {
   disposeStore?: boolean
 }
 
-/** Start in the background, with one daily check or an hourly retry after failure. */
+/** Check each ready startup afresh, then daily or hourly after failure. */
 export function installAutomaticUpdateChecks(ctx: Context, form: ConfigForm<Preferences>, options: SchedulerOptions = {}): () => void {
   const store = options.store ?? getUpdateNotice(ctx)
   const now = options.now ?? Date.now
   const schedule = options.setTimeout ?? setTimeout
   const cancel = options.clearTimeout ?? clearTimeout
-  let disposed = false, generation = 0, enabled = false
+  let disposed = false, generation = 0, enabled = false, startupPending = true
   let timer: ReturnType<typeof setTimeout> | undefined
   const clear = (): void => { if (timer !== undefined) { cancel(timer); timer = undefined } }
   const sync = (): void => {
@@ -125,13 +136,17 @@ export function installAutomaticUpdateChecks(ctx: Context, form: ConfigForm<Pref
     if (disposed) return
     const preferences = form.getSnapshot()
     const nextEnabled = preferences.status === 'ready' && preferences.value?.autoCheckUpdates !== false
-    if (nextEnabled !== enabled) { enabled = nextEnabled; generation++ }
+    if (nextEnabled !== enabled) { enabled = nextEnabled; generation++; if (enabled) startupPending = true }
     if (!enabled || store.getSnapshot().checking) return
-    const delay = Math.max(0, (store.getSnapshot().nextAutomaticCheck ?? now()) - now())
+    const delay = startupPending ? 0 : Math.max(0, (store.getSnapshot().nextAutomaticCheck ?? now()) - now())
+    const currentGeneration = generation
     timer = schedule(() => {
       timer = undefined
-      const currentGeneration = generation
-      if (!disposed && enabled) void store.check(false, () => !disposed && enabled && generation === currentGeneration)
+      if (disposed || !enabled || generation !== currentGeneration) return
+      startupPending = false
+      // This scheduler owns the daily/hourly cadence; every due check must
+      // reach GitHub instead of reusing the Host's earlier successful cache.
+      void store.check(true, { background: true, accept: () => !disposed && enabled && generation === currentGeneration })
     }, delay)
   }
   const offForm = form.subscribe(sync), offStore = store.subscribe(sync)

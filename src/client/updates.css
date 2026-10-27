@@ -23,7 +23,14 @@
 .qyt-about-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
 .qyt-updates .qyt-about-check { padding: 6px 12px; border-color: var(--qyt-ocean-line); color: var(--qyt-ocean); background: var(--qyt-ocean-soft); }
 .qyt-updates .qyt-about-check:hover:enabled { background: var(--dsw-alias-interactive-bg-hover); }
-.qyt-updates .qyt-about-install { padding: 6px 12px; }
+.qyt-updates .qyt-about-install { position:relative; overflow:hidden; isolation:isolate; min-width:124px; padding:6px 12px; font-variant-numeric:tabular-nums; }
+.qyt-about-install-fill { position:absolute; inset:0 auto 0 0; z-index:-1; background:rgba(255,255,255,.2); pointer-events:none; transition:width .15s linear; }
+.qyt-about-install-label { position:relative; }
+.qyt-about-download-progress { display:grid; gap:7px; margin-top:13px; }
+.qyt-about-download-track { height:5px; overflow:hidden; border-radius:99px; background:var(--qyt-ocean-soft); }
+.qyt-about-download-track > span { display:block; height:100%; border-radius:inherit; background:var(--qyt-ocean-solid); transition:width .15s linear; }
+.qyt-about-download-bytes { color:var(--dsw-alias-label-secondary); font-size:10px; font-variant-numeric:tabular-nums; }
+@media (prefers-reduced-motion:reduce) { .qyt-about-install-fill, .qyt-about-download-track > span { transition:none; } }
 .qyt-about-update-actions a { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 5px 0; color: var(--dsw-alias-label-secondary); font-size: 10px; text-decoration: none; }
 .qyt-about-update-actions a:hover { color: var(--qyt-ocean); }
 .qyt-about-update-actions a svg { width: 12px; height: 12px; }

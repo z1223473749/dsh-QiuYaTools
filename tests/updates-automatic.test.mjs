@@ -9,7 +9,7 @@ vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.expor
 const { UpdateNoticeStore, installAutomaticUpdateChecks, UPDATE_CHECK_INTERVAL, UPDATE_RETRY_INTERVAL } = module.exports
 const latest = { status: 'available', currentVersion: '0.6.2', canInstall: true, release: { version: '0.6.3', title: 'Update', tag: 'v0.6.3', notes: '', publishedAt: '', url: 'https://github.com/example/tools/releases/tag/v0.6.3' } }
 const pause = () => new Promise(resolve => setImmediate(resolve))
-function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes }); return { promise, resolve } }
+function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no }); return { promise, resolve, reject } }
 function fixture(t, handler, initial = { status: 'ready', value: {} }, extra = {}) {
   let timestamp = 10_000, preferences = initial, nextId = 0
   const calls = [], timers = new Map(), listeners = new Set()
@@ -24,7 +24,7 @@ function fixture(t, handler, initial = { status: 'ready', value: {} }, extra = {
   }
 }
 
-test('background checks start once, queue one fresh manual request, wait a day, and never request installation', async t => {
+test('startup checks are fresh, share a simultaneous manual check, wait a day, and never request installation', async t => {
   const pending = deferred()
   const f = fixture(t, count => count === 1 ? pending.promise : { ok: true, value: latest })
   assert.equal(f.calls.length, 0, 'startup schedules work outside the render/installation path')
@@ -33,17 +33,56 @@ test('background checks start once, queue one fresh manual request, wait a day, 
   const repeatedManual = f.store.check(true)
   assert.equal(manual, repeatedManual)
   assert.equal(f.calls.length, 1)
-  assert.deepEqual(f.calls[0], { channel: '/api', endpoint: 'qiuya-tools.updates.check', payload: { force: false } })
+  assert.deepEqual(f.calls[0], { channel: '/api', endpoint: 'qiuya-tools.updates.check', payload: { force: true } })
   pending.resolve({ ok: true, value: latest }); await manual; await pause()
   assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
-  assert.equal(f.calls.length, 2)
-  assert.equal(f.calls[1].payload.force, true, 'manual refresh behind an automatic request must bypass the Host daily cache')
-  await f.advance(UPDATE_CHECK_INTERVAL - 1); assert.equal(f.calls.length, 2)
-  await f.advance(1); assert.equal(f.calls.length, 3)
+  assert.equal(f.calls.length, 1, 'an explicit check can share a background request that is already fresh')
+  await f.advance(UPDATE_CHECK_INTERVAL - 1); assert.equal(f.calls.length, 1)
+  await f.advance(1); assert.equal(f.calls.length, 2)
+  assert.equal(f.calls[1].payload.force, true, 'a due daily check must reach GitHub')
   assert(f.calls.every(row => row.endpoint === 'qiuya-tools.updates.check'))
   await f.store.check(true)
-  assert.equal(f.calls.length, 4)
-  assert.equal(f.calls[3].payload.force, true, 'explicit checks bypass Host automatic cache')
+  assert.equal(f.calls.length, 3)
+  assert.equal(f.calls[2].payload.force, true, 'explicit checks bypass Host automatic cache')
+})
+
+test('manual checks behind a cached background request queue exactly one fresh check', async t => {
+  const pending = deferred()
+  const f = fixture(t, count => count === 1 ? pending.promise : { ok: true, value: latest }, { status: 'ready', value: { autoCheckUpdates: false } })
+  const automatic = f.store.check(false, { background: true, accept: () => false })
+  const manual = f.store.check(true)
+  assert.notEqual(manual, automatic)
+  assert.equal(f.store.check(true), manual)
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0].payload.force, false)
+  pending.resolve({ ok: true, value: latest })
+  assert.equal(await automatic, null, 'the old automatic generation still cannot accept its receipt')
+  await manual
+  assert.equal(f.calls.length, 2)
+  assert.equal(f.calls[1].payload.force, true)
+  assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
+})
+
+test('a ready connection checks once on startup even with a future daily deadline in the retained store', async t => {
+  const f = fixture(t, () => ({ ok: true, value: latest }), undefined, { disposeStore: false })
+  await f.advance(0)
+  const deadline = f.store.getSnapshot().nextAutomaticCheck
+  assert.equal(deadline, 10_000 + UPDATE_CHECK_INTERVAL)
+  f.stop()
+  f.restart()
+  for (let i = 0; i < 4; i++) f.change({ status: 'ready', value: {} })
+  await f.advance(0)
+  assert.equal(f.calls.length, 2, 'the new connection must not wait for the retained deadline')
+  assert.equal(f.calls[1].payload.force, true)
+  for (let i = 0; i < 4; i++) f.change({ status: 'ready', value: {} })
+  await f.advance(0)
+  assert.equal(f.calls.length, 2, 'repeated ready notifications do not repeat the startup request')
+  assert.equal(f.timers.size, 1)
+  await f.advance(UPDATE_CHECK_INTERVAL - 1)
+  assert.equal(f.calls.length, 2)
+  await f.advance(1)
+  assert.equal(f.calls.length, 3)
+  f.store.dispose()
 })
 
 test('failed transport and error results retry hourly without reporting up-to-date or erasing a known release', async t => {
@@ -55,6 +94,7 @@ test('failed transport and error results retry hourly without reporting up-to-da
   assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
   await f.advance(UPDATE_RETRY_INTERVAL - 1); assert.equal(f.calls.length, 2)
   await f.advance(1); assert.equal(f.calls.length, 3)
+  assert.equal(f.calls[2].payload.force, true, 'hourly retries must bypass a prior successful Host cache')
   assert.equal(f.store.getSnapshot().result.status, 'error')
   assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
 })
@@ -68,7 +108,55 @@ test('explicitly disabled and loading profiles make no request; disabling in fli
   pending.resolve({ ok: true, value: latest }); await pause()
   assert.equal(f.store.getSnapshot().notice, null)
   assert.equal(f.store.getSnapshot().result, null)
+  assert.equal(f.store.getSnapshot().nextAutomaticCheck, null)
   assert.equal(f.timers.size, 0)
+})
+
+test('forced background errors and failures are discarded after automatic checks are disabled', async t => {
+  for (const mode of ['error-result', 'transport-error']) await t.test(mode, async t => {
+    const pending = deferred()
+    const f = fixture(t, () => pending.promise)
+    await f.advance(0)
+    assert.equal(f.calls[0].payload.force, true)
+    f.change({ status: 'ready', value: { autoCheckUpdates: false } })
+    if (mode === 'transport-error') pending.reject(Error('private connection info'))
+    else pending.resolve({ ok: true, value: { status: 'error', currentVersion: '0.6.2', canInstall: false, problem: { code: 'network', message: 'Network unavailable' } } })
+    await pause()
+    assert.equal(f.store.getSnapshot().result, null)
+    assert.equal(f.store.getSnapshot().error, null)
+    assert.equal(f.store.getSnapshot().nextAutomaticCheck, null)
+    assert.equal(f.timers.size, 0)
+  })
+})
+
+test('an explicit user check sharing a fresh startup request may accept the receipt after disabling automation', async t => {
+  const pending = deferred()
+  const f = fixture(t, () => pending.promise)
+  await f.advance(0)
+  const manual = f.store.check(true)
+  f.change({ status: 'ready', value: { autoCheckUpdates: false } })
+  pending.resolve({ ok: true, value: latest })
+  assert.equal((await manual).release.version, '0.6.3')
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
+  assert.equal(f.timers.size, 0)
+})
+
+test('disabling and re-enabling in flight rejects the old generation then checks afresh once', async t => {
+  const pending = deferred()
+  const f = fixture(t, count => count === 1 ? pending.promise : { ok: true, value: latest })
+  await f.advance(0)
+  f.change({ status: 'ready', value: { autoCheckUpdates: false } })
+  f.change({ status: 'ready', value: {} })
+  await f.advance(0)
+  assert.equal(f.calls.length, 1, 'the old operation stays deduplicated until it settles')
+  pending.resolve({ ok: true, value: latest })
+  await pause()
+  assert.equal(f.store.getSnapshot().notice, null)
+  await f.advance(0)
+  assert.equal(f.calls.length, 2)
+  assert.equal(f.calls[1].payload.force, true)
+  assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
 })
 
 test('unloading clears subscriptions and timers and ignores an in-flight receipt', async t => {
@@ -94,10 +182,11 @@ test('a restarted connection retains its root store while rejecting the old auto
   const pending = deferred()
   const f = fixture(t, count => count === 1 ? pending.promise : { ok: true, value: latest }, undefined, { disposeStore: false })
   await f.advance(0); f.stop()
+  f.restart(); await f.advance(0)
+  assert.equal(f.calls.length, 1, 'the new scheduler waits for the abandoned request instead of sharing its old generation')
   pending.resolve({ ok: true, value: latest }); await pause()
   assert.equal(f.store.getSnapshot().notice, null)
-  assert.equal(f.listeners.size, 0)
-  f.restart(); await f.advance(0)
+  await f.advance(0)
   assert.equal(f.calls.length, 2)
   assert.equal(f.store.getSnapshot().notice.version, '0.6.3')
   f.store.dispose()
