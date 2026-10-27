@@ -9,12 +9,13 @@ import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import { installOceanPerformanceProbe } from './ocean-performance.mjs'
-import { inspectSceneMotion, recordOceanUi } from './ocean-perception.mjs'
+import { inspectSceneMotion, inspectWakeMotion, recordOceanUi } from './ocean-perception.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = resolve(root, 'artifacts/ocean-scene')
 const serve = process.argv.includes('--serve')
 const motionOnly = process.argv.includes('--motion-only')
+const wakeOnly = process.argv.includes('--wake-only')
 const portArgument = process.argv.find(argument => argument.startsWith('--port='))
 const requestedPort = portArgument ? Number(portArgument.split('=')[1]) : serve ? 4317 : 0
 assert.ok(Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535, 'Use --port=0..65535')
@@ -24,15 +25,17 @@ await promisify(execFile)(process.execPath, [join(root, 'scripts/preview-ocean-s
 const fixture = `
 import {installQTheme} from ${JSON.stringify(join(root, 'src/client/q-theme.ts'))};
 const performanceProbe=(${installOceanPerformanceProbe.toString()})();
-const uniformNames=new WeakMap(), captureRestorers=[];
-let heldTime=null,pendingCapture=null,captureQueued=false;
+const uniformNames=new WeakMap(), currentLayers=new WeakMap(), captureRestorers=[];
+let heldTime=null,pendingCapture=null,captureQueued=false,skippedLayers=[];
 for(const type of [window.WebGLRenderingContext,window.WebGL2RenderingContext]){
   if(!type)continue;
   for(const operation of ['getUniformLocation','uniform1f','drawArrays','drawElements']){
     const native=type.prototype[operation];
     const wrapped=function(...args){
       if(operation==='uniform1f'&&uniformNames.get(args[0])==='u_time'&&heldTime!==null)args[1]=heldTime;
-      const value=native.apply(this,args);
+      if(operation==='uniform1f'&&uniformNames.get(args[0])==='u_layer')currentLayers.set(this,args[1]);
+      const drawing=operation==='drawArrays'||operation==='drawElements';
+      const value=drawing&&skippedLayers.includes(currentLayers.get(this))?undefined:native.apply(this,args);
       if(operation==='getUniformLocation'&&value)uniformNames.set(value,args[1]);
       if((operation==='drawArrays'||operation==='drawElements')&&pendingCapture&&!captureQueued&&this.canvas?.hasAttribute('data-qyt-ocean-scene')){captureQueued=true;const canvas=this.canvas;queueMicrotask(()=>{captureQueued=false;if(pendingCapture){const capture=pendingCapture;pendingCapture=null;clearTimeout(capture.timer);capture.resolve(canvas.toDataURL('image/png'))}})}
       return value;
@@ -41,7 +44,7 @@ for(const type of [window.WebGLRenderingContext,window.WebGL2RenderingContext]){
     captureRestorers.push(()=>{if(type.prototype[operation]===wrapped)type.prototype[operation]=native});
   }
 }
-function captureAt(time){if(pendingCapture)throw Error('Finish the previous frame capture first');heldTime=time;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pendingCapture=null;reject(Error('Timed out capturing a deterministic Ocean frame'))},3000);pendingCapture={resolve,reject,timer}})}
+function captureAt(time,options={}){if(pendingCapture)throw Error('Finish the previous frame capture first');heldTime=time;skippedLayers=options.skipLayers??[];return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pendingCapture=null;reject(Error('Timed out capturing a deterministic Ocean frame'))},3000);pendingCapture={resolve,reject,timer}})}
 const listeners=new Set();
 const settingsKey='qyt.ocean.preview.settings';
 function storedSettings(){try{const value=JSON.parse(localStorage.getItem(settingsKey)||'null');return value&&typeof value==='object'?{...value,qThemeEnabled:value.qThemeEnabled??true}:{qThemeEnabled:true,qThemeSettings:{ocean:{motion:'dynamic'}}}}catch{return{qThemeEnabled:true,qThemeSettings:{ocean:{motion:'dynamic'}}}}}
@@ -62,7 +65,7 @@ function syncStoredSettings(event){if(event.key===settingsKey){preferences=store
 window.addEventListener('storage',syncStoredSettings);
 document.getElementById('open-theme-settings').addEventListener('click',()=>location.assign('/settings'));
 const performanceTimer=setInterval(()=>{const stats=performanceProbe.snapshot();document.documentElement.dataset.oceanFps=String(stats.webglDraws.fps);document.documentElement.dataset.oceanFrameP95=String(stats.webglDraws.p95Ms??0);document.documentElement.dataset.oceanRafFps=String(stats.browserRaf.fps)},500);
-window.__oceanFixture={setTheme,setMotion,setDark,rebuild,captureAt,resumeTime(){heldTime=null},performance:performanceProbe,dispose(){cleanup();clearInterval(performanceTimer);captureRestorers.reverse().forEach(restore=>restore());performanceProbe.dispose();window.removeEventListener('storage',syncStoredSettings)}};
+window.__oceanFixture={setTheme,setMotion,setDark,rebuild,captureAt,resumeTime(){heldTime=null;skippedLayers=[]},performance:performanceProbe,dispose(){cleanup();clearInterval(performanceTimer);captureRestorers.reverse().forEach(restore=>restore());performanceProbe.dispose();window.removeEventListener('storage',syncStoredSettings)}};
 window.__oceanFixtureReady=true;
 `
 const bundle = await build({
@@ -177,16 +180,22 @@ if (serve) {
     })
     assert.ok(initial.width > 0 && initial.height > 0, 'Scene must have a real drawing buffer')
     assert.equal(initial.pointerEvents, 'none', 'Background cannot intercept the composer')
-    if (motionOnly) {
+    if (wakeOnly) {
+      const wakeMotion = await inspectWakeMotion(page, output)
+      await page.evaluate(() => window.__oceanFixture.dispose())
+      await context.close()
+      console.log(JSON.stringify({ passed: true, fin: wakeMotion.fin.relative, coreLengthVariationPx: wakeMotion.fin.coreLengthVariationPx, foam: wakeMotion.foam }, null, 2))
+    } else if (motionOnly) {
+      const wakeMotion = await inspectWakeMotion(page, output)
       const sceneMotion = await inspectSceneMotion(page, output)
       await page.screenshot({ path: join(output, 'ocean-home.png') })
       const uiRecording = await recordOceanUi(page, output)
       await copyFile(join(output, 'ocean-ui-motion.webm'), join(output, 'ocean-motion.webm'))
       assert.deepEqual(errors, [])
-      const supplement = { passed: true, sceneMotion, uiRecording, errors, warnings, evidenceBoundary: 'Supplemental motion validation after a shader-only change: direction, visible cloud/body/tail movement, fixed 60/180/600 second screenshots, and a fresh 16-second recording of the normal UI. Performance and lifecycle results are retained from the preceding full three-pass browser suite.' }
+      const supplement = { passed: true, wakeMotion, sceneMotion, uiRecording, errors, warnings, evidenceBoundary: 'Supplemental motion validation after a shader-only change: fin movement, contact phase screenshots, direction, visible cloud/body/tail movement, fixed 60/180/600 second screenshots, and a fresh 16-second recording of the normal UI. Performance and lifecycle results are retained from the preceding full three-pass browser suite.' }
       await writeFile(join(output, 'motion-final.json'), JSON.stringify(supplement, null, 2) + '\n')
       const previous = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
-      await writeFile(join(output, 'report.json'), JSON.stringify({ ...previous, sceneMotion, uiRecording, supplementalValidation: supplement.evidenceBoundary }, null, 2) + '\n')
+      await writeFile(join(output, 'report.json'), JSON.stringify({ ...previous, wakeMotion, sceneMotion, uiRecording, supplementalValidation: supplement.evidenceBoundary }, null, 2) + '\n')
       await page.evaluate(() => window.__oceanFixture.dispose())
       await context.close()
       console.log(JSON.stringify({ passed: true, cloudDirection: sceneMotion.cloudDriftDirection, ranges: sceneMotion.ranges, longTermEpochs: sceneMotion.longTermEpochs, uiRecording, errors, warnings }, null, 2))
@@ -198,6 +207,7 @@ if (serve) {
     await writeFile(join(output, 'performance-current.json'), JSON.stringify(performance, null, 2) + '\n')
     assert.ok(performance.webglDraws.fps >= performance.browserRaf.fps * .85, `The background must follow browser refresh: ${performance.webglDraws.fps} actual WebGL FPS / ${performance.browserRaf.fps} browser rAF FPS`)
     assert.ok(performance.webglDraws.p95Ms <= performance.browserRaf.p95Ms * 1.8 + 4, `The background frame interval is uneven: P95 ${performance.webglDraws.p95Ms}ms`)
+    const wakeMotion = await inspectWakeMotion(page, output)
     const sceneMotion = await inspectSceneMotion(page, output)
     const hairMotion = await inspectHairMotion(page)
     await page.screenshot({ path: join(output, 'ocean-home.png') })
@@ -275,9 +285,14 @@ if (serve) {
     await fallback.close()
     assert.deepEqual(errors, [], 'Preview cannot log browser errors')
     await context.close()
-    const report = { passed: true, browser: await browser.version(), initial, performance, hairMotion, sceneMotion, uiRecording, checks: ['live rendering', 'actual WebGL frame cadence', 'hair motion relative to the face', 'visible monotonic cloud drift', 'visible body buoyancy', 'tail motion relative to the body', 'normal UI continuous recording', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: 'ocean-ui-motion.webm', warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video continuously records the actual composed UI, including the text, input controls and CSS color wash; mouse movement is tested after recording. Does not assert installation in the live Harness app or physical display presentation timing.' }
+    const report = { passed: true, browser: await browser.version(), initial, performance, hairMotion, wakeMotion, sceneMotion, uiRecording, checks: ['live rendering', 'actual WebGL frame cadence', 'hair motion relative to the face', 'fin stroke relative to the body', 'rigid body core', 'contact-phase screenshots for visual review', 'visible monotonic cloud drift', 'visible body buoyancy', 'tail motion relative to the body', 'normal UI continuous recording', 'mouse movement', 'composer input', 'native dark palette', 'reading phase', 'DOM replacement', 'theme toggle cleanup', 'system reduced motion', 'forced colors', 'per-theme dynamic/static preference', 'settings navigation and persistence', 'small viewport', 'WebGL unavailable fallback', 'unload cleanup'], screenshots: ['ocean-home.png', 'ocean-dark.png', 'ocean-reading.png', 'ocean-reading-light.png', 'ocean-reduced-motion.png', 'ocean-mobile.png'], video: 'ocean-ui-motion.webm', warnings, errors, evidenceBoundary: 'Runs the actual theme installer and WebGL renderer in Chromium with an account-free fixture. WebGL draw submission timing is measured separately from recording and screenshots. The video continuously records the actual composed UI, including the text, input controls and CSS color wash; mouse movement is tested after recording. Does not assert installation in the live Harness app or physical display presentation timing.' }
     await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n')
-    console.log(JSON.stringify(report, null, 2))
+    console.log(JSON.stringify({
+      passed: report.passed, browser: report.browser, checks: report.checks.length,
+      performance, finStroke: { inner: { x: wakeMotion.fin.relative.inner.x, y: wakeMotion.fin.relative.inner.y }, tip: { x: wakeMotion.fin.relative.tip.x, y: wakeMotion.fin.relative.tip.y }, coreLengthVariationPx: wakeMotion.fin.coreLengthVariationPx },
+      cloudDirection: sceneMotion.cloudDriftDirection, sceneRanges: sceneMotion.ranges, uiRecording,
+      video: report.video, report: join(output, 'report.json'), warnings, errors,
+    }, null, 2))
     }
   } finally {
     await browser?.close()

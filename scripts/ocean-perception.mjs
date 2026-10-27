@@ -3,6 +3,66 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+export async function inspectWakeMotion(page, output) {
+  const epochs = [0, .2, .35, .5, .65, .75, .8, 1, 1.2, 1.5, 2.25, 3, 3.75, 4.5, 5.25, 6], baseFrames = [], foam = []
+  for (const epoch of epochs) {
+    const full = await page.evaluate(time => window.__oceanFixture.captureAt(time), epoch)
+    for (const [name, clip] of Object.entries({ front: { x: 550, y: 690, width: 285, height: 215 }, right: { x: 1210, y: 690, width: 200, height: 210 }, fin: { x: 865, y: 725, width: 540, height: 265 } })) await page.screenshot({ path: join(output, `wake-${name}-${epoch}s.png`), clip })
+    const base = await page.evaluate(time => window.__oceanFixture.captureAt(time, { skipLayers: [2] }), epoch)
+    baseFrames.push(base)
+    foam.push(await page.evaluate(async ({ full, base, epoch }) => {
+      async function decode(source) { const image = new Image(); image.src = source; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; const ctx = canvas.getContext('2d', { willReadFrequently: true }); ctx.drawImage(image, 0, 0); return ctx.getImageData(0, 0, image.width, image.height) }
+      const [a, b] = await Promise.all([decode(full), decode(base)]), scene = document.querySelector('canvas[data-qyt-ocean-scene]'), bounds = scene.getBoundingClientRect()
+      function measure(rect) {
+        let energy = 0, brightenedPixels = 0
+        for (let y = rect.y; y < rect.y + rect.height; y++) for (let x = rect.x; x < rect.x + rect.width; x++) {
+          const offset = (Math.round((y - bounds.top) * a.height / bounds.height) * a.width + Math.round((x - bounds.left) * a.width / bounds.width)) * 4
+          const delta = (a.data[offset] + a.data[offset + 1] + a.data[offset + 2] - b.data[offset] - b.data[offset + 1] - b.data[offset + 2]) / 3
+          if (Math.min(a.data[offset], a.data[offset + 1], a.data[offset + 2]) > 190 && delta > 8) { energy += delta; brightenedPixels++ }
+        }
+        return { brightenedPixels, energy }
+      }
+      return { epoch, front: measure({ x: 550, y: 690, width: 285, height: 215 }), right: measure({ x: 1210, y: 690, width: 200, height: 210 }) }
+    }, { full, base, epoch }))
+  }
+  const fin = await page.evaluate(async ({ frames, epochs }) => {
+    const scene = document.querySelector('canvas[data-qyt-ocean-scene]'), bounds = scene.getBoundingClientRect(), fit = Math.max(innerWidth / 1600, innerHeight / 900)
+    const images = await Promise.all(frames.map(async source => { const image = new Image(); image.src = source; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; const ctx = canvas.getContext('2d', { willReadFrequently: true }); ctx.drawImage(image, 0, 0); return ctx.getImageData(0, 0, image.width, image.height).data }))
+    const point = (x, y) => [(innerWidth - 1600 * fit + ((x / 1600 - .5) * 1.035 + .5) * 1600 * fit - bounds.left) * scene.width / bounds.width, (innerHeight - 900 * fit + ((y / 900 - .5) * 1.035 + .5) * 900 * fit - bounds.top) * scene.height / bounds.height]
+    const regions = Object.fromEntries(Object.entries({ body: [1008, 600, 1050, 631], torso: [1335, 620, 1375, 650], inner: [1190, 725, 1260, 775], tip: [1420, 800, 1485, 840] }).map(([name, r]) => { const [x, y] = point(r[0], r[1]), [right, bottom] = point(r[2], r[3]); return [name, { x: Math.round(x), y: Math.round(y), width: Math.round(right - x), height: Math.round(bottom - y) }] }))
+    function match(target, roi, expected = null) {
+      const reference = images[0], pixels = [], width = scene.width
+      for (let y = roi.y; y < roi.y + roi.height; y += 2) for (let x = roi.x; x < roi.x + roi.width; x += 2) { const offset = (y * width + x) * 4; if (Math.abs(reference[offset] - reference[offset + 4]) + Math.abs(reference[offset] - reference[offset + width * 4]) > 8) pixels.push([x, y, offset]) }
+      const score = (dx, dy) => { let sum = 0; for (const [x, y, p] of pixels) { const q = ((y + dy) * width + x + dx) * 4; for (let c = 0; c < 3; c++) sum += Math.abs(reference[p + c] - target[q + c]) } return sum / Math.max(1, pixels.length * 3) }
+      let best = { dx: 0, dy: 0, error: Infinity }
+      if (expected) {
+        for (let dy = expected.dy - 8; dy <= expected.dy + 8; dy++) for (let dx = expected.dx - 8; dx <= expected.dx + 8; dx++) { const error = score(dx, dy); if (error < best.error) best = { dx, dy, error } }
+        return best
+      }
+      for (let dy = -64; dy <= 64; dy += 4) for (let dx = -64; dx <= 64; dx += 4) { const error = score(dx, dy); if (error < best.error) best = { dx, dy, error } }
+      const coarse = best
+      for (let dy = coarse.dy - 4; dy <= coarse.dy + 4; dy++) for (let dx = coarse.dx - 4; dx <= coarse.dx + 4; dx++) { const error = score(dx, dy); if (error < best.error) best = { dx, dy, error } }
+      return best
+    }
+    const measurements = epochs.map((epoch, index) => {
+      const body = index ? match(images[index], regions.body) : { dx: 0, dy: 0 }
+      return { epoch, regions: Object.fromEntries(Object.entries(regions).map(([name, roi]) => [name, name === 'body' ? body : index ? match(images[index], roi, name === 'torso' ? body : null) : { dx: 0, dy: 0 }])) }
+    })
+    const range = list => ({ x: Math.max(...list.map(v => v.dx)) - Math.min(...list.map(v => v.dx)), y: Math.max(...list.map(v => v.dy)) - Math.min(...list.map(v => v.dy)) })
+    const relative = Object.fromEntries(['inner', 'tip'].map(name => { const values = measurements.map(v => ({ epoch: v.epoch, dx: v.regions[name].dx - v.regions.body.dx, dy: v.regions[name].dy - v.regions.body.dy })); return [name, { ...range(values), values }] }))
+    const eye = regions.body, torso = regions.torso, vector = { x: torso.x + torso.width / 2 - eye.x - eye.width / 2, y: torso.y + torso.height / 2 - eye.y - eye.height / 2 }
+    const lengths = measurements.map(v => Math.hypot(vector.x + v.regions.torso.dx - v.regions.body.dx, vector.y + v.regions.torso.dy - v.regions.body.dy))
+    return { epochs, measurements, relative, coreLengthVariationPx: Math.max(...lengths) - Math.min(...lengths) }
+  }, { frames: baseFrames, epochs })
+  await page.evaluate(() => window.__oceanFixture.resumeTime())
+  const report = { fin, foam, evidenceBoundary: 'Fin registration uses actual GPU frames with only the foreground-water pass skipped. Foam energy compares complete and skipped-layer-2 frames at the same shader epoch. Phase screenshots retain the normal UI and all passes. Brightness difference supports timing review; visual contact and edge quality still require human inspection.' }
+  await writeFile(join(output, 'wake-motion.json'), JSON.stringify(report, null, 2) + '\n')
+  assert.ok(fin.relative.tip.y >= 30, `Fin tip must visibly stroke relative to the body: ${fin.relative.tip.y}px`)
+  assert.ok(Math.hypot(fin.relative.inner.x, fin.relative.inner.y) >= 10, 'Fin inner section must visibly stroke relative to the body')
+  assert.ok(fin.coreLengthVariationPx <= 4, `Whale core must retain its shape: ${fin.coreLengthVariationPx}px anchor-distance variation`)
+  return report
+}
+
 export async function inspectSceneMotion(page, output) {
   const epochs = [0, 1.5, 3, 4.5, 6, 8], frames = []
   for (const epoch of epochs) {
