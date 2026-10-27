@@ -15,7 +15,7 @@ const defaults = {
   planCommentsEnabled: true,
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
-  qThemeEnabled: false,
+  qThemeEnabled: true,
   computerUseEnabled: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,

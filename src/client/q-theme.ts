@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { getOceanMotion, type Preferences } from '../shared.ts'
+import { DEFAULT_PREFERENCES, getOceanMotion, type Preferences } from '../shared.ts'
 import css from './q-theme.css'
 import { OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
@@ -47,7 +47,7 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>): () 
   const sync = (): void => {
     if (disposed) return
     const snapshot = form.getSnapshot()
-    if (snapshot.status !== 'ready' || snapshot.value?.qThemeEnabled !== true) { remove(); return }
+    if (snapshot.status !== 'ready' || (snapshot.value?.qThemeEnabled ?? DEFAULT_PREFERENCES.qThemeEnabled) !== true) { remove(); return }
     let mount = mounts.get(doc)
     if (!mount) {
       const style = doc.createElement('style')

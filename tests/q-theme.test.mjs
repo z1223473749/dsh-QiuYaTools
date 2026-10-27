@@ -123,15 +123,57 @@ test('legacy Ocean preferences and an explicit dynamic preference start motion b
   }
 })
 
-test('stays off until an accepted explicit setting and ignores the legacy feature master switch', t => {
+test('ready preferences without a theme flag inherit the enabled dynamic default', t => {
+  for (const preferences of [{}, { enabled: false }, { qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }]) {
+    const scene = motionFixture()
+    const f = fixture(t, { sharedForm: formFixture(preferences), scene })
+    const cleanup = f.install()
+    assert.equal(f.styles().length, 1)
+    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+    assert.equal(scene.installs, 1)
+    assert.equal(scene.active, 1, 'missing appearance fields do not inherit the legacy tool master')
+    cleanup()
+    assert.equal(scene.active, 0)
+  }
+})
+
+test('the enabled theme default retains a saved static preference', t => {
+  const scene = motionFixture()
+  const f = fixture(t, { sharedForm: formFixture({ qThemeSettings: { ocean: { motion: 'static' } } }), scene })
+  f.install()
+  assert.equal(f.styles().length, 1)
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(scene.installs, 0, 'default enablement never replaces a saved motion choice')
+})
+
+test('loading and unavailable preferences never install the enabled default before an accepted ready snapshot', t => {
+  for (const status of ['loading', 'unavailable']) {
+    const scene = motionFixture()
+    const f = fixture(t, { sharedForm: formFixture({}, status), scene })
+    f.install()
+    assert.equal(f.styles().length, 0)
+    assert.equal(scene.installs, 0)
+    f.update({})
+    assert.equal(f.styles().length, 1)
+    assert.equal(scene.active, 1)
+    f.update({}, status)
+    assert.equal(f.styles().length, 0)
+    assert.equal(scene.active, 0)
+    f.update({ qThemeEnabled: false })
+    assert.equal(f.styles().length, 0)
+    assert.equal(scene.installs, 1, 'an explicit false remains authoritative after reconnecting')
+  }
+})
+
+test('an explicitly disabled theme stays off across tool updates and can be enabled independently', t => {
   const f = fixture(t)
   const original = f.doc.body.outerHTML
   f.install()
   assert.equal(f.listeners.size, 1)
   assert.equal(f.styles().length, 0)
   assert.equal(f.doc.body.outerHTML, original)
-  f.update({ enabled: true, pastedTextEnabled: true })
-  assert.equal(f.styles().length, 0, 'old profiles do not acquire a theme during upgrade')
+  f.update({ enabled: true, pastedTextEnabled: true, qThemeEnabled: false })
+  assert.equal(f.styles().length, 0, 'an accepted explicit false is preserved across tool updates')
   f.update({ enabled: false, pastedTextEnabled: false, sessionWindowsEnabled: false, bulkArchiveEnabled: false, planCommentsEnabled: false, qThemeEnabled: true })
   assert.equal(f.styles().length, 1, 'theme preference is independent from all tool switches')
   assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')

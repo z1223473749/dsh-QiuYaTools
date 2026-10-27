@@ -24,7 +24,7 @@ const release = { tagName: 'v0.5.2', isDraft: false, isPrerelease: false, publis
 const absent = { code: 1, stdout: JSON.stringify({ error: { code: 'E404' } }), stderr: '' }
 const ok = value => ({ code: 0, stdout: JSON.stringify(value), stderr: '' })
 const host = `
-const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:false,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15};
+const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:true,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15};
 export const Config={['~standard']:{version:1,vendor:'schemastery',validate(input){
   if(input.pasteCharacterThreshold===0)return{issues:[{message:'Invalid threshold'}]};
   return{value:Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,{get:()=>value,[Symbol.for('cosmokit.volatile.write')]:()=>{}}]))};

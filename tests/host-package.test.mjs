@@ -33,7 +33,7 @@ const expected = {
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   gitEnabled: true,
-  qThemeEnabled: false,
+  qThemeEnabled: true,
   qThemeSettings: { ocean: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
@@ -61,7 +61,7 @@ assert.deepEqual(unwrap(host.Config({})), expected,
 for (const input of [
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
-  { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: true, autoCheckUpdates: false },
+  { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
   { qThemeSettings: { ocean: { motion: 'static' } } },
 ]) {
   const result = await standard.validate(input)
@@ -211,7 +211,7 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteCharacterThreshold.get(), 1200)
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
-  assert.equal(fiber.config.qThemeEnabled.get(), false)
+  assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' } })
   assert.equal(Object.keys(fiber.config).length, 15)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)

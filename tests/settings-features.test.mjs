@@ -450,30 +450,30 @@ test('About and Updates mount on first visit and keep separate instances while a
   } finally { f.dispose() }
 })
 
-test('Q Theme defaults off and persists independently from the enhancement tools and their legacy master switch', async () => {
+test('Q Theme defaults on and persists independently from the enhancement tools and their legacy master switch', async () => {
   for (const enabled of [true, false]) {
     const initial = { ...defaults, enabled }
     delete initial.qThemeEnabled
     const f = mount(initial)
     try {
       f.select('qThemeTab')
-      assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'false')
+      assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'true')
       const preview = f.container.querySelector('[role="img"][aria-label="qThemePreviewDescription"]')
       assert.ok(preview)
       assert.equal(preview.querySelectorAll('input, button, a').length, 0, 'the color preview is decorative, without pretend settings')
       await f.toggle('qTheme')
-      assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeEnabled'], value: true }]])
-      assert.equal(f.snapshot().value.enabled, enabled, 'enabling appearance never resumes paused tools')
+      assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeEnabled'], value: false }]])
+      assert.equal(f.snapshot().value.enabled, enabled, 'changing appearance never resumes paused tools')
       for (const field of featureFields) assert.equal(f.snapshot().value[field], true)
       assert.equal(f.switch('enabled').getAttribute('aria-checked'), String(enabled))
       await f.toggle('enabled')
       await f.toggle('enabled')
-      assert.equal(f.snapshot().value.qThemeEnabled, true, 'the tool master never writes the theme preference')
+      assert.equal(f.snapshot().value.qThemeEnabled, false, 'the tool master never writes the theme preference')
       for (const operation of f.mutations.slice(1).flat()) assert.notEqual(operation.path[0], 'qThemeEnabled')
       const before = structuredClone(f.snapshot().value)
       await f.toggle('qTheme')
-      assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeEnabled'], value: false }])
-      assert.deepEqual(f.snapshot().value, { ...before, qThemeEnabled: false })
+      assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeEnabled'], value: true }])
+      assert.deepEqual(f.snapshot().value, { ...before, qThemeEnabled: true })
     } finally { f.dispose() }
   }
 })

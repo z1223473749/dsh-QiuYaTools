@@ -8,7 +8,7 @@ import { verifyPackage } from '../scripts/verify-package.mjs'
 
 const metadata = JSON.stringify({ name: 'dsh-qiuya-tools', version: '0.5.1', type: 'module', main: './lib/index.js', exports: { '.': './lib/index.js' } })
 const host = `
-  const defaults = { enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:false,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15 };
+  const defaults = { enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:true,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15 };
   export const Config = { ['~standard']: {version:1,vendor:'schemastery',validate(input) {
     if(input.pasteCharacterThreshold===0) return {issues:[{message:'Invalid threshold'}]};
     return {value:Object.fromEntries(Object.entries(defaults).map(([name,value])=>[name,{get:()=>value,[Symbol.for('cosmokit.volatile.write')]:()=>{}}]))};

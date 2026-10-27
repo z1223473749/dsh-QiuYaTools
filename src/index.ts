@@ -49,7 +49,7 @@ export const Config = z.object({
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
-  qThemeEnabled: z.boolean().default(false).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
+  qThemeEnabled: z.boolean().default(true).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
   qThemeSettings: z.object({
     ocean: z.object({
       motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),

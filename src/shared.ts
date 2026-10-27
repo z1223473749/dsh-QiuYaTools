@@ -46,7 +46,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   sidebarToolsEnabled: true,
   promptSuggestionsEnabled: true,
   gitEnabled: true,
-  qThemeEnabled: false,
+  qThemeEnabled: true,
   qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
   computerUseEnabled: false,
   autoCheckUpdates: true,
