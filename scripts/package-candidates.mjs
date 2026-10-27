@@ -33,6 +33,7 @@ export async function packageCandidate(platform, architecture, output = join(roo
     await mkdir(join(stage, 'docs'))
     await cp(join(sourceRoot, 'docs/computer-use-guide.md'), join(stage, 'docs/computer-use-guide.md'))
     await cp(join(sourceRoot, 'docs/git-guide.md'), join(stage, 'docs/git-guide.md'))
+    await cp(join(sourceRoot, 'docs/q-theme-framework.md'), join(stage, 'docs/q-theme-framework.md'))
     // Menu/scene images are already embedded in lib/client.js. Redistributing
     // their source copies wastes ~90 KiB and breaks the existing Windows x64
     // 64 MiB installer budget. The package icon remains a real public asset.

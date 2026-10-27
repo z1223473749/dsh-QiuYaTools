@@ -11,8 +11,8 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import pkg from '../../package.json' with { type: 'json' }
 import {
-  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold, getOceanMotion,
-  type FeatureField, type Preferences, type OceanMotion,
+  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold, getQThemeId, getThemeMotion,
+  type FeatureField, type Preferences, type QThemeId, type ThemeMotion,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
 import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation, consumeUpdatesSettingsNavigation, subscribeUpdatesSettingsNavigation, openUpdatesSettings } from './account-menu.ts'
@@ -28,6 +28,8 @@ import { SitePermissions } from '../features/workbench/Views.tsx'
 import { ComputerIcon } from '../features/computer-use/presentation.tsx'
 import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
+import { Q_THEMES, getQTheme, type ThemeDefinition } from './theme-catalog.ts'
+import { ThemePreview } from './theme-preview.tsx'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
 import { getSessionWindowSupport } from './session-window-support.ts'
@@ -86,6 +88,18 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
   </svg>
 }
 
+function themeStyle(theme: ThemeDefinition): React.CSSProperties {
+  return {
+    '--qyt-theme-art': `url("${theme.art}")`,
+    '--qyt-theme-color': theme.accent,
+    '--qyt-theme-color-dark': theme.accentDark,
+    '--qyt-theme-solid': theme.accent,
+    '--qyt-theme-seed': theme.soft,
+    '--qyt-theme-banner-position': theme.bannerPosition ?? 'right 56%',
+    '--qyt-theme-preview-position': theme.previewPosition ?? 'center',
+  } as React.CSSProperties
+}
+
 export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const updates = getUpdateNotice(ctx)
   const updateState = useSyncExternalStore(updates.subscribe, updates.getSnapshot, updates.getSnapshot)
@@ -104,10 +118,14 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const [aboutVisited, setAboutVisited] = useState(false)
   const [updatesVisited, setUpdatesVisited] = useState(() => activeTab === 'updates')
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
+  const themeCards = useRef<(HTMLButtonElement | null)[]>([])
+  const pendingWrite = useRef(false)
   const id = useId()
   const ready = snapshot.status === 'ready'
   const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
-  const oceanMotion = getOceanMotion(preferences)
+  const themeId = getQThemeId(preferences)
+  const theme = getQTheme(themeId)
+  const themeMotion = getThemeMotion(preferences, themeId)
   const availableFeatures = FEATURE_FIELDS.filter(field => field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)
   const allEnabled = availableFeatures.every(field => isFeatureEnabled(preferences, field))
   const anyEnabled = availableFeatures.some(field => isFeatureEnabled(preferences, field))
@@ -139,7 +157,8 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   }
 
   async function persist(operations: FormOperations): Promise<boolean> {
-    if (disabled) return false
+    if (disabled || pendingWrite.current) return false
+    pendingWrite.current = true
     setSaveState('saving')
     try {
       const accepted = await form.mutate(operations)
@@ -148,6 +167,8 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     } catch {
       setSaveState('error')
       return false
+    } finally {
+      pendingWrite.current = false
     }
   }
 
@@ -170,9 +191,24 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     await persist([{ op: 'set', path: ['qThemeEnabled'], value }])
   }
 
-  async function setOceanMotion(value: OceanMotion): Promise<void> {
-    if (value === oceanMotion) return
-    await persist([{ op: 'set', path: ['qThemeSettings', 'ocean', 'motion'], value }])
+  async function selectTheme(value: QThemeId): Promise<void> {
+    if (value === themeId) return
+    await persist([{ op: 'set', path: ['qThemeId'], value }])
+  }
+
+  function navigateThemes(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
+    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? (index + 1) % Q_THEMES.length
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? (index - 1 + Q_THEMES.length) % Q_THEMES.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? Q_THEMES.length - 1 : undefined
+    if (next === undefined || disabled) return
+    event.preventDefault()
+    themeCards.current[next]?.focus()
+    void selectTheme(Q_THEMES[next].id)
+  }
+
+  async function setThemeMotion(value: ThemeMotion): Promise<void> {
+    if (value === themeMotion) return
+    await persist([{ op: 'set', path: ['qThemeSettings', themeId, 'motion'], value }])
   }
 
   function editThreshold(field: keyof ThresholdDraft, value: string): void {
@@ -196,7 +232,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   }
 
   return (
-    <section className="qyt-settings" aria-label={t('nav')}>
+    <section className="qyt-settings" data-theme={themeId} style={themeStyle(theme)} aria-label={t('nav')}>
       <div className="qyt-fixed">
         <header className="qyt-header">
           <span className="qyt-brand" aria-hidden="true"><span style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }} /></span>
@@ -223,14 +259,22 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 <div className="qyt-toggle-row"><div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name="qTheme"/></span><h3>{t('qTheme')}</h3></div><Switch className="qyt-switch" checked={preferences.qThemeEnabled === true} label={t('qTheme')} disabled={disabled} onChange={value => { void setThemeEnabled(value) }}/></div>
                 <p className="qyt-muted">{t('qThemeHint')}</p>
               </div>
-              <div className="qyt-card qyt-theme-card" data-theme="ocean">
-                <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t('qThemePreview')}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t('qThemeOceanMotion')}>
-                  {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-ocean-motion`} value={motion} checked={oceanMotion === motion} disabled={disabled} onChange={() => { void setOceanMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
-                </div></div><span className="qyt-theme-name">Q Ocean · 鲸与海</span></div>
-                <div className="qyt-theme-preview" role="img" aria-label={t('qThemePreviewDescription')}>
-                  <div className="qyt-theme-scene" aria-hidden="true"><div className="qyt-preview-sidebar"><span className="qyt-preview-brand" style={{ maskImage: `url("${MONO_ICON_DATA_URL}")`, WebkitMaskImage: `url("${MONO_ICON_DATA_URL}")` }}/><i/><i/><i/></div><div className="qyt-preview-main"><div className="qyt-preview-top"><span/><i/></div><div className="qyt-preview-bubble qyt-preview-user"><span/><span/></div><div className="qyt-preview-bubble qyt-preview-answer"><span/><span/><span/></div><div className="qyt-preview-composer"><span/><i/></div></div></div>
+              <div className="qyt-card qyt-theme-card" data-theme={themeId} style={themeStyle(theme)}>
+                <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t(theme.name)}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t(theme.motionLabel)}>
+                  {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-${themeId}-motion`} value={motion} checked={themeMotion === motion} disabled={disabled} onChange={() => { void setThemeMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
+                </div></div><span className="qyt-theme-name">{theme.label}</span></div>
+                <div className="qyt-theme-preview" role="img" aria-label={t(theme.description)}>
+                  <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)}/>
                 </div>
-                <div className="qyt-theme-caption"><p className="qyt-muted">{t('qThemePreviewHint')}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
+                <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
+              </div>
+              <div className="qyt-theme-choices" role="radiogroup" aria-label={t('qThemeChoose')}>
+                {Q_THEMES.map((option, index) => <button key={option.id} ref={element => { themeCards.current[index] = element }} type="button" role="radio" className="qyt-theme-choice" data-theme={option.id} style={themeStyle(option)} aria-label={t(option.name)} aria-checked={themeId === option.id} tabIndex={themeId === option.id ? 0 : -1} disabled={disabled} onClick={() => { void selectTheme(option.id) }} onKeyDown={event => { navigateThemes(event, index) }}>
+                  <span className="qyt-theme-thumbnail" aria-hidden="true"/>
+                  <span className="qyt-theme-choice-name">{t(option.name)}</span>
+                  <span className="qyt-theme-choice-circle" aria-hidden="true">{themeId === option.id && <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 8 3 3 5-6"/></svg>}</span>
+                  <span className="qyt-sr-only">{themeId === option.id ? t('qThemeSelected') : ''}</span>
+                </button>)}
               </div>
             </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className="qyt-feature-panel" key={feature.field}>
           <div className="qyt-card qyt-feature-summary">

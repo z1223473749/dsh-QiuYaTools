@@ -33,7 +33,7 @@ const compiled = await build({
       builder.onResolve({ filter: /^\.\/features\.ts$/ }, () => ({ path: 'installers', namespace: 'test-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, () => ({ contents: 'export function installFeatures() {}' }))
       builder.onResolve({ filter: /^\.\/q-theme\.ts$/ }, () => ({ path: 'theme', namespace: 'theme-stub' }))
-      builder.onLoad({ filter: /.*/, namespace: 'theme-stub' }, () => ({ contents: 'export function installQTheme() {}' }))
+      builder.onLoad({ filter: /.*/, namespace: 'theme-stub' }, () => ({ contents: 'export function installQTheme() { return () => {} }' }))
       builder.onResolve({ filter: /^\.\/session-window-support\.ts$/ }, () => ({ path: 'support', namespace: 'support-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'support-stub' }, () => ({ contents: 'export function getSessionWindowSupport(ctx) { return ctx.sessionWindowSupport }' }))
       builder.onResolve({ filter: /computer-use\/panel\.tsx$/ }, () => ({ path: 'computer', namespace: 'computer-stub' }))
@@ -85,12 +85,14 @@ function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1
   }
   const mutations = []
   let failure = null
+  let accepted = true
   const form = {
     getSnapshot: () => snapshot,
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback) },
     async mutate(operations) {
       mutations.push(structuredClone(operations))
       if (failure) throw failure
+      if (!accepted) return false
       const next = structuredClone(snapshot.value)
       for (const operation of operations) {
         assert.equal(operation.op, 'set')
@@ -120,6 +122,9 @@ function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1
     snapshot: () => snapshot,
     support(next) { act(() => { supportSnapshot = next; for (const listener of supportListeners) listener() }) },
     failWith(error) { failure = error },
+    accept(value) { accepted = value },
+    theme(id) { return container.querySelector(`.qyt-theme-choice[data-theme="${id}"]`) },
+    async chooseTheme(id) { await act(async () => { Simulate.click(this.theme(id)) }) },
     switch(label) { return container.querySelector(`:is([role="switch"], [role="checkbox"])[aria-label="${label}"]`) },
     tab(label) { return [...container.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === label) },
     select(label) { act(() => Simulate.click(this.tab(label))) },
@@ -610,4 +615,74 @@ test('computer control is the first dedicated toolbox tab while long-text remain
     assert.equal(f.snapshot().value.computerUseEnabled, true)
     assert.deepEqual(f.mutations[0], [{ op: 'set', path: ['enabled'], value: true }, { op: 'set', path: ['computerUseEnabled'], value: true }])
   } finally { f.dispose() }
+})
+
+
+test('theme cards persist only the selected id and restore each theme own motion', async () => {
+  const initial = { ...defaults, enabled: false, qThemeSettings: { ocean: { motion: 'static', extra: true }, begonia: { motion: 'dynamic' }, futureTheme: { motion: 'static' } } }
+  const f = mount(initial)
+  try {
+    f.select('qThemeTab')
+    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'false')
+    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 2)
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
+    await f.chooseTheme('begonia')
+    assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeId'], value: 'begonia' }]])
+    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'true')
+    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'false')
+    assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'begonia')
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="dynamic"]').checked, true)
+    assert.notEqual(f.theme('ocean').style.getPropertyValue('--qyt-theme-solid'), f.theme('begonia').style.getPropertyValue('--qyt-theme-solid'))
+    await act(async () => Simulate.change(f.container.querySelector('.qyt-theme-motion input[value="static"]')))
+    assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeSettings', 'begonia', 'motion'], value: 'static' }])
+    assert.deepEqual(f.snapshot().value.qThemeSettings.ocean, initial.qThemeSettings.ocean)
+    assert.deepEqual(f.snapshot().value.qThemeSettings.futureTheme, initial.qThemeSettings.futureTheme)
+    await f.chooseTheme('ocean')
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
+    assert.equal(f.snapshot().value.qThemeEnabled, false)
+    assert.equal(f.snapshot().value.enabled, false)
+    await f.chooseTheme('begonia')
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
+    const count = f.mutations.length
+    await f.chooseTheme('begonia')
+    assert.equal(f.mutations.length, count, 'clicking the accepted card does not write again')
+  } finally { f.dispose() }
+})
+
+test('theme card selection uses accepted snapshots and supports keyboard navigation', async () => {
+  const f = mount(defaults)
+  try {
+    f.select('qThemeTab')
+    f.accept(false)
+    await f.chooseTheme('begonia')
+    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'ocean')
+    assert.match(f.container.querySelector('[role="alert"]').textContent, /saveError/)
+    f.failWith(Error('offline'))
+    await f.chooseTheme('begonia')
+    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    f.failWith(null)
+    f.accept(true)
+    await act(async () => Simulate.keyDown(f.theme('ocean'), { key: 'ArrowRight' }))
+    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'true')
+    assert.equal(document.activeElement, f.theme('begonia'))
+    assert.equal(f.theme('begonia').tabIndex, 0)
+    assert.equal(f.theme('ocean').tabIndex, -1)
+    await act(async () => Simulate.keyDown(f.theme('begonia'), { key: 'Home' }))
+    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+  } finally { f.dispose() }
+})
+
+test('theme selection respects read-only and unavailable settings and falls back from unknown ids', async () => {
+  for (const policy of [{ writable: false }, { status: 'loading' }, { status: 'unavailable' }]) {
+    const f = mount({ ...defaults, qThemeId: 'future-theme' }, policy)
+    try {
+      f.select('qThemeTab')
+      assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+      for (const card of f.container.querySelectorAll('.qyt-theme-choice')) assert.equal(card.disabled, true)
+      await f.chooseTheme('begonia')
+      assert.equal(f.mutations.length, 0)
+    } finally { f.dispose() }
+  }
 })

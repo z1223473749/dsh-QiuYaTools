@@ -14,19 +14,30 @@ const buildOptions = {
 const [source, motionMockSource] = (await Promise.all([
   build(buildOptions),
   build({ ...buildOptions, plugins: [{
-    name: 'observe-ocean-motion-lifecycle',
+    name: 'observe-theme-motion-lifecycle',
     setup(build) {
       build.onLoad({ filter: /[/\\]ocean-scene\.ts$/ }, () => ({
         contents: 'export function installOceanScene(doc) { return globalThis.__scene.install(doc) }', loader: 'js',
       }))
+      build.onLoad({ filter: /[/\\]begonia-scene\.ts$/ }, () => ({
+        contents: 'export function installBegoniaScene(doc) { return globalThis.__begoniaScene.install(doc) }', loader: 'js',
+      }))
     },
   }] }),
 ])).map(result => result.outputFiles[0].text)
-const css = await readFile(new URL('src/client/q-theme.css', root), 'utf8')
+const [commonCss, oceanPalette, begoniaPalette] = await Promise.all(['src/client/q-theme.css', 'src/client/themes/ocean.css', 'src/client/themes/begonia.css'].map(path => readFile(new URL(path, root), 'utf8')))
+const css = oceanPalette + '\n' + commonCss
+const body = 'body[data-qyt-q-theme]'
+const sceneLayers = ':is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
+const readyLayers = ':is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
+const liveMarker = ':is([data-qyt-ocean-live], [data-qyt-theme-live])'
+const dockLayer = ':is([data-qyt-ocean-dock], [data-qyt-theme-dock])'
+const washLayer = ':is([data-qyt-ocean-wash], [data-qyt-theme-wash])'
+const dockFrames = ':is(canvas[data-qyt-ocean-dock-frame], canvas[data-qyt-theme-dock-frame], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
 
-function moduleFor(document, scene) {
+function moduleFor(document, scene, begoniaScene) {
   const module = { exports: {} }
-  vm.runInNewContext(scene ? motionMockSource : source, { module, exports: module.exports, document, __scene: scene })
+  vm.runInNewContext(scene || begoniaScene ? motionMockSource : source, { module, exports: module.exports, document, __scene: scene, __begoniaScene: begoniaScene })
   return module.exports
 }
 
@@ -40,36 +51,57 @@ function formFixture(value = { qThemeEnabled: false }, status = 'ready') {
   }
 }
 
-function fixture(t, { enabled = false, marker, dark = false, sharedForm, scene } = {}) {
+function fixture(t, { enabled = false, marker, dark = false, sharedForm, scene, begoniaScene } = {}) {
   const dom = new JSDOM('<!doctype html><html data-platform="darwin"><head><style data-native-theme>body{--dsw-alias-bg-base:#fff;--dsw-alias-state-error-primary:#d31d34;--dsw-alias-state-success-primary:#198251;--dsw-alias-state-warn-primary:#9b640a;--dsw-alias-code-diff-added:#d4f4dd;--dsw-alias-markdown-code-block:#f8f8f8}body[data-ds-dark-theme]{--dsw-alias-markdown-code-block:#191919}.shiki span{color:#7851a9}</style></head><body style="--host-layer: preserved; color: rgb(11, 22, 33)"><div id="root"><div data-slot="sidebar"><aside>Sidebar</aside></div><main data-slot="main.conversation"><section data-phase="active"><div data-conversation-scroll>Conversation</div></section></main><div data-composer-card>Composer</div><pre class="shiki"><span>highlighted</span></pre></div></body></html>')
   t.after(() => dom.window.close())
   const doc = dom.window.document
   if (marker !== undefined) doc.body.setAttribute('data-qyt-q-theme', marker)
   if (dark) doc.body.setAttribute('data-ds-dark-theme', '')
   const form = sharedForm ?? formFixture({ qThemeEnabled: enabled })
-  const plugin = moduleFor(doc, scene)
+  const plugin = moduleFor(doc, scene, begoniaScene)
   const cleanups = []
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup() })
   return {
     doc, dom, ...form, plugin,
     install() { const cleanup = plugin.installQTheme({}, form.form); cleanups.push(cleanup); return cleanup },
-    styles: () => [...doc.querySelectorAll('style[data-qyt-q-theme="ocean"]')],
+    styles: () => [...doc.querySelectorAll('style[data-qyt-q-theme]')],
     token: name => dom.window.getComputedStyle(doc.body).getPropertyValue(name).trim(),
   }
 }
 
-function motionFixture() {
+function motionFixture(themeId = 'ocean') {
   return {
     installs: 0, cleanups: 0, active: 0,
     install(doc) {
-      assert.ok(doc.querySelector('style[data-qyt-q-theme="ocean"]'), 'theme styles exist before motion installation')
-      assert.equal(doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+      assert.ok(doc.querySelector(`style[data-qyt-q-theme="${themeId}"]`), 'theme styles exist before motion installation')
+      assert.equal(doc.body.getAttribute('data-qyt-q-theme'), themeId)
       this.installs++; this.active++
       let stopped = false
       return () => { if (!stopped) { stopped = true; this.cleanups++; this.active-- } }
     },
   }
 }
+
+test('an explicit preview document shares the framework without replacing or stopping the main document scene', t => {
+  const scene = motionFixture()
+  const f = fixture(t, { enabled: true, scene })
+  const preview = new JSDOM('<!doctype html><html><head></head><body></body></html>')
+  t.after(() => preview.window.close())
+  const stopMain = f.install()
+  const mainStyle = f.styles()[0]
+  const stopPreview = f.plugin.installQTheme({}, f.form, preview.window.document)
+  t.after(stopPreview)
+  assert.equal(scene.active, 2)
+  assert.equal(preview.window.document.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(preview.window.document.querySelectorAll('style[data-qyt-q-theme]').length, 1)
+  assert.equal(f.styles()[0], mainStyle)
+  stopPreview()
+  assert.equal(scene.active, 1, 'closing the preview preserves the main scene')
+  assert.equal(preview.window.document.querySelectorAll('style[data-qyt-q-theme]').length, 0)
+  assert.equal(f.styles()[0], mainStyle)
+  stopMain()
+  assert.equal(scene.active, 0)
+})
 
 test('the Ocean static preference enables its palette without installing the motion runtime', t => {
   const scene = motionFixture()
@@ -276,17 +308,33 @@ function contrast(a, b) {
   return (high + .05) / (low + .05)
 }
 
-test('both palettes keep small primary/secondary/muted text readable on base, raised and selected surfaces', t => {
-  for (const dark of [false, true]) {
-    const f = fixture(t, { enabled: true, dark })
-    f.install()
-    for (const ink of ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']) {
-      for (const surface of ['--qyt-q-base', '--qyt-q-surface', '--qyt-q-raised', '--qyt-q-sidebar', '--qyt-q-selected']) {
-        assert.ok(contrast(f.token(ink), f.token(surface)) >= 4.5, `${dark ? 'dark' : 'light'} ${ink} on ${surface}`)
-      }
+const readingInk = ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']
+
+function forEachThemeAppearance(t, check) {
+  for (const themeId of ['ocean', 'begonia']) {
+    for (const dark of [false, true]) {
+      const f = fixture(t, { dark, sharedForm: formFixture({
+        qThemeEnabled: true, qThemeId: themeId,
+        qThemeSettings: { ocean: { motion: 'static' }, begonia: { motion: 'static' } },
+      }) })
+      f.install()
+      check(f, `${themeId} ${dark ? 'dark' : 'light'}`)
     }
   }
-  assert.ok(contrast('#116d83', '#ffffff') >= 4.5, 'native send button keeps its fixed white icon readable')
+}
+
+test('both themes keep small text readable on base, raised, sidebar and selected surfaces in both schemes', t => {
+  forEachThemeAppearance(t, (f, label) => {
+    for (const ink of readingInk) {
+      for (const surface of ['--qyt-q-base', '--qyt-q-surface', '--qyt-q-raised', '--qyt-q-sidebar', '--qyt-q-selected']) {
+        assert.ok(contrast(f.token(ink), f.token(surface)) >= 4.5, `${label} ${ink} on ${surface}`)
+      }
+    }
+    assert.ok(contrast(f.token('--qyt-q-tab-ink'), f.token('--qyt-q-tab-fill')) >= 4.5, `${label} native tab label`)
+  })
+  for (const fill of ['#116d83', '#bc353c', '#b32c3a']) {
+    assert.ok(contrast(fill, '#ffffff') >= 4.5, `${fill} send button keeps its fixed white icon readable`)
+  }
 })
 
 test('reading ink and major surfaces remain neutral while sea color is reserved for accents', t => {
@@ -306,16 +354,21 @@ function allRules(rules) {
   return [...rules].flatMap(rule => rule.cssRules ? allRules(rule.cssRules) : [rule])
 }
 
-test('theme illustration is embedded and withdrawn with the theme without external image requests', t => {
-  const f = fixture(t, { enabled: true })
-  const cleanup = f.install()
-  const installed = f.styles()[0].textContent
-  assert.ok(!installed.includes('__QYT_OCEAN_SCENE__'), 'the actual packaged image replaces the build placeholder')
-  const urls = [...installed.matchAll(/url\("([^"]+)"\)/gu)].map(match => match[1])
-  assert.equal(urls.length, 1)
-  assert.ok(urls.every(url => url.startsWith('data:image/webp;base64,')), 'no remote image request or unresolvable asset path')
-  cleanup()
-  assert.equal(f.styles().length, 0)
+test('both themes embed their own illustration and withdraw it without external image requests', t => {
+  const illustrations = []
+  for (const qThemeId of ['ocean', 'begonia']) {
+    const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
+    const cleanup = f.install()
+    const installed = f.styles()[0].textContent
+    assert.ok(!installed.includes('__QYT_THEME_SCENE__'), 'the actual packaged image replaces the build placeholder')
+    const urls = [...installed.matchAll(/url\("([^"]+)"\)/gu)].map(match => match[1])
+    assert.equal(urls.length, 1)
+    assert.ok(urls.every(url => /^data:image\/(?:webp|jpeg);base64,/u.test(url)), 'no remote image request or unresolvable asset path')
+    illustrations.push(urls[0])
+    cleanup()
+    assert.equal(f.styles().length, 0)
+  }
+  assert.notEqual(illustrations[0], illustrations[1], 'themes do not accidentally reuse the same illustration')
 })
 
 test('the approved illustrated sidebar keeps its own art opacity and selected-row treatment', t => {
@@ -325,30 +378,28 @@ test('the approved illustrated sidebar keeps its own art opacity and selected-ro
   assert.equal(f.token('--qyt-q-sidebar-wash'), 'rgba(229, 239, 234, .80)')
   assert.equal(f.token('--qyt-q-sidebar'), '#e5efea')
   const rules = allRules(f.styles()[0].sheet.cssRules)
-  const sidebar = rules.find(rule => rule.selectorText === 'body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child')
+  const sidebar = rules.find(rule => rule.selectorText === `${body} [data-slot="sidebar"] > :first-child`)
   assert.ok(sidebar)
   assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, auto 310px')
-  assert.ok(sidebar.style.getPropertyValue('background-image').includes('var(--qyt-ocean-art)'))
+  assert.ok(sidebar.style.getPropertyValue('background-image').includes('var(--qyt-theme-art)'))
   const selected = rules.find(rule => rule.selectorText?.includes('[data-row-key^="session:"][aria-selected="true"]'))
-  assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-sea)')
+  assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-accent)')
 })
 
-test('the translucent reading paper keeps text readable over any background image color', t => {
-  for (const dark of [false, true]) {
-    const f = fixture(t, { enabled: true, dark })
-    f.install()
+test('both themes keep reading ink legible over the darkest and lightest possible illustration pixels', t => {
+  forEachThemeAppearance(t, (f, label) => {
     const match = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([.\d]+)\)$/u.exec(f.token('--qyt-q-paper'))
-    assert.ok(match)
+    assert.ok(match, `${label} defines translucent reading paper`)
     const [r, g, b, alpha] = match.slice(1).map(Number)
-    // Luminance is monotonic in each channel. Black/white extremes bound
-    // every possible pixel in the illustration, including future artwork.
+    assert.ok(alpha > 0 && alpha < 1)
+    // Per-channel luminance is monotonic. Black/white bound every image pixel.
     for (const backdrop of [0, 255]) {
       const surface = '#' + [r, g, b].map(channel => Math.round(channel * alpha + backdrop * (1 - alpha)).toString(16).padStart(2, '0')).join('')
-      for (const ink of ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']) {
-        assert.ok(contrast(f.token(ink), surface) >= 4.5, `${dark ? 'dark' : 'light'} ${ink} on composited paper`)
+      for (const ink of readingInk) {
+        assert.ok(contrast(f.token(ink), surface) >= 4.5, `${label} ${ink} on composited paper over ${backdrop}`)
       }
     }
-  }
+  })
 })
 
 test('native conversation tabs get one light pill treatment and lose their underline without affecting plugin tabs', t => {
@@ -389,37 +440,37 @@ test('native conversation tabs get one light pill treatment and lose their under
 })
 
 test('stylesheet is a reversible token/semantic-surface layer without destructive content resets', () => {
-  assert.doesNotMatch(css, /!important|(?:^|[;{])\s*(?:filter|font-family|font-size|line-height|animation)\s*:/u)
+  assert.doesNotMatch(css + begoniaPalette, /!important|(?:^|[;{])\s*(?:filter|font-family|font-size|line-height|animation)\s*:/u)
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
   try {
     const sheet = dom.window.document.createElement('style'); sheet.textContent = css; dom.window.document.head.append(sheet)
     for (const rule of allRules(sheet.sheet.cssRules)) {
       if (!rule.style) continue
       if (rule.style.getPropertyValue('position') || rule.style.getPropertyValue('z-index') || rule.style.getPropertyValue('backdrop-filter') || rule.style.getPropertyValue('-webkit-backdrop-filter')) {
-        const phase = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase]'
-        const illustration = `${phase} > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash])`
-        const seat = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]'
+        const phase = `${body} [data-slot="main.conversation"] > [data-phase]`
+        const illustration = `${phase} > ${sceneLayers}`
+        const seat = `${body} [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]`
         const dock = '[data-slot="conversation.input.dock"] > [data-testid="todo-panel"]'
         const todo = `${seat} ${dock}`
-        const mirror = 'body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > :is(canvas[data-qyt-ocean-dock-frame], [data-qyt-ocean-wash])'
-        assert.ok([phase, illustration, `${seat}::before`, `${seat} > [data-qyt-ocean-dock]`, mirror, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
+        const mirror = `${body} [data-composer-seat] > ${dockLayer} > ${dockFrames}`
+        assert.ok([phase, illustration, `${seat}::before`, `${seat} > ${dockLayer}`, mirror, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
       }
     }
   } finally { dom.window.close() }
-  assert.doesNotMatch(css, /--(?:shiki|dsw-alias-(?:state-(?:error|success|warn)|code-diff|file-diff|markdown-code))/u)
+  assert.doesNotMatch(css + begoniaPalette, /--(?:shiki|dsw-alias-(?:state-(?:error|success|warn)|code-diff|file-diff|markdown-code))/u)
   assert.match(css, /body\[data-qyt-q-theme="ocean"\]\[data-ds-dark-theme\]/u)
   assert.match(css, /@media \(forced-colors: active\)/u)
   assert.match(css, /\[data-composer-card\]/u)
   assert.match(css, /\[data-slot="sidebar"\]/u)
-  assert.doesNotMatch(css, /body\[data-qyt-q-theme="ocean"\]\s+\[role="tab"\]/u)
+  assert.doesNotMatch(commonCss, /body\[data-qyt-q-theme\]\s+\[role="tab"\]/u)
 })
 
 test('live illustration layers stay behind native content and preserve the static fallback until ready', t => {
   const f = fixture(t, { enabled: true })
   f.install()
   const rules = allRules(f.styles()[0].sheet.cssRules)
-  const phase = 'body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase]'
-  const decoration = rules.find(rule => rule.selectorText === `${phase} > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash])`)
+  const phase = `${body} [data-slot="main.conversation"] > [data-phase]`
+  const decoration = rules.find(rule => rule.selectorText === `${phase} > ${sceneLayers}`)
   assert.ok(decoration)
   for (const [property, value] of [['position', 'absolute'], ['z-index', '-1'], ['pointer-events', 'none'], ['visibility', 'hidden']]) {
     assert.equal(decoration.style.getPropertyValue(property), value)
@@ -427,16 +478,167 @@ test('live illustration layers stay behind native content and preserve the stati
   const baseline = rules.find(rule => rule.selectorText === phase)
   assert.equal(baseline.style.getPropertyValue('isolation'), 'isolate')
   assert.equal(baseline.style.getPropertyValue('background-image'), 'var(--qyt-q-canvas-image)')
-  const live = rules.find(rule => rule.selectorText === `${phase}[data-qyt-ocean-live]`)
+  const live = rules.find(rule => rule.selectorText === `${phase}${liveMarker}`)
   assert.equal(live.style.getPropertyValue('background-image'), 'none')
-  const ready = rules.find(rule => rule.selectorText === `${phase}[data-qyt-ocean-live] > :is(canvas[data-qyt-ocean-scene][data-ready="true"], [data-qyt-ocean-wash])`)
+  const ready = rules.find(rule => rule.selectorText === `${phase}${liveMarker} > ${readyLayers}`)
   assert.equal(ready.style.getPropertyValue('visibility'), 'visible')
-  const wash = rules.find(rule => rule.selectorText === `${phase} > [data-qyt-ocean-wash]`)
-  const dockWash = rules.find(rule => rule.selectorText.endsWith('[data-qyt-ocean-dock] > [data-qyt-ocean-wash]'))
+  const wash = rules.find(rule => rule.selectorText === `${phase} > ${washLayer}`)
+  const dockWash = rules.find(rule => rule.selectorText.endsWith(`${dockLayer} > ${washLayer}`))
   for (const property of ['background-image', 'background-attachment', 'background-position', 'background-size']) {
     assert.equal(dockWash.style.getPropertyValue(property), wash.style.getPropertyValue(property), 'both pieces of the same frame use the same viewport wash')
   }
   assert.equal(wash.style.getPropertyValue('background-attachment'), 'fixed')
   assert.ok(!rules.some(rule => rule.selectorText?.includes('[data-qyt-ocean-live]') && rule.selectorText?.includes('[data-composer-seat]') && rule.style?.getPropertyValue('background-image') === 'none'), 'live mode must not turn the composer backdrop into an opaque plain panel')
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/u)
+})
+
+
+test('missing and unknown theme ids retain Ocean and its saved static choice', t => {
+  for (const qThemeId of [undefined, null, '', 'future-theme', '__proto__', 42]) {
+    const ocean = motionFixture('ocean'), begonia = motionFixture('begonia')
+    const f = fixture(t, { scene: ocean, begoniaScene: begonia, sharedForm: formFixture({
+      qThemeEnabled: true, qThemeId,
+      qThemeSettings: { ocean: { motion: 'static' }, begonia: { motion: 'dynamic' } },
+    }) })
+    f.install()
+    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+    assert.equal(f.styles().length, 1)
+    assert.equal(f.token('--qyt-q-base'), '#fafaf8')
+    assert.equal(ocean.installs, 0)
+    assert.equal(begonia.installs, 0)
+  }
+})
+
+test('theme switching reuses one presentation layer and each theme retains its own motion preference', t => {
+  const ocean = motionFixture('ocean'), begonia = motionFixture('begonia')
+  const initial = { qThemeEnabled: true, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' }, begonia: { motion: 'dynamic' } } }
+  const f = fixture(t, { scene: ocean, begoniaScene: begonia, sharedForm: formFixture(initial) })
+  const cleanup = f.install()
+  const style = f.styles()[0]
+  assert.equal(ocean.active, 0)
+  f.update({ ...initial, qThemeId: 'begonia' })
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'begonia')
+  assert.equal(style.dataset.qytQTheme, 'begonia')
+  assert.equal(f.styles()[0], style)
+  assert.equal(f.token('--qyt-q-base'), '#fffaf5')
+  assert.equal(begonia.active, 1)
+  assert.equal(ocean.installs, 0)
+  const updated = { ...initial, qThemeId: 'begonia', qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } } }
+  f.update(updated)
+  assert.equal(begonia.installs, 1, 'editing the inactive theme never restarts selected motion')
+  f.update({ ...updated, qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'static' } } })
+  assert.equal(begonia.active, 0)
+  assert.equal(begonia.cleanups, 1)
+  f.update({ ...updated, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'static' } } })
+  assert.equal(ocean.active, 1)
+  assert.equal(ocean.installs, 1)
+  assert.equal(f.token('--qyt-q-base'), '#fafaf8')
+  f.update({ ...updated, qThemeId: 'begonia', qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'static' } } })
+  assert.equal(ocean.active, 0)
+  assert.equal(ocean.cleanups, 1)
+  assert.equal(begonia.installs, 1, 'returning to static Begonia preserves its independent choice')
+  assert.equal(f.styles()[0], style)
+  assert.equal(f.styles().length, 1)
+  cleanup()
+  assert.equal(f.styles().length, 0)
+})
+
+test('multiple consumers switch adapters once and the final owner restores the original marker', t => {
+  const ocean = motionFixture('ocean'), begonia = motionFixture('begonia')
+  const f = fixture(t, { enabled: true, marker: 'existing-owner', scene: ocean, begoniaScene: begonia })
+  const original = f.doc.body.outerHTML
+  const first = f.install(), second = f.install()
+  const style = f.styles()[0]
+  assert.equal(ocean.installs, 1)
+  f.update({ qThemeEnabled: true, qThemeId: 'begonia' })
+  assert.equal(ocean.cleanups, 1)
+  assert.equal(begonia.installs, 1)
+  assert.equal(begonia.active, 1)
+  assert.equal(f.styles()[0], style)
+  f.update({ qThemeEnabled: true, qThemeId: 'ocean' })
+  assert.equal(begonia.cleanups, 1)
+  assert.equal(ocean.installs, 2)
+  first()
+  assert.equal(ocean.active, 1)
+  assert.equal(f.styles().length, 1)
+  second()
+  assert.equal(ocean.active, 0)
+  assert.equal(ocean.cleanups, 2)
+  assert.equal(f.styles().length, 0)
+  assert.equal(f.doc.body.outerHTML, original)
+  assert.equal(f.listeners.size, 0)
+})
+
+test('theme changes preserve native semantic colors, syntax highlighting and inline styles', t => {
+  const f = fixture(t, { enabled: true })
+  const inline = f.doc.body.getAttribute('style')
+  const cleanup = f.install()
+  const style = f.styles()[0]
+  for (const qThemeId of ['begonia', 'ocean', 'begonia']) {
+    f.update({ qThemeEnabled: true, qThemeId, qThemeSettings: { [qThemeId]: { motion: 'static' } } })
+    for (const dark of [false, true]) {
+      f.doc.body.toggleAttribute('data-ds-dark-theme', dark)
+      for (const [name, value] of [
+        ['--dsw-alias-state-error-primary', '#d31d34'], ['--dsw-alias-state-success-primary', '#198251'],
+        ['--dsw-alias-state-warn-primary', '#9b640a'], ['--dsw-alias-code-diff-added', '#d4f4dd'],
+      ]) assert.equal(f.token(name), value)
+      assert.equal(f.token('--dsw-alias-markdown-code-block'), dark ? '#191919' : '#f8f8f8')
+      assert.equal(f.dom.window.getComputedStyle(f.doc.querySelector('.shiki span')).color, 'rgb(120, 81, 169)')
+      assert.equal(f.doc.body.getAttribute('style'), inline)
+      assert.equal(f.styles()[0], style)
+    }
+  }
+  f.doc.body.setAttribute('data-qyt-q-theme', 'later-owner')
+  cleanup()
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'later-owner', 'cleanup preserves a subsequent external owner')
+})
+
+test('a failing motion adapter retains static artwork and retries only after an explicit mode change', t => {
+  for (const qThemeId of ['ocean', 'begonia']) {
+    let attempts = 0
+    const broken = { install() { attempts++; throw new Error('unsupported renderer') } }
+    const value = { qThemeEnabled: true, qThemeId }
+    const f = fixture(t, { scene: broken, begoniaScene: broken, sharedForm: formFixture(value) })
+    assert.doesNotThrow(() => f.install())
+    assert.equal(attempts, 1)
+    assert.equal(f.styles().length, 1)
+    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), qThemeId)
+    assert.ok(f.token('--qyt-theme-art').startsWith('url("data:image/'), 'static illustration survives failed motion')
+    f.update(value)
+    assert.equal(attempts, 1, 'ordinary snapshots cannot create a renderer retry loop')
+    f.update({ ...value, qThemeSettings: { [qThemeId]: { motion: 'static' } } })
+    f.update({ ...value, qThemeSettings: { [qThemeId]: { motion: 'dynamic' } } })
+    assert.equal(attempts, 2)
+    f.update({ ...value, qThemeEnabled: false })
+    assert.equal(f.styles().length, 0)
+    assert.equal(f.doc.body.hasAttribute('data-qyt-q-theme'), false)
+  }
+})
+
+
+test('a throwing adapter disposer cannot interrupt theme switching, static mode or final restoration', t => {
+  let installs = 0, cleanups = 0
+  const brokenCleanup = { install() { installs++; return () => { cleanups++; throw new Error('lost rendering context') } } }
+  const f = fixture(t, { enabled: true, marker: 'previous-theme', scene: brokenCleanup, begoniaScene: brokenCleanup })
+  const original = f.doc.body.outerHTML
+  const cleanup = f.install()
+  const style = f.styles()[0]
+  assert.doesNotThrow(() => f.update({ qThemeEnabled: true, qThemeId: 'begonia' }))
+  assert.equal(cleanups, 1)
+  assert.equal(installs, 2)
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'begonia')
+  assert.equal(f.styles()[0], style)
+  assert.doesNotThrow(() => f.update({ qThemeEnabled: true, qThemeId: 'begonia', qThemeSettings: { begonia: { motion: 'static' } } }))
+  assert.equal(cleanups, 2)
+  assert.equal(installs, 2)
+  assert.equal(f.token('--qyt-q-base'), '#fffaf5')
+  f.update({ qThemeEnabled: true, qThemeId: 'ocean' })
+  assert.equal(installs, 3)
+  assert.doesNotThrow(cleanup)
+  assert.equal(cleanups, 3)
+  assert.equal(f.styles().length, 0)
+  assert.equal(f.doc.body.outerHTML, original)
+  assert.equal(f.listeners.size, 0)
+  cleanup()
+  assert.equal(cleanups, 3, 'disposed adapters are never called again')
 })

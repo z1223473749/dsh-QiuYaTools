@@ -22,7 +22,7 @@ const compiled = (await build({
     builder.onResolve({ filter: /^\.\/features\.ts$/ }, () => ({ path: 'features', namespace: 'no-install' }))
     builder.onLoad({ filter: /.*/, namespace: 'no-install' }, () => ({ contents: 'export function installFeatures(){}' }))
     builder.onResolve({ filter: /^\.\/q-theme\.ts$/ }, () => ({ path: 'theme', namespace: 'no-theme' }))
-    builder.onLoad({ filter: /.*/, namespace: 'no-theme' }, () => ({ contents: 'export function installQTheme(){}' }))
+    builder.onLoad({ filter: /.*/, namespace: 'no-theme' }, () => ({ contents: 'export function installQTheme(){return()=>{}}' }))
     builder.onResolve({ filter: /^\.\/session-window-support\.ts$/ }, () => ({ path: 'support', namespace: 'ready-support' }))
     builder.onLoad({ filter: /.*/, namespace: 'ready-support' }, () => ({ contents: 'export function getSessionWindowSupport(ctx){return ctx.support}' }))
   } }],

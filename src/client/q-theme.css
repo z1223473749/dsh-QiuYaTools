@@ -1,194 +1,60 @@
-/* Q Ocean: an illustrated sea outside the quiet paper reading surface.
-   The native presenter still owns light/dark preference. Semantic message,
-   diff and syntax palettes stay under their original owners. */
-body[data-qyt-q-theme="ocean"] {
-  --qyt-ocean-art: url("__QYT_OCEAN_SCENE__");
-  --qyt-q-sea: #116d83;
-  --qyt-q-sea-hover: #0b586e;
-  --qyt-q-ink: #24282b;
-  --qyt-q-secondary: #53595f;
-  --qyt-q-muted: #535d62;
-  --qyt-q-base: #fafaf8;
-  --qyt-q-surface: #ffffff;
-  --qyt-q-raised: #f1f2f1;
-  --qyt-q-sidebar: #e5efea;
-  --qyt-q-selected: #d6e7e1;
-  --qyt-q-line: #d9dedc;
-  --qyt-q-mist: rgba(154, 189, 188, .11);
-  --qyt-q-shadow: rgba(27, 37, 42, .09);
-  --qyt-q-shadow-float: rgba(27, 37, 42, .14);
-  --qyt-q-tab-fill: #e8f1eb;
-  --qyt-q-tab-ink: #225e6d;
-  --qyt-q-tab-line: rgba(32, 40, 44, .11);
-  --qyt-q-focus-line: rgba(17, 109, 131, .38);
-  --qyt-q-paper: rgba(250, 250, 248, .88);
-  --qyt-q-chrome: rgba(229, 239, 234, .95);
-  --qyt-q-sidebar-wash: rgba(229, 239, 234, .80);
-  --qyt-q-sidebar-caption: #3d4b4d;
-  --qyt-q-art-wash: rgba(250, 250, 248, .25);
-  --qyt-q-hero-wash: rgba(250, 250, 248, .12);
-  --qyt-q-composer-fill: rgba(235, 246, 239, .94);
-  --qyt-q-composer-dock: rgba(235, 246, 239, .18);
-  --qyt-q-stat-fill: rgba(235, 246, 239, .92);
-  --qyt-q-task-fill: rgba(240, 248, 244, .98);
-  --qyt-q-task-line: rgba(17, 109, 131, .18);
-  --qyt-q-sky-glow: rgba(153, 197, 182, .25);
-  --qyt-q-sand-glow: rgba(237, 217, 179, .18);
-
-
+/* Shared Q Theme presentation: palettes and illustration adapters plug into
+   the same quiet reading surfaces. Native appearance, syntax and semantic
+   status colors keep their original owners. */
+body[data-qyt-q-theme] {
   --dsw-alias-bg-base: var(--qyt-q-base);
-  --dsw-alias-bg-layer-1: #f6f7f5;
   --dsw-alias-bg-layer-2: var(--qyt-q-surface);
   --dsw-alias-bg-layer-3: var(--qyt-q-raised);
-  --dsw-alias-bg-module-platform: #f1f3f1;
   --dsw-alias-bg-multi-select: var(--qyt-q-selected);
-  --dsw-alias-bg-overlay: #f3f5f3;
-  --dsw-alias-border-l1: rgba(32, 40, 44, .055);
-  --dsw-alias-border-l2: rgba(32, 40, 44, .10);
-  --dsw-alias-border-l2-darkmode-thin: rgba(32, 40, 44, .09);
-  --dsw-alias-border-l3: rgba(32, 40, 44, .12);
-  --dsw-alias-border-l4: rgba(32, 40, 44, .17);
   --dsw-alias-label-primary: var(--qyt-q-ink);
-  --dsw-alias-label-primary-dimmed: #393e42;
   --dsw-alias-label-secondary: var(--qyt-q-secondary);
   --dsw-alias-label-tertiary: var(--qyt-q-muted);
   --dsw-alias-label-caption: var(--qyt-q-muted);
   --dsw-alias-menu-icon: var(--qyt-q-secondary);
-  --dsw-alias-link: var(--qyt-q-sea);
+  --dsw-alias-link: var(--qyt-q-accent);
   --dsw-alias-brand-primary: var(--qyt-q-ink);
   --dsw-alias-brand-primary-invert: var(--qyt-q-ink);
   --dsw-alias-brand-text: var(--qyt-q-ink);
-  --dsw-alias-button-primary-fill: var(--qyt-q-sea);
-  --dsw-alias-button-primary-hover: var(--qyt-q-sea-hover);
-  --dsw-alias-button-primary-dimmed: #e8edec;
-  --dsw-alias-button-info-fill: var(--qyt-q-sea);
-  --dsw-alias-button-info-hover: var(--qyt-q-sea-hover);
+  --dsw-alias-button-primary-fill: var(--qyt-q-accent);
+  --dsw-alias-button-primary-hover: var(--qyt-q-accent-hover);
+  --dsw-alias-button-info-fill: var(--qyt-q-accent);
+  --dsw-alias-button-info-hover: var(--qyt-q-accent-hover);
   --dsw-alias-button-elevated-fill: var(--qyt-q-surface);
   --dsw-alias-button-floating-fill: var(--qyt-q-surface);
-  --dsw-alias-button-floating-hover: #f0f3f1;
-  --dsw-alias-button-ghost-active-border: #b8c8c9;
-  --dsw-alias-button-ghost-active-fill: #edf2f1;
   --dsw-alias-button-ghost-active-hover: var(--qyt-q-selected);
-  --dsw-alias-interactive-bg-hover: rgba(40, 55, 61, .055);
-  --dsw-alias-interactive-bg-hover-accent: rgba(40, 55, 61, .09);
-  --dsw-alias-interactive-bg-hover-solid: #edf0ee;
-  --dsw-alias-interactive-bg-active: rgba(40, 55, 61, .105);
-  --dsw-alias-state-business-primary: var(--qyt-q-sea);
+  --dsw-alias-state-business-primary: var(--qyt-q-accent);
   --dsw-alias-state-business-tertiary: var(--qyt-q-selected);
-  --dsw-alias-scrollbar-bg-l1: #d2d7d5;
-  --dsw-alias-scrollbar-bg-l2: #cbd2cf;
-  --dsw-alias-scrollbar-hover-l1: #b5bfbb;
-  --dsw-alias-scrollbar-hover-l2: #aab6b0;
   --dsw-specific-input-major: var(--qyt-q-surface);
-  --dsw-specific-selector: #edf1ee;
-  --dsw-specific-bubble: #eaf0e8;
-  --dsw-specific-bubble-highlight: #dce9e9;
-  --dsw-specific-tip: #f1f4f1;
-  --dsw-menu-surface-fill: rgba(255, 255, 254, .985);
-  --dsw-alias-menu-group-header-fill: rgba(247, 248, 245, .99);
   --dsw-specific-menu: var(--dsw-menu-surface-fill);
   --dsw-alias-settings-card-fill: var(--qyt-q-surface);
   --dsw-alias-settings-card-stroke: var(--qyt-q-line);
-  --dsw-focus-ring-color: var(--qyt-q-sea);
-}
-
-body[data-qyt-q-theme="ocean"][data-ds-dark-theme] {
-  --qyt-q-sea: #8ec6d2;
-  --qyt-q-sea-hover: #b5dae2;
-  --qyt-q-ink: #ececeb;
-  --qyt-q-secondary: #c0c4c8;
-  --qyt-q-muted: #a5adb3;
-  --qyt-q-base: #1b1e22;
-  --qyt-q-surface: #252a2f;
-  --qyt-q-raised: #2d3338;
-  --qyt-q-sidebar: #202e2f;
-  --qyt-q-selected: #2b4040;
-  --qyt-q-line: #41494f;
-  --qyt-q-mist: rgba(130, 167, 168, .045);
-  --qyt-q-shadow: rgba(0, 0, 0, .20);
-  --qyt-q-shadow-float: rgba(0, 0, 0, .34);
-  --qyt-q-tab-fill: #30363c;
-  --qyt-q-tab-ink: #cbe2e8;
-  --qyt-q-tab-line: rgba(255, 255, 255, .09);
-  --qyt-q-focus-line: rgba(142, 198, 210, .40);
-  --qyt-q-paper: rgba(27, 30, 34, .90);
-  --qyt-q-chrome: rgba(25, 42, 44, .95);
-  --qyt-q-sidebar-wash: rgba(25, 42, 44, .89);
-  --qyt-q-sidebar-caption: #bac3c6;
-  --qyt-q-art-wash: rgba(19, 35, 39, .75);
-  --qyt-q-hero-wash: rgba(17, 31, 35, .70);
-  --qyt-q-composer-fill: rgba(33, 50, 47, .94);
-  --qyt-q-composer-dock: rgba(30, 47, 44, .22);
-  --qyt-q-stat-fill: rgba(33, 50, 47, .94);
-  --qyt-q-task-fill: rgba(34, 49, 47, .98);
-  --qyt-q-task-line: rgba(142, 198, 210, .24);
-  --qyt-q-sky-glow: rgba(57, 100, 88, .18);
-  --qyt-q-sand-glow: rgba(119, 107, 77, .10);
-
-
-  --dsw-alias-bg-layer-1: #202529;
-  --dsw-alias-bg-module-platform: #292f34;
-  --dsw-alias-bg-overlay: #2a3035;
-  --dsw-alias-border-l1: rgba(232, 237, 239, .055);
-  --dsw-alias-border-l2: rgba(232, 237, 239, .10);
-  --dsw-alias-border-l2-darkmode-thin: rgba(232, 237, 239, .08);
-  --dsw-alias-border-l3: rgba(232, 237, 239, .13);
-  --dsw-alias-border-l4: rgba(232, 237, 239, .19);
-  --dsw-alias-label-primary-dimmed: #d1d3d4;
-  --dsw-alias-button-primary-fill: #b3d4dc;
-  --dsw-alias-button-primary-hover: #cbe1e6;
-  --dsw-alias-button-primary-dimmed: #343d42;
-  /* Native send glyphs stay white in both schemes. */
-  --dsw-alias-button-info-fill: #116d83;
-  --dsw-alias-button-info-hover: #0b586e;
-  --dsw-alias-button-floating-hover: #30373b;
-  --dsw-alias-button-ghost-active-border: #58666c;
-  --dsw-alias-button-ghost-active-fill: #303a3e;
-  --dsw-alias-button-ghost-active-hover: #3a454a;
-  --dsw-alias-interactive-bg-hover: rgba(218, 229, 232, .065);
-  --dsw-alias-interactive-bg-hover-accent: rgba(218, 229, 232, .11);
-  --dsw-alias-interactive-bg-hover-solid: #343d42;
-  --dsw-alias-interactive-bg-active: rgba(218, 229, 232, .12);
-  --dsw-alias-scrollbar-bg-l1: #454e54;
-  --dsw-alias-scrollbar-bg-l2: #4c565d;
-  --dsw-alias-scrollbar-hover-l1: #626e76;
-  --dsw-alias-scrollbar-hover-l2: #6c7981;
-  --dsw-specific-selector: #313a3e;
-  --dsw-specific-bubble: #2a3034;
-  --dsw-specific-bubble-highlight: #3b4d54;
-  --dsw-specific-tip: #2a3236;
-  --dsw-menu-surface-fill: rgba(39, 45, 50, .985);
-  --dsw-alias-menu-group-header-fill: rgba(44, 50, 55, .99);
+  --dsw-focus-ring-color: var(--qyt-q-accent);
 }
 
 /* The native roots own layout and scrolling. Every illustration layer is
    decorative and ignores pointer events, so native clicks and drags pass through. */
-body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child {
+body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child {
   --dsw-alias-label-secondary: var(--qyt-q-sidebar-caption);
   --dsw-alias-label-tertiary: var(--qyt-q-sidebar-caption);
   --dsw-alias-label-caption: var(--qyt-q-sidebar-caption);
   --dsw-specific-sidebar-fill: var(--qyt-q-sidebar);
-  --dsw-specific-sidebar-nav-item-hover: #e7ece9;
+  --dsw-specific-sidebar-nav-item-hover: var(--qyt-q-sidebar-hover);
   --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
-  --dsw-specific-sidebar-nav-item-active-accent: #c7dfd6;
+  --dsw-specific-sidebar-nav-item-active-accent: var(--qyt-q-sidebar-active-accent);
   background-color: var(--qyt-q-sidebar);
-  background-image: linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%), var(--qyt-ocean-art);
+  background-image: linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%), var(--qyt-theme-art);
   background-position: center, right bottom;
   background-size: 100% 100%, auto 310px;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"][data-ds-dark-theme] [data-slot="sidebar"] > :first-child {
-  --dsw-specific-sidebar-nav-item-hover: #293338;
-  --dsw-specific-sidebar-nav-item-active-accent: #35474e;
-}
-body[data-qyt-q-theme="ocean"] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
+body[data-qyt-q-theme] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
   background: var(--qyt-q-selected);
-  box-shadow: inset 3px 0 var(--qyt-q-sea);
+  box-shadow: inset 3px 0 var(--qyt-q-accent);
   border-radius: 10px;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] {
   --qyt-q-canvas-wash: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 65%), radial-gradient(ellipse at 90% 10%, var(--qyt-q-sand-glow), transparent 58%), linear-gradient(var(--qyt-q-art-wash), var(--qyt-q-art-wash));
-  --qyt-q-canvas-image: var(--qyt-q-canvas-wash), var(--qyt-ocean-art);
+  --qyt-q-canvas-image: var(--qyt-q-canvas-wash), var(--qyt-theme-art);
   /* Fixed backgrounds use the viewport; cover it at every window size. The
      composer fade inherits this size to keep both copies of the art aligned. */
   --qyt-q-canvas-size: 100% 100%, 100% 100%, 100% 100%, cover;
@@ -201,15 +67,15 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="hero"] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="hero"] {
   --qyt-q-canvas-wash: radial-gradient(ellipse at 18% 0%, var(--qyt-q-sky-glow), transparent 68%), radial-gradient(ellipse at 90% 12%, var(--qyt-q-sand-glow), transparent 60%), linear-gradient(180deg, transparent 0%, var(--qyt-q-hero-wash) 55%, var(--qyt-q-art-wash) 100%);
 }
 /* A successfully drawn frame replaces the illustration only. The wash follows
    the native color scheme in CSS and remains above the moving picture. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) {
   background-image: none;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -220,48 +86,48 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > 
   user-select: none;
   visibility: hidden;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-qyt-ocean-wash] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is([data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   background-image: var(--qyt-q-canvas-wash);
   background-attachment: fixed;
   background-position: center;
   background-size: 100% 100%;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] > :is(canvas[data-qyt-ocean-scene][data-ready="true"], [data-qyt-ocean-wash]) {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) > :is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   visibility: visible;
 }
 /* A quiet paper column follows the native content width. Art stays visible in
    the side margins; even the smallest viewport keeps opaque text surfaces. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll] {
   background-image: linear-gradient(90deg, transparent, var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)), var(--qyt-q-paper) min(calc(100% - 12px), calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 20px)), transparent);
   background-size: 100% 100%;
   background-position: center top;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header {
   background: linear-gradient(110deg, var(--qyt-q-chrome), var(--qyt-q-paper) 75%);
   border-bottom-color: var(--qyt-q-line);
 }
 
 /* A floating writing surface with a neutral hairline and diffuse depth.
    Focus strengthens that same edge instead of adding a second heavy frame. */
-body[data-qyt-q-theme="ocean"] [data-composer-card] {
+body[data-qyt-q-theme] [data-composer-card] {
   border-radius: 22px;
   background: var(--qyt-q-surface);
   box-shadow: 0 8px 28px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
 }
-body[data-qyt-q-theme="ocean"] [data-composer-card]:focus-within {
+body[data-qyt-q-theme] [data-composer-card]:focus-within {
   box-shadow: 0 10px 30px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--qyt-q-focus-line);
 }
 /* The seat and its gaps reveal the canvas directly. Only the actual input
    card and individual statistics receive surfaces; native layout owns height. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] {
   background: transparent;
 }
 /* Blend the reading paper into the exact canvas over the 36px above the
    dock. Only this decoration fades: the input, menus and statistics stay
    crisp, with scrolled text fully covered by the time it reaches the seat. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
   content: "";
   position: absolute;
   inset: -36px 0 0;
@@ -278,7 +144,7 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
 }
 /* The dock uses a crop of the same animated frame. Keep the original static
    decoration until that crop is ready, with the same wash and 36px fade. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] > [data-qyt-ocean-dock] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] > :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) {
   position: absolute;
   inset: -36px 0 0;
   z-index: -1;
@@ -288,32 +154,32 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   -webkit-mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
   mask-image: linear-gradient(180deg, transparent 0px, #000 36px);
 }
-body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > :is(canvas[data-qyt-ocean-dock-frame], [data-qyt-ocean-wash]) {
+body[data-qyt-q-theme] [data-composer-seat] > :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) > :is(canvas[data-qyt-ocean-dock-frame], canvas[data-qyt-theme-dock-frame], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
 }
-body[data-qyt-q-theme="ocean"] [data-composer-seat] > [data-qyt-ocean-dock] > [data-qyt-ocean-wash] {
+body[data-qyt-q-theme] [data-composer-seat] > :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) > :is([data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   background-image: var(--qyt-q-canvas-wash);
   background-attachment: fixed;
   background-position: center;
   background-size: 100% 100%;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat][data-qyt-ocean-dock-live]::before {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]:is([data-qyt-ocean-dock-live], [data-qyt-theme-dock-live])::before {
   content: none;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat][data-qyt-ocean-dock-live] > [data-qyt-ocean-dock] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]:is([data-qyt-ocean-dock-live], [data-qyt-theme-dock-live]) > :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) {
   visibility: visible;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card] {
   background: var(--qyt-q-composer-fill);
   border-color: var(--qyt-q-focus-line);
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > [data-slot="conversation.composer.dock"] > :is([data-composer-stat="activity"], [data-composer-stat="usage"]) > :is(button, span),
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > span > button[aria-haspopup="dialog"] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > [data-slot="conversation.composer.dock"] > :is([data-composer-stat="activity"], [data-composer-stat="usage"]) > :is(button, span),
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-dock] > span > button[aria-haspopup="dialog"] {
   background: var(--qyt-q-stat-fill);
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
@@ -325,10 +191,10 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
    floats above that anchor, so opening tasks never grows the writing seat.
    Only this dock panel is positioned; history views and other menus keep
    their native layout and task status colors. */
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]:has([data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded="true"]) {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]:has([data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded="true"]) {
   z-index: 9;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] {
   position: relative;
   overflow: visible;
   border: 1px solid var(--qyt-q-task-line);
@@ -337,12 +203,12 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   backdrop-filter: none;
   box-shadow: 0 6px 20px -12px var(--qyt-q-shadow-float), 0 1px 4px var(--qyt-q-shadow);
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded]:focus-visible {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > button[aria-expanded]:focus-visible {
   border-radius: 8px;
   outline: 2px solid var(--qyt-q-focus-line);
   outline-offset: 2px;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
   position: absolute;
   inset: auto 0 calc(100% + 10px);
   z-index: 1;
@@ -359,25 +225,25 @@ body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="ac
   scrollbar-gutter: stable;
 }
 
-body[data-qyt-q-theme="ocean"] [data-rightbar-col] {
+body[data-qyt-q-theme] [data-rightbar-col] {
   background-color: var(--dsw-alias-bg-layer-1);
 }
-body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"][role="dialog"] {
+body[data-qyt-q-theme] [data-shortcut-modal="settings"][role="dialog"] {
   border-radius: 20px;
   background-color: var(--qyt-q-surface);
 }
-body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav {
+body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav {
   background-color: var(--qyt-q-sidebar);
-  background-image: linear-gradient(180deg, var(--qyt-q-sidebar), var(--qyt-q-sidebar-wash)), var(--qyt-ocean-art);
+  background-image: linear-gradient(180deg, var(--qyt-q-sidebar), var(--qyt-q-sidebar-wash)), var(--qyt-theme-art);
   background-size: 100% 100%, auto 260px;
   background-position: center, right bottom;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
+body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
   background-color: var(--qyt-q-selected);
   color: var(--qyt-q-ink);
 }
-body[data-qyt-q-theme="ocean"] :is([role="menu"], [role="listbox"]) {
+body[data-qyt-q-theme] :is([role="menu"], [role="listbox"]) {
   border-radius: 12px;
   background-color: var(--dsw-menu-surface-fill);
   border-color: var(--dsw-alias-border-l2);
@@ -387,7 +253,7 @@ body[data-qyt-q-theme="ocean"] :is([role="menu"], [role="listbox"]) {
 /* Harness 0.2.1's public Session header emits this exact marker and direct
    tab buttons. Its native active ::after is a 2px underline: retract it before
    introducing a floating pill. No other tablist (including QiuYaTools) matches. */
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] {
   justify-self: start;
   align-items: center;
   gap: 4px;
@@ -397,7 +263,7 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
   overflow-x: auto;
   scrollbar-width: none;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"] {
   flex: 0 0 auto;
   box-sizing: border-box;
   min-height: 28px;
@@ -408,60 +274,60 @@ body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data
   color: var(--qyt-q-secondary);
   box-shadow: none;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]::after {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]::after {
   content: none;
   display: none;
 }
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:not([aria-selected="true"]):hover {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:not([aria-selected="true"]):hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--qyt-q-ink);
 }
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
   border-color: var(--qyt-q-tab-line);
   background: var(--qyt-q-tab-fill);
   color: var(--qyt-q-tab-ink);
   box-shadow: 0 1px 3px var(--qyt-q-shadow);
 }
-body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:focus-visible {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:focus-visible {
   outline: 2px solid var(--dsw-focus-ring-color);
   outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  body[data-qyt-q-theme="ocean"] [data-qyt-ocean-dock] { display: none; }
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase][data-qyt-ocean-live] {
+  body[data-qyt-q-theme] :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) { display: none; }
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) {
     background-image: var(--qyt-q-canvas-image);
   }
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
     display: none;
   }
 }
 
 @media (forced-colors: active) {
-  body[data-qyt-q-theme="ocean"] [data-qyt-ocean-dock] { display: none; }
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], [data-qyt-ocean-wash]) {
+  body[data-qyt-q-theme] :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) { display: none; }
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
     display: none;
   }
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"] > div > ul {
     background: Canvas;
     border-color: CanvasText;
     box-shadow: none;
   }
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before { content: none; }
-  body[data-qyt-q-theme="ocean"] [data-slot="sidebar"] > :first-child,
-  body[data-qyt-q-theme="ocean"] [data-shortcut-modal="settings"] > nav,
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="hero"],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card],
-  body[data-qyt-q-theme="ocean"] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header,
-  body[data-qyt-q-theme="ocean"] [data-composer-card] {
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before { content: none; }
+  body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child,
+  body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav,
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="hero"],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-composer-card],
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header,
+  body[data-qyt-q-theme] [data-composer-card] {
     background: Canvas;
     box-shadow: none;
   }
-  body[data-qyt-q-theme="ocean"] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+  body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
     border-color: Highlight;
     color: HighlightText;
     background: Highlight;

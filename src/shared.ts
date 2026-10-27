@@ -1,11 +1,14 @@
 export const SETTINGS_ID = 'qiuya-tools'
 
-export type OceanMotion = 'dynamic' | 'static'
-export interface QThemeSettings {
-  ocean: { motion: OceanMotion }
-}
+export const Q_THEME_IDS = ['ocean', 'begonia'] as const
+export type QThemeId = typeof Q_THEME_IDS[number]
+export type ThemeMotion = 'dynamic' | 'static'
+/** Kept for existing Ocean consumers. */
+export type OceanMotion = ThemeMotion
+export type QThemeSettings = Record<QThemeId, { motion: ThemeMotion }>
 export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   ocean: Object.freeze({ motion: 'dynamic' }),
+  begonia: Object.freeze({ motion: 'dynamic' }),
 })
 
 /** Serialized values projected by the Host configuration form. */
@@ -22,7 +25,9 @@ export interface Preferences {
   gitEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
-  /** Each theme owns its options; Ocean motion does not affect other themes. */
+  /** Missing or unknown ids retain Ocean when upgrading an older profile. */
+  qThemeId: QThemeId
+  /** Each theme owns its options; changing one leaves the others intact. */
   qThemeSettings: QThemeSettings
   computerUseEnabled: boolean
   /** Background checks only; installation always requires an explicit action. */
@@ -47,6 +52,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: true,
+  qThemeId: 'ocean',
   qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
   computerUseEnabled: false,
   autoCheckUpdates: true,
@@ -54,9 +60,18 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   pasteLineThreshold: 15,
 })
 
-/** Older profiles retain Ocean's dynamic default when theme options are absent. */
+/** Treat saved data as untrusted: old and unknown themes fall back to Ocean. */
+export function getQThemeId(preferences: Partial<Preferences> | undefined): QThemeId {
+  return Q_THEME_IDS.find(id => id === preferences?.qThemeId) ?? 'ocean'
+}
+
+/** Every theme has an independent motion setting, including legacy profiles. */
+export function getThemeMotion(preferences: Partial<Preferences> | undefined, id = getQThemeId(preferences)): ThemeMotion {
+  return preferences?.qThemeSettings?.[id]?.motion === 'static' ? 'static' : 'dynamic'
+}
+
 export function getOceanMotion(preferences: Partial<Preferences> | undefined): OceanMotion {
-  return preferences?.qThemeSettings?.ocean?.motion === 'static' ? 'static' : 'dynamic'
+  return getThemeMotion(preferences, 'ocean')
 }
 
 /** Missing feature fields inherit the defaults when upgrading an older profile. */

@@ -18,7 +18,7 @@ import { installWorkbench } from './features/workbench/integration.ts'
 import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 import { installGitHost } from './features/git/host.ts'
-import { DEFAULT_Q_THEME_SETTINGS, type QThemeSettings } from './shared.ts'
+import { DEFAULT_Q_THEME_SETTINGS, Q_THEME_IDS, type QThemeId, type QThemeSettings } from './shared.ts'
 
 /** Preferences persisted by Harness in the active profile. */
 export interface Config {
@@ -32,6 +32,7 @@ export interface Config {
   promptSuggestionsEnabled: Volatile<boolean>
   gitEnabled: Volatile<boolean>
   qThemeEnabled: Volatile<boolean>
+  qThemeId: Volatile<QThemeId>
   qThemeSettings: Volatile<QThemeSettings>
   computerUseEnabled: Volatile<boolean>
   autoCheckUpdates: Volatile<boolean>
@@ -49,12 +50,11 @@ export const Config = z.object({
   sidebarToolsEnabled: z.boolean().default(true).description('扩展会话与工作区菜单：未读、复制、打开目录').volatile(),
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
-  qThemeEnabled: z.boolean().default(true).description('为整个 Harness 启用青蓝海面 Q 主题').volatile(),
-  qThemeSettings: z.object({
-    ocean: z.object({
-      motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),
-    }).default(DEFAULT_Q_THEME_SETTINGS.ocean),
-  }).default(DEFAULT_Q_THEME_SETTINGS).description('各 Q 主题的独立设置').volatile(),
+  qThemeEnabled: z.boolean().default(true).description('为整个 Harness 启用 Q 主题').volatile(),
+  qThemeId: z.union(Q_THEME_IDS.map(id => z.const(id))).default('ocean').description('当前 Q 主题').volatile(),
+  qThemeSettings: z.object(Object.fromEntries(Q_THEME_IDS.map(id => [id, z.object({
+    motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),
+  }).default(DEFAULT_Q_THEME_SETTINGS[id])]))).default(DEFAULT_Q_THEME_SETTINGS).description('各 Q 主题的独立设置').volatile(),
   computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   autoCheckUpdates: z.boolean().default(true).description('后台自动检查插件更新并显示提醒，安装由用户确认').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)

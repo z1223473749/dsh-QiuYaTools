@@ -40,6 +40,7 @@ test('the npm alias is a script-free universal wrapper with all native dependenc
   assert.equal(packed.scripts, undefined); assert.equal(packed.devDependencies, undefined)
   assert.deepEqual(checked.files.filter(path => path.startsWith('package/lib/')).sort(), ['package/lib/client.js', 'package/lib/computer-agent.js', 'package/lib/index.js'])
   assert.equal(readDistributionArchive(bytes).get('package/docs/git-guide.md').bytes.toString('utf8'), 'fixture data\n', 'The npm wrapper carries its linked Git guide')
+  assert.equal(readDistributionArchive(bytes).get('package/docs/q-theme-framework.md').bytes.toString('utf8'), 'fixture data\n', 'The npm wrapper includes the theme integration guide linked from its README')
   const entries = [...readDistributionArchive(bytes)].map(([path, entry]) => [path, entry.bytes, entry.mode])
   for (const path of ['package/lib/native/unreviewed.exe', 'package/lib/extra.js']) assert.throws(() => validateUniversalArchive(tarball([...entries, [path, 'must not ship']]), { version }), /must not carry native files/, 'Adding the Git guide does not widen the public lib entry allowlist')
   assert.deepEqual(nativeOptionalDependencies(version), rootPackage.optionalDependencies)
@@ -51,6 +52,7 @@ test('complete Windows archives retain their executable and omit universal optio
   assert.equal(metadata(bytes).optionalDependencies, undefined)
   assert.deepEqual(metadata(bytes).scripts, { test: 'node consumer-test.mjs' }, 'Compiled platform packages omit pack lifecycle hooks while preserving other commands')
   assert.ok(files.has('package/lib/native/win32-x64/qiuya-windows.exe'))
+  assert.ok(files.has('package/docs/q-theme-framework.md'), 'Complete platform archives include the shared theme guide')
   assert.equal(files.has('package/lib/native/win32-arm64/qiuya-windows.exe'), false)
 })
 

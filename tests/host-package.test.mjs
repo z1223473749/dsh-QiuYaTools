@@ -34,7 +34,8 @@ const expected = {
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: true,
-  qThemeSettings: { ocean: { motion: 'dynamic' } },
+  qThemeId: 'ocean',
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -47,6 +48,7 @@ assert.equal(typeof standard.vendor, 'string')
 assert.equal(typeof standard.validate, 'function')
 
 const unwrap = value => Object.fromEntries(Object.entries(value).map(([field, ref]) => [field, ref.get()]))
+const withDefaults = input => ({ ...expected, ...input, qThemeSettings: { ...expected.qThemeSettings, ...input.qThemeSettings } })
 const validated = standard.validate({})
 assert.equal(typeof validated.then, 'undefined', 'Cordis requires synchronous configuration validation')
 assert.equal(validated.issues, undefined, 'default configuration must validate')
@@ -63,17 +65,18 @@ for (const input of [
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
   { qThemeSettings: { ocean: { motion: 'static' } } },
+  { qThemeId: 'begonia', qThemeSettings: { begonia: { motion: 'static' } } },
 ]) {
   const result = await standard.validate(input)
   assert.equal(result.issues, undefined, 'valid boundary or explicit settings must validate')
-  assert.deepEqual(unwrap(result.value), { ...expected, ...input })
+  assert.deepEqual(unwrap(result.value), withDefaults(input))
   const plain = host.Config.simplify(result.value)
   assert.deepEqual(plain, input)
   const restored = await standard.validate(JSON.parse(JSON.stringify(plain)))
   assert.equal(restored.issues, undefined)
-  assert.deepEqual(unwrap(restored.value), { ...expected, ...input },
+  assert.deepEqual(unwrap(restored.value), withDefaults(input),
     'plain persisted data must restore volatile references and omitted defaults')
-  for (const [field, value] of Object.entries(input)) assert.deepEqual(result.value[field].get(), value)
+  for (const field of Object.keys(input)) assert.deepEqual(result.value[field].get(), withDefaults(input)[field])
 }
 
 for (const input of [{ qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }]) {
@@ -101,6 +104,8 @@ const invalid = [
   { autoCheckUpdates: 'false' },
   { qThemeSettings: { ocean: { motion: 'off' } } },
   { qThemeSettings: { ocean: { motion: false } } },
+  { qThemeId: 'unregistered' },
+  { qThemeSettings: { begonia: { motion: 'off' } } },
 ]
 for (const input of invalid) {
   const result = await standard.validate(input)
@@ -181,7 +186,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 15, invalidCases: 17, applied: true,
+    imported: true, standardSchema: true, volatileFields: 16, invalidCases: 19, applied: true,
   })
 })
 
@@ -212,8 +217,9 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' } })
-  assert.equal(Object.keys(fiber.config).length, 15)
+  assert.equal(fiber.config.qThemeId.get(), 'ocean')
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } })
+  assert.equal(Object.keys(fiber.config).length, 16)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
   assert.equal(fiber.config.gitEnabled.get(), true)
