@@ -30,3 +30,5 @@ node scripts/e2e-harness.mjs --package /absolute/candidate.tgz \
 2026-11-03：84 项相关回归通过，覆盖有效 DOCX/XLSX 内容解析、文件选择器与文件粘贴入口；在 macOS ARM64 的隔离 Harness / 无头 Chrome 中，6 项集成验收通过，使用有效 Word、Excel 和 PDF 文件核对真实 Host 上传、文件存储字节、内容预览、混合附件提交接受、草稿清理、浅深色和窄窗口截图。未使用真实模型账号。系统来源应用拖拽与 Windows 实机未在本次环境验收，不能用浏览器事件模拟结果代替这两项证据。
 
 最终参考样式截图和报告位于 `artifacts/composer-attachments-reference-final/`。完整测试还包含本次无关的本地网络与 .NET SDK 依赖；沙箱内全量测试遇到 loopback `EPERM` 和缺少 SDK，未获得全量通过结果。
+
+0.7.1 发布前补充验证：使用可用的 loopback 环境及 .NET SDK 8.0.426，`npm run check` 完成类型检查、Mac universal 构建和全量测试，3,271 项通过、0 失败、2 项按平台条件跳过。附件专项用例与原 Mac 完整验收隔离，保持原 12 项业务顺序、预检及超时约束，附件文档依赖仅在专项用例内按需加载。

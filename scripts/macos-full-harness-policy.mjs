@@ -28,7 +28,7 @@ export function makeMacFullHarnessSource(original, { repository, snapshot, polic
   once('assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: false })', 'assertHarnessMacEntryPrepared({ prepared: true, headlessSubset: false })')
   // Keep root relative to this frozen script. All dynamic TS/Swift reads below
   // therefore resolve inside snapshot, never to mutable live fixtures.
-  source = source.replace(/^const featureEvidenceOnly = .*$/mu, 'const featureEvidenceOnly = false').replace(/^const pastedTextOnly = .*$/mu, 'const pastedTextOnly = false')
+  source = source.replace(/^const featureEvidenceOnly = .*$/mu, 'const featureEvidenceOnly = false').replace(/^const pastedTextOnly = .*$/mu, 'const pastedTextOnly = false').replace(/^const attachmentsOnly = .*$/mu, 'const attachmentsOnly = false')
   once("    let log = ''; let exited = false", "    await writeFile(join(output, 'owned-host-profile.json'), JSON.stringify({ profileHome, hostPid: host.pid, runnerPid: process.pid, ownTemporary: temporary, noCredentials: true }, null, 2))\n    let log = ''; let exited = false")
   for (const [before, after] of [
     ["assert.equal(await page.getByRole('spinbutton').nth(1).inputValue(), '4')", "assert.equal(await page.getByRole('spinbutton').nth(1).inputValue(), '4'); await screenshot('thresholds-saved')"],
@@ -80,7 +80,7 @@ export function makeMacFileExchangeSource(source, { repository, providerSource, 
   once('assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: false })', 'assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: true })')
   once("const root = fileURLToPath(new URL('../', import.meta.url))", 'const root = ' + JSON.stringify(repository))
   once("import { spawn } from 'node:child_process'", "import { spawn } from 'node:child_process'\nimport { readMacExchangeBundle } from " + JSON.stringify(pathToFileURL(policySource).href))
-  source = source.replace(/^const featureEvidenceOnly = .*$/mu, 'const featureEvidenceOnly = true').replace(/^const pastedTextOnly = .*$/mu, 'const pastedTextOnly = false').replace(/^const featureEvidenceCases = .*$/mu, 'const featureEvidenceCases = new Set(' + JSON.stringify(MAC_EXCHANGE_CASES) + ')')
+  source = source.replace(/^const featureEvidenceOnly = .*$/mu, 'const featureEvidenceOnly = true').replace(/^const pastedTextOnly = .*$/mu, 'const pastedTextOnly = false').replace(/^const attachmentsOnly = .*$/mu, 'const attachmentsOnly = false').replace(/^const featureEvidenceCases = .*$/mu, 'const featureEvidenceCases = new Set(' + JSON.stringify(MAC_EXCHANGE_CASES) + ')')
   const start = source.indexOf('const nativeCommand = '), end = source.indexOf('async function ownMacTarget(', start)
   assert(start > 0 && end > start)
   source = source.slice(0, start) + `let allowedNativeReads = 0, forbiddenNativeCommands = 0

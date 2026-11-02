@@ -24,7 +24,6 @@ import { assertHarnessMacEntryPrepared } from './harness-macos-entry-preflight.m
 import { startHarnessWindowsWindowRetirement } from './harness-windows-window-retirement.mjs'
 import { stagePassiveObserverForProvider } from './harness-passive-observer-artifact.mjs'
 import { HARNESS_PASSIVE_OBSERVER_SHA256 } from '../tests/fixtures/harness-passive-input-source.mjs'
-import { wordPreviewFixture, spreadsheetPreviewFixture, pdfPreviewFixture } from '../tests/fixtures/composer-attachment-files.mjs'
 
 assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: false })
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -326,7 +325,8 @@ try {
     await card.getByRole('button', { name: '移除附件 ' + name, exact: true }).click()
     return { input: 'browser ClipboardEvent', path: 'actual Harness attachment intake, binary upload and ready UI', storedBytesVerified: true, bytes: bytes.length, sha256 }
   })
-  await test('mixed-file-drop-content-preview-and-send', async () => {
+  if (attachmentsOnly) await test('mixed-file-drop-content-preview-and-send', async () => {
+    const { wordPreviewFixture, spreadsheetPreviewFixture, pdfPreviewFixture } = await import(new URL('../tests/fixtures/composer-attachment-files.mjs', import.meta.url))
     const suffix = randomUUID().slice(0, 8)
     const fixtures = [
       { name: `组合文本-${suffix}.txt`, type: 'text/plain', text: '文件附件统一预览\r\n' + Array.from({ length: 35 }, (_, i) => `第 ${i + 1} 行：中文内容缩略预览😀，文件拖入后保留已有草稿。`).join('\r\n') + '\r\n<script>inert</script>' },
@@ -428,7 +428,8 @@ try {
       await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
     }
   })
-  await test('unified-file-picker-and-file-paste-preview', async () => {
+  if (attachmentsOnly) await test('unified-file-picker-and-file-paste-preview', async () => {
+    const { wordPreviewFixture, spreadsheetPreviewFixture } = await import(new URL('../tests/fixtures/composer-attachment-files.mjs', import.meta.url))
     const card = page.locator('[data-composer-card]:visible').first()
     const name = `picker-${randomUUID().slice(0, 8)}.docx`
     const bytes = wordPreviewFixture()
