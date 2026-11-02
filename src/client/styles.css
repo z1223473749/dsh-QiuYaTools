@@ -194,12 +194,21 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-theme-accent: var(--qyt-theme-col
 .qyt-computer-permission-row > div:first-child { flex:1; min-width:0; }
 .qyt-computer-permission-row strong { font-size:12px; overflow-wrap:anywhere; }
 .qyt-computer-permission-row .qyt-computer-caption { overflow-wrap:anywhere; }
+.qyt-computer-permissions { margin-top:14px; }
+.qyt-computer-permissions > summary { cursor:pointer; color:var(--qyt-computer-text); font-size:12px; font-weight:600; padding:6px 0; }
+.qyt-computer-permission-toolbar { align-items:center; flex-wrap:wrap; margin-top:10px; }
+.qyt-computer-application-selection { display:flex; align-items:center; gap:10px; cursor:pointer; min-width:0; }
+.qyt-computer-application-selection > input { flex:none; accent-color:var(--qyt-computer-accent); }
+.qyt-computer-application-selection > .qyt-computer-application-identity { min-width:0; }
+.qyt-computer-application-selection .qyt-computer-application-identity > span:last-child { min-width:0; }
 .qyt-computer-panel .qyt-computer-empty { margin-top:14px; color:var(--qyt-computer-secondary); font-size:12px; line-height:1.7; }
 .qyt-computer-panel .qyt-computer-notice { margin-top:12px; padding:10px 12px; border-radius:9px; background:var(--qyt-computer-soft); font-size:12px; }
 .qyt-computer-panel .qyt-computer-error { color:var(--qyt-computer-error); font-size:12px; overflow-wrap:anywhere; }
 .qyt-computer-add-application { display:grid; min-width:0; gap:10px; margin-top:14px; padding:12px; border:1px solid var(--qyt-computer-line); border-radius:10px; background:var(--qyt-computer-muted-bg); }
 .qyt-application-picker-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; font-weight:600; }
 .qyt-application-picker-heading .qyt-computer-caption { font-weight:400; }
+.qyt-application-picker-selection { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.qyt-application-picker-selection > button { flex:none; }
 .qyt-application-search { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--qyt-computer-line); border-radius:8px; background:var(--qyt-computer-bg); }
 .qyt-application-search:focus-within { border-color:var(--qyt-computer-accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--qyt-computer-accent) 14%,transparent); }
 .qyt-application-search > svg { flex:none; width:16px; height:16px; color:var(--qyt-computer-secondary); }

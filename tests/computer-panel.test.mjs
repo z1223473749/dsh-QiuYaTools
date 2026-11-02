@@ -35,7 +35,7 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
     const [value, update] = originalUseState(initial)
     return [value, next => { stateAudit.writes++; if (stateAudit.unmounted) stateAudit.lateWrites++; update(next) }]
   }
-  const calls = [], changes = [], plans = [], listeners = new Set(), status = { sessions: [], allowedApps: [], native, pendingRequests: [], environments: [] }
+  const calls = [], changes = [], plans = [], listeners = new Set(), allowFailures = new Map(), status = { sessions: [], allowedApps: [], native, pendingRequests: [], environments: [] }
   const current = { value: activeSessionId }, applications = [{ appId: 'fixture.app', name: '自有应用', running: true }]
   const ctx = { get(name) {
     if (name === 'uiSession') return { adapter: { current: { subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) }, getSnapshot: () => ({ key: current.value }) } } }
@@ -45,7 +45,11 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
       const planned = plans.findIndex(row => row.op === input.op); if (planned >= 0) return plans.splice(planned, 1)[0].promise
       if (input.op === 'status') return { ok: true, value: structuredClone(status) }
       if (input.op === 'applications') return { ok: true, value: structuredClone(applications) }
-      if (input.op === 'allow') { status.allowedApps = input.allowed ? [...status.allowedApps, input.appId] : status.allowedApps.filter(id => id !== input.appId); return { ok: true, value: {} } }
+      if (input.op === 'allow') {
+        const failure = allowFailures.get(input.appId); allowFailures.delete(input.appId)
+        if (!failure || failure.afterApply) status.allowedApps = input.allowed ? [...new Set([...status.allowedApps, input.appId])] : status.allowedApps.filter(id => id !== input.appId)
+        return failure ? { ok: false, error: { message: failure.message } } : { ok: true, value: { allowedApps: [...status.allowedApps] } }
+      }
       if (input.op === 'openSettings') return { ok: true, value: { opened: true, kind: input.kind, guideReady: true, appName: 'QiuYaTools Computer' } }
       if (input.op === 'decide') status.pendingRequests = status.pendingRequests.filter(row => row.requestId !== input.requestId)
       assert.ok(['openSettings', 'decide', 'pause', 'resume', 'preview', 'redock', 'stop'].includes(input.op), `Unexpected mutation ${input.op}`)
@@ -64,7 +68,7 @@ async function fixture(t, { native = { platform: 'win32', available: true }, ena
   const button = label => [...dom.window.document.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label)
   const click = async label => { const node = button(label); assert.ok(node, `${label} must exist`); await act(async () => { node.click(); await tick() }) }
   t.after(async () => { await unmount(); if (auditStateWrites) React.useState = originalUseState; dom.window.close(); for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key] })
-  return { dom, status, applications, calls, changes, render, button, click, unmount, stateAudit,
+  return { dom, status, applications, calls, changes, render, button, click, unmount, stateAudit, allowFailures,
     plan(op) { let resolve; const promise = new Promise(done => { resolve = done }); plans.push({ op, promise }); return resolve },
     async switchSession(value) { await act(async () => { current.value = value; for (const listener of listeners) listener(); await tick() }) },
     async setEnabled(value) { enabled = value; await render() },
@@ -326,7 +330,7 @@ test('manual persistent app list adds and revokes by application identity', asyn
   assert.match(f.dom.window.document.querySelector('[aria-label="始终允许的应用"]').textContent, /暂无持续授权/u)
 })
 
-test('application picker searches names and identities, clears hidden selection, and grants only after explicit confirmation', async t => {
+test('application picker preserves selections across name and identity searches and grants only after explicit confirmation', async t => {
   const f = await fixture(t)
   f.applications.push({ appId: 'org.mozilla.firefox', name: 'Firefox', running: false }, { appId: 'com.example.editor', name: '工具箱编辑器', running: false })
   await f.render(); await f.click('添加应用')
@@ -337,10 +341,225 @@ test('application picker searches names and identities, clears hidden selection,
   await act(async () => { Simulate.keyDown(field, { key: 'Enter', preventDefault() {} }); await tick() })
   assert.equal(f.button('始终允许').disabled, false); assert.deepEqual(f.mutations(), [], 'Enter in search selects without granting')
   await search('com.example')
-  assert.equal(f.button('始终允许').disabled, true, 'a previous hidden selection must not remain authorizable')
+  assert.equal(f.button('始终允许').disabled, false, 'cross-search selections remain available for the explicit batch confirmation')
+  assert.match(f.dom.window.document.querySelector('form').textContent, /已选择 1 个应用/u)
   assert.equal(f.dom.window.document.querySelector('[role="option"]').textContent, '工具箱编辑器')
   await f.click('工具箱编辑器'); await f.click('始终允许')
-  assert.deepEqual(f.mutations(), [{ op: 'allow', appId: 'com.example.editor', allowed: true }])
+  assert.deepEqual(f.mutations(), [{ op: 'allow', appId: 'org.mozilla.firefox', allowed: true }, { op: 'allow', appId: 'com.example.editor', allowed: true }])
+})
+
+const options = f => [...f.dom.window.document.querySelectorAll('[role="option"]')]
+const selectedOptions = f => options(f).filter(node => node.getAttribute('aria-selected') === 'true')
+const searchApps = async (f, value) => act(async () => { Simulate.change(f.dom.window.document.querySelector('[aria-label="搜索应用"]'), { target: { value } }); await tick() })
+const checkRevoke = async (f, name) => act(async () => { f.dom.window.document.querySelector(`input[aria-label="选择撤销 ${name}"]`).click(); await tick() })
+
+test('multi-select click and Enter toggle without granting; select all affects only the current search', async t => {
+  const f = await fixture(t)
+  f.applications.push({ appId: 'browser.one', name: '浏览器一', running: false }, { appId: 'browser.two', name: '浏览器二', running: false })
+  await f.render(); await f.click('添加应用')
+  assert.equal(f.dom.window.document.querySelector('[role="listbox"]').getAttribute('aria-multiselectable'), 'true')
+  await f.click('自有应用运行中'); await f.click('自有应用运行中✓')
+  assert.equal(selectedOptions(f).length, 0)
+  const field = f.dom.window.document.querySelector('[aria-label="搜索应用"]')
+  const enter = async () => act(async () => { Simulate.keyDown(field, { key: 'Enter', preventDefault() {} }); await tick() })
+  await enter(); assert.equal(selectedOptions(f).length, 1)
+  await enter(); assert.equal(selectedOptions(f).length, 0)
+  await f.click('自有应用运行中'); await searchApps(f, '浏览器'); await f.click('全选')
+  assert.equal(selectedOptions(f).length, 2)
+  assert.match(f.dom.window.document.querySelector('form').textContent, /已选择 3 个应用/u)
+  await f.click('取消全选'); assert.equal(selectedOptions(f).length, 0)
+  assert.match(f.dom.window.document.querySelector('form').textContent, /已选择 1 个应用/u)
+  await searchApps(f, '无匹配项'); assert.equal(f.button('全选').disabled, true)
+  await f.click('清除搜索'); assert.equal(selectedOptions(f).length, 1)
+  assert.deepEqual(f.mutations(), [])
+  await f.click('取消'); assert.equal(f.dom.window.document.querySelector('form'), null)
+  await f.click('添加应用'); assert.equal(selectedOptions(f).length, 0)
+})
+
+test('the picker excludes persistent grants, updates counts, and forgets selections granted by another window', async t => {
+  const f = await fixture(t, { manualClock: true }); f.status.allowedApps = ['fixture.app']
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  await f.render(); await f.click('添加应用')
+  assert.deepEqual(options(f).map(node => node.textContent), ['第二个应用'])
+  assert.match(f.dom.window.document.querySelector('.qyt-application-picker-heading').textContent, /1 个应用/u)
+  await f.click('第二个应用'); f.status.allowedApps.push('second'); await f.advance(1500)
+  assert.equal(options(f).length, 0); assert.equal(f.button('始终允许').disabled, true)
+  assert.equal(f.button('全选').disabled, true)
+  assert.match(f.dom.window.document.querySelector('form').textContent, /暂无未授权的应用.*已选择 0 个应用/u)
+  f.status.allowedApps = []; await f.advance(1500)
+  assert.equal(options(f).length, 2); assert.equal(selectedOptions(f).length, 0)
+  assert.deepEqual(f.mutations(), [])
+})
+
+test('55 persistent grants default to a closed details list; batch revoke keeps only failed selections and works while disabled', async t => {
+  const f = await fixture(t, { enabled: false })
+  f.status.allowedApps = Array.from({ length: 55 }, (_, i) => `app.${i}`)
+  f.allowFailures.set('app.1', { message: '保存失败' })
+  await f.render()
+  const details = f.dom.window.document.querySelector('.qyt-computer-permissions')
+  assert.equal(details.open, false); assert.equal(details.querySelector('summary').textContent, '已授权应用（55）')
+  await act(async () => { details.querySelector('summary').click(); await tick() }); assert.equal(details.open, true)
+  assert.equal(f.button('撤销所选').disabled, true)
+  for (const id of ['app.0', 'app.1', 'app.2']) await checkRevoke(f, id)
+  await f.click('撤销所选')
+  assert.deepEqual(f.mutations(), ['app.0', 'app.1', 'app.2'].map(appId => ({ op: 'allow', appId, allowed: false })))
+  assert.equal(details.open, true); assert.equal(details.querySelector('summary').textContent, '已授权应用（53）')
+  const checked = [...details.querySelectorAll('input:checked')]
+  assert.deepEqual(checked.map(node => node.getAttribute('aria-label')), ['选择撤销 app.1'])
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /已撤销 2 个应用；1 个应用未完成或需检查.*app\.1：保存失败/u)
+  await f.click('撤销所选'); assert.deepEqual(f.mutations().at(-1), { op: 'allow', appId: 'app.1', allowed: false })
+  assert.equal(details.querySelector('summary').textContent, '已授权应用（52）'); assert.equal(details.querySelectorAll('input:checked').length, 0)
+})
+
+test('batch add continues after a failure, reconciles real grants and retries only the remaining failed app', async t => {
+  const f = await fixture(t)
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false }, { appId: 'third', name: '第三个应用', running: false })
+  f.allowFailures.set('second', { message: '磁盘写入失败' })
+  await f.render(); await f.click('添加应用'); await f.click('全选'); await f.click('始终允许')
+  assert.deepEqual(f.mutations(), ['fixture.app', 'second', 'third'].map(appId => ({ op: 'allow', appId, allowed: true })))
+  assert.deepEqual(options(f).map(node => node.textContent), ['第二个应用✓'])
+  assert.match(f.dom.window.document.querySelector('form').textContent, /1 个应用.*已选择 1 个应用/u)
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /已添加 2 个应用；1 个应用未完成或需检查.*第二个应用：磁盘写入失败/u)
+  assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（2）')
+  await f.click('始终允许')
+  assert.equal(f.mutations().length, 4); assert.equal(f.mutations().at(-1).appId, 'second')
+  assert.equal(f.dom.window.document.querySelector('form'), null)
+  assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（3）')
+})
+
+test('an error after applying a grant is reconciled without offering to resubmit that app', async t => {
+  const f = await fixture(t); f.allowFailures.set('fixture.app', { message: '响应未能确认', afterApply: true })
+  await f.render(); await f.click('添加应用'); await f.click('全选'); await f.click('始终允许')
+  assert.equal(options(f).length, 0); assert.equal(f.button('始终允许').disabled, true)
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /响应未能确认（当前已授权，无需重复提交）/u)
+  assert.equal(f.mutations().length, 1)
+})
+
+test('a failed final status read blocks resubmission until an explicit recheck reconciles the remaining selection', async t => {
+  const f = await fixture(t, { manualClock: true })
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  f.allowFailures.set('second', { message: '授权未确认' })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  f.plan('status')({ ok: false, error: { message: '状态读取中断' } })
+  await f.click('始终允许')
+  assert.equal(f.button('始终允许').disabled, true)
+  assert.match(f.dom.window.document.querySelector('[aria-label="始终允许的应用"] [role="alert"]').textContent, /已添加 1 个应用.*授权状态刷新失败：状态读取中断/u)
+  assert.deepEqual(selectedOptions(f).map(node => node.textContent), ['第二个应用✓'])
+  await act(async () => { f.dom.window.document.querySelector('form').dispatchEvent(new f.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick() })
+  assert.equal(f.mutations().length, 2, 'even form submission cannot bypass uncertain state')
+  await f.click('刷新授权状态'); assert.equal(f.button('始终允许').disabled, false)
+  await f.click('始终允许'); assert.equal(f.mutations().length, 3)
+  assert.equal(f.dom.window.document.querySelector('form'), null)
+})
+
+test('polling also clears the uncertain-state gate after a failed batch reconciliation', async t => {
+  const f = await fixture(t, { manualClock: true })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  f.allowFailures.set('fixture.app', { message: '授权结果未确认', afterApply: true })
+  f.plan('status')({ ok: false, error: { message: '状态读取中断' } })
+  await f.click('始终允许'); assert.equal(f.button('始终允许').disabled, true)
+  assert.equal(selectedOptions(f).length, 1)
+  await f.advance(1500)
+  assert.equal(f.button('刷新授权状态'), undefined)
+  assert.equal(options(f).length, 0)
+  assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（1）')
+  assert.equal(f.mutations().length, 1, 'reconciliation never retries a possibly applied grant')
+})
+
+test('a successful request whose final grant disagrees stays selected for explicit handling', async t => {
+  const f = await fixture(t)
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  // Model another window revoking the grant before the final status is read.
+  f.plan('status')({ ok: true, value: { ...f.status, allowedApps: [] } })
+  await f.click('始终允许')
+  assert.equal(selectedOptions(f).length, 1)
+  assert.equal(f.button('始终允许').disabled, false)
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /刷新后的授权状态与请求不一致/u)
+  assert.equal(f.mutations().length, 1)
+})
+
+test('batch reconciliation refreshes pending approval cards and native permissions in the current revision', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(true).native, manualClock: true })
+  f.status.pendingRequests = [request('A')]
+  await f.render(); await f.click('添加应用'); await f.click('自有应用运行中')
+  f.plan('status')({ ok: true, value: { ...f.status, allowedApps: ['fixture.app'], pendingRequests: [], native: macPermissionStatus(false).native } })
+  await act(async () => { f.dom.window.document.querySelector('form').dispatchEvent(new f.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick() })
+  assert.equal(Boolean(f.dom.window.document.querySelector('[data-qyt-computer-request]')), false, 'an already handled approval cannot remain actionable until the next poll')
+  assert.doesNotMatch(permissionText(f), /已允许/u)
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+})
+
+test('a failed batch status read retires native permission readings just like a failed regular poll', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(true).native, manualClock: true })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  f.plan('status')({ ok: false, error: { message: '批量操作后状态中断' } })
+  await f.click('始终允许')
+  assert.doesNotMatch(permissionText(f), /已允许|未允许/u)
+  assert.match(permissionText(f), /无法检查/u)
+  assert.match(permissionText(f), /批量操作后状态中断/u)
+  await f.advance(1500)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+})
+
+test('a batch status reply after a chat revision reconciles grants without replacing the native status of that revision', async t => {
+  const f = await fixture(t, { native: macPermissionStatus(false).native, manualClock: true })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  const finish = f.plan('status'); await f.click('始终允许'); await f.switchSession('B')
+  await act(async () => { finish({ ok: true, value: { ...f.status, native: macPermissionStatus(true).native } }); await tick() })
+  assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（1）')
+  assert.doesNotMatch(permissionText(f), /已允许/u)
+  assert.equal((permissionText(f).match(/未允许/gu) ?? []).length, 3)
+  f.status.native = macPermissionStatus(true).native; await f.advance(1500)
+  assert.equal((permissionText(f).match(/已允许/gu) ?? []).length, 3)
+})
+
+test('batch locks survive chat changes and polling; an older status reply cannot restore stale candidates', async t => {
+  const f = await fixture(t, { manualClock: true })
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  const staleStatus = f.plan('status')
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  const allow = f.plan('allow'); await f.click('始终允许')
+  assert.equal(f.mutations().length, 1)
+  const statusCalls = f.calls.filter(row => row.op === 'status').length
+  await f.switchSession('B'); await f.advance(3000)
+  assert.equal(f.calls.filter(row => row.op === 'status').length, statusCalls)
+  assert.equal(f.button('始终允许').disabled, true); assert.equal(f.button('取消全选').disabled, true)
+  await act(async () => { f.status.allowedApps.push('fixture.app'); allow({ ok: true, value: {} }); await tick() })
+  assert.equal(f.mutations().length, 2); assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（2）')
+  await act(async () => { staleStatus({ ok: true, value: { ...f.status, allowedApps: [] } }); await tick() })
+  await f.click('添加应用'); assert.equal(options(f).length, 0)
+})
+
+test('disabling computer control during a batch stops subsequent grants but leaves confirmed results visible', async t => {
+  const f = await fixture(t)
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  const allow = f.plan('allow'); await f.click('始终允许'); await f.setEnabled(false)
+  await act(async () => { f.status.allowedApps.push('fixture.app'); allow({ ok: true, value: {} }); await tick() })
+  assert.deepEqual(f.mutations(), [{ op: 'allow', appId: 'fixture.app', allowed: true }])
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /第二个应用：电脑操控已关闭，未提交授权/u)
+  assert.equal(f.dom.window.document.querySelector('summary').textContent, '已授权应用（1）')
+  assert.equal(f.button('撤销 自有应用').disabled, false)
+})
+
+test('turning control off and back on does not resume the unsubmitted tail of an old grant batch', async t => {
+  const f = await fixture(t)
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  const allow = f.plan('allow'); await f.click('始终允许')
+  await f.setEnabled(false); await f.setEnabled(true)
+  await act(async () => { f.status.allowedApps.push('fixture.app'); allow({ ok: true, value: {} }); await tick() })
+  assert.deepEqual(f.mutations(), [{ op: 'allow', appId: 'fixture.app', allowed: true }])
+  assert.match(f.dom.window.document.querySelector('[role="alert"]').textContent, /第二个应用：.*未提交授权/u)
+})
+
+test('unmount during a batch prevents later grants and all late component writes', async t => {
+  const f = await fixture(t, { auditStateWrites: true })
+  f.applications.push({ appId: 'second', name: '第二个应用', running: false })
+  await f.render(); await f.click('添加应用'); await f.click('全选')
+  const allow = f.plan('allow'); await f.click('始终允许'); await f.unmount()
+  await act(async () => { allow({ ok: true, value: {} }); await tick() })
+  assert.equal(f.mutations().length, 1); assert.equal(f.stateAudit.lateWrites, 0)
 })
 
 test('adding an application during automatic catalog discovery shares the in-flight read instead of racing the native catalog', async t => {

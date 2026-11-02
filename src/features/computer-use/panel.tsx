@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { ComputerApprovalCard, ComputerIcon, SystemPermissionNotice, computerApprovalNeedsSystemPermissions, computerStateLabels, type ComputerApprovalRequest, type ComputerDecision, type NativeApplication, type ComputerNativeView } from './presentation.tsx'
 import type { Context } from '@deepseek-ai/cordis'
@@ -15,12 +15,21 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
   const currentSeat = (ctx.get('uiSession') as { adapter?: { current?: { subscribe(listener: () => void): () => void; getSnapshot(): { key?: string } } } } | undefined)?.adapter?.current
   const activeSessionId = useSyncExternalStore(currentSeat ? listener => currentSeat.subscribe(listener) : noSubscribe, () => currentSeat?.getSnapshot().key, () => undefined)
   const [status, setStatus] = useState<Status>({ sessions: [], allowedApps: [], native: null })
-  const [message, setMessage] = useState(''), [statusError, setStatusError] = useState(''), [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState(''), [statusError, setStatusError] = useState(''), [actionBusy, setBusy] = useState(false)
+  const [batchBusy, setBatchBusy] = useState(false), permissionBatch = useRef(false)
+  const [permissionUncertain, setPermissionUncertain] = useState(false)
+  const [permissionResult, setPermissionResult] = useState<{ message: string; errors: string[]; refreshError?: string }>()
+  const [revokeIds, setRevokeIds] = useState<string[]>([])
+  const busy = actionBusy || batchBusy, enabledValue = useRef(enabled)
+  enabledValue.current = enabled
   const [applications, setApplications] = useState<NativeApplication[]>([]), [addingApp, setAddingApp] = useState(false)
-  const [applicationBusy, setApplicationBusy] = useState(false), applicationGeneration = useRef(0)
+  const [applicationBusy, setApplicationBusy] = useState(false), applicationGeneration = useRef(0), grantGeneration = useRef(0)
   const revision = useRef(0), mounted = useRef(true), performing = useRef(false)
   const statusRead = useRef<{ revision: number; result: Promise<void> } | undefined>(undefined)
   const applicationRead = useRef<Promise<NativeApplication[]> | undefined>(undefined)
+  const availableApplications = useMemo(() => applications.filter(app => !status.allowedApps.includes(app.appId)), [applications, status.allowedApps])
+  const selectedRevokeIds = revokeIds.filter(id => status.allowedApps.includes(id))
+  useEffect(() => { setRevokeIds(previous => { const next = previous.filter(id => status.allowedApps.includes(id)); return next.length === previous.length ? previous : next }) }, [status.allowedApps])
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; revision.current++ } }, [])
   const call = async (op: string, extra: object = {}) => {
     const connection = ctx.get('connection') as Rpc | undefined
@@ -29,7 +38,16 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     if (!response.ok) throw new Error(response.error?.message ?? '电脑操控请求失败')
     return response.value
   }
+  const statusFailed = (error: Error) => {
+    setStatusError(error.message)
+    // Retire stale native permission readings on every failed status read,
+    // including the reconciliation at the end of a permission batch.
+    setStatus(previous => ({ ...previous, native: { available: false, platform: previous.native?.platform, mode: previous.native?.mode, message: '当前状态读取失败，恢复连接后会自动重新检查。' } }))
+  }
   const refresh = () => {
+    // A batch reconciles once after all requests. Polling must not put a stale
+    // grant back into either selection while those requests are in flight.
+    if (permissionBatch.current) return Promise.resolve()
     const generation = revision.current, current = statusRead.current
     // Slow native reads must survive later polling ticks. Explicit rechecks
     // share the current read, while a new seat/enablement revision owns its own.
@@ -38,13 +56,10 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     read.result = (async () => {
       const result = await call('status') as Status
       if (!mounted.current || generation !== revision.current || statusRead.current !== read) return
-      setStatus(result); setStatusError('')
+      setStatus(result); setStatusError(''); setPermissionUncertain(false)
     })().catch(error => {
       if (mounted.current && generation === revision.current && statusRead.current === read) {
-        setStatusError((error as Error).message)
-        // A failed read cannot keep displaying a previous grant as a current
-        // OS result. Retain only the environment identity, not stale bits.
-        setStatus(previous => ({ ...previous, native: { available: false, platform: previous.native?.platform, mode: previous.native?.mode, message: '当前状态读取失败，恢复连接后会自动重新检查。' } }))
+        statusFailed(error as Error)
       }
       throw error
     }).finally(() => { if (statusRead.current === read) statusRead.current = undefined })
@@ -71,7 +86,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('focus', onReturn); document.removeEventListener('visibilitychange', onReturn) }
   }, [enabled, activeSessionId])
   useEffect(() => {
-    applicationGeneration.current++; setApplicationBusy(false); setAddingApp(false)
+    applicationGeneration.current++; grantGeneration.current++; setApplicationBusy(false); setAddingApp(false)
     if (!enabled) return
     let disposed = false
     // Application names are owner-only metadata; loading them never opens a
@@ -90,7 +105,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     finally { if (mounted.current && generation === applicationGeneration.current) setApplicationBusy(false) }
   }
   const action = async (op: string, extra: object = {}) => {
-    if (performing.current) return
+    if (performing.current || permissionBatch.current) return
     performing.current = true; const generation = revision.current; setBusy(true); setMessage('')
     try {
       if (op !== 'refresh') {
@@ -100,6 +115,54 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
       await refresh(); return true
     } catch (error) { if (op !== 'refresh' && mounted.current && generation === revision.current) setMessage((error as Error).message); return false }
     finally { if (mounted.current && generation === revision.current) { performing.current = false; setBusy(false) } }
+  }
+  const changePermissions = async (inputIds: string[], allowed: boolean) => {
+    if (performing.current || permissionBatch.current || permissionUncertain || (allowed && !enabledValue.current)) return
+    const ids = [...new Set(inputIds)].filter(id => status.allowedApps.includes(id) !== allowed)
+    if (!ids.length) return
+    permissionBatch.current = true; revision.current++; setBatchBusy(true); setPermissionResult(undefined); setMessage('')
+    const granting = grantGeneration.current
+    const errors = new Map<string, string>(), confirmed = new Set<string>(), names = new Map(applications.map(app => [app.appId, app.name]))
+    const verb = allowed ? '添加' : '撤销'
+    try {
+      for (const appId of ids) {
+        if (!mounted.current) return
+        if (allowed && (!enabledValue.current || granting !== grantGeneration.current)) { errors.set(appId, enabledValue.current ? '电脑操控开关已切换，未提交授权，请重新选择' : '电脑操控已关闭，未提交授权'); continue }
+        try {
+          await call('allow', { appId, allowed })
+          if (!mounted.current) return
+          confirmed.add(appId)
+        } catch (error) { errors.set(appId, (error as Error).message) }
+      }
+      if (!mounted.current) return
+      const statusGeneration = revision.current
+      let latest: string[] | undefined, refreshError: string | undefined
+      try {
+        const result = await call('status') as Status
+        if (!mounted.current) return
+        latest = result.allowedApps
+        // Refresh all status in the same revision, including pending approval
+        // cards. After a chat/enablement change, only owner-wide grants survive.
+        if (statusGeneration === revision.current) { setStatus(result); setStatusError('') }
+        else setStatus(previous => ({ ...previous, allowedApps: result.allowedApps, sessions: result.sessions }))
+        setPermissionUncertain(false)
+      } catch (error) {
+        if (!mounted.current) return
+        refreshError = (error as Error).message; setPermissionUncertain(true)
+        if (statusGeneration === revision.current) statusFailed(error as Error)
+        // Keep confirmed results if reconciliation is unavailable. Publish
+        // once at the end so a temporary success cannot erase the selection
+        // of an item whose final state turns out to disagree with the request.
+        setStatus(previous => ({ ...previous, allowedApps: allowed ? [...new Set([...previous.allowedApps, ...confirmed])] : previous.allowedApps.filter(id => !confirmed.has(id)) }))
+      }
+      for (const id of ids) if (latest && latest.includes(id) !== allowed && !errors.has(id)) errors.set(id, '刷新后的授权状态与请求不一致')
+      const details = [...errors].map(([id, reason]) => `${names.get(id) || id}：${reason}${latest?.includes(id) === allowed ? `（当前已${allowed ? '授权' : '撤销'}，无需重复提交）` : ''}`)
+      setPermissionResult({ message: `已${verb} ${ids.length - errors.size} 个应用${errors.size ? `；${errors.size} 个应用未完成或需检查` : ''}。`, errors: details, refreshError })
+      if (allowed && !errors.size && !refreshError) setAddingApp(false)
+    } finally {
+      permissionBatch.current = false
+      if (mounted.current) setBatchBusy(false)
+    }
   }
   const native = status.native, mac = native?.platform === 'darwin'
   const catalog = (ctx.get('sessions') as Catalog | undefined)?.list.getSnapshot()
@@ -120,8 +183,13 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     </section>
     <section className="qyt-card" aria-label="始终允许的应用">
       <div className="qyt-computer-section-heading"><div><h4>始终允许的应用</h4><p className="qyt-muted">这些应用无需重复询问。撤销后会立即停止相应操作。</p></div><button type="button" className="qyt-button" disabled={busy || applicationBusy || addingApp || !enabled} onClick={() => { void openApplications() }}>{applicationBusy ? '正在读取…' : '添加应用'}</button></div>
-      {addingApp && enabled && <ApplicationPicker applications={applications} busy={busy} onCancel={() => setAddingApp(false)} onAllow={appId => { void action('allow', { appId, allowed: true }).then(accepted => { if (accepted) setAddingApp(false) }) }}/>}
-      {status.allowedApps.length ? <div className="qyt-computer-permission-list">{status.allowedApps.map(id => <div className="qyt-computer-permission-row" key={id}><div className="qyt-computer-application-identity"><ApplicationIcon application={applications.find(app => app.appId === id)}/><div><strong>{applications.find(app => app.appId === id)?.name || id}</strong><span className="qyt-computer-caption">持续授权</span></div></div><button type="button" className="qyt-button" disabled={busy} aria-label={`撤销 ${applications.find(app => app.appId === id)?.name || id}`} onClick={() => { void action('allow', { appId: id, allowed: false }) }}>撤销</button></div>)}</div> : <p className="qyt-computer-empty">暂无持续授权。模型首次使用应用时会向你询问。</p>}
+      {addingApp && enabled && <ApplicationPicker applications={availableApplications} busy={busy} allowDisabled={permissionUncertain} onCancel={() => setAddingApp(false)} onAllow={ids => { void changePermissions(ids, true) }}/>}
+      {permissionResult && <div className={permissionResult.errors.length || permissionResult.refreshError ? 'qyt-computer-error' : 'qyt-computer-caption'} role={permissionResult.errors.length || permissionResult.refreshError ? 'alert' : 'status'}><p>{permissionResult.message}</p>{permissionResult.errors.length > 0 && <ul>{permissionResult.errors.map((error, index) => <li key={index}>{error}</li>)}</ul>}{permissionResult.refreshError && <p>批量操作后的授权状态刷新失败：{permissionResult.refreshError}。{permissionUncertain ? '请先刷新授权状态，再处理未确认项。' : '授权状态已重新读取，请按当前列表处理。'}</p>}</div>}
+      {permissionUncertain && <button type="button" className="qyt-button" disabled={busy} onClick={() => { void action('refresh') }}>刷新授权状态</button>}
+      <details className="qyt-computer-permissions"><summary>已授权应用（{status.allowedApps.length}）</summary>
+        {status.allowedApps.length ? <><div className="qyt-computer-section-heading qyt-computer-permission-toolbar"><span className="qyt-computer-caption">已选择 {selectedRevokeIds.length} 个应用</span><button type="button" className="qyt-button" disabled={busy || permissionUncertain || !selectedRevokeIds.length} onClick={() => { void changePermissions(selectedRevokeIds, false) }}>撤销所选</button></div>
+          <div className="qyt-computer-permission-list">{status.allowedApps.map(id => { const app = applications.find(app => app.appId === id), name = app?.name || id; return <div className="qyt-computer-permission-row" key={id}><div><label className="qyt-computer-application-selection"><input type="checkbox" aria-label={`选择撤销 ${name}`} checked={selectedRevokeIds.includes(id)} disabled={busy} onChange={event => { const checked = event.target.checked; setRevokeIds(previous => checked ? [...new Set([...previous, id])] : previous.filter(value => value !== id)) }}/><span className="qyt-computer-application-identity"><ApplicationIcon application={app}/><span><strong>{name}</strong><span className="qyt-computer-caption">持续授权</span></span></span></label></div><button type="button" className="qyt-button" disabled={busy || permissionUncertain} aria-label={`撤销 ${name}`} onClick={() => { void changePermissions([id], false) }}>撤销</button></div> })}</div></> : <p className="qyt-computer-empty">暂无持续授权。模型首次使用应用时会向你询问。</p>}
+      </details>
     </section>
     <section className="qyt-card" aria-label="电脑任务概览"><div className="qyt-computer-section-heading"><div><h4>任务概览</h4><p className="qyt-muted">同一聊天可同时保留多个任务，每个任务都有独立的预览、授权和暂停状态。</p></div><span className="qyt-computer-status-badge">{tasks.length} 个任务</span></div>
       {!tasks.length && <p className="qyt-computer-empty">还没有电脑任务。回到聊天，告诉模型你想完成什么。</p>}

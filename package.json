@@ -1,6 +1,6 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "为 DeepSeek Harness 提供 Git 分支、改动对比与 PR 管理，会话和计划批注、长文本附件、独立窗口、批量归档、提示词建议与 Q 主题，并支持 Mac/Windows 电脑操控和实时预览。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
@@ -65,6 +65,7 @@
     "test:computer:host": "node --test tests/computer-tools.test.mjs tests/computer-host.test.mjs tests/computer-host-dispose.test.mjs tests/computer-native.test.mjs",
     "test:computer:remote": "node --test tests/computer-remote.test.mjs tests/computer-remote-lifecycle.test.mjs",
     "test:computer:web": "node scripts/test-computer-preview.mjs",
+    "test:computer:permissions": "node scripts/test-computer-permissions.mjs",
     "test:computer:macos": "node scripts/e2e-macos-computer.mjs --evidence-dir artifacts/computer-use/macos-native",
     "test:computer:lease:macos": "node scripts/test-macos-computer-lease.mjs --action-crash",
     "test:computer:windows": "node scripts/test-windows-native-pd.mjs",
@@ -88,9 +89,9 @@
     "test:updates:browser": "node scripts/test-update-progress.mjs"
   },
   "optionalDependencies": {
-    "dsh-qiuya-tools-native-darwin-universal": "0.6.8",
-    "dsh-qiuya-tools-native-win32-arm64": "0.6.8",
-    "dsh-qiuya-tools-native-win32-x64": "0.6.8"
+    "dsh-qiuya-tools-native-darwin-universal": "0.6.9",
+    "dsh-qiuya-tools-native-win32-arm64": "0.6.9",
+    "dsh-qiuya-tools-native-win32-x64": "0.6.9"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"
