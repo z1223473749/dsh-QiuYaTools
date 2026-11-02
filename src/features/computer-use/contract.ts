@@ -12,10 +12,11 @@ export interface ComputerObservation {
   aiCursor?: { x: number; y: number; visible: boolean; actor: 'ai'; epoch?: number; phase?: string }
 }
 export interface ComputerAction {
-  kind: 'click' | 'move' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType' | 'goBack' | 'goForward' | 'reload'
+  kind: 'click' | 'move' | 'moveRelative' | 'drag' | 'scroll' | 'type' | 'key' | 'navigate' | 'openTab' | 'closeTab' | 'selectorClick' | 'selectorType' | 'goBack' | 'goForward' | 'reload'
   x?: number; y?: number; toX?: number; toY?: number; text?: string; key?: string
   deltaX?: number; deltaY?: number; button?: 'left' | 'right' | 'middle'
   url?: string; selector?: string
+  holdMs?: number; inputMode?: 'standard' | 'compatibility'
 }
 export interface ComputerActionRequest { actionId: string; frameId: string; action: ComputerAction }
 export interface ComputerActionResult { actionId: string; targetId: string; epoch: number; result: unknown }
@@ -99,10 +100,13 @@ export function validGeometry(value: ComputerGeometry): boolean {
 export function parseComputerAction(value: unknown): ComputerAction {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ComputerError('INVALID_ACTION', '操作必须是对象')
   const input = value as Record<string, unknown>
-  const fields = new Set(['kind', 'x', 'y', 'toX', 'toY', 'text', 'key', 'deltaX', 'deltaY', 'button', 'url', 'selector'])
+  const fields = new Set(['kind', 'x', 'y', 'toX', 'toY', 'text', 'key', 'deltaX', 'deltaY', 'button', 'url', 'selector', 'holdMs', 'inputMode'])
   if (Object.keys(input).some(key => !fields.has(key))) throw new ComputerError('INVALID_ACTION', '操作包含不支持的参数')
-  if (typeof input.kind !== 'string' || !['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
+  if (typeof input.kind !== 'string' || !['click', 'move', 'moveRelative', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(String(input.kind))) throw new ComputerError('INVALID_ACTION', '不支持的操作')
   for (const field of ['x', 'y', 'toX', 'toY', 'deltaX', 'deltaY']) if (input[field] !== undefined && (typeof input[field] !== 'number' || !Number.isFinite(input[field]) || Math.abs(input[field] as number) > 1_000_000)) throw new ComputerError('INVALID_ACTION', `${field} 无效`)
+  if (input.holdMs !== undefined && (!['key', 'click'].includes(String(input.kind)) || !Number.isInteger(input.holdMs) || (input.holdMs as number) < 1 || (input.holdMs as number) > 2000)) throw new ComputerError('INVALID_ACTION', '按住时长必须为 1 到 2000 毫秒，仅适用于按键或点击')
+  if (input.inputMode !== undefined && (!['key', 'type'].includes(String(input.kind)) || !['standard', 'compatibility'].includes(String(input.inputMode)))) throw new ComputerError('INVALID_ACTION', '输入模式仅适用于按键或文本')
+  if (input.kind === 'moveRelative' && (input.x !== undefined || input.y !== undefined || input.toX !== undefined || input.toY !== undefined || !['deltaX', 'deltaY'].some(key => typeof input[key] === 'number' && input[key] !== 0) || ['deltaX', 'deltaY'].some(key => !Number.isInteger(input[key] ?? 0) || Math.abs(Number(input[key] ?? 0)) > 4096))) throw new ComputerError('INVALID_ACTION', '相对移动需要不超过 4096 的非零位移，不接受绝对坐标')
   if (input.button !== undefined && (typeof input.button !== 'string' || !['left', 'right', 'middle'].includes(input.button))) throw new ComputerError('INVALID_ACTION', '鼠标按键无效')
   if (['click', 'move', 'drag', 'scroll'].includes(String(input.kind)) && (input.x === undefined || input.y === undefined)) throw new ComputerError('INVALID_ACTION', '操作需要 x 和 y')
   if (input.kind === 'drag' && (input.toX === undefined || input.toY === undefined)) throw new ComputerError('INVALID_ACTION', '拖动需要终点')

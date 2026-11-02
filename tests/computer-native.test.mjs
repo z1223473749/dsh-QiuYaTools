@@ -355,3 +355,10 @@ test('administrator access is an explicit owner request and its receipt never fa
     await assert.rejects(fixture.driver.openSystemSettings('administrator'), { code: 'SYSTEM_SETTINGS_UNAVAILABLE' })
   } finally { await fixture.driver.dispose() }
 })
+
+test('an older companion rejects compatibility requests before issuing an unsupported input', async () => {
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [script] })
+  try {
+    for (const action of [{kind:'key',key:'Left',holdMs:200},{kind:'key',key:'Left',inputMode:'compatibility'},{kind:'moveRelative',deltaX:4}]) await assert.rejects(driver.act(10,'target',action),{code:'INPUT_MODE_UNSUPPORTED'})
+  } finally { await driver.dispose() }
+})

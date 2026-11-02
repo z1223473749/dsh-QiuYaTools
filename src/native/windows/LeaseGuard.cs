@@ -10,7 +10,7 @@ namespace QiuYaTools.Windows;
 /// The write-ahead journal survives process death; acquiring its lock always recovers it first.
 internal sealed class DesktopLeaseGuard : IDisposable
 {
-    private sealed record Journal(int Version, string OwnerId, ushort[] Keys, uint[] MouseButtons, ushort[] UnicodeUnits);
+    private sealed record Journal(int Version, string OwnerId, ushort[] Keys, uint[] MouseButtons, ushort[] UnicodeUnits, ushort[]? ScanCodes = null);
     private readonly string directory;
     private readonly string lockPath;
     private readonly string journalPath;
@@ -50,10 +50,10 @@ internal sealed class DesktopLeaseGuard : IDisposable
         catch (IOException) { throw new NativeFailure("desktop-busy", "Another QiuYaTools companion owns this desktop; pause it before taking control"); }
     }
 
-    internal void Record(IEnumerable<ushort> keys, IEnumerable<uint> mouseButtons, IEnumerable<ushort> unicodeUnits)
+    internal void Record(IEnumerable<ushort> keys, IEnumerable<uint> mouseButtons, IEnumerable<ushort> unicodeUnits, IEnumerable<ushort>? scanCodes = null)
     {
         if (lease == null || OwnerId == null) throw new NativeFailure("desktop-lease-required", "No desktop input lease is held");
-        var record = new Journal(1, OwnerId, keys.Distinct().Order().ToArray(), mouseButtons.Distinct().Order().ToArray(), unicodeUnits.Distinct().Order().ToArray());
+        var record = new Journal(scanCodes?.Any() == true ? 2 : 1, OwnerId, keys.Distinct().Order().ToArray(), mouseButtons.Distinct().Order().ToArray(), unicodeUnits.Distinct().Order().ToArray(), scanCodes?.Distinct().Order().ToArray());
         var json = JsonSerializer.Serialize(record);
         if (json == lastRecord) return;
         WriteJournal(json);
@@ -88,14 +88,17 @@ internal sealed class DesktopLeaseGuard : IDisposable
         Journal? journal;
         try {
             journal = ReadJournal();
-            if (journal is not { Version: 1 } || !Guid.TryParseExact(journal.OwnerId, "N", out _) || journal.Keys == null || journal.Keys.Length > 32 || journal.Keys.Any(key => key > 255)
+            if (journal is not { Version: 1 or 2 } || !Guid.TryParseExact(journal.OwnerId, "N", out _) || journal.Keys == null || journal.Keys.Length > 32 || journal.Keys.Any(key => key > 255)
                 || journal.MouseButtons == null || journal.MouseButtons.Length > 3 || journal.MouseButtons.Any(button => button is not (0x0004 or 0x0010 or 0x0040))
+                || journal.Version == 2 && journal.ScanCodes == null
+                || journal.ScanCodes is { } scans && (scans.Length > 32 || scans.Any(scan => (scan & 255) == 0 || scan > 511))
                 || journal.UnicodeUnits == null || journal.UnicodeUnits.Length > 65_536) throw new JsonException();
         } catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException) {
             throw new NativeFailure("input-journal-invalid", "The previous owner's input journal cannot be read safely; control remains blocked");
         }
         if (expectedOwner != null && !string.Equals(journal.OwnerId, expectedOwner, StringComparison.Ordinal)) return;
         var inputs = journal.Keys.Select(key => Native.Keyboard(key, 0, 0x0002))
+            .Concat((journal.ScanCodes ?? []).Select(scan => Native.ScanKeyboard(scan, true)))
             .Concat(journal.UnicodeUnits.Select(unit => Native.Keyboard(0, unit, 0x0004 | 0x0002)))
             .Concat(journal.MouseButtons.Select(button => Native.Mouse(button))).ToArray();
         foreach (var input in inputs) {

@@ -95,11 +95,12 @@ enum CompletedKeyboardInputPolicy {
     private var heldKeys = Set<CGKeyCode>()
     private struct OwnedKeyRelease {
         let id: UUID, code: CGKeyCode, epoch: Int, ownerId: String
-        let pid: pid_t, identity: NativeFocusIdentity, event: CGEvent
+        let pid: pid_t, identity: NativeFocusIdentity, event: CGEvent, session: Bool
     }
     private var ownedKeyReleases: [CGKeyCode: OwnedKeyRelease] = [:]
     private var lastPoint = CGPoint.zero
     private var lastPid: pid_t?
+    private var sessionKeyboard = false
     private var actionFocus: NativeFocusIdentity?
     private var actionInputFence: ActionInputGenerationFence?
     private var keyboardReadinessBudget: KeyboardReadinessRetryBudget?
@@ -164,6 +165,21 @@ enum CompletedKeyboardInputPolicy {
             throw ComputerError("INPUT_CLEANUP_FAILED", "The owned key release responsibility cannot be confirmed.")
         }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("INPUT_CLEANUP_FAILED", "Input permission was revoked before owned input could be released.") }
+        if owned.session {
+            guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+                  session[kCGSessionOnConsoleKey as String] as? Bool == true,
+                  (session[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == getuid(),
+                  session["CGSSessionScreenIsLocked"] as? Bool != true else {
+                throw ComputerError("INPUT_CLEANUP_FAILED", "The original keyboard session is unavailable.")
+            }
+            owned.event.post(tap: .cghidEventTap)
+            for _ in 0..<20 { if !CGEventSource.keyState(.combinedSessionState, key: code) { break }; usleep(10_000) }
+            guard !CGEventSource.keyState(.combinedSessionState, key: code) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The owned session key release is not confirmed.") }
+            ownedKeyReleases.removeValue(forKey: code); heldKeys.remove(code)
+            let postedCount = focusAttempt?["ownedKeyUpPosts"] as? Int ?? 0
+            focusAttempt?["ownedKeyUpPosts"] = postedCount + 1
+            return
+        }
         let recipient = owned.identity.ownedKeyRecipient(to: owned.pid)
         let sessionVerified: Bool, keyHeld: Bool
         if recipient == .retired {
@@ -213,9 +229,9 @@ enum CompletedKeyboardInputPolicy {
                 try self.keyboardCheckpoint(epoch, generation: generation, ownerId: ownerId, keys: [code])
             }
         }, postDown: {
-            self.ownedKeyReleases[code] = OwnedKeyRelease(id: id, code: code, epoch: epoch, ownerId: ownerId, pid: target.pid, identity: identity, event: up)
+            self.ownedKeyReleases[code] = OwnedKeyRelease(id: id, code: code, epoch: epoch, ownerId: ownerId, pid: target.pid, identity: identity, event: up, session: self.sessionKeyboard)
             self.heldKeys.insert(code)
-            down.postToPid(target.pid); self.focusAttempt?["inputPosted"] = true
+            if self.sessionKeyboard { down.post(tap: .cghidEventTap) } else { down.postToPid(target.pid) }; self.focusAttempt?["inputPosted"] = true
             self.operationBadge.posted(epoch: epoch, target: target)
         }, hold: {
             if holdNanoseconds > 0 { try await Task.sleep(nanoseconds: holdNanoseconds) }
@@ -281,7 +297,13 @@ enum CompletedKeyboardInputPolicy {
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for the application shown in the computer-use permission settings.") }
         guard !busy else { throw ComputerError("INPUT_BUSY", "Another input action is still settling.") }
         guard target.frame == geometry.frame else { throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.") }
-        guard let kind = action["kind"] as? String, ["click", "move", "drag", "scroll", "type", "key"].contains(kind) else { throw ComputerError("INVALID_ACTION", "Unsupported action kind.") }
+        guard let kind = action["kind"] as? String, ["click", "move", "moveRelative", "drag", "scroll", "type", "key"].contains(kind) else { throw ComputerError("INVALID_ACTION", "Unsupported action kind.") }
+        let holdMs = finiteNumber(action["holdMs"]) ?? 50
+        guard holdMs >= 1, holdMs <= 2000, holdMs.rounded() == holdMs,
+              action["holdMs"] == nil || ["key", "click"].contains(kind) else { throw ComputerError("INVALID_ACTION", "Invalid input hold duration.") }
+        let inputMode = action["inputMode"] as? String ?? "standard"
+        guard ["standard", "compatibility"].contains(inputMode) else { throw ComputerError("INVALID_ACTION", "Invalid input mode.") }
+        sessionKeyboard = inputMode == "compatibility"
         // Validate the whole action before changing application focus or posting any input.
         var start: CGPoint?; var destination: CGPoint?
         if ["click", "move", "drag", "scroll"].contains(kind) {
@@ -291,6 +313,13 @@ enum CompletedKeyboardInputPolicy {
         if kind == "drag" {
             guard let x = finiteNumber(action["toX"]), let y = finiteNumber(action["toY"]) else { throw ComputerError("INVALID_COORDINATES", "Drag requires screenshot toX and toY.") }
             destination = try geometry.point(x: x, y: y)
+        }
+        if kind == "moveRelative" {
+            guard let current = CGEvent(source: nil)?.location else { throw ComputerError("INVALID_COORDINATES", "Pointer position is unavailable.") }
+            let dx = finiteNumber(action["deltaX"]) ?? 0, dy = finiteNumber(action["deltaY"]) ?? 0
+            let end = CGPoint(x: current.x + dx * geometry.frame.width / Double(geometry.pixelWidth), y: current.y + dy * geometry.frame.height / Double(geometry.pixelHeight))
+            guard abs(dx) <= 4096, abs(dy) <= 4096, dx != 0 || dy != 0, geometry.frame.contains(current), geometry.frame.contains(end) else { throw ComputerError("INVALID_COORDINATES", "Relative movement must stay inside the observed window.") }
+            start = current; destination = end
         }
         let buttonName = action["button"] as? String ?? "left"
         guard ["left", "right", "middle"].contains(buttonName) else { throw ComputerError("INVALID_ACTION", "Unsupported mouse button.") }
@@ -333,16 +362,22 @@ enum CompletedKeyboardInputPolicy {
         lastPid = target.pid
         // Record the entire action's possible downs before the first injected down.
         // Keeping this superset until completion avoids an fsync for every typed character.
-        try desktopLease?.record(keys: keys, mouse: ["click", "drag"].contains(kind) ? button : nil, targetPid: target.pid)
+        try desktopLease?.record(keys: keys, mouse: ["click", "drag"].contains(kind) ? button : nil, targetPid: target.pid, sessionKeyboard: sessionKeyboard)
         switch kind {
         case "click":
             try mouse(.mouseMoved, start!, .left, epoch, target, geometry)
             try mouse(button == .left ? .leftMouseDown : button == .right ? .rightMouseDown : .otherMouseDown, start!, button, epoch, target, geometry)
             heldMouse = button
-            try await Task.sleep(nanoseconds: 35_000_000)
+            try await Task.sleep(nanoseconds: UInt64(holdMs) * 1_000_000)
             try mouse(button == .left ? .leftMouseUp : button == .right ? .rightMouseUp : .otherMouseUp, start!, button, epoch, target, geometry)
             heldMouse = nil
         case "move": try mouse(.mouseMoved, start!, .left, epoch, target, geometry)
+        case "moveRelative":
+            guard let current = CGEvent(source: nil)?.location, hypot(current.x - start!.x, current.y - start!.y) < 1 else { throw ComputerError("POINTER_CHANGED", "Pointer moved before relative input.") }
+            try check(epoch, target, geometry, route: .pointer(start!))
+            guard let event = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: destination!, mouseButton: .left) else { throw ComputerError("EVENT_FAILED", "Could not create relative input.") }
+            event.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx)); event.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy))
+            postPointer(event); focusAttempt?["inputPosted"] = true
         case "drag":
             try mouse(.mouseMoved, start!, .left, epoch, target, geometry)
             try mouse(button == .left ? .leftMouseDown : button == .right ? .rightMouseDown : .otherMouseDown, start!, button, epoch, target, geometry)
@@ -381,7 +416,7 @@ enum CompletedKeyboardInputPolicy {
             guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: eventSource, virtualKey: combination.0, keyDown: false) else { throw ComputerError("EVENT_FAILED", "Could not create a key event.") }
             down.flags = combination.1; up.flags = []
-            try await keyboardPair(down: down, up: up, code: combination.0, holdNanoseconds: 25_000_000, epoch: epoch, target: target, geometry: geometry, ownerId: actionOwnerId)
+            try await keyboardPair(down: down, up: up, code: combination.0, holdNanoseconds: UInt64(holdMs) * 1_000_000, epoch: epoch, target: target, geometry: geometry, ownerId: actionOwnerId)
         default: break
         }
         try await Task.sleep(nanoseconds: 50_000_000)

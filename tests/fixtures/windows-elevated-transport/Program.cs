@@ -4,6 +4,13 @@ using System.Text;
 using System.Text.Json;
 using QiuYaTools.Windows;
 
+foreach (var code in new ushort[] { 0x1D, 0x2A, 0x148, 0x15B }) {
+ var down = KeyboardEncoding.Encode(code, false); var up = KeyboardEncoding.Encode(code, true);
+ if (down.Scan != up.Scan || down.Scan != (code & 255) || up.Flags != (down.Flags | 2u) || (down.Flags & 1u) != ((code & 256) != 0 ? 1u : 0u)) throw new Exception("Scan prefix or release encoding was lost");
+}
+foreach (var code in new ushort[] {0, 256, 512, 65535}) {
+ try { KeyboardEncoding.Encode(code, false); throw new Exception("Invalid scan code accepted"); } catch (NativeFailure) { }
+}
 var name = "ctl-" + Guid.NewGuid().ToString("N")[..8];
 using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);

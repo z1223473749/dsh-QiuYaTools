@@ -1,3 +1,4 @@
+import { setTimeout as holdInput } from 'node:timers/promises'
 import type { DiagnosticEvent } from '../browser-diagnostics/contract.ts'
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
@@ -482,6 +483,7 @@ export class BrowserSession {
     return observation
   }
   async act(tabId: string, input: ComputerAction | BrowserSelectorAction, signal?: AbortSignal, beforeInput?: () => void): Promise<unknown> {
+    if (input.kind === 'moveRelative' || 'inputMode' in input && input.inputMode === 'compatibility') throw new ComputerError('INPUT_MODE_UNSUPPORTED', '此输入方式需要原生桌面执行器')
     if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(input.kind)) throw new ComputerError('BROWSER_DRIVER_REQUIRED', '此操作须通过电脑会话控制层执行')
     await this.permission(tabId, signal)
     const session = await this.tabSession(tabId, signal)
@@ -535,6 +537,7 @@ export class BrowserSession {
           owned = ++this.inputSequence
           this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', button, clickCount: 1, x: action.toX ?? x, y: action.toY ?? y } })
         })
+        if (action.holdMs) await holdInput(action.holdMs, undefined, { signal })
         if (action.kind === 'drag') for (let step = 1; step <= 10; step++) await perform('Input.dispatchMouseEvent', { type: 'mouseMoved', button, buttons: button === 'left' ? 1 : button === 'right' ? 2 : 4, x: x + (action.toX! - x) * step / 10, y: y + (action.toY! - y) * step / 10 })
       } finally { if (owned !== undefined) await this.releaseInput(owned) }
     } else if (action.kind === 'key') {
@@ -552,7 +555,7 @@ export class BrowserSession {
       try { await perform('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers, ...(text ? { text, unmodifiedText: text } : {}) }, () => {
         owned = ++this.inputSequence
         this.ownedInput.set(owned, { sessionId: session, tabId, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key: actual === 'Space' ? ' ' : actual, windowsVirtualKeyCode: code, modifiers } })
-      }) }
+      }); if (action.holdMs) await holdInput(action.holdMs, undefined, { signal }) }
       finally { if (owned !== undefined) await this.releaseInput(owned) }
     }
     this.observations.delete(tabId); this.previewObservations.delete(tabId)

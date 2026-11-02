@@ -19,6 +19,7 @@ internal sealed class ComputerDriver : IDisposable
     private readonly SemaphoreSlim actionGate = new(1, 1);
     private readonly ConcurrentDictionary<string, Rectangle> observations = new();
     private readonly HashSet<ushort> heldKeys = new();
+    private readonly HashSet<ushort> heldScans = new();
     private readonly HashSet<ushort> heldUnicode = new();
     private readonly Func<Native.INPUT[], uint> writeInputs;
     private readonly DesktopLeaseGuard? desktopLease;
@@ -87,7 +88,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
     internal void RequireIdleForPermissionChange()
     {
         lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
@@ -111,7 +112,7 @@ internal sealed class ComputerDriver : IDisposable
         if (reason != null) Program.Emit(new { @event = "foregroundContextInvalidated", identity = foregroundHandoff.Core.Identity, physicalSequence = ForegroundHandoffCore.Decimal(physicalInput.Sequence), reason });
     }
     private bool ForegroundClean() => epoch == 0 && !disposed && !inputCleanupFailed && Volatile.Read(ref physicalCleanupPending) == 0
-        && Volatile.Read(ref leaseAcquiring) == 0 && actionGate.CurrentCount == 1 && heldKeys.Count == 0 && heldMouse.Count == 0 && heldUnicode.Count == 0 && journalUnicodeSuperset.Count == 0;
+        && Volatile.Read(ref leaseAcquiring) == 0 && actionGate.CurrentCount == 1 && heldKeys.Count == 0 && heldScans.Count == 0 && heldMouse.Count == 0 && heldUnicode.Count == 0 && journalUnicodeSuperset.Count == 0;
     private static long PrivateSafeInteger(JsonElement request, string name, bool allowZero = false)
     {
         if (!request.TryGetProperty(name, out var value) || !value.TryGetInt64(out var result) || result < (allowZero ? 0 : 1) || result > 9_007_199_254_740_991)
@@ -377,12 +378,23 @@ internal sealed class ComputerDriver : IDisposable
         var targetId = Program.Text(request, "targetId", 256);
         if (!request.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.Object) throw new NativeFailure("invalid-request", "Missing action");
         var kind = Program.Text(action, "kind", 32);
+        var holdMs = Program.Number(action, "holdMs", 50);
+        if (holdMs < 1 || holdMs > 2000 || holdMs != Math.Truncate(holdMs) || (action.TryGetProperty("holdMs", out _) && kind is not ("key" or "click"))) throw new NativeFailure("invalid-action", "Invalid input hold duration");
+        var mode = action.TryGetProperty("inputMode", out _) ? Program.Text(action, "inputMode", 32) : "compatibility";
+        if (mode is not ("standard" or "compatibility")) throw new NativeFailure("invalid-action", "Invalid input mode");
         var target = Target(targetId);
         Native.GetWindowThreadProcessId(target.Handle, out var targetPid); ProcessPermissions.RequireTarget(targetPid);
         lock (inputLock) { Check(requested); }
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
         if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
         var trajectory = new List<Point>();
+        if (kind == "moveRelative") {
+            var dx = Program.Number(action, "deltaX"); var dy = Program.Number(action, "deltaY");
+            if (Math.Abs(dx) > 4096 || Math.Abs(dy) > 4096 || (dx == 0 && dy == 0)) throw new NativeFailure("invalid-action", "Invalid relative movement");
+            var current = Cursor.Position; var end = new Point(current.X + (int)dx, current.Y + (int)dy);
+            if (!target.Rect.Contains(current) || !target.Rect.Contains(end)) throw new NativeFailure("invalid-coordinate", "Relative movement must stay inside the observed window");
+            trajectory.Add(current); trajectory.Add(end);
+        }
         if (kind is "move" or "click" or "scroll") trajectory.Add(PointOf(target.Rect, action, "x", "y"));
         else if (kind == "drag") {
             var from = PointOf(target.Rect, action, "x", "y"); var to = PointOf(target.Rect, action, "toX", "toY");
@@ -405,11 +417,16 @@ internal sealed class ComputerDriver : IDisposable
         Program.Emit(new { @event = "action", phase = "started", targetId, epoch = requested, action });
         switch (kind) {
             case "move": Move(requested, target.Rect, action, "x", "y"); break;
+            case "moveRelative": {
+                if (Cursor.Position != trajectory[0]) throw new NativeFailure("pointer-changed", "Pointer moved before relative input");
+                Send(requested, Native.Mouse(0x0001, 0, (int)Program.Number(action, "deltaX"), (int)Program.Number(action, "deltaY"))); break;
+            }
             case "click": {
                 Move(requested, target.Rect, action, "x", "y");
                 var button = Button(action);
                 try {
                     lock (inputLock) { Check(requested); heldMouse.Add(button.Up); EmitHeld(); Send(requested, Native.Mouse(button.Down)); }
+                    await Task.Delay((int)holdMs);
                 } finally { lock (inputLock) { var released = ReleaseMouse(button.Up); EmitHeld(); if (!released) CleanupFailure(); } }
                 break;
             }
@@ -453,7 +470,7 @@ internal sealed class ComputerDriver : IDisposable
                 }
                 break;
             }
-            case "key": await Key(requested, Program.Text(action, "key", 128)); break;
+            case "key": await Key(requested, Program.Text(action, "key", 128), mode == "compatibility", (int)holdMs); break;
             default: throw new NativeFailure("invalid-action", "Unknown input action");
         }
         lock (inputLock) { Check(requested); RefreshForeground(true); foregroundHandoff?.Core.ActionSucceeded(requested, targetId); }
@@ -484,7 +501,7 @@ internal sealed class ComputerDriver : IDisposable
             if (inputTargetId != null) aiCursor.Move(requested, inputTargetId, inputTarget, inputTargetBounds, point);
         }
     }
-    private async Task Key(long requested, string raw)
+    private async Task Key(long requested, string raw, bool scanMode, int holdMs)
     {
         var names = raw.Replace("Control", "CTRL", StringComparison.OrdinalIgnoreCase).Replace("Arrow", "", StringComparison.OrdinalIgnoreCase).Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         if (names.Length == 0 || names.Length > 5) throw new NativeFailure("invalid-key", "Invalid key combination");
@@ -498,19 +515,30 @@ internal sealed class ComputerDriver : IDisposable
             _ when name.StartsWith('F') && int.TryParse(name.AsSpan(1), out var function) && function is >= 1 and <= 24 => (ushort)(0x6F + function),
             _ => throw new NativeFailure("invalid-key", "Unsupported key name")
         }).Distinct().ToArray();
+        var scans = scanMode ? keys.Select(key => Native.ScanCode(key, inputTarget)).ToArray() : [];
         try {
-            foreach (var key in keys) { lock (inputLock) { Check(requested); heldKeys.Add(key); EmitHeld(); Send(requested, Native.Keyboard(key, 0, 0)); } }
-            await Task.Delay(12);
+            for (var i = 0; i < keys.Length; i++) { lock (inputLock) {
+                Check(requested);
+                if (scanMode) { heldScans.Add(scans[i]); EmitHeld(); Send(requested, Native.ScanKeyboard(scans[i], false)); }
+                else { heldKeys.Add(keys[i]); EmitHeld(); Send(requested, Native.Keyboard(keys[i], 0, 0)); }
+            } }
+            await Task.Delay(holdMs);
         } finally {
-            lock (inputLock) { var released = true; foreach (var key in keys.Reverse()) if (!ReleaseKey(key)) released = false; EmitHeld(); if (!released) CleanupFailure(); }
+            lock (inputLock) { var released = true; foreach (var key in (scanMode ? scans : keys).Reverse()) if (!(scanMode ? ReleaseScan(key) : ReleaseKey(key))) released = false; EmitHeld(); if (!released) CleanupFailure(); }
         }
     }
     private void EmitHeld()
     {
-        var snapshot = new { @event = "inputHeld", ownerId = desktopLease?.OwnerId, keys = heldKeys.Order().ToArray(), unicodeUnits = heldUnicode.Order().ToArray(), mouseButtons = heldMouse.Select(flag => flag switch { 0x0004 => "left", 0x0010 => "right", _ => "middle" }).Order().ToArray() };
-        try { if (desktopLease?.OwnerId != null) desktopLease.Record(heldKeys, heldMouse, heldUnicode.Concat(journalUnicodeSuperset)); }
+        var snapshot = new { @event = "inputHeld", ownerId = desktopLease?.OwnerId, keys = heldKeys.Order().ToArray(), scanCodes = heldScans.Order().ToArray(), unicodeUnits = heldUnicode.Order().ToArray(), mouseButtons = heldMouse.Select(flag => flag switch { 0x0004 => "left", 0x0010 => "right", _ => "middle" }).Order().ToArray() };
+        try { if (desktopLease?.OwnerId != null) desktopLease.Record(heldKeys, heldMouse, heldUnicode.Concat(journalUnicodeSuperset), heldScans); }
         catch (NativeFailure) { aiCursor.Revoke(epoch); epoch = 0; inputCleanupFailed = true; Program.Emit(snapshot); throw; }
         Program.Emit(snapshot);
+    }
+    private bool ReleaseScan(ushort scan)
+    {
+        if (!heldScans.Contains(scan)) return true;
+        if (writeInputs([Native.ScanKeyboard(scan, true)]) != 1) return false;
+        heldScans.Remove(scan); return true;
     }
     private bool ReleaseKey(ushort key)
     {
@@ -539,6 +567,7 @@ internal sealed class ComputerDriver : IDisposable
     {
         var released = true;
         foreach (var key in heldKeys.ToArray()) if (!ReleaseKey(key)) released = false;
+        foreach (var scan in heldScans.ToArray()) if (!ReleaseScan(scan)) released = false;
         foreach (var button in heldMouse.ToArray()) if (!ReleaseMouse(button)) released = false;
         foreach (var unit in heldUnicode.ToArray()) if (!ReleaseUnicode(unit)) released = false;
         EmitHeld();
@@ -550,14 +579,15 @@ internal sealed class ComputerDriver : IDisposable
         var sent = new List<Native.INPUT>();
         using var driver = new ComputerDriver(inputs => { sent.AddRange(inputs); return accepted ? (uint)inputs.Length : 0; });
         driver.epoch = 9;
-        driver.heldKeys.Add(0x11); driver.heldMouse.Add(0x0004); driver.heldUnicode.Add(0x4E2D);
+        driver.heldKeys.Add(0x11); driver.heldScans.Add(0x148); driver.heldMouse.Add(0x0004); driver.heldUnicode.Add(0x4E2D);
         try { driver.ClearHeld(); throw new InvalidOperationException("Rejected releases must fail"); }
         catch (NativeFailure failure) when (failure.Code == "input-cleanup-failed") { }
-        if (!driver.inputCleanupFailed || driver.epoch != 0 || driver.heldKeys.Count != 1 || driver.heldMouse.Count != 1 || driver.heldUnicode.Count != 1) throw new InvalidOperationException("Rejected release state was lost");
+        if (!driver.inputCleanupFailed || driver.epoch != 0 || driver.heldKeys.Count != 1 || driver.heldScans.Count != 1 || driver.heldMouse.Count != 1 || driver.heldUnicode.Count != 1) throw new InvalidOperationException("Rejected release state was lost");
         accepted = true;
         driver.ClearHeld();
-        if (driver.heldKeys.Count != 0 || driver.heldMouse.Count != 0 || driver.heldUnicode.Count != 0) throw new InvalidOperationException("Accepted releases were not removed");
+        if (driver.heldKeys.Count != 0 || driver.heldScans.Count != 0 || driver.heldMouse.Count != 0 || driver.heldUnicode.Count != 0) throw new InvalidOperationException("Accepted releases were not removed");
         if (!sent.Any(input => input.Type == 1 && input.Data.Keyboard.Scan == 0x4E2D && input.Data.Keyboard.Flags == 6)) throw new InvalidOperationException("Unicode release must preserve its scan unit");
+        if (!sent.Any(input => input.Type == 1 && input.Data.Keyboard.Scan == 0x48 && input.Data.Keyboard.Flags == 11)) throw new InvalidOperationException("Extended scan release must preserve its E0 prefix");
         try { driver.Check(9); throw new InvalidOperationException("Failed cleanup must fence the worker"); }
         catch (NativeFailure failure) when (failure.Code == "input-cleanup-failed") { }
         return new { passed = true, checks = 4, kind = "deterministic-rejected-release-state-machine", actualOsInput = false };
@@ -601,5 +631,15 @@ internal static class Native
     [StructLayout(LayoutKind.Sequential)] internal struct MOUSEINPUT { internal int Dx, Dy; internal uint MouseData, Flags, Time; internal UIntPtr ExtraInfo; }
     [StructLayout(LayoutKind.Sequential)] internal struct KEYBDINPUT { internal ushort Vk, Scan; internal uint Flags, Time; internal UIntPtr ExtraInfo; }
     internal static INPUT Mouse(uint flags, uint data = 0, int x = 0, int y = 0) => new() { Type = 0, Data = new() { Mouse = new() { Dx = x, Dy = y, MouseData = data, Flags = flags } } };
+    internal static ushort ScanCode(ushort key, IntPtr target)
+    {
+        var thread = GetWindowThreadProcessId(target, out _);
+        var scan = MapVirtualKeyEx(key, 4, GetKeyboardLayout(thread));
+        if ((scan & 255) == 0 || (scan >> 8) is not (0 or 0xE0)) throw new NativeFailure("invalid-key", "This key has no supported scan code");
+        return (ushort)((scan & 255) | ((scan >> 8) == 0xE0 ? 0x100u : 0u));
+    }
+    internal static INPUT ScanKeyboard(ushort scan, bool up) { var packet = KeyboardEncoding.Encode(scan, up); return Keyboard(0, packet.Scan, packet.Flags); }
+    [DllImport("user32.dll")] private static extern uint MapVirtualKeyEx(uint code, uint map, IntPtr layout);
+    [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
     internal static INPUT Keyboard(ushort key, ushort scan, uint flags) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = key, Scan = scan, Flags = flags } } };
 }

@@ -22,14 +22,16 @@ interface NativeCapture {
   waiters: Set<CaptureWaiter>
   result: Promise<ComputerObservation>
 }
-interface NativeHeldInputs { keys: number[]; mouseButtons: string[]; unicodeUnits?: number[]; ownerId?: string }
+interface NativeHeldInputs { keys: number[]; mouseButtons: string[]; unicodeUnits?: number[]; scanCodes?: number[]; ownerId?: string }
 function ownedInputs(message: Record<string, unknown>): NativeHeldInputs | undefined {
   if (!Array.isArray(message.keys) || message.keys.length > 256 || !message.keys.every(key => Number.isSafeInteger(key) && key >= 0 && key <= 255)) return
   if (!Array.isArray(message.mouseButtons) || message.mouseButtons.length > 3 || !message.mouseButtons.every(button => ['left', 'right', 'middle'].includes(button))) return
   if (message.unicodeUnits !== undefined && (!Array.isArray(message.unicodeUnits) || message.unicodeUnits.length > 1024 || !message.unicodeUnits.every(unit => Number.isSafeInteger(unit) && unit >= 0 && unit <= 65535))) return
+  if (message.scanCodes !== undefined && (!Array.isArray(message.scanCodes) || message.scanCodes.length > 32 || !message.scanCodes.every(scan => Number.isInteger(scan) && scan > 0 && scan <= 511 && (scan & 255) !== 0))) return
   if (message.ownerId !== undefined && (typeof message.ownerId !== 'string' || !/^[a-f0-9]{32}$/iu.test(message.ownerId))) return
   return { keys: [...message.keys], mouseButtons: [...message.mouseButtons],
     ...(message.unicodeUnits === undefined ? {} : { unicodeUnits: [...message.unicodeUnits as number[]] }),
+    ...(message.scanCodes === undefined ? {} : { scanCodes: [...message.scanCodes as number[]] }),
     ...(message.ownerId === undefined ? {} : { ownerId: message.ownerId as string }) }
 }
 /** Bounded JSONL companion transport. Model requests and credentials never enter argv. */
@@ -105,7 +107,7 @@ export class NativeCompanionDriver implements DeviceDriver {
   }
   private async releaseHeldInputs(held: NativeHeldInputs): Promise<void> {
     const args = this.options.releaseInputArgs ?? (process.platform === 'win32' ? ['--release-input'] : undefined)
-    if (!args || !held.keys.length && !held.mouseButtons.length && !held.unicodeUnits?.length) return
+    if (!args || !held.keys.length && !held.mouseButtons.length && !held.unicodeUnits?.length && !held.scanCodes?.length) return
     await new Promise<void>((resolve, reject) => {
       const cleanup = spawn(this.executable ?? this.options.executable ?? resolveNativeExecutable('computer'), args, { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
       const timer = setTimeout(() => { cleanup.kill(); reject(new ComputerError('NATIVE_CLEANUP_FAILED', '故障后的按键清理超时，已阻止新的电脑输入。')) }, 2000)
@@ -378,7 +380,11 @@ export class NativeCompanionDriver implements DeviceDriver {
       throw error
     }
   }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }) { return this.checked('act', { epoch, targetId, action, ...(privateOptions ? { foregroundTicket: privateOptions.foregroundTicket } : {}) }, signal) }
+  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }) {
+    const status = await this.compatible()
+    if ((action.kind === 'moveRelative' || action.holdMs !== undefined || action.inputMode !== undefined) && !(Array.isArray(status.capabilities) ? status.capabilities.includes('input-compatibility') : status.capabilities?.inputCompatibility === true)) throw new ComputerError('INPUT_MODE_UNSUPPORTED', '请更新目标电脑的原生执行器后使用此输入方式')
+    return this.checked('act', { epoch, targetId, action, ...(privateOptions ? { foregroundTicket: privateOptions.foregroundTicket } : {}) }, signal)
+  }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { return this.checked('closePreview', options?.preserveSession ? { preserveSession: true } : {}, signal) }
   async dispose(): Promise<void> {

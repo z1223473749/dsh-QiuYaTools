@@ -214,9 +214,10 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       parameters: { type: 'object', additionalProperties: false, required: ['frameId', 'action'], properties: {
         taskId: taskParameter, actionId: { type: 'string', description: 'Unique action id; reuse only to retrieve the same action result.' }, frameId: { type: 'string', description: 'Fresh frameId from the latest observe, valid for one successful act only. After success, observe again before any next act; never repeat the completed action just to refresh its frame.' },
         action: { type: 'object', required: ['kind'], additionalProperties: false, properties: {
-          kind: { type: 'string', enum: ['click', 'move', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'] },
+          kind: { type: 'string', enum: ['click', 'move', 'moveRelative', 'drag', 'scroll', 'type', 'key', 'navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'] },
           x: { type: 'number' }, y: { type: 'number' }, toX: { type: 'number' }, toY: { type: 'number' }, text: { type: 'string' }, key: { type: 'string' }, deltaX: { type: 'number' }, deltaY: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle'] },
           url: { type: 'string' }, selector: { type: 'string' },
+          holdMs: { type: 'integer', minimum: 1, maximum: 2000, description: 'Native key or click hold duration; always released on pause or cancellation.' }, inputMode: { type: 'string', enum: ['standard', 'compatibility'], description: 'Native keyboard delivery. Choose before input; never resend an uncertain action using a different mode.' },
         } },
       } }, output,
       async execute(args, exec) {

@@ -106,7 +106,7 @@ import ScreenCaptureKit
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
                 "permissionOwner": permissionGuide.permissionOwner as Any? ?? NSNull(),
-                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator"],
+                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator", "input-compatibility"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
                 "aiCursor": input.aiCursorState, "aiOperation": input.aiOperationState,

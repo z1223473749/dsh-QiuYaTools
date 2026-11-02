@@ -13,6 +13,7 @@ final class DesktopLeaseGuard {
         let mouseButtons: [UInt32]
         let targetPid: Int32?
         let targetLaunchedAt: TimeInterval?
+        let sessionKeyboard: Bool?
     }
     private let directory: URL
     private var descriptor: Int32 = -1
@@ -51,10 +52,10 @@ final class DesktopLeaseGuard {
         } catch { unlock(); throw error }
     }
 
-    func record(keys: Set<CGKeyCode>, mouse: CGMouseButton?, targetPid: pid_t?) throws {
+    func record(keys: Set<CGKeyCode>, mouse: CGMouseButton?, targetPid: pid_t?, sessionKeyboard: Bool = false) throws {
         guard descriptor >= 0, let ownerId else { throw ComputerError("DESKTOP_LEASE_REQUIRED", "A desktop input lease is required.") }
-        let journal = Journal(version: 1, ownerId: ownerId, keys: keys.sorted(), mouseButtons: mouse.map { [$0.rawValue] } ?? [],
-            targetPid: targetPid, targetLaunchedAt: targetPid.flatMap { NSRunningApplication(processIdentifier: $0)?.launchDate?.timeIntervalSince1970 })
+        let journal = Journal(version: sessionKeyboard ? 2 : 1, ownerId: ownerId, keys: keys.sorted(), mouseButtons: mouse.map { [$0.rawValue] } ?? [],
+            targetPid: targetPid, targetLaunchedAt: targetPid.flatMap { NSRunningApplication(processIdentifier: $0)?.launchDate?.timeIntervalSince1970 }, sessionKeyboard: sessionKeyboard)
         let data = try JSONEncoder().encode(journal)
         guard lastRecord != data else { return }
         let temporary = directory.appendingPathComponent("journal-\(getpid())-\(UUID().uuidString).tmp").path
@@ -75,7 +76,7 @@ final class DesktopLeaseGuard {
         let path = directory.appendingPathComponent("owned-input.json")
         guard FileManager.default.fileExists(atPath: path.path) else { return }
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path), let size = attributes[.size] as? NSNumber, size.intValue <= 16_384,
-              let data = try? Data(contentsOf: path), let journal = try? JSONDecoder().decode(Journal.self, from: data), journal.version == 1,
+              let data = try? Data(contentsOf: path), let journal = try? JSONDecoder().decode(Journal.self, from: data), [1, 2].contains(journal.version), (journal.version == 1 || journal.sessionKeyboard == true),
               journal.ownerId.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil, journal.keys.count <= 32, journal.keys.allSatisfy({ $0 <= 255 }),
               journal.mouseButtons.count <= 3, journal.mouseButtons.allSatisfy({ $0 <= 2 }) else {
             throw ComputerError("INPUT_JOURNAL_INVALID", "The previous owner's input journal cannot be read safely. Control remains blocked.")
@@ -90,12 +91,25 @@ final class DesktopLeaseGuard {
                     mouseCursorPosition: point, mouseButton: button) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The previous owner's mouse release could not be created.") }
                 event.post(tap: .cghidEventTap)
             }
-            if let pid = journal.targetPid, let process = NSRunningApplication(processIdentifier: pid),
+            if journal.sessionKeyboard == true {
+                guard let session = CGSessionCopyCurrentDictionary() as? [String: Any], session[kCGSessionOnConsoleKey as String] as? Bool == true,
+                      (session[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == getuid(), session["CGSSessionScreenIsLocked"] as? Bool != true else {
+                    throw ComputerError("INPUT_CLEANUP_FAILED", "The previous keyboard session is unavailable.")
+                }
+                for key in journal.keys {
+                    guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { throw ComputerError("INPUT_CLEANUP_FAILED", "Could not release the previous session key.") }
+                    event.flags = []; event.post(tap: .cghidEventTap)
+                }
+            } else if let pid = journal.targetPid, let process = NSRunningApplication(processIdentifier: pid),
                process.launchDate?.timeIntervalSince1970 == journal.targetLaunchedAt {
                 for key in journal.keys {
                     guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { throw ComputerError("INPUT_CLEANUP_FAILED", "The previous owner's key release could not be created.") }
                     event.flags = []; event.postToPid(pid)
                 }
+            }
+            if journal.sessionKeyboard == true {
+                for _ in 0..<20 { if journal.keys.allSatisfy({ !CGEventSource.keyState(.combinedSessionState, key: $0) }) { break }; usleep(10_000) }
+                guard journal.keys.allSatisfy({ !CGEventSource.keyState(.combinedSessionState, key: $0) }) else { throw ComputerError("INPUT_CLEANUP_FAILED", "Previous session key releases are unconfirmed.") }
             }
             // CGEvent posting has no delivery acknowledgement. Verify the observable button
             // state before granting a new owner, and retain the journal if cleanup is uncertain.

@@ -16,7 +16,7 @@ internal static class EmergencyRelease
             if (line == null || line.Length > 16_384) throw new JsonException();
             using var document = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 4 });
             var request = document.RootElement;
-            if (request.ValueKind != JsonValueKind.Object || request.EnumerateObject().Any(property => property.Name is not ("keys" or "mouseButtons" or "unicodeUnits" or "ownerId"))) throw new JsonException();
+            if (request.ValueKind != JsonValueKind.Object || request.EnumerateObject().Any(property => property.Name is not ("keys" or "mouseButtons" or "unicodeUnits" or "scanCodes" or "ownerId"))) throw new JsonException();
             if (!request.TryGetProperty("keys", out var keys) || keys.ValueKind != JsonValueKind.Array || keys.GetArrayLength() > 32 || !request.TryGetProperty("mouseButtons", out var buttons) || buttons.ValueKind != JsonValueKind.Array || buttons.GetArrayLength() > 3) throw new JsonException();
             if (!request.TryGetProperty("ownerId", out var owner) || owner.ValueKind != JsonValueKind.String || owner.GetString() is not string ownerId) throw new JsonException();
             var enteredTicks = testReady ? Stopwatch.GetTimestamp() : 0;

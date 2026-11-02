@@ -111,3 +111,21 @@ test('a cancellation before key-down dispatch does not invent a held key or send
   assert.equal(state.downs, 0); assert.equal(state.releases, 0)
   await browser.close()
 })
+
+test('cancelling a long key hold releases exactly one owned key before pause returns', async () => {
+  const { browser, state } = cdpFixture(), driver = new BrowserDeviceDriver(browser)
+  state.failRelease = false
+  await driver.lease(1)
+  const acting = driver.act(1, 'tab', { kind: 'key', key: 'Left', holdMs: 2000 })
+  const rejected = assert.rejects(acting)
+  while (!state.keyHeld) await new Promise(resolve => setImmediate(resolve))
+  await driver.release(1); await rejected
+  assert.equal(state.keyHeld, false); assert.equal(state.downs, 1); assert.equal(state.releases, 1)
+  await driver.dispose()
+})
+
+test('native-only input modes are rejected before browser input is posted', async () => {
+  const { browser, state } = cdpFixture()
+  for (const action of [{kind:'moveRelative',deltaX:10},{kind:'key',key:'Left',inputMode:'compatibility'}]) await assert.rejects(browser.act('tab',action),{code:'INPUT_MODE_UNSUPPORTED'})
+  assert.equal(state.downs,0); await browser.close()
+})
