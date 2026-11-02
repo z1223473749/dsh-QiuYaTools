@@ -14,6 +14,48 @@ try {
   const page = await browser.newPage({ viewport: { width: 780, height: 1000 } })
   const errors = []; page.on('pageerror', error => errors.push(error.message))
   await page.goto(`http://127.0.0.1:${server.address().port}`)
+  // Use the public native markers to check both navigation surfaces against
+  // the actual installed stylesheet, including uploaded portrait artwork.
+  await page.evaluate(() => {
+    const host = document.createElement('div'); host.id = 'navigation-check'
+    host.style.cssText = 'position:fixed;left:-1000px;top:0;width:200px;height:800px;'
+    host.innerHTML = '<div data-slot="sidebar"><aside style="height:800px">Sidebar</aside></div><div data-shortcut-modal="settings"><nav style="height:640px">Settings</nav></div>'
+    document.body.append(host)
+  })
+  async function checkCurrentThemeEditor(label) {
+    await page.getByRole('button', { name: '＋ 新建主题', exact: true }).click()
+    const editor = page.getByRole('dialog', { name: '自定义主题', exact: true })
+    await editor.waitFor()
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark)
+      const actual = await editor.evaluate(element => {
+        const style = getComputedStyle(element), probe = document.createElement('span')
+        probe.style.color = getComputedStyle(document.body).getPropertyValue('--qyt-q-accent'); element.append(probe)
+        const accent = getComputedStyle(probe).color; probe.remove()
+        const navigation = [...document.querySelectorAll('#navigation-check aside,#navigation-check nav')].map(node => {
+          const s = getComputedStyle(node); return { size: s.backgroundSize, image: s.backgroundImage, position: s.backgroundPosition }
+        })
+        return { accent, range: getComputedStyle(element.querySelector('input[type=range]')).accentColor,
+          save: getComputedStyle(element.querySelector('.qyt-editor-save')).backgroundColor,
+          surface: style.backgroundColor, expectedSurface: getComputedStyle(document.body).getPropertyValue('--qyt-q-surface').trim(), navigation }
+      })
+      assert.equal(actual.range, actual.accent, label+' range follows active theme')
+      assert.equal(actual.save, actual.accent, label+' save follows active theme')
+      for (const nav of actual.navigation) {
+        assert.equal(nav.size, '100% 100%, cover', label+' navigation fills its height')
+        assert.ok(nav.image.includes('data:image/'), label+' uses its own artwork')
+      }
+      assert.deepEqual(actual.navigation[0], actual.navigation[1], label+' app and settings navigation share presentation')
+      if (label === 'moonfrost') await page.screenshot({ path: `artifacts/custom-themes/editor-active-${dark?'dark':'light'}.png` })
+    }
+    await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+    await editor.getByRole('button', { name: '取消', exact: true }).click()
+  }
+  for (const [id, name] of [['moonfrost','月阙清霜'],['begonia','大鱼海棠 · 椿'],['sunset','落日山野'],['ocean','鲸与海']]) {
+    await page.getByRole('radio', { name, exact: true }).click()
+    await page.waitForFunction(id => document.body.dataset.qytQTheme === id, id)
+    await checkCurrentThemeEditor(id)
+  }
   const initial = await page.evaluate(() => ({ theme: document.body.dataset.qytQTheme, mutations: window.__oceanSettingsFixture.mutations.length }))
   await page.getByRole('button', { name: '＋ 新建主题', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '自定义主题', exact: true })
@@ -45,6 +87,7 @@ try {
   assert.ok(saved.qCustomThemes[0].image.startsWith('data:image/webp;base64,'))
   assert.ok(saved.qCustomThemes[0].image.length < 350000)
   assert.equal(await page.getByRole('radio', { name: '我的晚霞', exact: true }).getAttribute('aria-checked'), 'true')
+  await checkCurrentThemeEditor('custom')
   const add = page.getByRole('button', { name: '＋ 新建主题', exact: true })
   const before = await add.boundingBox()
   const list = page.locator('.qyt-theme-choices')

@@ -9,6 +9,11 @@ import { ThemePreview } from './theme-preview.tsx'
 import { importThemeImage } from './theme-image.ts'
 import type { LocaleKey } from './locales.ts'
 
+function currentThemeAccent(): string {
+  const accent = typeof document === 'undefined' ? '' : document.defaultView?.getComputedStyle(document.body).getPropertyValue('--qyt-q-accent').trim() ?? ''
+  return /^#[\da-f]{6}$/i.test(accent) ? accent : '#ad563e'
+}
+
 export function CustomThemeEditor({ ctx, original, disabled, t, onClose, onSave, onDelete }: {
   ctx: Context; original?: CustomTheme; disabled: boolean; t: (key: LocaleKey) => string; onClose(): void
   onSave(theme: CustomTheme): Promise<boolean>; onDelete?(id: CustomTheme['id']): Promise<boolean>
@@ -16,7 +21,7 @@ export function CustomThemeEditor({ ctx, original, disabled, t, onClose, onSave,
   const id = useId(), dialog = useRef<HTMLDialogElement>(null), file = useRef<HTMLInputElement>(null)
   const alive = useRef(true), importGeneration = useRef(0)
   const [draft, setDraft] = useState<CustomTheme>(() => original ?? {
-    id: `custom:${crypto.randomUUID()}`, name: '', image: '', width: 1, height: 1, accent: '#ad563e',
+    id: `custom:${crypto.randomUUID()}`, name: '', image: '', width: 1, height: 1, accent: currentThemeAccent(),
     motion: 'dynamic', movement: 'parallax', atmosphere: 'glow', intensity: .35, speed: .45, x: 50, y: 62, zoom: 1, mask: .9,
   })
   const [appearance, setAppearance] = useState<'light' | 'dark'>('light')
@@ -68,7 +73,7 @@ export function CustomThemeEditor({ ctx, original, disabled, t, onClose, onSave,
   function range(key: 'zoom' | 'x' | 'y' | 'intensity' | 'speed' | 'mask', label: LocaleKey, min: number, max: number, step: number, value: string) {
     return <label className="qyt-editor-range"><span>{t(label)}</span><input aria-label={t(label)} type="range" min={min} max={max} step={step} value={draft[key]} onChange={e => change(key, Number(e.target.value))}/><output>{value}</output></label>
   }
-  return createPortal(<dialog ref={dialog} className="qyt-custom-dialog" style={{ '--editor-accent': previewTheme.accent } as React.CSSProperties} aria-labelledby={`${id}-title`} onCancel={e => { e.preventDefault(); if (!saving) onClose() }}>
+  return createPortal(<dialog ref={dialog} className="qyt-custom-dialog" aria-labelledby={`${id}-title`} onCancel={e => { e.preventDefault(); if (!saving) onClose() }}>
     <header><div><h3 id={`${id}-title`}>{t('qThemeCustom')}</h3><p>{t('qThemeCustomIntro')}</p></div><button type="button" aria-label={t('qThemeClose')} disabled={saving} onClick={onClose}>×</button></header>
     <form className="qyt-editor-body" onSubmit={e => { e.preventDefault(); void save() }}>
       <fieldset disabled={busy}>

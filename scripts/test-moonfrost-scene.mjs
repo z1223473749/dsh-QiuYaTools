@@ -31,7 +31,7 @@ try {
   }
   const regions = await page.evaluate(() => {
     const [a, b] = window.__frames
-    const regions = { train: [790, 530, 335, 325], face: [1235, 45, 95, 110], bodice: [1245, 160, 95, 145], leftHeel: [1164, 766, 61, 111], rightHeel: [1264, 753, 93, 105], mountains: [150, 160, 500, 400] }
+    const regions = { train: [790, 530, 335, 325], hair: [1000, 200, 210, 180], face: [1235, 45, 95, 110], bodice: [1245, 160, 95, 145], leftHeel: [1164, 766, 61, 111], rightHeel: [1264, 753, 93, 105], mountains: [150, 160, 500, 400] }
     return Object.fromEntries(Object.entries(regions).map(([name, [x,y,w,h]]) => {
       let changed=0,total=0,sum=0
       for(let py=Math.floor(y*a.height/941);py<(y+h)*a.height/941;py++)for(let px=Math.floor(x*a.width/1672);px<(x+w)*a.width/1672;px++){
@@ -42,6 +42,7 @@ try {
       return [name,{changed,total,ratio:changed/total,meanDelta:sum/total}]
     }))
   })
+  assert.ok(regions.hair.ratio > .1, 'Hair tips must move independently of the face')
   assert.ok(regions.train.ratio > .1, 'The fabric itself must visibly change without pointer movement or snow')
   for (const name of ['face','bodice','leftHeel','rightHeel','mountains']) assert.equal(regions[name].changed, 0, name + ' stays fixed')
   await page.evaluate(() => { window.__art.dispose(); window.__art.dispose() })

@@ -2,6 +2,7 @@
    the same quiet reading surfaces. Native appearance, syntax and semantic
    status colors keep their original owners. */
 body[data-qyt-q-theme] {
+  --qyt-q-sidebar-gradient: linear-gradient(180deg, var(--qyt-q-sidebar-wash), color-mix(in srgb, var(--qyt-q-sidebar-wash) 97.5%, transparent) 48%, color-mix(in srgb, var(--qyt-q-sidebar-wash) 92.5%, transparent));
   --qyt-q-panel-image: linear-gradient(var(--qyt-q-paper), var(--qyt-q-paper)), var(--qyt-theme-art);
   --dsw-alias-bg-base: var(--qyt-q-base);
   --dsw-alias-bg-layer-2: var(--qyt-q-surface);
@@ -38,7 +39,9 @@ body[data-qyt-q-theme] {
 
 /* The native roots own layout and scrolling. Every illustration layer is
    decorative and ignores pointer events, so native clicks and drags pass through. */
-body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child {
+/* Both navigation surfaces fill their height for every preset and upload. */
+body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child,
+body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav {
   --dsw-alias-label-secondary: var(--qyt-q-sidebar-caption);
   --dsw-alias-label-tertiary: var(--qyt-q-sidebar-caption);
   --dsw-alias-label-caption: var(--qyt-q-sidebar-caption);
@@ -47,9 +50,9 @@ body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child {
   --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
   --dsw-specific-sidebar-nav-item-active-accent: var(--qyt-q-sidebar-active-accent);
   background-color: var(--qyt-q-sidebar);
-  background-image: var(--qyt-q-sidebar-gradient, linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%)), var(--qyt-theme-art);
-  background-position: center, var(--qyt-q-sidebar-art-position, right bottom);
-  background-size: 100% 100%, var(--qyt-q-sidebar-art-size, auto 310px);
+  background-image: var(--qyt-q-sidebar-gradient), var(--qyt-theme-art);
+  background-position: center, var(--qyt-q-sidebar-art-position, right center);
+  background-size: 100% 100%, cover;
   background-repeat: no-repeat;
 }
 body[data-qyt-q-theme] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
@@ -281,13 +284,6 @@ body[data-qyt-q-theme] [data-textpreview-unsupported] {
 body[data-qyt-q-theme] [data-shortcut-modal="settings"][role="dialog"] {
   border-radius: 20px;
   background-color: var(--qyt-q-surface);
-}
-body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav {
-  background-color: var(--qyt-q-sidebar);
-  background-image: linear-gradient(180deg, var(--qyt-q-sidebar), var(--qyt-q-sidebar-wash)), var(--qyt-theme-art);
-  background-size: 100% 100%, auto 260px;
-  background-position: center, right bottom;
-  background-repeat: no-repeat;
 }
 body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav button[aria-current="true"] {
   background-color: var(--qyt-q-selected);

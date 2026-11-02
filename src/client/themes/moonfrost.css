@@ -27,9 +27,7 @@ body[data-qyt-q-theme="moonfrost"] {
   --qyt-q-paper: rgba(246, 248, 252, .72);
   --qyt-q-chrome: rgba(233, 238, 248, .95);
   --qyt-q-sidebar-wash: rgba(233, 238, 248, .80);
-  --qyt-q-sidebar-art-size: auto 100%;
   --qyt-q-sidebar-art-position: 80% center;
-  --qyt-q-sidebar-gradient: linear-gradient(180deg, rgba(233, 238, 248, .80), rgba(233, 238, 248, .78) 48%, rgba(233, 238, 248, .74));
   --qyt-q-sidebar-caption: #344258;
   --qyt-q-art-wash: rgba(237, 242, 252, .22);
   --qyt-q-hero-wash: rgba(237, 242, 252, .10);
@@ -96,7 +94,6 @@ body[data-qyt-q-theme="moonfrost"][data-ds-dark-theme] {
   --qyt-q-paper: rgba(21, 29, 45, .78);
   --qyt-q-chrome: rgba(25, 37, 59, .96);
   --qyt-q-sidebar-wash: rgba(25, 37, 59, .88);
-  --qyt-q-sidebar-gradient: linear-gradient(180deg, rgba(25, 37, 59, .88), rgba(25, 37, 59, .80) 48%, rgba(25, 37, 59, .70));
   --qyt-q-sidebar-caption: #c3cfe3;
   --qyt-q-art-wash: rgba(15, 25, 45, .45);
   --qyt-q-hero-wash: rgba(15, 25, 45, .30);

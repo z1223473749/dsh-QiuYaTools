@@ -76,7 +76,7 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
         const px = reading ? (i % 2 ? rect.width - 10 - (i * 17 % margin) : 10 + (i * 17 % margin)) : (.1 + (i * .618034 % .8)) * rect.width
         const py = progress * (rect.height + 24) - 12
         particle.style.transform = `translate(${px + Math.sin(time + seed) * 6 * strength}px,${py}px) rotate(${seed + time * .4}rad)`
-        particle.style.opacity = String((.25 + strength * .6) * (.6 + Math.sin(time + seed) * .3))
+        particle.style.opacity = String((.35 + strength * .6) * (.8 + Math.sin(time + seed) * .18))
       }
       schedule()
     })
@@ -104,10 +104,10 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
       const wash = doc.createElement('div')
       wash.style.cssText = 'position:absolute;inset:0;background-image:var(--qyt-q-canvas-wash);'
       layer.append(art, wash)
-      const count = atmosphere === 'none' ? 0 : atmosphere === 'glow' ? 14 : 20
+      const count = atmosphere === 'none' ? 0 : atmosphere === 'glow' ? 14 : 32
       particles = Array.from({ length: count }, (_, i) => {
-        const dot = doc.createElement('i'), size = atmosphere === 'petals' ? 7 : 2 + i % 3
-        dot.style.cssText = `position:absolute;top:0;left:0;width:${size}px;height:${size}px;opacity:0;border-radius:${atmosphere === 'petals' ? '80% 10% 80% 30%' : '50%'};background:${atmosphere === 'snow' ? '#fff' : atmosphere === 'petals' ? 'var(--qyt-q-accent)' : '#ffe4a3'};box-shadow:${atmosphere === 'glow' ? '0 0 8px 2px #ffd78080' : 'none'};`
+        const dot = doc.createElement('i'), size = atmosphere === 'petals' ? 8 : 3 + i % 4
+        dot.style.cssText = `position:absolute;top:0;left:0;width:${size}px;height:${size}px;opacity:0;border-radius:${atmosphere === 'petals' ? '80% 10% 80% 30%' : '50%'};background:${atmosphere === 'snow' ? '#fff' : atmosphere === 'petals' ? 'var(--qyt-q-accent)' : '#ffe4a3'};box-shadow:${atmosphere === 'glow' ? '0 0 8px 2px #ffd78080' : atmosphere === 'snow' ? '0 1px 3px 1px #45649399' : 'none'};`
         layer!.append(dot); return dot
       })
       next.prepend(layer); resize.observe(next); intersection?.observe(next)

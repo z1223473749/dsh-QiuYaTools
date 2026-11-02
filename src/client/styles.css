@@ -381,7 +381,7 @@ button.qyt-update-badge { cursor:pointer; }
 .qyt-editor-error { color: var(--dsw-alias-state-error-primary, #ad2633); font-size: 12px; }
 .qyt-custom-dialog > footer { border-top: 1px solid var(--editor-line); }
 .qyt-custom-dialog > footer > span { flex: 1; }
-.qyt-custom-dialog .qyt-editor-save { color: #fff; background: #a34d36; border-color: #a34d36; }
+.qyt-custom-dialog .qyt-editor-save { color: var(--qyt-q-surface, #fff); background: var(--editor-accent); border-color: var(--editor-accent); }
 .qyt-editor-delete { display: flex; gap: 4px; }
 .qyt-editor-delete > button { color: var(--dsw-alias-state-error-primary, #ad2633); font-size: 11px; }
 @media(max-width:460px) { .qyt-editor-columns { grid-template-columns: minmax(0,1fr); gap: 0; } .qyt-custom-dialog > header, .qyt-custom-dialog > footer, .qyt-editor-body { padding: 12px; } .qyt-editor-delete { flex-wrap: wrap; } }

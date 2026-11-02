@@ -3,7 +3,7 @@ import { installLandscapeScene, type LandscapeArt } from './landscape-scene.ts'
 
 const WIDTH = 1672, HEIGHT = 941, MAX_PIXELS = 1_500_000
 
-// Only the loose train and trailing silk enter this matte. The head, hands,
+// Only the loose train, trailing silk and hair tips enter these mattes. The head, hands,
 // bodice, exposed legs and heels always come from the original still image.
 export const MOONFROST_CLOTH_PATHS = [
   `M 1226 352 C 1205 414 1181 459 1148 498
@@ -22,6 +22,14 @@ export const MOONFROST_CLOTH_PATHS = [
    C 1034 519 1078 501 1139 482 Z`,
 ] as const
 
+export const MOONFROST_HAIR_PATH = `M 1216 181
+ C 1180 213 1140 204 1095 199 C 1053 192 1008 211 982 238
+ C 1024 214 1055 212 1090 225 C 1050 236 1011 253 1001 285
+ C 990 313 1008 327 1030 336 C 1005 312 1009 291 1036 274
+ C 1045 265 1068 256 1092 251 C 1059 280 1045 309 1061 342
+ C 1062 362 1077 382 1097 386 C 1074 354 1072 331 1092 308
+ C 1128 291 1165 280 1190 259 L 1216 220 Z`
+
 const VERTEX = `attribute vec2 a_position;
 varying vec2 v_uv;
 void main(){gl_Position=vec4(a_position,0.,1.);v_uv=vec2((a_position.x+1.)*.5,(1.-a_position.y)*.5);}`
@@ -36,7 +44,11 @@ vec2 wind(vec2 p){
   // traveling wave, rather than translating or warping the whole figure.
   float loose=smoothstep(0.,1.,clamp((1238.-p.x)/550.,0.,1.));
   float wave=sin(u_time*1.8-p.x*.013+p.y*.004);
-  return vec2(sin(u_time*1.45-p.y*.016)*7.,wave*17.+sin(u_time*2.1-p.x*.025)*3.)*loose;
+  return vec2(sin(u_time*1.45-p.y*.016)*18.,wave*42.+sin(u_time*2.1-p.x*.025)*7.)*loose;
+}
+vec2 hairWind(vec2 p){
+  float loose=smoothstep(0.,1.,clamp((1218.-p.x)/230.,0.,1.));
+  return vec2(sin(u_time*1.7-p.y*.018)*12.,sin(u_time*2.-p.x*.02)*22.)*loose;
 }
 void main(){
   vec2 source=vec2(1672.,941.);
@@ -46,12 +58,15 @@ void main(){
   vec2 uv=(u_origin+v_uv*u_size-offset)/scaled;
   vec2 p=uv*source;
   vec2 warped=uv-wind(p)/source;
+  vec2 hair=uv-hairWind(p)/source;
   // Original cloth is erased over a registered clean plate before the moving
   // cloth is composited. This prevents a second, stationary hem underneath.
-  float erase=texture2D(u_matte,uv).r;
+  vec2 matte=texture2D(u_matte,uv).rg;
+  float erase=max(matte.r,matte.g);
   float alpha=texture2D(u_matte,warped).r;
   vec3 base=mix(texture2D(u_art,uv).rgb,texture2D(u_plate,uv).rgb,erase);
-  gl_FragColor=vec4(mix(base,texture2D(u_art,warped).rgb,alpha),1.);
+  base=mix(base,texture2D(u_art,warped).rgb,alpha);
+  gl_FragColor=vec4(mix(base,texture2D(u_art,hair).rgb,texture2D(u_matte,hair).g),1.);
 }`
 
 /** GPU drawing plugs into the same visibility, motion and disposal lifecycle
@@ -123,8 +138,9 @@ export function createMoonfrostArt(doc: Document): LandscapeArt | null {
     const context = matte.getContext('2d')
     if (!context) throw new Error('Cannot create cloth matte')
     context.fillStyle = '#000'; context.fillRect(0, 0, WIDTH, HEIGHT)
-    context.fillStyle = '#fff'; context.filter = 'blur(.6px)'
+    context.fillStyle = '#f00'; context.filter = 'blur(.6px)'
     for (const path of MOONFROST_CLOTH_PATHS) context.fill(new win.Path2D(path))
+    context.fillStyle = '#0f0'; context.fill(new win.Path2D(MOONFROST_HAIR_PATH))
     upload(matte, 2, 'u_matte')
     for (const [index, image] of images.entries()) {
       image.onload = () => {
@@ -162,5 +178,5 @@ export function createMoonfrostArt(doc: Document): LandscapeArt | null {
 }
 
 export function installMoonfrostScene(doc: Document): () => void {
-  return installLandscapeScene(doc, { movement: 'none', atmosphere: 'snow', intensity: .4, speed: .85, position: 'right bottom', createArt: createMoonfrostArt })
+  return installLandscapeScene(doc, { movement: 'none', atmosphere: 'snow', intensity: .8, speed: 1.05, position: 'right bottom', createArt: createMoonfrostArt })
 }

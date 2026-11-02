@@ -91,7 +91,7 @@ try {
   await page.getByRole('heading').evaluate(node => { node.textContent = '月阙清霜 · 月照仙山' })
   await page.screenshot({ path: join(output, 'moonfrost-home.png') })
   const moonLayer = page.locator('[data-qyt-landscape-scene]')
-  assert.equal(await moonLayer.locator('i').count(), 20)
+  assert.equal(await moonLayer.locator('i').count(), 32)
   assert.deepEqual(await moonLayer.evaluate(layer => ({ hidden: layer.getAttribute('aria-hidden'), inert: layer.hasAttribute('inert'), events: getComputedStyle(layer).pointerEvents })), { hidden: 'true', inert: true, events: 'none' })
   const snowBefore = await moonLayer.locator('i').first().evaluate(node => node.style.transform)
   await page.waitForFunction(previous => document.querySelector('[data-qyt-landscape-scene] i')?.style.transform !== previous, snowBefore)
