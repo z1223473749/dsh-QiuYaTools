@@ -147,7 +147,7 @@ if (process.argv.includes('--generate-only')) {
       await shell.evaluate((element, height) => { element.style.height = height }, height)
       await page.setViewportSize(viewport)
     }
-    assert.equal(await choices.getByRole('radio').count(), 2, 'Each registered theme owns one clickable selection card')
+    assert.equal(await choices.getByRole('radio').count(), 3, 'Each registered theme owns one clickable selection card')
     const checkSelection = async (selected, color) => {
       await page.waitForFunction(({ selected, color }) => { const card = document.querySelector(`.qyt-theme-choice[data-theme="${selected}"]`); return card && getComputedStyle(card).borderTopColor === color }, { selected, color })
       await choices.evaluate(element => Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished)))

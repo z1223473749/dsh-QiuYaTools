@@ -18,6 +18,7 @@ import { installWorkbench } from './features/workbench/integration.ts'
 import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 import { installGitHost } from './features/git/host.ts'
+import { CUSTOM_THEME_ID, THEME_IMAGE, MAX_CUSTOM_THEMES, MAX_THEME_IMAGE_BYTES, type CustomTheme } from './custom-themes.ts'
 import { DEFAULT_Q_THEME_SETTINGS, Q_THEME_IDS, type QThemeId, type QThemeSettings } from './shared.ts'
 
 /** Preferences persisted by Harness in the active profile. */
@@ -34,6 +35,7 @@ export interface Config {
   qThemeEnabled: Volatile<boolean>
   qThemeId: Volatile<QThemeId>
   qThemeSettings: Volatile<QThemeSettings>
+  qCustomThemes: Volatile<CustomTheme[]>
   computerUseEnabled: Volatile<boolean>
   autoCheckUpdates: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
@@ -51,10 +53,22 @@ export const Config = z.object({
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
   qThemeEnabled: z.boolean().default(true).description('为整个 Harness 启用 Q 主题').volatile(),
-  qThemeId: z.union(Q_THEME_IDS.map(id => z.const(id))).default('ocean').description('当前 Q 主题').volatile(),
+  qThemeId: z.union([...Q_THEME_IDS.map(id => z.const(id)), z.string().pattern(CUSTOM_THEME_ID)]).default('ocean').description('当前 Q 主题').volatile(),
   qThemeSettings: z.object(Object.fromEntries(Q_THEME_IDS.map(id => [id, z.object({
     motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),
   }).default(DEFAULT_Q_THEME_SETTINGS[id])]))).default(DEFAULT_Q_THEME_SETTINGS).description('各 Q 主题的独立设置').volatile(),
+  qCustomThemes: z.array(z.object({
+    id: z.string().pattern(CUSTOM_THEME_ID), name: z.string().min(1).max(40),
+    image: z.string().pattern(THEME_IMAGE).max(Math.ceil(MAX_THEME_IMAGE_BYTES / 3) * 4 + 40),
+    width: z.number().step(1).min(1).max(1600), height: z.number().step(1).min(1).max(1600),
+    accent: z.string().pattern(/^#[a-f0-9]{6}$/i),
+    motion: z.union([z.const('dynamic'), z.const('static')]),
+    movement: z.union([z.const('parallax'), z.const('pan'), z.const('none')]),
+    atmosphere: z.union([z.const('glow'), z.const('petals'), z.const('snow'), z.const('none')]),
+    intensity: z.number().min(0).max(1), speed: z.number().min(.1).max(2),
+    x: z.number().min(0).max(100), y: z.number().min(0).max(100),
+    zoom: z.number().min(1).max(2), mask: z.number().min(.5).max(1),
+  })).max(MAX_CUSTOM_THEMES).default([]).description('用户自定义主题和压缩图片，随当前配置保存').volatile(),
   computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   autoCheckUpdates: z.boolean().default(true).description('后台自动检查插件更新并显示提醒，安装由用户确认').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)

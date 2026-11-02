@@ -35,6 +35,7 @@ const expected = {
   gitEnabled: true,
   qThemeEnabled: true,
   qThemeId: 'ocean',
+  qCustomThemes: [],
   qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
@@ -60,7 +61,9 @@ assert.equal(host.Config.simplify(validated.value), null, 'default-valued fields
 assert.deepEqual(unwrap(host.Config({})), expected,
   'callable Config and Standard Schema must agree')
 
+const custom = { id: 'custom:sample', name: '我的风景', image: 'data:image/webp;base64,UklGRg==', width: 800, height: 600, accent: '#ad563e', motion: 'dynamic', movement: 'pan', atmosphere: 'snow', intensity: .35, speed: .45, x: 50, y: 62, zoom: 1.2, mask: .9 }
 for (const input of [
+  { qThemeId: custom.id, qCustomThemes: [custom] },
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
@@ -87,6 +90,11 @@ for (const input of [{ qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }])
 }
 
 const invalid = [
+  { qCustomThemes: [{ ...custom, image: 'https://example.com/a.png' }] },
+  { qCustomThemes: [{ ...custom, mask: .1 }] },
+  { qCustomThemes: [{ ...custom, zoom: Infinity }] },
+  { qCustomThemes: Array.from({ length: 9 }, (_, i) => ({ ...custom, id: 'custom:t' + i })) },
+  { qThemeId: 'custom:invalid[css]' },
   { pasteCharacterThreshold: 0 },
   { pasteCharacterThreshold: -1 },
   { pasteCharacterThreshold: 1_000_001 },
@@ -186,7 +194,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 16, invalidCases: 19, applied: true,
+    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 24, applied: true,
   })
 })
 
@@ -219,7 +227,7 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.equal(fiber.config.qThemeId.get(), 'ocean')
   assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } })
-  assert.equal(Object.keys(fiber.config).length, 16)
+  assert.equal(Object.keys(fiber.config).length, 17)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
   assert.equal(fiber.config.gitEnabled.get(), true)

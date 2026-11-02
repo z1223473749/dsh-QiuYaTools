@@ -1,11 +1,13 @@
+import { getCustomThemes, type CustomTheme } from './custom-themes.ts'
 export const SETTINGS_ID = 'qiuya-tools'
 
 export const Q_THEME_IDS = ['ocean', 'begonia', 'sunset'] as const
-export type QThemeId = typeof Q_THEME_IDS[number]
+export type QPresetThemeId = typeof Q_THEME_IDS[number]
+export type QThemeId = QPresetThemeId | `custom:${string}`
 export type ThemeMotion = 'dynamic' | 'static'
 /** Kept for existing Ocean consumers. */
 export type OceanMotion = ThemeMotion
-export type QThemeSettings = Record<QThemeId, { motion: ThemeMotion }>
+export type QThemeSettings = Record<QPresetThemeId, { motion: ThemeMotion }>
 export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   ocean: Object.freeze({ motion: 'dynamic' }),
   begonia: Object.freeze({ motion: 'dynamic' }),
@@ -30,6 +32,7 @@ export interface Preferences {
   qThemeId: QThemeId
   /** Each theme owns its options; changing one leaves the others intact. */
   qThemeSettings: QThemeSettings
+  qCustomThemes: CustomTheme[]
   computerUseEnabled: boolean
   /** Background checks only; installation always requires an explicit action. */
   autoCheckUpdates: boolean
@@ -55,6 +58,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   qThemeEnabled: true,
   qThemeId: 'ocean',
   qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
+  qCustomThemes: [],
   computerUseEnabled: false,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -63,12 +67,14 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
 
 /** Treat saved data as untrusted: old and unknown themes fall back to Ocean. */
 export function getQThemeId(preferences: Partial<Preferences> | undefined): QThemeId {
-  return Q_THEME_IDS.find(id => id === preferences?.qThemeId) ?? 'ocean'
+  return Q_THEME_IDS.find(id => id === preferences?.qThemeId)
+    ?? getCustomThemes(preferences).find(theme => theme.id === preferences?.qThemeId)?.id ?? 'ocean'
 }
 
 /** Every theme has an independent motion setting, including legacy profiles. */
 export function getThemeMotion(preferences: Partial<Preferences> | undefined, id = getQThemeId(preferences)): ThemeMotion {
-  return preferences?.qThemeSettings?.[id]?.motion === 'static' ? 'static' : 'dynamic'
+  if (id.startsWith('custom:')) return getCustomThemes(preferences).find(theme => theme.id === id)?.motion ?? 'static'
+  return preferences?.qThemeSettings?.[id as QPresetThemeId]?.motion === 'static' ? 'static' : 'dynamic'
 }
 
 export function getOceanMotion(preferences: Partial<Preferences> | undefined): OceanMotion {

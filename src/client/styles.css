@@ -331,3 +331,58 @@ button.qyt-update-badge { cursor:pointer; }
 .qyt-update-badge:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
 .qyt-tabs [role="tab"] { position:relative; }
 .qyt-update-dot { position:absolute; top:8px; right:13px; width:6px; height:6px; border-radius:50%; background:var(--qyt-theme-accent,#277b8c); }
+
+/* Only the card grid scrolls. The heading and create action are flex siblings. */
+.qyt-theme-picker > .qyt-theme-choices { flex: 1; }
+.qyt-theme-add { flex: none; width: 100%; min-height: 36px; margin-top: 10px; padding: 7px 4px; border: 1px dashed var(--qyt-theme-line); border-radius: 8px; color: var(--qyt-theme-accent); background: var(--qyt-surface); font: inherit; font-size: 12px; cursor: pointer; }
+.qyt-theme-add:disabled, .qyt-theme-edit:disabled { opacity: .5; cursor: default; }
+.qyt-theme-edit { width: 100%; margin-top: 10px; padding: 10px; border: 1px solid var(--qyt-theme-line); border-radius: 10px; color: var(--qyt-theme-accent); background: var(--qyt-surface); font: inherit; cursor: pointer; }
+.qyt-theme-add:focus-visible, .qyt-theme-edit:focus-visible { outline: 2px solid var(--qyt-theme-accent); outline-offset: 2px; }
+.qyt-custom-dialog {
+  --editor-accent: var(--qyt-q-accent, #ad563e); --editor-line: var(--qyt-q-line, #e7d6d0); --editor-surface: var(--qyt-q-surface, #fffdfb); --editor-muted: var(--qyt-q-muted, #725a55);
+  width: min(600px, calc(100vw - 24px)); max-width: none; max-height: min(940px, calc(100dvh - 32px)); padding: 0; border: 1px solid var(--editor-line); border-radius: 16px; color: var(--dsw-alias-label-primary, #322726); background: var(--editor-surface); box-shadow: 0 20px 80px #0003; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow: hidden;
+}
+.qyt-custom-dialog[open] { display: flex; flex-direction: column; }
+.qyt-custom-dialog::backdrop { background: #23181655; backdrop-filter: blur(3px); }
+.qyt-custom-dialog * { box-sizing: border-box; }
+.qyt-custom-dialog button, .qyt-custom-dialog input { font: inherit; }
+.qyt-custom-dialog button { padding: 6px 10px; border: 1px solid var(--editor-line); border-radius: 7px; color: inherit; background: var(--editor-surface); cursor: pointer; }
+.qyt-custom-dialog button:disabled { cursor: default; opacity: .5; }
+.qyt-custom-dialog button:focus-visible, .qyt-custom-dialog input:focus-visible { outline: 2px solid var(--editor-accent); outline-offset: 2px; }
+.qyt-custom-dialog > header, .qyt-custom-dialog > footer { display: flex; align-items: center; gap: 10px; flex: none; padding: 16px 20px; }
+.qyt-custom-dialog > header { justify-content: space-between; border-bottom: 1px solid var(--editor-line); }
+.qyt-custom-dialog h3 { margin: 0; font-size: 18px; }
+.qyt-custom-dialog header p { margin: 3px 0 0; color: var(--editor-muted); font-size: 12px; }
+.qyt-custom-dialog > header > button { align-self: flex-start; font-size: 21px; line-height: 1; border: 0; }
+.qyt-editor-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 16px 20px; }
+.qyt-editor-body fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
+.qyt-editor-body fieldset:disabled .qyt-editor-pills { opacity: .55; }
+.qyt-editor-field { display: grid; gap: 7px; margin-bottom: 14px; }
+.qyt-editor-field > input:not([type="file"]) { width: 100%; padding: 8px 10px; border: 1px solid var(--editor-line); border-radius: 7px; color: inherit; background: transparent; }
+.qyt-custom-dialog small { display: block; color: var(--editor-muted); font-size: 11px; }
+.qyt-custom-dialog .qyt-editor-upload { display: flex; align-items: center; gap: 12px; min-height: 66px; text-align: left; }
+.qyt-editor-upload > img { width: 94px; height: 50px; border-radius: 5px; object-fit: cover; }
+.qyt-editor-upload > span:last-child { margin-left: auto; }
+.qyt-editor-section { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 10px; padding-top: 12px; border-top: 1px solid var(--editor-line); }
+.qyt-editor-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.qyt-editor-pills > button { padding: 4px 10px; font-size: 12px; }
+.qyt-editor-pills > button[aria-pressed="true"] { color: var(--editor-accent); border-color: var(--editor-accent); background: color-mix(in srgb,var(--editor-accent) 8%,var(--editor-surface)); }
+.qyt-editor-preview { min-height: 186px; overflow: hidden; display: grid; place-items: center; border: 1px solid var(--editor-line); border-radius: 9px; margin-bottom: 6px; color: var(--editor-muted); background: color-mix(in srgb,var(--editor-accent) 4%,var(--editor-surface)); cursor: grab; }
+.qyt-editor-preview:active { cursor: grabbing; }
+.qyt-editor-preview .qyt-theme-preview-frame { min-height: 186px; aspect-ratio: 2.55; }
+.qyt-editor-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.qyt-editor-options > span:first-child { flex: none; min-width: 70px; }
+.qyt-editor-options > input[type="color"] { width: 35px; height: 28px; padding: 1px; border: 1px solid var(--editor-line); border-radius: 5px; background: transparent; }
+.qyt-editor-range { display: flex; align-items: center; gap: 9px; margin: 10px 0; font-size: 12px; }
+.qyt-editor-range > span { flex: none; }
+.qyt-editor-range input { width: 100%; min-width: 30px; accent-color: var(--editor-accent); }
+.qyt-editor-range output { min-width: 38px; text-align: right; color: var(--editor-muted); font-size: 11px; }
+.qyt-editor-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; }
+.qyt-editor-error { color: var(--dsw-alias-state-error-primary, #ad2633); font-size: 12px; }
+.qyt-custom-dialog > footer { border-top: 1px solid var(--editor-line); }
+.qyt-custom-dialog > footer > span { flex: 1; }
+.qyt-custom-dialog .qyt-editor-save { color: #fff; background: #a34d36; border-color: #a34d36; }
+.qyt-editor-delete { display: flex; gap: 4px; }
+.qyt-editor-delete > button { color: var(--dsw-alias-state-error-primary, #ad2633); font-size: 11px; }
+@media(max-width:460px) { .qyt-editor-columns { grid-template-columns: minmax(0,1fr); gap: 0; } .qyt-custom-dialog > header, .qyt-custom-dialog > footer, .qyt-editor-body { padding: 12px; } .qyt-editor-delete { flex-wrap: wrap; } }
+@media(forced-colors:active) { .qyt-custom-dialog, .qyt-custom-dialog button, .qyt-custom-dialog input { color: CanvasText; background: Canvas; border-color: ButtonText; } .qyt-editor-pills > button[aria-pressed="true"] { color: HighlightText; background: Highlight; } }

@@ -1,3 +1,5 @@
+import { CustomThemeEditor } from './custom-theme-editor.tsx'
+import { getCustomThemes, MAX_CUSTOM_THEMES, type CustomTheme } from '../custom-themes.ts'
 import { installBrowserDiagnosticClient } from '../features/browser-diagnostics/client.tsx'
 import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
 import { installAcceptanceWorkflowClient } from '../features/acceptance-workflows/client.tsx'
@@ -28,7 +30,7 @@ import { SitePermissions } from '../features/workbench/Views.tsx'
 import { ComputerIcon } from '../features/computer-use/presentation.tsx'
 import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
-import { Q_THEMES, getQTheme, type ThemeDefinition } from './theme-catalog.ts'
+import { getQThemes, getQTheme, type ThemeDefinition } from './theme-catalog.ts'
 import { ThemePreview } from './theme-preview.tsx'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installEarlySessionWindowNavigation } from '../features/session-windows/index.tsx'
@@ -124,7 +126,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const ready = snapshot.status === 'ready'
   const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
   const themeId = getQThemeId(preferences)
-  const theme = getQTheme(themeId)
+  const themes = useMemo(() => getQThemes(snapshot.value), [snapshot.value])
+  const theme = themes.find(theme => theme.id === themeId) ?? getQTheme(themeId, preferences)
+  const [themeEditor, setThemeEditor] = useState<{ original?: CustomTheme } | null>(null)
+  const customTheme = getCustomThemes(preferences).find(item => item.id === themeId)
   const themeMotion = getThemeMotion(preferences, themeId)
   const availableFeatures = FEATURE_FIELDS.filter(field => field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)
   const allEnabled = availableFeatures.every(field => isFeatureEnabled(preferences, field))
@@ -156,12 +161,12 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     tabs.current[next]?.focus()
   }
 
-  async function persist(operations: FormOperations): Promise<boolean> {
+  async function persist(operations: FormOperations, expectedRevision = form.getSnapshot().revision): Promise<boolean> {
     if (disabled || pendingWrite.current) return false
     pendingWrite.current = true
     setSaveState('saving')
     try {
-      const accepted = await form.mutate(operations)
+      const accepted = await form.mutate(operations, expectedRevision)
       setSaveState(accepted ? 'saved' : 'error')
       return accepted
     } catch {
@@ -197,18 +202,21 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   }
 
   function navigateThemes(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
-    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? (index + 1) % Q_THEMES.length
-      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? (index - 1 + Q_THEMES.length) % Q_THEMES.length
-        : event.key === 'Home' ? 0 : event.key === 'End' ? Q_THEMES.length - 1 : undefined
+    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? (index + 1) % themes.length
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? (index - 1 + themes.length) % themes.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? themes.length - 1 : undefined
     if (next === undefined || disabled) return
     event.preventDefault()
     themeCards.current[next]?.focus()
-    void selectTheme(Q_THEMES[next].id)
+    themeCards.current[next]?.scrollIntoView?.({ block: 'nearest' })
+    void selectTheme(themes[next].id)
   }
 
   async function setThemeMotion(value: ThemeMotion): Promise<void> {
     if (value === themeMotion) return
-    await persist([{ op: 'set', path: ['qThemeSettings', themeId, 'motion'], value }])
+    if (customTheme) {
+      await persist([{ op: 'set', path: ['qCustomThemes'], value: getCustomThemes(form.getSnapshot().value).map(item => item.id === themeId ? { ...item, motion: value } : item) }])
+    } else await persist([{ op: 'set', path: ['qThemeSettings', themeId, 'motion'], value }])
   }
 
   function editThreshold(field: keyof ThresholdDraft, value: string): void {
@@ -261,7 +269,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
               </div>
               <div className="qyt-theme-layout">
                 <div className="qyt-card qyt-theme-card" data-theme={themeId} style={themeStyle(theme)}>
-                  <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{t(theme.name)}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t(theme.motionLabel)}>
+                  <div className="qyt-theme-title"><div className="qyt-theme-controls"><h4>{theme.displayName ?? t(theme.name)}</h4><div className="qyt-theme-motion" role="radiogroup" aria-label={t(theme.motionLabel)}>
                     {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-${themeId}-motion`} value={motion} checked={themeMotion === motion} disabled={disabled} onChange={() => { void setThemeMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
                   </div></div><span className="qyt-theme-name">{theme.label}</span></div>
                   <div className="qyt-theme-preview" role="img" aria-label={t(theme.description)}>
@@ -272,15 +280,39 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 <aside className="qyt-card qyt-theme-picker" aria-labelledby={`${id}-theme-picker-title`}>
                   <h4 id={`${id}-theme-picker-title`}>{t('qThemePickerTitle')}</h4>
                   <div className="qyt-theme-choices" role="radiogroup" aria-label={t('qThemeChoose')}>
-                    {Q_THEMES.map((option, index) => <button key={option.id} ref={element => { themeCards.current[index] = element }} type="button" role="radio" className="qyt-theme-choice" data-theme={option.id} style={themeStyle(option)} aria-label={t(option.name)} aria-checked={themeId === option.id} tabIndex={themeId === option.id ? 0 : -1} disabled={disabled} onClick={() => { void selectTheme(option.id) }} onKeyDown={event => { navigateThemes(event, index) }}>
+                    {themes.map((option, index) => <button key={option.id} ref={element => { themeCards.current[index] = element }} type="button" role="radio" className="qyt-theme-choice" data-theme={option.id} style={themeStyle(option)} aria-label={option.displayName ?? t(option.name)} aria-checked={themeId === option.id} tabIndex={themeId === option.id ? 0 : -1} disabled={disabled} onClick={() => { void selectTheme(option.id) }} onKeyDown={event => { navigateThemes(event, index) }}>
                       <span className="qyt-theme-thumbnail" aria-hidden="true"/>
-                      <span className="qyt-theme-choice-name">{t(option.name)}</span>
+                      <span className="qyt-theme-choice-name">{option.displayName ?? t(option.name)}</span>
                       <span className="qyt-theme-choice-circle" aria-hidden="true">{themeId === option.id && <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 8 3 3 5-6"/></svg>}</span>
                       <span className="qyt-sr-only">{themeId === option.id ? t('qThemeSelected') : ''}</span>
                     </button>)}
                   </div>
+                  <button type="button" className="qyt-theme-add" disabled={disabled || getCustomThemes(preferences).length >= MAX_CUSTOM_THEMES} title={getCustomThemes(preferences).length >= MAX_CUSTOM_THEMES ? t('qThemeCustomLimit') : undefined} onClick={() => setThemeEditor({})}>{t('qThemeNew')}</button>
                 </aside>
               </div>
+              {customTheme && <button type="button" className="qyt-theme-edit" disabled={disabled} onClick={() => setThemeEditor({ original: structuredClone(customTheme) })}>{t('qThemeEdit')}</button>}
+              {themeEditor && <CustomThemeEditor ctx={ctx} t={t} original={themeEditor.original} disabled={disabled} onClose={() => setThemeEditor(null)} onSave={async value => {
+                const current = getCustomThemes(form.getSnapshot().value)
+                const original = themeEditor.original
+                if (original ? JSON.stringify(current.find(item => item.id === original.id)) !== JSON.stringify(original) : current.length >= MAX_CUSTOM_THEMES) return false
+                const accepted = await persist([
+                  { op: 'set', path: ['qCustomThemes'], value: original ? current.map(item => item.id === value.id ? value : item) : [...current, value] },
+                  { op: 'set', path: ['qThemeId'], value: value.id },
+                ])
+                if (accepted) setThemeEditor(null)
+                return accepted
+              }} onDelete={themeEditor.original ? async id => {
+                const original = themeEditor.original
+                const latest = form.getSnapshot().value
+                const current = getCustomThemes(latest)
+                if (JSON.stringify(current.find(item => item.id === id)) !== JSON.stringify(original)) return false
+                const accepted = await persist([
+                  { op: 'set', path: ['qCustomThemes'], value: current.filter(item => item.id !== id) },
+                  ...(latest?.qThemeId === id ? [{ op: 'set' as const, path: ['qThemeId'], value: 'sunset' }] : []),
+                ])
+                if (accepted) setThemeEditor(null)
+                return accepted
+              } : undefined}/>}
             </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className="qyt-feature-panel" key={feature.field}>
           <div className="qyt-card qyt-feature-summary">
             <div className="qyt-toggle-row">

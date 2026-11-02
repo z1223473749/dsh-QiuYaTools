@@ -1,4 +1,6 @@
-import { Q_THEME_IDS, type QThemeId } from '../shared.ts'
+import { getCustomThemes } from '../custom-themes.ts'
+import { createCustomTheme } from './custom-theme-definition.ts'
+import { Q_THEME_IDS, type QThemeId, type QPresetThemeId, type Preferences } from '../shared.ts'
 import type { LocaleKey } from './locales.ts'
 import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
@@ -12,6 +14,8 @@ import begoniaPalette from './themes/begonia.css'
  * reading surfaces and installation lifecycle belong to the common framework. */
 export interface ThemeDefinition {
   readonly id: QThemeId
+  readonly displayName?: string
+  readonly revision?: string
   readonly name: LocaleKey
   readonly description: LocaleKey
   readonly hint: LocaleKey
@@ -28,7 +32,7 @@ export interface ThemeDefinition {
   readonly installScene?: (doc: Document) => () => void
 }
 
-const definitions: Readonly<Record<QThemeId, ThemeDefinition>> = {
+const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
   ocean: {
     id: 'ocean', name: 'qThemePreview', description: 'qThemePreviewDescription',
     hint: 'qThemePreviewHint', motionLabel: 'qThemeOceanMotion', label: 'Q Ocean · 鲸与海',
@@ -53,6 +57,14 @@ const definitions: Readonly<Record<QThemeId, ThemeDefinition>> = {
 
 export const Q_THEMES: readonly ThemeDefinition[] = Q_THEME_IDS.map(id => definitions[id])
 
-export function getQTheme(id: QThemeId): ThemeDefinition {
-  return definitions[id] ?? definitions.ocean
+export function getQThemes(preferences?: Partial<Preferences>): readonly ThemeDefinition[] {
+  return [...Q_THEMES, ...getCustomThemes(preferences).map(createCustomTheme)]
+}
+
+export function getQTheme(id: QThemeId, preferences?: Partial<Preferences>): ThemeDefinition {
+  if (id.startsWith('custom:')) {
+    const theme = getCustomThemes(preferences).find(theme => theme.id === id)
+    return theme ? createCustomTheme(theme) : definitions.ocean
+  }
+  return definitions[id as QPresetThemeId] ?? definitions.ocean
 }
