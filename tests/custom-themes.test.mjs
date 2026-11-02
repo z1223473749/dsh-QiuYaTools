@@ -10,7 +10,7 @@ test('custom theme selection requires a saved valid record and bounds persisted 
   assert.equal(api.isCustomTheme(sample), true)
   assert.equal(api.getQThemeId({ qThemeId: sample.id, qCustomThemes: [sample] }), sample.id)
   assert.equal(api.getThemeMotion({ qCustomThemes: [sample] }, sample.id), 'static')
-  assert.equal(api.getQThemeId({ qThemeId: sample.id, qCustomThemes: [] }), 'ocean')
+  assert.equal(api.getQThemeId({ qThemeId: sample.id, qCustomThemes: [] }), 'moonfrost')
   for (const change of [{ id: 'custom:x"]{}' }, { image: 'https://example.com/x.jpg' }, { image: 'data:image/svg+xml;base64,AAAA' }, { image: sample.image + 'A'.repeat(360000) }, { accent: '#abc;}' }, { zoom: NaN }, { mask: .1 }, { x: Infinity }, { name: ' ' }, { width: 2000 }]) {
     assert.equal(api.isCustomTheme({ ...sample, ...change }), false, JSON.stringify(change).slice(0, 120))
     assert.equal(api.getCustomThemes({ qCustomThemes: [{ ...sample, ...change }] }).length, 0)
@@ -33,6 +33,6 @@ test('editing a selected custom theme refreshes art and palette without changing
   assert.ok(style.textContent.includes('25% 62%'))
   assert.ok(style.textContent.includes('#116d83'))
   value = { ...value, qCustomThemes: [] }; listeners.forEach(cb => cb())
-  assert.equal(dom.window.document.body.dataset.qytQTheme, 'ocean')
+  assert.equal(dom.window.document.body.dataset.qytQTheme, 'moonfrost')
   stop(); assert.equal(listeners.size, 0); dom.window.close()
 })

@@ -1,14 +1,16 @@
 import { getCustomThemes } from '../custom-themes.ts'
 import { createCustomTheme } from './custom-theme-definition.ts'
-import { Q_THEME_IDS, type QThemeId, type QPresetThemeId, type Preferences } from '../shared.ts'
+import { DEFAULT_Q_THEME_ID, Q_THEME_IDS, type QThemeId, type QPresetThemeId, type Preferences } from '../shared.ts'
 import type { LocaleKey } from './locales.ts'
-import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL } from './brand-assets.ts'
+import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL, MOONFROST_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
 import { installBegoniaScene } from './begonia-scene.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
+import { installMoonfrostScene } from './moonfrost-scene.ts'
 import sunsetPalette from './themes/sunset.css'
 import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
+import moonfrostPalette from './themes/moonfrost.css'
 
 /** A theme supplies art, colors and an optional motion adapter. The settings,
  * reading surfaces and installation lifecycle belong to the common framework. */
@@ -53,6 +55,14 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
     bannerPosition: 'right 62%', previewPosition: 'center 62%',
     palette: sunsetPalette, installScene: doc => installLandscapeScene(doc),
   },
+  moonfrost: {
+    id: 'moonfrost', name: 'qThemeMoonfrost', description: 'qThemeMoonfrostDescription',
+    hint: 'qThemeMoonfrostHint', motionLabel: 'qThemeMoonfrostMotion', label: 'Q Moonfrost · 月阙清霜',
+    art: MOONFROST_SCENE_DATA_URL, accent: '#456493', accentDark: '#b4c9ee', soft: '#b7c8e4',
+    bannerPosition: 'right top', previewPosition: 'right top',
+    palette: moonfrostPalette,
+    installScene: installMoonfrostScene,
+  },
 }
 
 export const Q_THEMES: readonly ThemeDefinition[] = Q_THEME_IDS.map(id => definitions[id])
@@ -64,7 +74,7 @@ export function getQThemes(preferences?: Partial<Preferences>): readonly ThemeDe
 export function getQTheme(id: QThemeId, preferences?: Partial<Preferences>): ThemeDefinition {
   if (id.startsWith('custom:')) {
     const theme = getCustomThemes(preferences).find(theme => theme.id === id)
-    return theme ? createCustomTheme(theme) : definitions.ocean
+    return theme ? createCustomTheme(theme) : definitions[DEFAULT_Q_THEME_ID]
   }
-  return definitions[id as QPresetThemeId] ?? definitions.ocean
+  return definitions[id as QPresetThemeId] ?? definitions[DEFAULT_Q_THEME_ID]
 }

@@ -23,7 +23,7 @@ import css from './src/client/styles.css';
 import {OCEAN_SCENE_DATA_URL} from './src/client/brand-assets.ts';
 const style=document.createElement('style');style.textContent=css.replaceAll('__QYT_OCEAN_SCENE__',OCEAN_SCENE_DATA_URL);document.head.append(style);
 const listeners=new Set(),mutations=[];
-const initial=JSON.parse(localStorage.getItem('qyt.ocean.preview.settings')||'null')||{qThemeEnabled:true,qThemeSettings:{ocean:{motion:'dynamic'},futureTheme:{motion:'static'}}};
+const initial=JSON.parse(localStorage.getItem('qyt.ocean.preview.settings')||'null')||{qThemeEnabled:true,qThemeId:'ocean',qThemeSettings:{ocean:{motion:'dynamic'},futureTheme:{motion:'static'}}};
 let snapshot={status:'ready',writable:true,value:initial,revision:1},failure=false;
 const form={getSnapshot:()=>snapshot,subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn)},async mutate(operations){
   mutations.push(structuredClone(operations));await new Promise(resolve=>setTimeout(resolve,25));if(failure)return false;
@@ -147,7 +147,8 @@ if (process.argv.includes('--generate-only')) {
       await shell.evaluate((element, height) => { element.style.height = height }, height)
       await page.setViewportSize(viewport)
     }
-    assert.equal(await choices.getByRole('radio').count(), 3, 'Each registered theme owns one clickable selection card')
+    assert.equal(await choices.getByRole('radio').count(), 4, 'Each registered theme owns one clickable selection card')
+    assert.equal(await choices.getByRole('radio').first().getAttribute('data-theme'), 'moonfrost', 'Moonfrost is the first theme');
     const checkSelection = async (selected, color) => {
       await page.waitForFunction(({ selected, color }) => { const card = document.querySelector(`.qyt-theme-choice[data-theme="${selected}"]`); return card && getComputedStyle(card).borderTopColor === color }, { selected, color })
       await choices.evaluate(element => Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished)))
@@ -254,12 +255,41 @@ if (process.argv.includes('--generate-only')) {
     both = await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value)
     assert.equal(both.qThemeSettings.ocean.motion, 'dynamic')
     assert.equal(both.qThemeSettings.begonia.motion, 'static')
+    await page.setViewportSize({ width: 1080, height: 1160 })
+    await choices.locator('[data-theme="moonfrost"]').click()
+    await page.waitForFunction(() => window.__oceanSettingsFixture.getSnapshot().value.qThemeId === 'moonfrost')
+    await page.locator('.qyt-tab-panel:not([hidden])').evaluate(element => { element.scrollTop = 0 })
+    await checkSelection('moonfrost', 'rgb(69, 100, 147)')
+    const moonfrostGroup = page.getByRole('radiogroup', { name: '月阙清霜背景效果', exact: true })
+    assert.equal(await moonfrostGroup.getByRole('radio', { name: '动态', exact: true }).isChecked(), true)
+    await previewFrame.locator('canvas[data-qyt-moonfrost-cloth][data-ready="true"]').waitFor({ state: 'visible' })
+    assert.equal(await previewFrame.locator('[data-qyt-landscape-art]').evaluate(node => getComputedStyle(node).backgroundPosition), '100% 0%', 'Dynamic preview preserves the face at the top of the wallpaper')
+    const moonfrostA = await previewFrame.locator('[data-qyt-landscape-scene] i').first().evaluate(node => node.style.transform)
+    await page.waitForFunction(previous => document.querySelector('iframe[data-qyt-theme-preview]').contentDocument.querySelector('[data-qyt-landscape-scene] i')?.style.transform !== previous, moonfrostA)
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'moonfrost-settings.png') })
+    await page.locator('.qyt-theme-card').screenshot({ path: join(output, 'moonfrost-settings-card.png') })
+    await moonfrostGroup.getByText('静态', { exact: true }).click()
+    await page.waitForFunction(() => window.__oceanSettingsFixture.getSnapshot().value.qThemeSettings.moonfrost?.motion === 'static')
+    assert.equal(await previewFrame.locator('[data-qyt-landscape-scene]').count(), 0)
+    assert.ok((await previewFrame.locator('[data-phase]').evaluate(node => getComputedStyle(node).backgroundPosition)).endsWith('100% 0%'), 'Static preview keeps the same subject framing')
+    await page.reload(); await page.getByRole('tab', { name: 'Q 主题', exact: true }).click()
+    assert.equal(await choices.locator('[data-theme="moonfrost"]').getAttribute('aria-checked'), 'true')
+    assert.equal(await moonfrostGroup.getByRole('radio', { name: '静态', exact: true }).isChecked(), true)
+    await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'moonfrost-settings-dark.png') })
+    await page.setViewportSize({ width: 420, height: 900 })
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'moonfrost-settings-narrow.png') })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    both = await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value)
+    assert.equal(both.qThemeSettings.ocean.motion, 'dynamic')
+    assert.equal(both.qThemeSettings.begonia.motion, 'static')
+    assert.equal(both.qThemeSettings.moonfrost.motion, 'static')
     await page.evaluate(() => { window.__detachedThemePreview = document.querySelector('iframe[data-qyt-theme-preview]').contentDocument })
     await page.getByRole('tab', { name: '长文本', exact: true }).click()
     assert.equal(await page.locator('iframe[data-qyt-theme-preview]').count(), 0)
     assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
     assert.deepEqual(errors, [])
-    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png'] }
+    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png'] }
     await writeFile(join(output, 'settings-preview-result.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
   } finally {

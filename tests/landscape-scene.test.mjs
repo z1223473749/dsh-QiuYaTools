@@ -42,3 +42,32 @@ test('host replacement moves decoration and static atmosphere allocates no parti
   assert.equal(previous.isConnected, false)
   assert.equal(section.querySelectorAll('[data-qyt-landscape-scene]').length, 1)
 })
+
+test('theme painters share scene suspension, disposal and stale-frame protection', t => {
+  let draws = 0, allocations = 0, disposals = 0
+  const f = fixture(t, { movement: 'none', createArt(doc) {
+    allocations++
+    return { element: doc.createElement('canvas'), draw() { draws++ }, dispose() { disposals++ } }
+  } })
+  f.frame(1000); assert.equal(draws, 1)
+  const stale = [...f.frames.values()][0]
+  f.media[0].change(true)
+  assert.equal(disposals, 1); assert.equal(f.doc.querySelector('canvas'), null)
+  stale(1200); assert.equal(draws, 1)
+  f.media[0].change(false); f.frame(1400)
+  assert.equal(allocations, 2); assert.equal(draws, 2)
+  f.stop(); assert.equal(disposals, 2); assert.equal(f.frames.size, 0)
+})
+
+test('a failed art renderer leaves the original static background without retry loops', t => {
+  let allocations = 0, disposals = 0
+  const f = fixture(t, { createArt(doc) {
+    allocations++
+    return { element: doc.createElement('canvas'), draw() { throw Error('GPU lost') }, dispose() { disposals++ } }
+  } })
+  f.frame(1000)
+  assert.equal(disposals, 1); assert.equal(f.frames.size, 0)
+  assert.equal(f.doc.querySelector('[data-qyt-landscape-scene]'), null)
+  f.visibility(true); f.visibility(false)
+  assert.equal(allocations, 1)
+})

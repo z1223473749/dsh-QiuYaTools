@@ -34,9 +34,9 @@ const expected = {
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: true,
-  qThemeId: 'ocean',
+  qThemeId: 'moonfrost',
   qCustomThemes: [],
-  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } },
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -68,7 +68,9 @@ for (const input of [
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
   { qThemeSettings: { ocean: { motion: 'static' } } },
+  { qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } },
   { qThemeId: 'begonia', qThemeSettings: { begonia: { motion: 'static' } } },
+  { qThemeSettings: { moonfrost: { motion: 'static' } } },
 ]) {
   const result = await standard.validate(input)
   assert.equal(result.issues, undefined, 'valid boundary or explicit settings must validate')
@@ -114,6 +116,7 @@ const invalid = [
   { qThemeSettings: { ocean: { motion: false } } },
   { qThemeId: 'unregistered' },
   { qThemeSettings: { begonia: { motion: 'off' } } },
+  { qThemeSettings: { moonfrost: { motion: 'off' } } },
 ]
 for (const input of invalid) {
   const result = await standard.validate(input)
@@ -194,7 +197,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 24, applied: true,
+    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 25, applied: true,
   })
 })
 
@@ -225,8 +228,8 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.pasteLineThreshold.get(), 20)
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
-  assert.equal(fiber.config.qThemeId.get(), 'ocean')
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } })
+  assert.equal(fiber.config.qThemeId.get(), 'moonfrost')
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' } })
   assert.equal(Object.keys(fiber.config).length, 17)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)

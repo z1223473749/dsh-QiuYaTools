@@ -1,4 +1,10 @@
-/** Reusable decoration for a single still image. Never transforms host UI. */
+export interface LandscapeArt {
+  readonly element: HTMLElement
+  draw(time: number): void
+  dispose(): void
+}
+
+/** Shared scene lifecycle. Theme painters only own decorative artwork. */
 export interface LandscapeOptions {
   movement?: 'parallax' | 'pan' | 'none'
   atmosphere?: 'glow' | 'petals' | 'snow' | 'none'
@@ -6,6 +12,7 @@ export interface LandscapeOptions {
   speed?: number
   zoom?: number
   position?: string
+  createArt?: (doc: Document) => LandscapeArt | null
 }
 
 export function installLandscapeScene(doc: Document, options: LandscapeOptions = {}): () => void {
@@ -16,7 +23,8 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
   if (!reduced.addEventListener || !forced.addEventListener) return () => {}
   const movement = options.movement ?? 'parallax', atmosphere = options.atmosphere ?? 'glow'
   const strength = Math.max(0, Math.min(1, options.intensity ?? .35)), speed = Math.max(.1, Math.min(2, options.speed ?? .45))
-  let disposed = false, frame = 0, generation = 0, last: number | null = null, time = 0, intersecting = true
+  let disposed = false, failed = false, frame = 0, generation = 0, last: number | null = null, time = 0, intersecting = true
+  let painter: LandscapeArt | null = null
   let host: HTMLElement | null = null, layer: HTMLElement | null = null, art: HTMLElement | null = null
   let particles: HTMLElement[] = [], targetX = 0, targetY = 0, x = 0, y = 0
   const cancel = () => { generation++; if (frame) win.cancelAnimationFrame(frame); frame = 0; last = null }
@@ -37,6 +45,7 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
   function release(): void {
     cancel(); resize.disconnect(); intersection?.disconnect()
     host?.removeEventListener('pointermove', pointer); host?.removeEventListener('pointerleave', leave)
+    try { painter?.dispose() } finally { painter = null }
     layer?.remove(); host = layer = art = null; particles = []; intersecting = true; leave(); x = y = 0
   }
   function rendered(element: HTMLElement): boolean {
@@ -58,6 +67,7 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
       const dx = movement === 'parallax' ? x * strength * 10 : movement === 'pan' ? Math.sin(time * .18) * strength * 12 : 0
       const dy = movement === 'parallax' ? y * strength * 7 : 0
       art.style.transform = `translate(${dx}px,${dy}px) scale(${Math.max(1, options.zoom ?? 1) * (movement === 'none' ? 1 : 1.045)})`
+      try { painter?.draw(time) } catch { failed = true; release(); return }
       const rect = host.getBoundingClientRect(), reading = host.dataset.phase === 'active'
       const margin = Math.max(20, (rect.width - 720) / 2 - 20)
       for (const [i, particle] of particles.entries()) {
@@ -72,7 +82,7 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
     })
   }
   function sync(): void {
-    if (disposed) return
+    if (disposed || failed) return
     if (reduced.matches || forced.matches) { release(); return }
     const candidates = [...doc.querySelectorAll<HTMLElement>('[data-slot="main.conversation"] > [data-phase]')]
     const next = candidates.find(rendered) ?? candidates[0]
@@ -84,7 +94,13 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
       layer.style.cssText = 'position:absolute;inset:0;overflow:hidden;z-index:-1;pointer-events:none;user-select:none;'
       art = doc.createElement('div'); art.dataset.qytLandscapeArt = ''
       art.style.cssText = 'position:absolute;inset:0;background-image:var(--qyt-theme-art);background-size:cover;background-repeat:no-repeat;will-change:transform;'
-      art.style.backgroundPosition = options.position ?? 'center 62%'
+      // Miniature previews can preserve a portrait subject's face without
+      // changing the full application's framing in either motion mode.
+      art.style.backgroundPosition = `var(--qyt-preview-art-position, ${options.position ?? 'center 62%'})`
+      if (options.createArt) {
+        try { painter = options.createArt(doc) } catch { painter = null }
+        if (painter) art.append(painter.element)
+      }
       const wash = doc.createElement('div')
       wash.style.cssText = 'position:absolute;inset:0;background-image:var(--qyt-q-canvas-wash);'
       layer.append(art, wash)

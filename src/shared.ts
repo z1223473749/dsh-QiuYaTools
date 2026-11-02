@@ -1,8 +1,9 @@
 import { getCustomThemes, type CustomTheme } from './custom-themes.ts'
 export const SETTINGS_ID = 'qiuya-tools'
 
-export const Q_THEME_IDS = ['ocean', 'begonia', 'sunset'] as const
+export const Q_THEME_IDS = ['moonfrost', 'ocean', 'begonia', 'sunset'] as const
 export type QPresetThemeId = typeof Q_THEME_IDS[number]
+export const DEFAULT_Q_THEME_ID: QPresetThemeId = 'moonfrost'
 export type QThemeId = QPresetThemeId | `custom:${string}`
 export type ThemeMotion = 'dynamic' | 'static'
 /** Kept for existing Ocean consumers. */
@@ -12,6 +13,7 @@ export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   ocean: Object.freeze({ motion: 'dynamic' }),
   begonia: Object.freeze({ motion: 'dynamic' }),
   sunset: Object.freeze({ motion: 'dynamic' }),
+  moonfrost: Object.freeze({ motion: 'dynamic' }),
 })
 
 /** Serialized values projected by the Host configuration form. */
@@ -28,7 +30,7 @@ export interface Preferences {
   gitEnabled: boolean
   /** Appearance is independent of the enhancement tools and their legacy master. */
   qThemeEnabled: boolean
-  /** Missing or unknown ids retain Ocean when upgrading an older profile. */
+  /** Missing or unknown ids use the default; saved valid selections remain. */
   qThemeId: QThemeId
   /** Each theme owns its options; changing one leaves the others intact. */
   qThemeSettings: QThemeSettings
@@ -56,7 +58,7 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   promptSuggestionsEnabled: true,
   gitEnabled: true,
   qThemeEnabled: true,
-  qThemeId: 'ocean',
+  qThemeId: DEFAULT_Q_THEME_ID,
   qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
   qCustomThemes: [],
   computerUseEnabled: false,
@@ -65,10 +67,10 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   pasteLineThreshold: 15,
 })
 
-/** Treat saved data as untrusted: old and unknown themes fall back to Ocean. */
+/** Treat saved data as untrusted: missing and unknown themes use the default. */
 export function getQThemeId(preferences: Partial<Preferences> | undefined): QThemeId {
   return Q_THEME_IDS.find(id => id === preferences?.qThemeId)
-    ?? getCustomThemes(preferences).find(theme => theme.id === preferences?.qThemeId)?.id ?? 'ocean'
+    ?? getCustomThemes(preferences).find(theme => theme.id === preferences?.qThemeId)?.id ?? DEFAULT_Q_THEME_ID
 }
 
 /** Every theme has an independent motion setting, including legacy profiles. */

@@ -22,6 +22,9 @@ const [source, motionMockSource] = (await Promise.all([
       build.onLoad({ filter: /[/\\]begonia-scene\.ts$/ }, () => ({
         contents: 'export function installBegoniaScene(doc) { return globalThis.__begoniaScene.install(doc) }', loader: 'js',
       }))
+      build.onLoad({ filter: /[/\\]landscape-scene\.ts$/ }, () => ({
+        contents: 'export function installLandscapeScene(doc) { return globalThis.__landscapeScene.install(doc) }', loader: 'js',
+      }))
     },
   }] }),
 ])).map(result => result.outputFiles[0].text)
@@ -35,9 +38,9 @@ const dockLayer = ':is([data-qyt-ocean-dock], [data-qyt-theme-dock])'
 const washLayer = ':is([data-qyt-ocean-wash], [data-qyt-theme-wash])'
 const dockFrames = ':is(canvas[data-qyt-ocean-dock-frame], canvas[data-qyt-theme-dock-frame], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
 
-function moduleFor(document, scene, begoniaScene) {
+function moduleFor(document, scene, begoniaScene, landscapeScene) {
   const module = { exports: {} }
-  vm.runInNewContext(scene || begoniaScene ? motionMockSource : source, { module, exports: module.exports, document, __scene: scene, __begoniaScene: begoniaScene })
+  vm.runInNewContext(scene || begoniaScene || landscapeScene ? motionMockSource : source, { module, exports: module.exports, document, __scene: scene, __begoniaScene: begoniaScene, __landscapeScene: landscapeScene })
   return module.exports
 }
 
@@ -51,14 +54,14 @@ function formFixture(value = { qThemeEnabled: false }, status = 'ready') {
   }
 }
 
-function fixture(t, { enabled = false, marker, dark = false, sharedForm, scene, begoniaScene } = {}) {
+function fixture(t, { enabled = false, marker, dark = false, sharedForm, scene, begoniaScene, landscapeScene } = {}) {
   const dom = new JSDOM('<!doctype html><html data-platform="darwin"><head><style data-native-theme>body{--dsw-alias-bg-base:#fff;--dsw-alias-state-error-primary:#d31d34;--dsw-alias-state-success-primary:#198251;--dsw-alias-state-warn-primary:#9b640a;--dsw-alias-code-diff-added:#d4f4dd;--dsw-alias-markdown-code-block:#f8f8f8}body[data-ds-dark-theme]{--dsw-alias-markdown-code-block:#191919}.shiki span{color:#7851a9}</style></head><body style="--host-layer: preserved; color: rgb(11, 22, 33)"><div id="root"><div data-slot="sidebar"><aside>Sidebar</aside></div><main data-slot="main.conversation"><section data-phase="active"><div data-conversation-scroll>Conversation</div></section></main><div data-composer-card>Composer</div><pre class="shiki"><span>highlighted</span></pre></div></body></html>')
   t.after(() => dom.window.close())
   const doc = dom.window.document
   if (marker !== undefined) doc.body.setAttribute('data-qyt-q-theme', marker)
   if (dark) doc.body.setAttribute('data-ds-dark-theme', '')
-  const form = sharedForm ?? formFixture({ qThemeEnabled: enabled })
-  const plugin = moduleFor(doc, scene, begoniaScene)
+  const form = sharedForm ?? formFixture({ qThemeEnabled: enabled, qThemeId: 'ocean' })
+  const plugin = moduleFor(doc, scene, begoniaScene, landscapeScene)
   const cleanups = []
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup() })
   return {
@@ -105,7 +108,7 @@ test('an explicit preview document shares the framework without replacing or sto
 
 test('the Ocean static preference enables its palette without installing the motion runtime', t => {
   const scene = motionFixture()
-  const sharedForm = formFixture({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  const sharedForm = formFixture({ qThemeEnabled: true, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } })
   const f = fixture(t, { sharedForm, scene })
   const cleanup = f.install()
   assert.equal(f.styles().length, 1)
@@ -122,15 +125,15 @@ test('changing Ocean motion stops and resumes only animation while preserving th
   const first = f.install(), second = f.install()
   const style = f.styles()[0]
   assert.equal(scene.installs, 1, 'shared theme consumers install one scene')
-  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  f.update({ qThemeEnabled: true, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } })
   assert.equal(scene.active, 0)
   assert.equal(scene.cleanups, 1)
   assert.equal(f.styles()[0], style)
   assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
   assert.equal(f.token('--qyt-q-base'), '#fafaf8')
-  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'static' } } })
+  f.update({ qThemeEnabled: true, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } })
   assert.equal(scene.cleanups, 1, 'repeated static updates do not dispose twice')
-  f.update({ qThemeEnabled: true, qThemeSettings: { ocean: { motion: 'dynamic' } } })
+  f.update({ qThemeEnabled: true, qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'dynamic' } } })
   assert.equal(scene.installs, 2)
   assert.equal(scene.active, 1)
   assert.equal(f.styles()[0], style)
@@ -145,7 +148,7 @@ test('changing Ocean motion stops and resumes only animation while preserving th
 test('legacy Ocean preferences and an explicit dynamic preference start motion by default', t => {
   for (const qThemeSettings of [undefined, {}, { ocean: {} }, { ocean: { motion: 'dynamic' } }]) {
     const scene = motionFixture()
-    const sharedForm = formFixture({ qThemeEnabled: true, ...(qThemeSettings === undefined ? {} : { qThemeSettings }) })
+    const sharedForm = formFixture({ qThemeEnabled: true, qThemeId: 'ocean', ...(qThemeSettings === undefined ? {} : { qThemeSettings }) })
     const f = fixture(t, { sharedForm, scene })
     const cleanup = f.install()
     assert.equal(scene.installs, 1)
@@ -156,12 +159,12 @@ test('legacy Ocean preferences and an explicit dynamic preference start motion b
 })
 
 test('ready preferences without a theme flag inherit the enabled dynamic default', t => {
-  for (const preferences of [{}, { enabled: false }, { qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }]) {
-    const scene = motionFixture()
-    const f = fixture(t, { sharedForm: formFixture(preferences), scene })
+  for (const preferences of [{}, { enabled: false }, { qThemeSettings: {} }, { qThemeSettings: { moonfrost: {} } }]) {
+    const scene = motionFixture('moonfrost')
+    const f = fixture(t, { sharedForm: formFixture(preferences), landscapeScene: scene })
     const cleanup = f.install()
     assert.equal(f.styles().length, 1)
-    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'moonfrost')
     assert.equal(scene.installs, 1)
     assert.equal(scene.active, 1, 'missing appearance fields do not inherit the legacy tool master')
     cleanup()
@@ -170,18 +173,18 @@ test('ready preferences without a theme flag inherit the enabled dynamic default
 })
 
 test('the enabled theme default retains a saved static preference', t => {
-  const scene = motionFixture()
-  const f = fixture(t, { sharedForm: formFixture({ qThemeSettings: { ocean: { motion: 'static' } } }), scene })
+  const scene = motionFixture('moonfrost')
+  const f = fixture(t, { sharedForm: formFixture({ qThemeSettings: { moonfrost: { motion: 'static' } } }), landscapeScene: scene })
   f.install()
   assert.equal(f.styles().length, 1)
-  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'moonfrost')
   assert.equal(scene.installs, 0, 'default enablement never replaces a saved motion choice')
 })
 
 test('loading and unavailable preferences never install the enabled default before an accepted ready snapshot', t => {
   for (const status of ['loading', 'unavailable']) {
-    const scene = motionFixture()
-    const f = fixture(t, { sharedForm: formFixture({}, status), scene })
+    const scene = motionFixture('moonfrost')
+    const f = fixture(t, { sharedForm: formFixture({}, status), landscapeScene: scene })
     f.install()
     assert.equal(f.styles().length, 0)
     assert.equal(scene.installs, 0)
@@ -208,7 +211,7 @@ test('an explicitly disabled theme stays off across tool updates and can be enab
   assert.equal(f.styles().length, 0, 'an accepted explicit false is preserved across tool updates')
   f.update({ enabled: false, pastedTextEnabled: false, sessionWindowsEnabled: false, bulkArchiveEnabled: false, planCommentsEnabled: false, qThemeEnabled: true })
   assert.equal(f.styles().length, 1, 'theme preference is independent from all tool switches')
-  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'moonfrost')
   f.update({ qThemeEnabled: true }, 'unavailable')
   assert.equal(f.styles().length, 0)
   f.update({ qThemeEnabled: true }, 'loading')
@@ -280,8 +283,8 @@ test('accepted profile changes update separate client documents together', t => 
   sharedForm.update({ qThemeEnabled: true })
   assert.equal(main.styles().length, 1)
   assert.equal(window.styles().length, 1)
-  assert.equal(main.token('--qyt-q-base'), '#fafaf8')
-  assert.equal(window.token('--qyt-q-base'), '#1b1e22')
+  assert.equal(main.token('--qyt-q-base'), '#f6f8fc')
+  assert.equal(window.token('--qyt-q-base'), '#151d2d')
   sharedForm.update({ qThemeEnabled: false })
   assert.equal(main.styles().length, 0)
   assert.equal(window.styles().length, 0)
@@ -311,11 +314,11 @@ function contrast(a, b) {
 const readingInk = ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']
 
 function forEachThemeAppearance(t, check) {
-  for (const themeId of ['ocean', 'begonia']) {
+  for (const themeId of ['ocean', 'begonia', 'moonfrost']) {
     for (const dark of [false, true]) {
       const f = fixture(t, { dark, sharedForm: formFixture({
         qThemeEnabled: true, qThemeId: themeId,
-        qThemeSettings: { ocean: { motion: 'static' }, begonia: { motion: 'static' } },
+        qThemeSettings: { [themeId]: { motion: 'static' } },
       }) })
       f.install()
       check(f, `${themeId} ${dark ? 'dark' : 'light'}`)
@@ -323,7 +326,7 @@ function forEachThemeAppearance(t, check) {
   }
 }
 
-test('both themes keep small text readable on base, raised, sidebar and selected surfaces in both schemes', t => {
+test('Ocean, Begonia and Moonfrost keep small text readable on base, raised, sidebar and selected surfaces in both schemes', t => {
   forEachThemeAppearance(t, (f, label) => {
     for (const ink of readingInk) {
       for (const surface of ['--qyt-q-base', '--qyt-q-surface', '--qyt-q-raised', '--qyt-q-sidebar', '--qyt-q-selected']) {
@@ -332,7 +335,7 @@ test('both themes keep small text readable on base, raised, sidebar and selected
     }
     assert.ok(contrast(f.token('--qyt-q-tab-ink'), f.token('--qyt-q-tab-fill')) >= 4.5, `${label} native tab label`)
   })
-  for (const fill of ['#116d83', '#bc353c', '#b32c3a']) {
+  for (const fill of ['#116d83', '#bc353c', '#b32c3a', '#456493']) {
     assert.ok(contrast(fill, '#ffffff') >= 4.5, `${fill} send button keeps its fixed white icon readable`)
   }
 })
@@ -354,9 +357,9 @@ function allRules(rules) {
   return [...rules].flatMap(rule => rule.cssRules ? allRules(rule.cssRules) : [rule])
 }
 
-test('both themes embed their own illustration and withdraw it without external image requests', t => {
+test('preset themes embed their own illustration and withdraw it without external image requests', t => {
   const illustrations = []
-  for (const qThemeId of ['ocean', 'begonia']) {
+  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost']) {
     const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
     const cleanup = f.install()
     const installed = f.styles()[0].textContent
@@ -368,7 +371,7 @@ test('both themes embed their own illustration and withdraw it without external 
     cleanup()
     assert.equal(f.styles().length, 0)
   }
-  assert.notEqual(illustrations[0], illustrations[1], 'themes do not accidentally reuse the same illustration')
+  assert.equal(new Set(illustrations).size, illustrations.length, 'themes do not accidentally reuse the same illustration')
 })
 
 test('the approved illustrated sidebar keeps its own art opacity and selected-row treatment', t => {
@@ -386,7 +389,7 @@ test('the approved illustrated sidebar keeps its own art opacity and selected-ro
   assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-accent)')
 })
 
-test('both themes keep reading ink legible over the darkest and lightest possible illustration pixels', t => {
+test('Ocean, Begonia and Moonfrost keep reading ink legible over the darkest and lightest possible illustration pixels', t => {
   forEachThemeAppearance(t, (f, label) => {
     const match = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([.\d]+)\)$/u.exec(f.token('--qyt-q-paper'))
     assert.ok(match, `${label} defines translucent reading paper`)
@@ -493,17 +496,17 @@ test('live illustration layers stay behind native content and preserve the stati
 })
 
 
-test('missing and unknown theme ids retain Ocean and its saved static choice', t => {
+test('missing and unknown theme ids use Moonfrost and retain its saved static choice', t => {
   for (const qThemeId of [undefined, null, '', 'future-theme', '__proto__', 42]) {
     const ocean = motionFixture('ocean'), begonia = motionFixture('begonia')
     const f = fixture(t, { scene: ocean, begoniaScene: begonia, sharedForm: formFixture({
       qThemeEnabled: true, qThemeId,
-      qThemeSettings: { ocean: { motion: 'static' }, begonia: { motion: 'dynamic' } },
+      qThemeSettings: { moonfrost: { motion: 'static' }, ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } },
     }) })
     f.install()
-    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'ocean')
+    assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'moonfrost')
     assert.equal(f.styles().length, 1)
-    assert.equal(f.token('--qyt-q-base'), '#fafaf8')
+    assert.equal(f.token('--qyt-q-base'), '#f6f8fc')
     assert.equal(ocean.installs, 0)
     assert.equal(begonia.installs, 0)
   }

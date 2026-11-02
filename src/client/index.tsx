@@ -13,7 +13,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import pkg from '../../package.json' with { type: 'json' }
 import {
-  SETTINGS_ID, DEFAULT_PREFERENCES, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold, getQThemeId, getThemeMotion,
+  SETTINGS_ID, DEFAULT_PREFERENCES, DEFAULT_Q_THEME_ID, FEATURE_FIELDS, isFeatureEnabled, parsePasteThreshold, getQThemeId, getThemeMotion,
   type FeatureField, type Preferences, type QThemeId, type ThemeMotion,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
@@ -308,7 +308,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 if (JSON.stringify(current.find(item => item.id === id)) !== JSON.stringify(original)) return false
                 const accepted = await persist([
                   { op: 'set', path: ['qCustomThemes'], value: current.filter(item => item.id !== id) },
-                  ...(latest?.qThemeId === id ? [{ op: 'set' as const, path: ['qThemeId'], value: 'sunset' }] : []),
+                  ...(latest?.qThemeId === id ? [{ op: 'set' as const, path: ['qThemeId'], value: DEFAULT_Q_THEME_ID }] : []),
                 ])
                 if (accepted) setThemeEditor(null)
                 return accepted

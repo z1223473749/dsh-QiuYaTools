@@ -89,7 +89,7 @@ try {
   await dialog.getByRole('button', { name: '删除主题', exact: true }).click()
   await dialog.getByRole('button', { name: '确认删除', exact: true }).click()
   await dialog.waitFor({ state: 'detached' })
-  assert.equal(await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value.qThemeId), 'sunset')
+  assert.equal(await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value.qThemeId), 'moonfrost')
   assert.equal(await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value.qCustomThemes.length), 0)
   assert.deepEqual(errors, [])
   console.log('Custom themes: upload, draft isolation, light/dark preview, refusal/retry, persistence, static mode, cancel, delete, narrow layout and fixed create action passed')

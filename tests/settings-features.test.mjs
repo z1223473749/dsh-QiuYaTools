@@ -66,7 +66,7 @@ const { QiuYaToolsSettings } = module.exports
 
 const defaults = {
   enabled: true, pastedTextEnabled: true, sessionWindowsEnabled: true,
-  bulkArchiveEnabled: true, planCommentsEnabled: true, conversationCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, gitEnabled: true, qThemeEnabled: false,
+  bulkArchiveEnabled: true, planCommentsEnabled: true, conversationCommentsEnabled: true, sidebarToolsEnabled: true, promptSuggestionsEnabled: true, gitEnabled: true, qThemeEnabled: false, qThemeId: 'ocean',
   pasteCharacterThreshold: 1000, pasteLineThreshold: 15,
 }
 const featureFields = ['pastedTextEnabled', 'sessionWindowsEnabled', 'bulkArchiveEnabled', 'planCommentsEnabled', 'conversationCommentsEnabled', 'sidebarToolsEnabled', 'promptSuggestionsEnabled', 'gitEnabled']
@@ -459,12 +459,15 @@ test('Q Theme defaults on and persists independently from the enhancement tools 
   for (const enabled of [true, false]) {
     const initial = { ...defaults, enabled }
     delete initial.qThemeEnabled
+    delete initial.qThemeId
     const f = mount(initial)
     try {
       f.select('qThemeTab')
       assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'true')
-      const preview = f.container.querySelector('[role="img"][aria-label="qThemePreviewDescription"]')
+      const preview = f.container.querySelector('[role="img"][aria-label="qThemeMoonfrostDescription"]')
       assert.ok(preview)
+      assert.equal(f.container.querySelector('.qyt-theme-choice').dataset.theme, 'moonfrost')
+      assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
       assert.equal(preview.querySelectorAll('input, button, a').length, 0, 'the color preview is decorative, without pretend settings')
       await f.toggle('qTheme')
       assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeEnabled'], value: false }]])
@@ -625,7 +628,7 @@ test('theme cards persist only the selected id and restore each theme own motion
     f.select('qThemeTab')
     assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
     assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'false')
-    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 3)
+    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 4)
     assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
     await f.chooseTheme('begonia')
     assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeId'], value: 'begonia' }]])
@@ -670,7 +673,7 @@ test('theme card selection uses accepted snapshots and supports keyboard navigat
     assert.equal(f.theme('begonia').tabIndex, 0)
     assert.equal(f.theme('ocean').tabIndex, -1)
     await act(async () => Simulate.keyDown(f.theme('begonia'), { key: 'Home' }))
-    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
   } finally { f.dispose() }
 })
 
@@ -679,7 +682,7 @@ test('theme selection respects read-only and unavailable settings and falls back
     const f = mount({ ...defaults, qThemeId: 'future-theme' }, policy)
     try {
       f.select('qThemeTab')
-      assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+      assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
       for (const card of f.container.querySelectorAll('.qyt-theme-choice')) assert.equal(card.disabled, true)
       await f.chooseTheme('begonia')
       assert.equal(f.mutations.length, 0)

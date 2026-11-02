@@ -64,8 +64,8 @@ export function ThemePreview({ ctx, form, theme, title, appearance }: {
     const appearanceObserver = new view.MutationObserver(syncAppearance)
     appearanceObserver.observe(parent.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
     const stop = installQTheme(ctx, projected, doc)
-    // Keep the approved subject crop on the static Begonia backdrop. Ocean's
-    // default matches its renderer's viewport mapping in both motion modes.
+    // Keep each theme's subject crop in the miniature. Landscape motion also
+    // consumes this variable; Ocean retains its renderer's viewport mapping.
     const crop = doc.createElement('style')
     crop.textContent = 'body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]{background-position:center,center,center,var(--qyt-preview-art-position,right bottom)}'
     doc.body.style.setProperty('--qyt-preview-art-position', theme.previewPosition ?? 'right bottom')

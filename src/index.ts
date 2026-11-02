@@ -19,7 +19,7 @@ import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 import { installGitHost } from './features/git/host.ts'
 import { CUSTOM_THEME_ID, THEME_IMAGE, MAX_CUSTOM_THEMES, MAX_THEME_IMAGE_BYTES, type CustomTheme } from './custom-themes.ts'
-import { DEFAULT_Q_THEME_SETTINGS, Q_THEME_IDS, type QThemeId, type QThemeSettings } from './shared.ts'
+import { DEFAULT_Q_THEME_ID, DEFAULT_Q_THEME_SETTINGS, Q_THEME_IDS, type QThemeId, type QThemeSettings } from './shared.ts'
 
 /** Preferences persisted by Harness in the active profile. */
 export interface Config {
@@ -53,7 +53,7 @@ export const Config = z.object({
   promptSuggestionsEnabled: z.boolean().default(true).description('根据当前会话推荐下一句提示词，按 Tab 填入但不自动发送').volatile(),
   gitEnabled: z.boolean().default(true).description('会话分支、改动统计、Git 对比、提交与 PR').volatile(),
   qThemeEnabled: z.boolean().default(true).description('为整个 Harness 启用 Q 主题').volatile(),
-  qThemeId: z.union([...Q_THEME_IDS.map(id => z.const(id)), z.string().pattern(CUSTOM_THEME_ID)]).default('ocean').description('当前 Q 主题').volatile(),
+  qThemeId: z.union([...Q_THEME_IDS.map(id => z.const(id)), z.string().pattern(CUSTOM_THEME_ID)]).default(DEFAULT_Q_THEME_ID).description('当前 Q 主题').volatile(),
   qThemeSettings: z.object(Object.fromEntries(Q_THEME_IDS.map(id => [id, z.object({
     motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),
   }).default(DEFAULT_Q_THEME_SETTINGS[id])]))).default(DEFAULT_Q_THEME_SETTINGS).description('各 Q 主题的独立设置').volatile(),
