@@ -1,8 +1,10 @@
 import { Q_THEME_IDS, type QThemeId } from '../shared.ts'
 import type { LocaleKey } from './locales.ts'
-import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL } from './brand-assets.ts'
+import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
 import { installBegoniaScene } from './begonia-scene.ts'
+import { installLandscapeScene } from './landscape-scene.ts'
+import sunsetPalette from './themes/sunset.css'
 import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
 
@@ -39,6 +41,13 @@ const definitions: Readonly<Record<QThemeId, ThemeDefinition>> = {
     art: BEGONIA_SCENE_DATA_URL, accent: '#bc353c', accentDark: '#f0a2a6', soft: '#e4a4a3',
     bannerPosition: 'right 38%', previewPosition: 'right 25%',
     palette: begoniaPalette, installScene: installBegoniaScene,
+  },
+  sunset: {
+    id: 'sunset', name: 'qThemeSunset', description: 'qThemeSunsetDescription',
+    hint: 'qThemeSunsetHint', motionLabel: 'qThemeSunsetMotion', label: 'Q Sunset · 落日山野',
+    art: SUNSET_SCENE_DATA_URL, accent: '#ad563e', accentDark: '#f4b393', soft: '#e8b78a',
+    bannerPosition: 'right 62%', previewPosition: 'center 62%',
+    palette: sunsetPalette, installScene: doc => installLandscapeScene(doc),
   },
 }
 

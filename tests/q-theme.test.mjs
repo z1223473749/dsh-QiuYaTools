@@ -642,3 +642,15 @@ test('a throwing adapter disposer cannot interrupt theme switching, static mode 
   cleanup()
   assert.equal(cleanups, 3, 'disposed adapters are never called again')
 })
+
+test('Sunset is a separate preset with persistent static mode and its own palette', t => {
+  const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId: 'sunset', qThemeSettings: { sunset: { motion: 'static' } } }) })
+  const stop = f.install()
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'sunset')
+  assert.equal(f.token('--qyt-q-accent'), '#ad563e')
+  assert.match(f.token('--qyt-theme-art'), /data:image\/jpeg;base64/)
+  f.doc.body.setAttribute('data-ds-dark-theme', '')
+  assert.equal(f.token('--qyt-q-accent'), '#f4b393')
+  stop()
+  assert.equal(f.styles().length, 0)
+})

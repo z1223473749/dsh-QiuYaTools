@@ -101,9 +101,9 @@ body[data-ds-dark-theme] .qyt-settings { --qyt-theme-accent: var(--qyt-theme-col
 .qyt-theme-panel { container: qyt-themes / inline-size; }
 .qyt-theme-layout { display: grid; grid-template-columns: minmax(0, 1fr) 144px; gap: 12px; align-items: start; min-width: 0; }
 .qyt-theme-card { min-width: 0; }
-.qyt-theme-picker { align-self: stretch; min-width: 0; padding: 10px; }
+.qyt-theme-picker { align-self: stretch; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 350px; padding: 10px; }
 .qyt-theme-picker > h4 { margin: 0 0 10px; font-size: 12px; }
-.qyt-theme-choices { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.qyt-theme-choices { display: grid; grid-template-columns: 1fr; align-content: start; gap: 10px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 3px; scrollbar-width: thin; }
 .qyt-theme-picker .qyt-theme-choice { min-height: 102px; padding: 8px 34px 8px 7px; border-radius: 10px; }
 .qyt-theme-picker .qyt-theme-choice-name { max-width: 100%; padding: 2px 3px; font-size: 11px; }
 .qyt-theme-picker .qyt-theme-choice-circle { top: 8px; right: 7px; width: 21px; height: 21px; box-shadow: 0 0 0 3px var(--qyt-art-paper); }

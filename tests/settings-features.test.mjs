@@ -625,7 +625,7 @@ test('theme cards persist only the selected id and restore each theme own motion
     f.select('qThemeTab')
     assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
     assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'false')
-    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 2)
+    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 3)
     assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
     await f.chooseTheme('begonia')
     assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeId'], value: 'begonia' }]])

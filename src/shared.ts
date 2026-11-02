@@ -1,6 +1,6 @@
 export const SETTINGS_ID = 'qiuya-tools'
 
-export const Q_THEME_IDS = ['ocean', 'begonia'] as const
+export const Q_THEME_IDS = ['ocean', 'begonia', 'sunset'] as const
 export type QThemeId = typeof Q_THEME_IDS[number]
 export type ThemeMotion = 'dynamic' | 'static'
 /** Kept for existing Ocean consumers. */
@@ -9,6 +9,7 @@ export type QThemeSettings = Record<QThemeId, { motion: ThemeMotion }>
 export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   ocean: Object.freeze({ motion: 'dynamic' }),
   begonia: Object.freeze({ motion: 'dynamic' }),
+  sunset: Object.freeze({ motion: 'dynamic' }),
 })
 
 /** Serialized values projected by the Host configuration form. */

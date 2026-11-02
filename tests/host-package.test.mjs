@@ -35,7 +35,7 @@ const expected = {
   gitEnabled: true,
   qThemeEnabled: true,
   qThemeId: 'ocean',
-  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } },
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -218,7 +218,7 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.equal(fiber.config.qThemeId.get(), 'ocean')
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' } })
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' } })
   assert.equal(Object.keys(fiber.config).length, 16)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
