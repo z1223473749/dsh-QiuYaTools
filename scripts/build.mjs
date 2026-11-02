@@ -5,6 +5,7 @@ import { buildMacOSComputer } from './build-macos-computer.mjs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
+import { composerPreviewBuild } from './composer-preview-build.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -36,22 +37,9 @@ const client = await build({
   external: ['@deepseek-ai/*', 'react', 'react/*', 'react-dom', 'react-dom/*', 'node:*'],
   minifyWhitespace: true,
   jsx: 'automatic', loader: { '.css': 'text' },
-  plugins: [{
+  plugins: [composerPreviewBuild(), {
     name: 'qiuya-css-modules',
     setup(build) {
-      build.onResolve({ filter: /^pdfjs-dist\/build\/pdf\.worker\.min\.mjs\?raw$/ }, () => ({
-        path: require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), namespace: 'qyt-worker-source',
-      }))
-      build.onLoad({ filter: /.*/, namespace: 'qyt-worker-source' }, async ({ path }) => ({
-        contents: await readFile(path, 'utf8'), loader: 'text',
-      }))
-      build.onLoad({ filter: /\/pdfjs-dist\/build\/pdf\.mjs$/ }, async ({ path }) => {
-        const source = await readFile(path, 'utf8')
-        if (!source.includes('globalThis.pdfjsLib = {')) throw Error('PDF.js export face changed')
-        return { loader: 'js', contents: '/*! Modified by QiuYaTools: isolate PDF.js global exports from the Host preview runtime. */\n' + source
-          .replace('globalThis.pdfjsLib = {', 'const qytPdfjsLib = {')
-          .replace('globalThis._pdfjsTestingUtils = {', 'const qytPdfjsTestingUtils = {') }
-      })
       build.onLoad({ filter: /\.module\.css$/ }, async ({ path }) => ({
         contents: await readFile(path, 'utf8'), loader: 'local-css',
       }))

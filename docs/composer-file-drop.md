@@ -31,4 +31,4 @@ node scripts/e2e-harness.mjs --package /absolute/candidate.tgz \
 
 最终参考样式截图和报告位于 `artifacts/composer-attachments-reference-final/`。完整测试还包含本次无关的本地网络与 .NET SDK 依赖；沙箱内全量测试遇到 loopback `EPERM` 和缺少 SDK，未获得全量通过结果。
 
-0.7.1 发布前补充验证：使用可用的 loopback 环境及 .NET SDK 8.0.426，`npm run check` 完成类型检查、Mac universal 构建和全量测试，3,271 项通过、0 失败、2 项按平台条件跳过。附件专项用例与原 Mac 完整验收隔离，保持原 12 项业务顺序、预检及超时约束，附件文档依赖仅在专项用例内按需加载。
+0.7.1 发布前补充验证：使用可用的 loopback 环境及 .NET SDK 8.0.426，`npm run check` 完成类型检查、Mac universal 构建和全量测试，3,272 项通过、0 失败、2 项按平台条件跳过。附件专项用例与原 Mac 完整验收隔离，保持原 12 项业务顺序、预检及超时约束，附件文档依赖仅在专项用例内按需加载。PDF worker 使用稳定的虚拟模块名，跨开发目录与 CI 目录的构建字节一致，产物不包含本机绝对路径。
