@@ -55,7 +55,7 @@ function permissionOwnerProjection(value: unknown): ComputerPermissionPreflight[
 }
 function permissionProjection(status: ComputerStatus): ComputerPermissionPreflight {
   const permissions: Record<string, boolean> = {}, capabilities: Record<string, boolean> = {}
-  for (const key of ['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring']) if (typeof status.permissions?.[key] === 'boolean') permissions[key] = status.permissions[key]
+  for (const key of ['screen', 'screenRecording', 'accessibility', 'postEvents', 'inputMonitoring', 'administrator']) if (typeof status.permissions?.[key] === 'boolean') permissions[key] = status.permissions[key]
   if (status.capabilities && !Array.isArray(status.capabilities)) for (const key of ['capture', 'input', 'applications', 'launchApplication']) if (typeof status.capabilities[key] === 'boolean') capabilities[key] = status.capabilities[key]
   const permissionOwner = permissionOwnerProjection(status.permissionOwner)
   return { available: status.available === true, ...(['darwin', 'win32', 'linux'].includes(String(status.platform)) ? { platform: String(status.platform) } : {}), ...(['local', 'remote', 'browser'].includes(String(status.mode)) ? { mode: String(status.mode) } : {}), ...(permissionOwner ? { permissionOwner } : {}), permissions, capabilities, ...(status.available === false ? { message: unavailablePreflightMessage } : {}) }

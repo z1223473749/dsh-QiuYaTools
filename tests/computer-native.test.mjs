@@ -343,3 +343,15 @@ test('native application catalog retains a bounded embedded icon and keeps legac
     ])
   } finally { await driver.dispose() }
 })
+
+test('administrator access is an explicit owner request and its receipt never fabricates an OS grant', async () => {
+  const fixture = await settingsFixture('administrator-receipts')
+  try {
+    await fixture.reply({ opened: true, supported: true, kind: 'administrator' })
+    await fixture.driver.openSystemSettings('administrator')
+    assert.equal((await fixture.read()).filter(row => row.op === 'openSystemSettings').length, 1)
+    assert.equal((await fixture.driver.status()).permissions.administrator, undefined)
+    await fixture.reply({ opened: false, supported: true, kind: 'administrator' })
+    await assert.rejects(fixture.driver.openSystemSettings('administrator'), { code: 'SYSTEM_SETTINGS_UNAVAILABLE' })
+  } finally { await fixture.driver.dispose() }
+})

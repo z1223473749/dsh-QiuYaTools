@@ -265,7 +265,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   }
   openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
     this.assertEnabled()
-    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
+    if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
     return this.entry().driver.openSystemSettings(kind, signal)
   }
   targetsFor(sessionId?: string, signal?: AbortSignal) { this.assertEnabled(); const entry = this.entry(sessionId); if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境'); entry.lastUsed = this.now(); return entry.service.targets(signal) }

@@ -178,7 +178,7 @@ export function ComputerPanel({ ctx, enabled, onEnabled, disabled }: { ctx: Cont
     <section className="qyt-card" aria-label="系统权限">
       <div className="qyt-computer-section-heading"><div><h4>系统权限</h4><p className="qyt-muted">{!enabled ? '启用电脑操控后，可检查并设置系统权限。' : mac ? '自动检测 macOS 权限，授权后返回这里会自动更新。' : '检查这台电脑的可用状态。应用授权会在聊天中单独询问。'}</p></div><button type="button" className="qyt-button" disabled={busy || !enabled} onClick={() => { void action('refresh') }}>重新检查</button></div>
       {enabled && statusError && <p className="qyt-computer-error" role="alert">{statusError}</p>}
-      {!enabled ? null : mac ? <SystemPermissionNotice native={native} busy={busy} full onOpenSettings={kind => { void action('openSettings', { kind }) }} onRefresh={() => { void action('refresh') }}/>
+      {!enabled ? null : mac || native?.platform === 'win32' && native.available !== false ? <SystemPermissionNotice native={native} busy={busy} full onOpenSettings={kind => { void action('openSettings', { kind }) }} onRefresh={() => { void action('refresh') }}/>
         : <p className="qyt-muted">{native?.message || (native?.available ? '当前交互桌面已就绪。' : '正在检查本机状态…')}</p>}
     </section>
     <section className="qyt-card" aria-label="始终允许的应用">

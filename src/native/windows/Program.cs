@@ -16,6 +16,7 @@ internal static class Program
         if (args.Contains("--self-test-applications")) { Emit(ApplicationMetadataSelfTest.Run()); return; }
         if (args.Contains("--self-test-preview-storage")) { Emit(AiCursorSelfTest.PreviewStorage()); return; }
         if (args.Contains("--self-test-ai-cursor")) { Emit(AiCursorSelfTest.Run()); return; }
+        ElevatedComputer.ConnectWorker(args);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -28,7 +29,7 @@ internal static class Program
         if (args.Contains("--self-test-input")) { Program.Emit(ComputerDriver.TestReleaseFailures()); return; }
         if (args.Contains("--release-input")) { EmergencyRelease.Run(args.Contains("--release-input-test-ready")); return; }
         if (args.Contains("--fixture")) { Application.Run(new FixtureForm(args)); return; }
-        using var context = new NativeContext(args.Contains("--computer"));
+        using var context = new NativeContext(args.Contains("--computer") || ElevatedComputer.Worker);
         Application.Run(context);
     }
     internal static void Emit(object value)
@@ -59,6 +60,8 @@ internal sealed class NativeContext : ApplicationContext
     private readonly System.Windows.Forms.Timer parentWatch = new() { Interval = 1500 };
     private readonly int parentPid;
     private bool exiting;
+    private bool elevating;
+    private ElevatedComputer? elevated;
     internal NativeContext(bool computerMode)
     {
         dispatcher.CreateControl();
@@ -98,8 +101,21 @@ internal sealed class NativeContext : ApplicationContext
         try {
             var op = Program.Text(request, "op", 64);
             if (op == "release") InputTrace.Mark("dispatch-release", request.TryGetProperty("epoch", out var tracedEpoch) && tracedEpoch.ValueKind == JsonValueKind.Number && tracedEpoch.TryGetInt64(out var value) ? value : 0);
+            if (ElevatedComputer.Worker && op == "shutdownControl") { Shutdown(); return; }
+            if (ElevatedComputer.Worker && !ElevatedComputer.Allows(op)) throw new NativeFailure("unknown-operation", "Operation is unavailable in administrator control");
+            if (elevating && op is not ("status" or "release")) throw new NativeFailure("elevation-pending", "Wait for the administrator access decision");
             object? result;
-            if (computer == null) result = await windows.Session(op, request, requestId);
+            if (computer != null && op == "openSystemSettings" && Program.Text(request, "kind", 64) == "administrator") {
+                computer.RequireIdleForPermissionChange();
+                if (elevated == null && !ProcessPermissions.Elevated) {
+                    elevating = true;
+                    try { elevated = await ElevatedComputer.Start(); if (exiting) { await elevated.Close(); throw new NativeFailure("elevation-cancelled", "The control owner closed during administrator access"); } }
+                    finally { elevating = false; }
+                }
+                result = new { opened = true, supported = true, kind = "administrator" };
+            }
+            else if (elevated != null && ElevatedComputer.Allows(op)) result = await elevated.Call(op, request);
+            else if (computer == null) result = await windows.Session(op, request, requestId);
             else result = op switch {
                 "status" => computer.Status(),
                 "applications" => await Task.Run(applications.Applications),
@@ -135,7 +151,7 @@ internal sealed class NativeContext : ApplicationContext
         // separate bound; they never keep an unconfirmed input owner alive.
         try {
             var inputReleased = false;
-            try { computer?.Dispose(); inputReleased = true; }
+            try { if (elevated != null) await elevated.Close(); computer?.Dispose(); inputReleased = true; }
             catch (Exception) { Environment.ExitCode = 1; }
             if (computer != null) {
                 try {

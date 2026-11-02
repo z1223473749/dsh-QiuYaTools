@@ -46,7 +46,7 @@ internal sealed class DesktopLeaseGuard : IDisposable
 
     private FileStream OpenLock()
     {
-        try { return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        try { var stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); try { ProcessPermissions.ShareJournalIntegrity(lockPath); return stream; } catch { stream.Dispose(); throw; } }
         catch (IOException) { throw new NativeFailure("desktop-busy", "Another QiuYaTools companion owns this desktop; pause it before taking control"); }
     }
 
@@ -67,6 +67,7 @@ internal sealed class DesktopLeaseGuard : IDisposable
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                 var bytes = Encoding.UTF8.GetBytes(json); stream.Write(bytes); stream.Flush(true);
             }
+            ProcessPermissions.ShareJournalIntegrity(temporary);
             AtomicJournalPublish.Publish(temporary, journalPath);
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException) {
             throw new NativeFailure("input-journal-failed", "Owned input could not be durably recorded; no further input is allowed");

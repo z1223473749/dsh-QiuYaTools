@@ -177,7 +177,7 @@ export class NativeCompanionDriver implements DeviceDriver {
         // A timed-out mutating native request has unknown outcome. Kill the worker;
         // reconnecting requires a fresh service lease and observation.
         this.fail(new ComputerError('NATIVE_TIMEOUT', '原生操作超时，执行器已停止'), child)
-      }, this.options.timeoutMs ?? 20_000)
+      }, op === 'openSystemSettings' && (payload as { kind?: unknown }).kind === 'administrator' ? 60_000 : this.options.timeoutMs ?? 20_000)
       const abort = () => { const entry = this.pending.get(requestId); if (!entry || awaitIssuedReply && issued) return; this.pending.delete(requestId); entry.clean(); reject(signal?.reason ?? new ComputerError('ABORTED', '操作已取消')) }
       const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
       this.pending.set(requestId, {
@@ -297,9 +297,10 @@ export class NativeCompanionDriver implements DeviceDriver {
     return this.checked('launchApplication', { appId }, signal, true)
   }
   async openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
-    if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
+    if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
     const result = await this.checked<{ opened?: unknown; kind?: unknown; supported?: unknown; guideShown?: unknown; guideReady?: unknown }>('openSystemSettings', { kind }, signal)
     if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.opened !== 'boolean' || result.kind !== undefined && result.kind !== kind || result.supported !== undefined && typeof result.supported !== 'boolean' || result.guideShown !== undefined && typeof result.guideShown !== 'boolean' || result.guideReady !== undefined && typeof result.guideReady !== 'boolean') throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的系统权限设置回执无效')
+    if (kind === 'administrator' && result.opened) { this.protocol = undefined; this.foreground = undefined; this.foregroundSequence = undefined }
     if (!result.opened) throw new ComputerError('SYSTEM_SETTINGS_UNAVAILABLE', result.supported === false ? '当前系统不支持此 macOS 权限设置。' : '无法打开系统权限设置，请稍后重试。')
     // Older companions may omit guide metadata. Readiness does not claim the
     // card is visible: it follows Settings when that application is in front.

@@ -143,7 +143,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
             value = input.op === 'decide' ? await entry.decide(sessionId, requestId, input.requestVersion, input.decision) : entry.cancelRequest(sessionId, requestId, input.requestVersion)
           }
           else if (input.op === 'openSettings') {
-            if (!['screenRecording', 'accessibility', 'inputMonitoring'].includes(input.kind)) throw new Error('系统权限类型无效。')
+            if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(input.kind)) throw new Error('系统权限类型无效。')
             value = manager ? await manager.openSystemSettings(input.kind as ComputerSystemPermission, request.signal) : await driver?.openSystemSettings?.(input.kind as ComputerSystemPermission, request.signal)
             if (value === undefined) throw new Error('当前执行器不支持打开系统权限设置。')
           }

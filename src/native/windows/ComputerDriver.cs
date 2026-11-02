@@ -87,7 +87,11 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available, foregroundHandoff = foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal void RequireIdleForPermissionChange()
+    {
+        lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
+    }
     private ForegroundHandoff RequireForeground()
     {
         if (foregroundHandoff == null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
@@ -374,6 +378,7 @@ internal sealed class ComputerDriver : IDisposable
         if (!request.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.Object) throw new NativeFailure("invalid-request", "Missing action");
         var kind = Program.Text(action, "kind", 32);
         var target = Target(targetId);
+        Native.GetWindowThreadProcessId(target.Handle, out var targetPid); ProcessPermissions.RequireTarget(targetPid);
         lock (inputLock) { Check(requested); }
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
         if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
