@@ -120,6 +120,20 @@ enum ExactInputIdentity {
     }
 }
 
+/// Explicit session delivery may use CG identity when the application has no AX focused root.
+/// Ambiguous siblings and any different leading normal window remain blocked.
+enum SessionKeyboardFocus {
+    static func check(target: NativeTarget, geometry: FrameGeometry, before: [FocusWindowState], after: [FocusWindowState], beforePid: pid_t?, afterPid: pid_t?, processIdentityCurrent: Bool) throws {
+        try ExactInputIdentity.check(target: target, geometry: geometry, before: before, after: after, beforePid: beforePid, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
+        for rows in [before, after] {
+            let visible = rows.filter(\.normalVisible)
+            guard visible.first?.windowId == target.windowId, visible.filter({ $0.pid == target.pid }).count == 1 else {
+                throw ComputerError("FOCUS_CHANGED", "Session keyboard delivery requires one unambiguous foreground window.")
+            }
+        }
+    }
+}
+
 @MainActor struct PointerRoutingBackend {
     var primaryMaxY: () -> Double?
     var windowAt: (CGPoint) -> CGWindowID?
@@ -313,6 +327,7 @@ private struct FocusProcessBirth: Equatable {
     let target: NativeTarget
     let geometry: FrameGeometry
     let application: NSRunningApplication
+    var allowSessionKeyboard = false
     private let birth: FocusProcessBirth
     private let diagnostics = FocusIdentityDiagnostics()
     var diagnosticSnapshot: [String: Any] { diagnostics.snapshot }
@@ -410,12 +425,17 @@ private struct FocusProcessBirth: Equatable {
                 try ExactInputIdentity.check(target: target, geometry: geometry, before: windows, after: after,
                     beforePid: foreground, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
                 diagnostics.keyboardIndependentIdentityAccepted = true
-                if retryTransientKeyboardAX, TransientKeyboardAXRead.mayWait(focused: focused, error: diagnostics.keyboardAXError,
-                    stage: diagnostics.keyboardStage, now: ProcessInfo.processInfo.systemUptime, deadline: deadline) {
-                    throw KeyboardDownReadError.temporarilyUnavailable
+                if allowSessionKeyboard && focused == nil && diagnostics.keyboardStage == "focused-window" && diagnostics.keyboardAXError != AXError.cannotComplete.rawValue {
+                    try SessionKeyboardFocus.check(target: target, geometry: geometry, before: windows, after: after, beforePid: foreground, afterPid: afterPid, processIdentityCurrent: processIdentityCurrent)
+                    diagnostics.keyboardStage = "session-window-identity"
+                } else {
+                    if retryTransientKeyboardAX, TransientKeyboardAXRead.mayWait(focused: focused, error: diagnostics.keyboardAXError,
+                        stage: diagnostics.keyboardStage, now: ProcessInfo.processInfo.systemUptime, deadline: deadline) {
+                        throw KeyboardDownReadError.temporarilyUnavailable
+                    }
+                    try ExactKeyboardFocus.check(target: target, geometry: geometry, before: windows, after: after,
+                        beforePid: foreground, afterPid: afterPid, focused: focused, processIdentityCurrent: processIdentityCurrent)
                 }
-                try ExactKeyboardFocus.check(target: target, geometry: geometry, before: windows, after: after,
-                    beforePid: foreground, afterPid: afterPid, focused: focused, processIdentityCurrent: processIdentityCurrent)
             }
             guard ProcessInfo.processInfo.systemUptime < deadline else {
                 diagnostics.routeStage = "deadline"

@@ -333,7 +333,8 @@ enum CompletedKeyboardInputPolicy {
         busy = true
         started()
         defer { busy = false; actionFocus = nil; actionInputFence = nil; keyboardReadinessBudget = nil }
-        let focusIdentity = try NativeFocusIdentity(target: target, geometry: geometry)
+        var focusIdentity = try NativeFocusIdentity(target: target, geometry: geometry)
+        focusIdentity.allowSessionKeyboard = sessionKeyboard
         actionFocus = focusIdentity
         let expectedHumanInputGeneration = humanInputGeneration
         let generationFence = ActionInputGenerationFence(expected: expectedHumanInputGeneration)

@@ -200,15 +200,15 @@ internal sealed class NativeApplicationCatalog
                 if (pid == 0 || pid == Environment.ProcessId) return true;
                 var title = new StringBuilder(1025); Native.GetWindowText(handle, title, title.Capacity);
                 if (string.IsNullOrWhiteSpace(title.ToString()) || !Native.GetWindowRect(handle, out var rect) || rect.Width < 16 || rect.Height < 16) return true;
-                using var process = Process.GetProcessById((int)pid);
-                var born = process.StartTime.ToUniversalTime().Ticks;
-                if (process.HasExited || process.MainModule?.FileName is not string path || process.StartTime.ToUniversalTime().Ticks != born) return true;
+                var identity = WindowProcessIdentity.Read(pid);
+                var path = identity.Path;
+                if (WindowProcessIdentity.Read(pid).Born != identity.Born) return true;
                 Native.GetWindowThreadProcessId(handle, out var currentPid);
                 if (currentPid != pid || !Native.IsWindowVisible(handle) || Native.IsIconic(handle)) return true;
                 accept(Path.GetFullPath(path));
                 accepted++;
                 if (accepted >= 256) { markTruncated(); return false; }
-            } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NativeFailure) { }
             return canRead();
         }, IntPtr.Zero);
     }

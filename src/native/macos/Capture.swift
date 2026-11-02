@@ -46,6 +46,7 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
     private var receiver: FrameReceiver?
     private var identity: String?
     private var frame: CGRect?
+    private var scale: Double?
     private var generation = 0
     private var shareableWindows: [CGWindowID: SCWindow] = [:]
     private let outputQueue = DispatchQueue(label: "com.qiuya.tools.computer-use.capture", qos: .userInitiated)
@@ -92,7 +93,7 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func observe(_ target: NativeTarget, window: SCWindow) async throws -> (CapturedFrame, Int) {
-        if identity != target.id || frame != target.frame || receiver == nil {
+        if identity != target.id || frame != target.frame || scale != target.scale || receiver == nil {
             await stop()
             let sink = FrameReceiver()
             let config = SCStreamConfiguration()
@@ -108,7 +109,7 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
             if #available(macOS 14.0, *) { config.ignoreShadowsSingleWindow = true }
             let next = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: config, delegate: sink)
             try next.addStreamOutput(sink, type: .screen, sampleHandlerQueue: outputQueue)
-            receiver = sink; stream = next; identity = target.id; frame = target.frame; generation += 1
+            receiver = sink; stream = next; identity = target.id; frame = target.frame; scale = target.scale; generation += 1
             do { try await next.startCapture() } catch { await stop(); throw ComputerError("CAPTURE_START_FAILED", "ScreenCaptureKit could not start the selected window capture.") }
         }
         let currentGeneration = generation
@@ -122,7 +123,7 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stop() async {
         let old = stream
-        stream = nil; receiver = nil; identity = nil; frame = nil; generation += 1
+        stream = nil; receiver = nil; identity = nil; frame = nil; scale = nil; generation += 1
         try? await old?.stopCapture()
     }
 }

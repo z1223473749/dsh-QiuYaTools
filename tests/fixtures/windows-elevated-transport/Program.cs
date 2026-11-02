@@ -11,6 +11,8 @@ foreach (var code in new ushort[] { 0x1D, 0x2A, 0x148, 0x15B }) {
 foreach (var code in new ushort[] {0, 256, 512, 65535}) {
  try { KeyboardEncoding.Encode(code, false); throw new Exception("Invalid scan code accepted"); } catch (NativeFailure) { }
 }
+if (!CaptureFramePolicy.Uniform(800, 600, (_, _) => 0) || !CaptureFramePolicy.Uniform(800, 600, (_, _) => 0xFFFFFF)) throw new Exception("Uniform GPU surfaces need visible fallback");
+if (CaptureFramePolicy.Uniform(800, 600, (x, y) => x == 0 && y == 0 ? 1 : 0)) throw new Exception("A nonuniform surface was discarded");
 var name = "ctl-" + Guid.NewGuid().ToString("N")[..8];
 using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);

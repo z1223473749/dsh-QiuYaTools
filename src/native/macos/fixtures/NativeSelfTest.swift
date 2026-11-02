@@ -18,6 +18,7 @@ import Security
         try exactWindowReadiness()
         try exactPointerRouting()
         try exactKeyboardFocus()
+        try sessionKeyboardFocus()
         try actionHumanInterruption()
         try await boundedFocusPreparation()
         try await ownedKeyboardPairs()
@@ -1473,5 +1474,25 @@ import Security
             precondition(rgb.min()! >= 35 && rgb.max()! <= 140 && rgb.max()! - rgb.min()! < 30,
                 "Approved fill stays translucent neutral grey over black")
         }
+    }
+}
+
+
+extension NativeSelfTest {
+    @MainActor static func sessionKeyboardFocus() throws {
+        let frame = CGRect(x: -800, y: 50, width: 600, height: 400)
+        let target = NativeTarget(id: "session-window", appId: "fixture.client", title: "", pid: 99, windowId: 11, frame: frame, scale: 2)
+        let geometry = FrameGeometry(frame: frame, pixelWidth: 1200, pixelHeight: 800)
+        let selected = FocusWindowState(windowId: 11, pid: 99, frame: frame)
+        try SessionKeyboardFocus.check(target: target, geometry: geometry, before: [selected], after: [selected], beforePid: 99, afterPid: 99, processIdentityCurrent: true)
+        let sibling = FocusWindowState(windowId: 12, pid: 99, frame: frame.insetBy(dx: 20, dy: 20))
+        let other = FocusWindowState(windowId: 13, pid: 100, frame: frame)
+        for rows in [[selected, sibling], [sibling, selected], [other, selected]] {
+            do { try SessionKeyboardFocus.check(target: target, geometry: geometry, before: rows, after: rows, beforePid: 99, afterPid: 99, processIdentityCurrent: true); preconditionFailure("Ambiguous session focus accepted") }
+            catch let issue as ComputerError { precondition(issue.code == "FOCUS_CHANGED") }
+        }
+        do { try SessionKeyboardFocus.check(target: target, geometry: geometry, before: [selected], after: [selected], beforePid: 99, afterPid: 100, processIdentityCurrent: true); preconditionFailure("Changed session focus accepted") }
+        catch let issue as ComputerError { precondition(issue.code == "FOCUS_CHANGED") }
+        print("Session keyboard focus policy: 5 cases, no OS input")
     }
 }

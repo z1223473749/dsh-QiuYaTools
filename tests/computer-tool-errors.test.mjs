@@ -157,3 +157,11 @@ test('actual native and PTC SDK preserve finite foreground handoff failures with
     } finally { await f.close() }
   }
 })
+
+for (const code of ['administrator-required','target-permission-unknown','capture-foreground-required','capture-occluded','INPUT_MODE_UNSUPPORTED','POINTER_CHANGED']) test(`compatibility failure ${code} remains actionable without leaking native details`, async () => {
+ const f=await actualRuntime({async act(){throw failure(code)}})
+ try {
+  const result=await f.runtime.execute({callId:'compatibility-'+code,name:'qiuya_computer_act',arguments:actArgs,agent:f.agent,signal:new AbortController().signal})
+  assert.equal(result.isError,true); assert.ok(result.error.message.includes('['+code+']')); assert.doesNotMatch(JSON.stringify(result),/owned-profile|do-not-forward/)
+ } finally {await f.close()}
+})

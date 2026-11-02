@@ -17,7 +17,7 @@ internal sealed class ComputerDriver : IDisposable
     private readonly SemaphoreSlim captureGate = new(1, 1);
     private readonly CaptureBroker captureBroker = new();
     private readonly SemaphoreSlim actionGate = new(1, 1);
-    private readonly ConcurrentDictionary<string, Rectangle> observations = new();
+    private readonly ConcurrentDictionary<string, (Rectangle Rect, uint Dpi)> observations = new();
     private readonly HashSet<ushort> heldKeys = new();
     private readonly HashSet<ushort> heldScans = new();
     private readonly HashSet<ushort> heldUnicode = new();
@@ -33,6 +33,7 @@ internal sealed class ComputerDriver : IDisposable
     private string leaseActor = "ai";
     private readonly HashSet<uint> heldMouse = new();
     private bool disposed;
+    private int undiscoverableWindows;
     private bool inputCleanupFailed;
     private int physicalCleanupPending;
     private int leaseAcquiring;
@@ -88,7 +89,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
     internal void RequireIdleForPermissionChange()
     {
         lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
@@ -140,9 +141,9 @@ internal sealed class ComputerDriver : IDisposable
             if (requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Foreground action epoch is stale");
             var targetId = Program.Text(request, "targetId", 256); var target = Target(targetId);
             if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
-            if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
+            if (observed.Rect != target.Rect || observed.Dpi != Native.GetDpiForWindow(target.Handle)) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
             ForegroundHandoff.RequireNoPhysicalHeld();
-            var ticket = handoff.Core.Prepare(requested, PrivateSafeInteger(request, "logicalEpoch", true), targetId, GeometryDigest(observed),
+            var ticket = handoff.Core.Prepare(requested, PrivateSafeInteger(request, "logicalEpoch", true), targetId, GeometryDigest(observed.Rect),
                 Program.Text(request, "actionSHA256", 64), PrivateSafeInteger(request, "surfaceGeneration"));
             return new { ticket, physicalSequence = ticket.PhysicalSequence };
         }
@@ -189,7 +190,7 @@ internal sealed class ComputerDriver : IDisposable
     }
     internal object[] Targets()
     {
-        var targets = new List<object>();
+        var targets = new List<object>(); var unavailable = 0;
         Native.EnumWindows((handle, _) => {
             try {
                 if (!Native.IsWindowVisible(handle) || Native.IsIconic(handle)) return true;
@@ -197,15 +198,15 @@ internal sealed class ComputerDriver : IDisposable
                 if (pid == Environment.ProcessId || pid == 0) return true;
                 var title = WindowTitle(handle);
                 if (string.IsNullOrWhiteSpace(title) || !Native.GetWindowRect(handle, out var rect) || rect.Width < 16 || rect.Height < 16) return true;
-                using var process = Process.GetProcessById((int)pid);
-                var born = process.StartTime.ToUniversalTime().Ticks;
-                var id = $"window:{handle.ToInt64():x}:{pid}:{born}";
-                var imagePath = Path.GetFullPath(process.MainModule?.FileName ?? throw new InvalidOperationException());
+                var identity = WindowProcessIdentity.Read(pid);
+                var id = $"window:{handle.ToInt64():x}:{pid}:{identity.Born}";
+                var imagePath = identity.Path;
                 var appId = NativeApplicationCatalog.AppId(imagePath);
                 targets.Add(new { id, appId, title, pid, x = rect.Left, y = rect.Top, width = rect.Width, height = rect.Height, scale = Native.GetDpiForWindow(handle) / 96.0 });
-            } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            } catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NativeFailure) { unavailable++; }
             return targets.Count < 256;
         }, IntPtr.Zero);
+        Volatile.Write(ref undiscoverableWindows, unavailable);
         return targets.ToArray();
     }
     private static string WindowTitle(IntPtr handle)
@@ -222,14 +223,14 @@ internal sealed class ComputerDriver : IDisposable
         if (!Native.IsWindow(handle) || !Native.IsWindowVisible(handle) || Native.IsIconic(handle)) throw new NativeFailure("target-unavailable", "Target is closed, hidden or minimized");
         Native.GetWindowThreadProcessId(handle, out var actualPid);
         if (actualPid != pid || pid == Environment.ProcessId) throw new NativeFailure("target-changed", "Target identity changed");
-        try { using var process = Process.GetProcessById((int)pid); if (process.StartTime.ToUniversalTime().Ticks != born) throw new NativeFailure("target-changed", "Target process changed"); }
+        try { if (WindowProcessIdentity.Read(pid).Born != born) throw new NativeFailure("target-changed", "Target process changed"); }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { throw new NativeFailure("target-unavailable", "Target process is unavailable"); }
         if (!Native.GetWindowRect(handle, out var rect) || rect.Width <= 0 || rect.Height <= 0 || rect.Width > 16384 || rect.Height > 16384 || (long)rect.Width * rect.Height > 34_000_000) throw new NativeFailure("target-unavailable", "Target geometry cannot be captured");
         return (handle, Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom));
     }
     internal object Observe(string targetId, bool preview = false)
     {
-        var target = Target(targetId);
+        var target = Target(targetId); var dpi = Native.GetDpiForWindow(target.Handle);
         // All uninterruptible GDI rendering lives in an input-free child, never the input lease owner.
         if (!captureGate.Wait(0)) throw new NativeFailure("capture-busy", "The previous target capture is still pending");
         byte[] image;
@@ -237,8 +238,8 @@ internal sealed class ComputerDriver : IDisposable
         finally { captureGate.Release(); }
         var elements = preview ? "" : ReadElements(target.Handle);
         var after = Target(targetId);
-        if (after.Rect != target.Rect) throw new NativeFailure("geometry-changed", "Target moved while observing");
-        observations[targetId] = target.Rect;
+        if (after.Rect != target.Rect || Native.GetDpiForWindow(target.Handle) != dpi) throw new NativeFailure("geometry-changed", "Target geometry or scale changed while observing");
+        observations[targetId] = (target.Rect, dpi);
         var cursorPosition = Cursor.Position;
         return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, aiCursor = aiCursor.Snapshot(targetId), targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
     }
@@ -250,10 +251,10 @@ internal sealed class ComputerDriver : IDisposable
             bool rendered;
             try { rendered = Native.PrintWindow(target.Handle, context, 2); }
             finally { graphics.ReleaseHdc(context); }
-            if (!rendered) {
-                var desktop = SystemInformation.VirtualScreen;
-                if (!desktop.Contains(target.Rect)) throw new NativeFailure("capture-unavailable", "Target is outside the visible desktop");
+            if (!rendered || CaptureFramePolicy.Uniform(bitmap.Width, bitmap.Height, (x, y) => bitmap.GetPixel(x, y).ToArgb())) {
+                RequireVisibleCapture(target.Handle, target.Rect);
                 graphics.CopyFromScreen(target.Rect.Location, Point.Empty, target.Rect.Size, CopyPixelOperation.SourceCopy);
+                RequireVisibleCapture(target.Handle, target.Rect);
             }
         }
         using var stream = new MemoryStream();
@@ -262,6 +263,18 @@ internal sealed class ComputerDriver : IDisposable
         encoder.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 75L);
         bitmap.Save(stream, codec, encoder);
         return stream.ToArray();
+    }
+    private static void RequireVisibleCapture(IntPtr target, Rectangle rect)
+    {
+        if (!SystemInformation.VirtualScreen.Contains(rect) || Native.GetForegroundWindow() != target) throw new NativeFailure("capture-foreground-required", "Bring the target window to the foreground for desktop capture");
+        var window = Native.GetTopWindow(IntPtr.Zero);
+        for (var count = 0; window != IntPtr.Zero && count < 1024; count++, window = Native.GetWindow(window, 2)) {
+            if (window == target) return;
+            if (!Native.IsWindowVisible(window) || Native.IsIconic(window) || AiCursorOverlay.IsCursorWindow(window)) continue;
+            if (!Native.GetWindowRect(window, out var above)) throw new NativeFailure("capture-occluded", "Window visibility could not be verified");
+            if (rect.IntersectsWith(Rectangle.FromLTRB(above.Left, above.Top, above.Right, above.Bottom))) throw new NativeFailure("capture-occluded", "Another window covers the target; uncover it before capture");
+        }
+        throw new NativeFailure("capture-unavailable", "Target visibility could not be verified");
     }
     internal static byte[] CaptureForWorker(string targetId)
     {
@@ -386,7 +399,7 @@ internal sealed class ComputerDriver : IDisposable
         Native.GetWindowThreadProcessId(target.Handle, out var targetPid); ProcessPermissions.RequireTarget(targetPid);
         lock (inputLock) { Check(requested); }
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
-        if (observed != target.Rect) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
+        if (observed.Rect != target.Rect || observed.Dpi != Native.GetDpiForWindow(target.Handle)) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
         var trajectory = new List<Point>();
         if (kind == "moveRelative") {
             var dx = Program.Number(action, "deltaX"); var dy = Program.Number(action, "deltaY");
@@ -404,7 +417,7 @@ internal sealed class ComputerDriver : IDisposable
             Check(requested); RefreshForeground(true);
             var ticket = request.TryGetProperty("foregroundTicket", out _) ? ForegroundRecord<ForegroundActionTicket>(request, "foregroundTicket") : null;
             if (foregroundHandoff == null && ticket != null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
-            foregroundHandoff?.Core.Consume(ticket, requested, targetId, GeometryDigest(observed), ForegroundHandoff.Hash(action.GetRawText()));
+            foregroundHandoff?.Core.Consume(ticket, requested, targetId, GeometryDigest(observed.Rect), ForegroundHandoff.Hash(action.GetRawText()));
         }
         BrowserWindow.UncoverPointer(trajectory);
         if (Native.GetForegroundWindow() != target.Handle) {
@@ -412,7 +425,7 @@ internal sealed class ComputerDriver : IDisposable
             await Task.Delay(80);
             if (Native.GetForegroundWindow() != target.Handle) throw new NativeFailure("foreground-denied", "Activate the target window before input");
         }
-        if (Target(targetId).Rect != observed) throw new NativeFailure("geometry-changed", "Target moved while activating");
+        if (Target(targetId).Rect != observed.Rect || Native.GetDpiForWindow(target.Handle) != observed.Dpi) throw new NativeFailure("geometry-changed", "Target moved while activating");
         lock (inputLock) { Check(requested); inputTarget = target.Handle; inputTargetId = targetId; inputTargetBounds = target.Rect; }
         Program.Emit(new { @event = "action", phase = "started", targetId, epoch = requested, action });
         switch (kind) {
@@ -612,6 +625,8 @@ internal sealed class ComputerDriver : IDisposable
 internal static class Native
 {
     internal delegate bool EnumWindowsCallback(IntPtr handle, IntPtr parameter);
+    [DllImport("user32.dll")] internal static extern IntPtr GetTopWindow(IntPtr parent);
+    [DllImport("user32.dll")] internal static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindow(IntPtr handle);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindowVisible(IntPtr handle);
