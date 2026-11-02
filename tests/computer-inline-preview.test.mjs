@@ -43,7 +43,8 @@ async function fixture(t, { initial = { status: 'ready', value: { enabled: true,
     if (input.op === 'decide') { const request = requests.get(input.requestId); assert.ok(request); assert.equal(request.sessionId, input.sessionId); assert.equal(request.requestVersion, input.requestVersion); requests.delete(input.requestId); if (input.decision !== 'deny') states.set(input.sessionId, snapshot(input.sessionId)); return { ok: true, value: { requestId: input.requestId, state: input.decision === 'deny' ? 'denied' : 'approved' } } }
     const runtimeId = input.taskId ?? input.sessionId
     const current = states.get(runtimeId); assert.ok(current, 'control needs a fixture-owned session')
-    if (input.op === 'preview' || input.op === 'redock') detached.set(runtimeId, input.op === 'preview')
+    if (input.op === 'inputMode') { assert.equal(current.state, 'paused'); states.set(runtimeId, { ...current, inputMode: input.mode }) }
+    else if (input.op === 'preview' || input.op === 'redock') detached.set(runtimeId, input.op === 'preview')
     else if (['pause', 'takeover', 'resume', 'stop'].includes(input.op)) states.set(runtimeId, { ...current, state: { pause: 'paused', takeover: 'humanControl', resume: 'ready', stop: 'stopped' }[input.op] })
     else throw Error('Unexpected owner control')
     return { ok: true, value: states.get(runtimeId) }
@@ -395,4 +396,17 @@ test('one chat switches independent task previews and all controls retain the se
     {op:'redock',sessionId:'A',taskId:'task-two'},
     {op:'stop',sessionId:'A',taskId:'task-two'},
   ])
+})
+
+
+test('inline input compatibility switch is owner-scoped and enabled only after pausing', async t => {
+  const f=await fixture(t); f.states.set('chat-a',snapshot('chat-a')); await f.render({left:'chat-a'})
+  assert.equal(f.button('left','切换输入模式').disabled,true)
+  await f.click('left','暂停电脑任务')
+  assert.equal(f.button('left','切换输入模式').disabled,false)
+  await f.click('left','切换输入模式')
+  assert.equal(f.states.get('chat-a').inputMode,'compatibility')
+  assert.equal(f.mutations().at(-1).sessionId,'chat-a'); assert.equal(f.mutations().at(-1).op,'inputMode')
+  await f.click('left','继续电脑任务')
+  assert.equal(f.button('left','切换输入模式').disabled,true)
 })

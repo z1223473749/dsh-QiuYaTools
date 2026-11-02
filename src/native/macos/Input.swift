@@ -293,7 +293,9 @@ enum CompletedKeyboardInputPolicy {
 
     private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)
+        guard inputSessionAvailable() else { throw ComputerError("SESSION_UNAVAILABLE", "The target desktop session is locked or inactive.") }
         guard !aiPointer.restorationBlocked else { throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; no new input is permitted.") }
+        guard inputSessionAvailable() else { throw ComputerError("SESSION_UNAVAILABLE", "The target desktop session is locked or inactive.") }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Enable Accessibility for the application shown in the computer-use permission settings.") }
         guard !busy else { throw ComputerError("INPUT_BUSY", "Another input action is still settling.") }
         guard target.frame == geometry.frame else { throw ComputerError("GEOMETRY_CHANGED", "The window moved or resized. Observe it again before acting.") }
@@ -489,6 +491,7 @@ enum CompletedKeyboardInputPolicy {
 
     private func check(_ epoch: Int, _ target: NativeTarget, _ geometry: FrameGeometry, route: FocusInputRoute) throws {
         try fence.check(epoch)
+        guard inputSessionAvailable() else { throw ComputerError("SESSION_UNAVAILABLE", "The target desktop session is locked or inactive.") }
         guard !aiPointer.restorationBlocked else { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "Owned cursor cleanup is pending; input stopped.") }
         guard let identity = actionFocus, let generationFence = actionInputFence, identity.target.windowId == target.windowId, identity.target.pid == target.pid, identity.geometry.frame == geometry.frame else {
             aiPointer.hide(); throw ComputerError("FOCUS_CHANGED", "The action's selected window identity is unavailable; input stopped.")

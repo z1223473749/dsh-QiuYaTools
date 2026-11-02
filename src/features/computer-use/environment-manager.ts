@@ -10,7 +10,7 @@ import { ComputerError, computerError, requireIdentity } from './contract.ts'
 import type { ComputerActionRequest, ComputerSessionSnapshot, ComputerSystemPermission, NativeTarget } from './contract.ts'
 import type { ComputerTaskIdentity } from './task-types.ts'
 
-export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget'>
+export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget' | 'setInputMode'>
 export interface ComputerConnectionOptions {
   mode: 'local' | 'remote' | 'browser'; endpoint?: string; token?: string; allowPrivateNetwork?: boolean
   browser?: 'chrome' | 'edge'; allowedOrigins?: string[]; initialUrl?: string; cdpEndpoint?: string
@@ -263,10 +263,10 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
       return result
     } finally { pending.delete(controller); if (!pending.size) this.authorizationLaunches.delete(sessionId) }
   }
-  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal, sessionId?: string) {
     this.assertEnabled()
     if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
-    return this.entry().driver.openSystemSettings(kind, signal)
+    return this.entry(sessionId).driver.openSystemSettings(kind, signal)
   }
   targetsFor(sessionId?: string, signal?: AbortSignal) { this.assertEnabled(); const entry = this.entry(sessionId); if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境'); entry.lastUsed = this.now(); return entry.service.targets(signal) }
   targets(signal?: AbortSignal) { return this.targetsFor(undefined, signal) }
@@ -301,6 +301,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   act(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.act(sessionId, request, signal) }
   humanAct(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.humanAct(sessionId, request, signal) }
   permittedTargets(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.permittedTargets(sessionId, signal) }
+  setInputMode(sessionId: string, mode: 'standard' | 'compatibility') { this.invalidateAuthorization(sessionId); return this.forSession(sessionId).service.setInputMode(sessionId, mode) }
   selectTarget(sessionId: string, targetId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.selectTarget(sessionId, targetId, signal) }
   private stopOrPause(sessionId: string, pause: boolean): Promise<ComputerSessionSnapshot> {
     this.assertLive(); requireIdentity(sessionId, '会话')

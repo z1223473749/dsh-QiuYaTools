@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isIP } from 'node:net'
 import { ComputerError, computerError, parseComputerAction, requireIdentity } from './contract.ts'
 import { applicationIconDataUrl } from './application-icon.ts'
-import type { ComputerAction, ComputerObservation, ComputerStatus, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
+import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 import { ComputerExchange, EXCHANGE_MAX_BYTES, EXCHANGE_CHUNK_BYTES, parseExchangeRequest, type ExchangeResult } from './exchange.ts'
 export { NativeCompanionDriver } from './native.ts'
 
@@ -12,7 +12,7 @@ export const COMPUTER_AGENT_VERSION = 1
 export const COMPUTER_AGENT_PATH = '/v1/computer'
 const REQUEST_LIMIT = 512 * 1024
 const RESPONSE_LIMIT = 48 * 1024 * 1024
-const operations = new Set(['status', 'applications', 'launchApplication', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat', 'exchange'])
+const operations = new Set(['status', 'applications', 'launchApplication', 'targets', 'observe', 'lease', 'release', 'act', 'heartbeat', 'exchange', 'openSystemSettings'])
 function pairToken(value: string): string {
   if (typeof value !== 'string' || value.length < 32 || value.length > 512 || /\s|[\x00-\x1f\x7f]/u.test(value)) throw new ComputerError('INVALID_PAIR_TOKEN', '配对令牌必须至少 32 字符且不包含空白')
   return value
@@ -69,6 +69,7 @@ export class RemoteComputerDriver implements DeviceDriver {
   private readonly ownedEpochs = new Set<number>()
   private issuedEpoch = 0
   private disposed = false
+  private inputUncertain = false
   private disposing?: Promise<void>
   private requestId = 0
   private heartbeating = false
@@ -88,7 +89,7 @@ export class RemoteComputerDriver implements DeviceDriver {
   private async rpc<T>(op: string, payload: object = {}, signal?: AbortSignal, cleanup = false, awaitIssuedReply = false): Promise<T> {
     if (this.disposed && !cleanup) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     signal?.throwIfAborted()
-    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(new ComputerError('REMOTE_TIMEOUT', '远端操作超时')), this.options.timeoutMs ?? 20_000)
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(new ComputerError('REMOTE_TIMEOUT', '远端操作超时')), op === 'openSystemSettings' ? 60_000 : this.options.timeoutMs ?? 20_000)
     let issued = false, acknowledged = false
     const abort = () => { if (!awaitIssuedReply || !issued) controller.abort(signal?.reason) }
     signal?.addEventListener('abort', abort, { once: true }); this.pending.add(controller)
@@ -102,12 +103,14 @@ export class RemoteComputerDriver implements DeviceDriver {
       const limit = op === 'exchange' ? Math.min(256000, this.options.maxResponseBytes ?? RESPONSE_LIMIT) : this.options.maxResponseBytes ?? RESPONSE_LIMIT
       const value = await readResponse(response, limit) as { version?: unknown; requestId?: unknown; ok?: unknown; result?: T; error?: { code?: unknown; message?: unknown } }
       if (value?.version !== COMPUTER_AGENT_VERSION) throw new ComputerError('VERSION_MISMATCH', '远端电脑代理协议版本不兼容')
-      if (awaitIssuedReply && value.requestId === requestId) acknowledged = true
+      if (value.requestId === requestId) acknowledged = true
       if (!response.ok || value.ok !== true) throw new ComputerError(typeof value.error?.code === 'string' ? value.error.code : 'REMOTE_FAILED', typeof value.error?.message === 'string' ? value.error.message : '远端操作失败')
       if (value.requestId !== requestId) throw new ComputerError('REMOTE_PROTOCOL', '远端响应身份不匹配')
       if (awaitIssuedReply) signal?.throwIfAborted()
       return value.result as T
     } catch (error) {
+      if (issued && !acknowledged && op === 'act') throw new ComputerError('REMOTE_ACTION_UNCONFIRMED', '远端输入结果未确认，控制已停止。请重新连接并观察实际画面，不要重发原操作。')
+      if (awaitIssuedReply && issued && !acknowledged && op === 'openSystemSettings') throw new ComputerError('PERMISSION_CHANGE_UNCONFIRMED', '目标电脑的权限变更结果未确认，请用户检查后重新连接。')
       if (awaitIssuedReply && issued && !acknowledged) throw new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '独立电脑的应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接并确认当前窗口。')
       throw error
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); this.pending.delete(controller) }
@@ -125,6 +128,11 @@ export class RemoteComputerDriver implements DeviceDriver {
       }).finally(() => { this.heartbeating = false })
     }, this.options.heartbeatMs ?? 1000)
     this.timer.unref?.()
+  }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+    if (kind !== 'administrator') return Promise.reject(new ComputerError('SETTINGS_ON_TARGET_REQUIRED', '请在目标电脑上设置系统权限'))
+    if (this.ownedEpochs.size) return Promise.reject(new ComputerError('control-pause-required', '请先暂停并确认远端输入释放'))
+    return this.rpc('openSystemSettings', { kind }, signal, false, true).catch(error => { if (error instanceof ComputerError && error.code === 'PERMISSION_CHANGE_UNCONFIRMED') this.inputUncertain = true; throw error })
   }
   status(signal?: AbortSignal) { return this.rpc<ComputerStatus>('status', {}, signal) }
   async exchange(raw: unknown, signal?: AbortSignal): Promise<ExchangeResult> {
@@ -171,8 +179,10 @@ export class RemoteComputerDriver implements DeviceDriver {
   }
   observe(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId }, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.rpc<ComputerObservation>('observe', { targetId, preview: true }, signal) }
+  get requiresOwnerReconnect(): boolean { return this.inputUncertain }
   async lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown> {
     if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
+    if (this.inputUncertain) throw new ComputerError('REMOTE_ACTION_UNCONFIRMED', '远端输入结果未确认，请用户重新连接并观察实际状态')
     epochNumber(epoch)
     if (epoch <= this.issuedEpoch) throw new ComputerError('STALE_EPOCH', '远端控制周期必须递增')
     this.issuedEpoch = epoch
@@ -192,7 +202,19 @@ export class RemoteComputerDriver implements DeviceDriver {
     if (this.activeEpoch === epoch) this.activeEpoch = undefined
     return result
   }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) { return this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action) }, signal) }
+  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) {
+    try { return await this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action) }, signal) }
+    catch (error) {
+      if (error instanceof ComputerError && error.code === 'REMOTE_ACTION_UNCONFIRMED') {
+        this.inputUncertain = true
+        if (this.timer) clearInterval(this.timer); this.timer = undefined; this.activeEpoch = undefined
+        // Keep the owned epoch until its release is independently acknowledged.
+        try { await this.rpc('release', { epoch }, AbortSignal.timeout(2000), true); this.ownedEpochs.delete(epoch) } catch {}
+        this.emit({ event: 'disconnected' })
+      }
+      throw error
+    }
+  }
   async openPreview(_url: string, _title: string, _sessionId: string): Promise<unknown> { throw new ComputerError('LOCAL_PREVIEW_REQUIRED', '独立电脑预览应在本机窗口显示') }
   async closePreview(): Promise<unknown> { return undefined }
   dispose(): Promise<void> {
@@ -261,7 +283,7 @@ async function readRequest(request: IncomingMessage, maxBytes: number): Promise<
 /** Loopback by default. Public network exposure is an explicit operator decision. */
 export async function createComputerAgentServer(driver: DeviceDriver, options: ComputerAgentOptions): Promise<ComputerAgentServer> {
   let token: string | undefined = pairToken(options.token), active: ActiveLease | undefined, nextNativeEpoch = 0, closing = false
-  let pairingGeneration = 0
+  let pairingGeneration = 0, permissionChanging = false
   const clients = new Map<string, number>(), pending = new Set<AbortController>()
   const pendingReleases = new Map<number, ActiveLease>(), releasing = new Map<number, Promise<void>>()
   let leaseTail: Promise<unknown> = Promise.resolve()
@@ -331,6 +353,14 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       response.once('close', cancel)
       let result: unknown
       if (op === 'status') result = { ...await driver.status(controller.signal), protocolVersion: COMPUTER_AGENT_VERSION, leaseTimeoutMs: leaseTimeout, cleanupPending: pendingReleases.size > 0 }
+      else if (op === 'openSystemSettings') {
+        if (Object.keys(payload).length !== 1 || payload.kind !== 'administrator') throw new ComputerError('INVALID_PERMISSION', '代理仅支持用户确认后的管理员访问')
+        if (!driver.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '目标执行器不支持管理员访问')
+        if (active || pendingReleases.size || permissionChanging) throw new ComputerError('control-pause-required', '请先暂停并确认目标电脑的输入释放')
+        permissionChanging = true
+        try { result = await driver.openSystemSettings('administrator', controller.signal) }
+        finally { permissionChanging = false }
+      }
       else if (op === 'applications') {
         if (Object.keys(payload).length) throw new ComputerError('INVALID_REQUEST', '应用目录参数无效')
         result = driver.applications ? await driver.applications(controller.signal) : [...new Map((await driver.targets(controller.signal)).map(target => [target.appId, { appId: target.appId, name: target.appId, running: true, launchable: false }])).values()]
@@ -362,6 +392,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
           const acquiring = leaseTail.catch(() => {}).then(async () => {
             operationController.signal.throwIfAborted()
             if (closing || generation !== pairingGeneration) throw new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销')
+            if (permissionChanging) throw new ComputerError('elevation-pending', '目标电脑正在等待管理员访问确认')
             if (active && active.clientId !== clientId) throw new ComputerError('DEVICE_BUSY', '独立电脑已被另一个客户端控制')
             if ((clients.get(clientId) ?? 0) >= epoch) throw new ComputerError('STALE_EPOCH', '控制周期必须递增')
             if (!clients.has(clientId) && clients.size >= 128) throw new ComputerError('CLIENT_LIMIT', '配对客户端数量已达上限，请重新配对')

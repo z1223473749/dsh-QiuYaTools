@@ -405,3 +405,34 @@ test('switching a one-time authorized window rejects an application or process r
     await f.service.dispose()
   }
 })
+
+test('owner input mode changes require a released pause and affect only fresh keyboard actions in that session', async () => {
+  const f=fixture(); const original=await start(f)
+  assert.throws(()=>f.service.setInputMode('chat','compatibility'),{code:'control-pause-required'})
+  await f.service.pause('chat')
+  assert.equal(f.service.setInputMode('chat','compatibility').inputMode,'compatibility')
+  assert.equal(f.service.get('chat').lastObservation,undefined)
+  await f.service.resume('chat')
+  await assert.rejects(async()=>f.service.act('chat',request(original,'old-mode-frame',{kind:'key',key:'Left'})),{code:'STALE_OBSERVATION'})
+  const fresh=await f.service.observe('chat')
+  await f.service.act('chat',request(fresh,'compatible-key',{kind:'key',key:'Left',inputMode:'standard',holdMs:120}))
+  const delivered=f.records.filter(row=>row[0]==='input').at(-1)[3]
+  assert.equal(delivered.inputMode,'compatibility');assert.equal(delivered.holdMs,120)
+  await f.service.pause('chat'); f.service.setInputMode('chat','standard'); await f.service.resume('chat')
+  const standard=await f.service.observe('chat')
+  await f.service.act('chat',request(standard,'standard-key',{kind:'key',key:'Left'}))
+  assert.equal(f.records.filter(row=>row[0]==='input').at(-1)[3].inputMode,'standard')
+  await f.service.dispose()
+})
+
+test('paused preview polling cannot prevent changing input mode or publish an old frame afterward',async()=>{
+ const f=fixture();await start(f);await f.service.pause('chat')
+ const entered=deferred(),frame=deferred(),observe=f.driver.observe
+ f.driver.observe=async targetId=>{entered.resolve();await frame.promise;return observe(targetId)}
+ const preview=f.service.preview('chat'),rejected=assert.rejects(preview,{code:'CONTROL_CHANGED'})
+ await entered.promise
+ assert.equal(f.service.setInputMode('chat','compatibility').inputMode,'compatibility')
+ frame.resolve();await rejected
+ assert.equal(f.service.get('chat').lastObservation,undefined)
+ await f.service.dispose()
+})

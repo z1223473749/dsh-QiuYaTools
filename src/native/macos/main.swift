@@ -102,7 +102,8 @@ import ScreenCaptureKit
             return
         }
         if op == "status" {
-            Wire.success(requestId, ["platform": "darwin", "available": true, "protocolVersion": 1,
+            Wire.success(requestId, ["platform": "darwin", "available": inputSessionAvailable(), "protocolVersion": 1,
+                "message": inputSessionAvailable() ? "" : "目标桌面会话已锁定或未激活，请先恢复会话。",
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
                 "permissionOwner": permissionGuide.permissionOwner as Any? ?? NSNull(),

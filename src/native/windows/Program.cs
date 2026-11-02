@@ -151,7 +151,7 @@ internal sealed class NativeContext : ApplicationContext
         // separate bound; they never keep an unconfirmed input owner alive.
         try {
             var inputReleased = false;
-            try { if (elevated != null) await elevated.Close(); computer?.Dispose(); inputReleased = true; }
+            try { if (elevated != null) await elevated.Close(); computer?.ReleaseInputForShutdown(); inputReleased = true; }
             catch (Exception) { Environment.ExitCode = 1; }
             if (computer != null) {
                 try {
@@ -159,6 +159,7 @@ internal sealed class NativeContext : ApplicationContext
                     else Program.Emit(new { @event = "inputCleanupFailed" });
                 } catch (Exception) { Environment.ExitCode = 1; }
             }
+            try { computer?.Dispose(); } catch (Exception) { Environment.ExitCode = 1; }
             var browserReleased = false;
             try {
                 await windows.ShutdownAsync(WindowManager.BrowserShutdownMilliseconds);

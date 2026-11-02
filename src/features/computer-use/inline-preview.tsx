@@ -118,6 +118,7 @@ export function installInlineComputerPreview(ctx: Context, form: ConfigForm<Pref
           <div className="qyt-computer-inline-actions" aria-label="电脑预览悬浮控件" onFocusCapture={() => setControlsHidden(false)}>
             <button type="button" className="qyt-computer-inline-grip" aria-label="拖动电脑小预览" title="拖动小预览；方向键移动" onPointerDown={startDrag} onKeyDown={nudge}><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><circle cx="5" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="10" cy="12" r="1"/></svg></button>
             <button type="button" disabled={busy} aria-label="暂停电脑任务" onClick={() => { void control('pause') }}>暂停</button>
+            <button type="button" disabled={busy || active.state !== 'paused'} aria-label="切换输入模式" aria-pressed={active.inputMode === 'compatibility'} title="先暂停，再为远程桌面或虚拟机窗口切换兼容输入；继续后重新观察" onClick={() => { void control('inputMode', { mode: active.inputMode === 'compatibility' ? 'standard' : 'compatibility' }) }}>{active.inputMode === 'compatibility' ? '兼容输入' : '标准输入'}</button>
             <button type="button" disabled={busy || !live} aria-label="接管电脑任务" onClick={() => { void control('takeover') }}>接管</button>
             <button type="button" disabled={busy || !['paused', 'humanControl'].includes(active.state)} aria-label="继续电脑任务" onClick={() => { void control('resume') }}>继续</button>
             <button type="button" disabled={busy} aria-label="停止电脑任务" onClick={() => { void control('stop') }}>停止</button>

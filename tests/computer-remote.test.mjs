@@ -212,7 +212,7 @@ test('paired application discovery stays metadata-only and launches only namespa
   assert.throws(() => a.launchApplication('remote:other-device:fixture.app'), { code: 'APPLICATION_DEVICE_CHANGED' })
   assert.equal((await f.raw({ op: 'launchApplication', payload: { appId: 'anything.exe', args: ['--unsafe'] } })).value.error.code, 'INVALID_REQUEST')
   assert.equal((await f.raw({ op: 'launchApplication', payload: { appId: 'anything.exe' } })).value.error.code, 'APPLICATION_UNAVAILABLE')
-  assert.equal((await f.raw({ op: 'openSystemSettings', payload: { kind: 'accessibility' } })).value.error.code, 'OP_NOT_ALLOWED')
+  assert.equal((await f.raw({ op: 'openSystemSettings', payload: { kind: 'accessibility' } })).value.error.code, 'INVALID_PERMISSION')
   assert.deepEqual(f.input, []); assert.deepEqual(f.leased, [])
 })
 
@@ -231,4 +231,25 @@ test('paired application catalogs retain safe icons across HTTP without paths or
     ...rows.slice(1).map(({ appId, name, running }) => ({ appId: `${a.deviceId}:${appId}`, name, running })),
   ])
   assert.deepEqual(f.input, []); assert.deepEqual(f.leased, [])
+})
+
+test('administrator access executes on the paired target only after its input lease is released',async t=>{
+ const f=await fixture(t), client=f.remote('permission-owner'), settings=[]
+ f.driver.openSystemSettings=async kind=>{settings.push(kind);return {opened:true,kind}}
+ await client.lease(1)
+ await assert.rejects(client.openSystemSettings('administrator'),{code:'control-pause-required'})
+ assert.equal(settings.length,0)
+ await client.release(1)
+ assert.equal((await client.openSystemSettings('administrator')).opened,true)
+ assert.deepEqual(settings,['administrator'])
+ await assert.rejects(client.openSystemSettings('accessibility'),{code:'SETTINGS_ON_TARGET_REQUIRED'})
+ assert.equal((await f.raw({op:'openSystemSettings',payload:{kind:'accessibility'}})).value.error.code,'INVALID_PERMISSION')
+})
+test('a pending remote administrator decision prevents another input lease',async t=>{
+ const f=await fixture(t), client=f.remote('permission-owner'), entered=deferred(), decision=deferred()
+ f.driver.openSystemSettings=async kind=>{entered.resolve();await decision.promise;return {opened:true,kind}}
+ const asking=client.openSystemSettings('administrator');await entered.promise
+ const other=f.remote('other-owner')
+ try{await assert.rejects(other.lease(1),{code:'elevation-pending'})}finally{decision.resolve()}
+ await asking;await other.lease(2)
 })

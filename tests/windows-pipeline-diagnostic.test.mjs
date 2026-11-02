@@ -79,6 +79,6 @@ test('two-phase shutdown instrumentation reverses exactly without changing input
   }
   assert.equal(restored, body(source))
   assert.equal((body(diagnostic).match(/PipelineTrace.Mark\("shutdown-cleanup-failed"\)/gu) ?? []).length, 1)
-  assert.throws(() => instrumentPipelineSource('Program.cs', source.replace('            try { computer?.Dispose(); inputReleased = true; }', '            try { computer?.Dispose(); }')), /anchor changed/u)
+  assert.throws(() => instrumentPipelineSource('Program.cs', source.replace('            try { if (elevated != null) await elevated.Close(); computer?.ReleaseInputForShutdown(); inputReleased = true; }', '            try { computer?.Dispose(); }')), /anchor changed/u)
   assert.throws(() => instrumentPipelineSource('Program.cs', source.replace('            catch (Exception) { Environment.ExitCode = 1; }', '            catch (Exception) { Environment.ExitCode = 2; }')), /anchor changed/u)
 })

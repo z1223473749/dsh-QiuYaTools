@@ -186,7 +186,7 @@ export class NativeCompanionDriver implements DeviceDriver {
         // Preparing allocates a native ticket. Its successful ACK remains owned even
         // if cancellation won the race; the caller must receive and cancel that exact ID.
         resolve: value => { if (awaitIssuedReply && signal?.aborted && !retainIssuedResult) reject(signal.reason); else resolve(value as T) }, reject, clean,
-        ...(awaitIssuedReply ? { transportFailure: (error: unknown) => reject(issued ? (op.startsWith('foreground') ? new ComputerError('FOREGROUND_HANDOFF_UNCONFIRMED', '前台交接结果未确认，执行器已停止。请重新连接并确认当前窗口。') : new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接后确认当前窗口。')) : error) } : {}),
+        ...(awaitIssuedReply ? { transportFailure: (error: unknown) => reject(issued ? (op.startsWith('foreground') ? new ComputerError('FOREGROUND_HANDOFF_UNCONFIRMED', '前台交接结果未确认，执行器已停止。请重新连接并确认当前窗口。') : op === 'openSystemSettings' ? new ComputerError('PERMISSION_CHANGE_UNCONFIRMED', '目标电脑的权限变更结果未确认，请用户检查后重新连接。') : new ComputerError('APPLICATION_LAUNCH_UNCONFIRMED', '应用启动结果未确认，已阻止此电脑的新输入。请由用户重新连接后确认当前窗口。')) : error) } : {}),
       })
       signal?.addEventListener('abort', abort, { once: true })
       // Close the aborted-between-check-and-listener race before writing input.
@@ -300,10 +300,9 @@ export class NativeCompanionDriver implements DeviceDriver {
   }
   async openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
     if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(kind)) throw new ComputerError('INVALID_PERMISSION', '系统权限类型无效')
-    const result = await this.checked<{ opened?: unknown; kind?: unknown; supported?: unknown; guideShown?: unknown; guideReady?: unknown }>('openSystemSettings', { kind }, signal)
+    const result = await this.checked<{ opened?: unknown; kind?: unknown; supported?: unknown; guideShown?: unknown; guideReady?: unknown }>('openSystemSettings', { kind }, signal, kind === 'administrator').finally(() => { if (kind === 'administrator') { this.protocol = undefined; this.foreground = undefined; this.foregroundSequence = undefined } })
     if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.opened !== 'boolean' || result.kind !== undefined && result.kind !== kind || result.supported !== undefined && typeof result.supported !== 'boolean' || result.guideShown !== undefined && typeof result.guideShown !== 'boolean' || result.guideReady !== undefined && typeof result.guideReady !== 'boolean') throw new ComputerError('NATIVE_PROTOCOL', '执行器返回的系统权限设置回执无效')
-    if (kind === 'administrator' && result.opened) { this.protocol = undefined; this.foreground = undefined; this.foregroundSequence = undefined }
-    if (!result.opened) throw new ComputerError('SYSTEM_SETTINGS_UNAVAILABLE', result.supported === false ? '当前系统不支持此 macOS 权限设置。' : '无法打开系统权限设置，请稍后重试。')
+    if (!result.opened) throw new ComputerError('SYSTEM_SETTINGS_UNAVAILABLE', result.supported === false ? kind === 'administrator' ? '目标系统不支持此权限设置，请在目标电脑上检查或更新执行器。' : '当前系统不支持此 macOS 权限设置。' : '无法打开系统权限设置，请稍后重试。')
     // Older companions may omit guide metadata. Readiness does not claim the
     // card is visible: it follows Settings when that application is in front.
     if (result.guideReady === false || result.guideShown === false) throw new ComputerError('PERMISSION_GUIDE_UNAVAILABLE', '系统设置已打开，但授权卡片暂不可用，请重试。')

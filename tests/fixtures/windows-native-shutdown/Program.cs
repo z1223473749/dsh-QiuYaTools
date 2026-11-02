@@ -48,6 +48,17 @@ internal static class Program
         Check(computer.Exits == 1 && delayed.Data.Disposals == 1, "normal-shutdown-exits-once-and-releases-preview-scope");
 
         Reset();
+        var release = new TaskCompletionSource<bool>();
+        var privileged = new NativeContext(new TestComputer(), new WindowManager(), new TestElevated { Release = release });
+        var privilegedClose = privileged.Begin();
+        Check(!Has("inputReleased") && !privilegedClose.IsCompleted, "privileged-release-must-be-confirmed-before-input-ack");
+        release.SetResult(true); await privilegedClose;
+        Reset();
+        var failedPrivileged = new NativeContext(new TestComputer(), new WindowManager(), new TestElevated { Failure = new IOException() });
+        await failedPrivileged.Begin();
+        Check(!Has("inputReleased") && Has("inputCleanupFailed"), "uncertain-privileged-release-never-fabricates-input-ack");
+
+        Reset();
         var session = new NativeContext(null, new WindowManager());
         await session.Begin();
         Check(!Has("inputReleased") && !Has("inputCleanupFailed") && Has("browserShutdown", true), "session-companion-does-not-fabricate-input-ownership");
@@ -118,6 +129,7 @@ internal sealed class TestComputer
 {
     internal Exception? Failure;
     internal int Disposals;
+    internal void ReleaseInputForShutdown() { if (Failure != null) throw Failure; }
     internal void Dispose() { Disposals++; if (Failure != null) throw Failure; }
 }
 internal sealed class TestWatch { internal void Stop() { } }
@@ -126,10 +138,11 @@ internal sealed partial class NativeContext
     private bool exiting;
     private readonly TestWatch parentWatch = new();
     private readonly TestComputer? computer;
+    private readonly TestElevated? elevated;
     private readonly WindowManager windows;
     private readonly TaskCompletionSource completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal int Exits;
-    internal NativeContext(TestComputer? computer, WindowManager windows) { this.computer = computer; this.windows = windows; }
+    internal NativeContext(TestComputer? computer, WindowManager windows, TestElevated? elevated = null) { this.computer = computer; this.windows = windows; this.elevated = elevated; }
     internal Task Begin() { Shutdown(); return completed.Task; }
     private void ExitThread() { Exits++; completed.TrySetResult(); }
 }
@@ -158,4 +171,11 @@ internal sealed partial class WindowManager
         browserLifetimes.Add(window); return window.State;
     }
     private void CloseWindows() { Closes++; OnClose?.Invoke(); }
+}
+
+internal sealed class TestElevated
+{
+    internal Exception? Failure;
+    internal TaskCompletionSource<bool>? Release;
+    internal async Task Close() { if (Failure != null) throw Failure; if (Release != null) await Release.Task; }
 }

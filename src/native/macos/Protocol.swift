@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 
 /// stdout is a protocol channel: diagnostics and target contents never go to logs.
@@ -70,4 +71,12 @@ struct FrameGeometry {
               pixelWidth > 0, pixelHeight > 0 else { throw ComputerError("INVALID_COORDINATES", "Coordinates must be inside the latest screenshot.") }
         return CGPoint(x: frame.minX + x * frame.width / Double(pixelWidth), y: frame.minY + y * frame.height / Double(pixelHeight))
     }
+}
+
+
+func inputSessionAvailable() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return session[kCGSessionOnConsoleKey as String] as? Bool == true &&
+        (session[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == getuid() &&
+        session["CGSSessionScreenIsLocked"] as? Bool != true
 }

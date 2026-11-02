@@ -104,7 +104,7 @@ export class ComputerDriverRouter implements DeviceDriver {
     return this.current.targets(signal).then(targets => [...new Map(targets.map(target => [target.appId, { appId: target.appId, name: this.mode === 'browser' ? '浏览器' : target.appId, running: true, launchable: false }])).values()])
   }
   launchApplication(appId: string, signal?: AbortSignal) { this.assertLive(); if (!this.current.launchApplication) throw new ComputerError('APPLICATION_LAUNCH_UNSUPPORTED', '请先手动打开该应用'); return this.current.launchApplication(appId, signal) }
-  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) { this.assertLive(); if (!this.local.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '此设备不支持直接打开系统设置'); return this.local.openSystemSettings(kind, signal) }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) { this.assertLive(); if (!this.current.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '请在目标电脑上设置系统权限'); return this.current.openSystemSettings(kind, signal) }
   async exchange(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> {
     this.assertLive()
     const current = this.current as DeviceDriver & { exchange?(request: unknown, signal?: AbortSignal): Promise<ExchangeResult> }, generation = this.generation

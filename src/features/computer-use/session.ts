@@ -244,7 +244,8 @@ export class ComputerSessionService {
   private dispatch(sessionId: string, request: ComputerActionRequest, signal: AbortSignal | undefined, human: boolean): Promise<ComputerActionResult> {
     const record = this.record(sessionId), epoch = record.snapshot.epoch
     requireIdentity(request?.actionId, '操作'); requireIdentity(request?.frameId, '帧')
-    const action = parseComputerAction(request.action)
+    const parsed = parseComputerAction(request.action)
+    const action = record.snapshot.inputMode && ['key', 'type'].includes(parsed.kind) ? { ...parsed, inputMode: record.snapshot.inputMode } : parsed
     if (['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType', 'goBack', 'goForward', 'reload'].includes(action.kind) && !this.driver.resolveActionTarget) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '当前执行器不支持浏览器专用操作')
     const fingerprint = JSON.stringify({ epoch, frameId: request.frameId, action, human })
     const old = record.actions.get(request.actionId)
@@ -345,6 +346,15 @@ export class ComputerSessionService {
     record.transition = promise
     void promise.then(() => { record.transition = undefined }, () => { record.transition = undefined })
     return promise
+  }
+  setInputMode(sessionId: string, mode: 'standard' | 'compatibility'): ComputerSessionSnapshot {
+    this.assertEnabled()
+    if (!['standard', 'compatibility'].includes(mode)) throw new ComputerError('INVALID_ACTION', '输入模式无效')
+    const record = this.record(sessionId)
+    if (record.snapshot.state !== 'paused' || record.transition) throw new ComputerError('control-pause-required', '请先暂停并等待输入释放，再切换输入模式')
+    this.ownerControlVersion++; this.invalidate(record)
+    record.snapshot.inputMode = mode; this.change(record, 'paused')
+    return this.get(sessionId)!
   }
   pause(sessionId: string) { this.ownerControlVersion++; return this.transition(sessionId, 'paused') }
   takeover(sessionId: string) { this.ownerControlVersion++; return this.transition(sessionId, 'humanControl') }

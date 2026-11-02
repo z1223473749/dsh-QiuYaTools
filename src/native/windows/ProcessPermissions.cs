@@ -23,6 +23,16 @@ internal static class ProcessPermissions
             } finally { Marshal.FreeHGlobal(buffer); }
         }
     }
+    internal static bool SessionActive
+    {
+        get {
+            if (!WTSQuerySessionInformation(IntPtr.Zero, Process.GetCurrentProcess().SessionId, 8, out var buffer, out var size)) return false;
+            try { return size >= 4 && Marshal.ReadInt32(buffer) == 0; }
+            finally { WTSFreeMemory(buffer); }
+        }
+    }
+    [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, EntryPoint = "WTSQuerySessionInformationW", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool WTSQuerySessionInformation(IntPtr server, int session, int information, out IntPtr buffer, out int size);
+    [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(IntPtr buffer);
     internal static bool Elevated => Integrity((uint)Environment.ProcessId) >= 0x3000;
     internal static void RequireTarget(uint pid)
     {

@@ -135,3 +135,15 @@ test('shutdown retries forgotten candidate cleanup and failed disposal can itsel
   assert.equal(attempts, 3)
   assert.equal(local.calls.filter(call => call[0] === 'dispose').length, 1, 'successful cleanup is not replayed')
 })
+
+test('permission actions follow the selected device instead of opening local settings for a remote task',async()=>{
+ const local=driver('local'),remote=driver('remote')
+ local.openSystemSettings=async kind=>{local.calls.push(['settings',kind]);return {opened:true}}
+ remote.openSystemSettings=async kind=>{remote.calls.push(['settings',kind]);return {opened:true}}
+ const router=new ComputerDriverRouter({local,remoteFactory:()=>remote})
+ await router.useRemote({endpoint:'http://127.0.0.1:1',token:'a'.repeat(32)})
+ await router.openSystemSettings('administrator')
+ assert.equal(local.calls.filter(row=>row[0]==='settings').length,0)
+ assert.deepEqual(remote.calls.find(row=>row[0]==='settings'),['settings','administrator'])
+ await router.dispose()
+})

@@ -43,6 +43,7 @@ internal sealed class ComputerDriver : IDisposable
     private readonly Thread physicalCleanupThread;
     private int physicalCleanupStopping;
     private int disposeStarted;
+    private bool shutdownInputReleased;
     private readonly PhysicalInputMonitor physicalInput;
     private readonly ForegroundHandoff? foregroundHandoff;
     internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null)
@@ -89,7 +90,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive && ProcessPermissions.SessionActive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = !ProcessPermissions.SessionActive ? "The target desktop session is locked or inactive. Restore its interactive session before control." : Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
     internal void RequireIdleForPermissionChange()
     {
         lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
@@ -325,7 +326,8 @@ internal sealed class ComputerDriver : IDisposable
         var actor = LeaseActor(request);
         lock (inputLock) {
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
-            if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
+            if (desktopLease != null && !ProcessPermissions.SessionActive) throw new NativeFailure("session-unavailable", "The target Windows desktop session is not active");
+        if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
             if (Volatile.Read(ref physicalCleanupPending) != 0) throw new NativeFailure("human-input-pending", "Wait for interrupted input to finish releasing before reconnecting");
             RefreshForeground(true); foregroundHandoff?.Core.BeforeLease(requested);
             if (disposed || requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Lease epoch is stale");
@@ -605,12 +607,19 @@ internal sealed class ComputerDriver : IDisposable
         catch (NativeFailure failure) when (failure.Code == "input-cleanup-failed") { }
         return new { passed = true, checks = 4, kind = "deterministic-rejected-release-state-machine", actualOsInput = false };
     }
+    internal void ReleaseInputForShutdown()
+    {
+        lock (inputLock) {
+            if (shutdownInputReleased) return;
+            foregroundHandoff?.Core.Invalidate(); disposed = true;
+            aiCursor.Revoke(Interlocked.Exchange(ref epoch, 0));
+            ClearHeld(); desktopLease?.Release(); shutdownInputReleased = true;
+        }
+    }
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposeStarted, 1) != 0) return;
-        lock (inputLock) { foregroundHandoff?.Core.Invalidate(); }
-        Volatile.Write(ref disposed, true); aiCursor.Revoke(Interlocked.Exchange(ref epoch, 0));
-        try { lock (inputLock) { disposed = true; epoch = 0; ClearHeld(); desktopLease?.Release(); } }
+        try { ReleaseInputForShutdown(); }
         finally {
             try { captureBroker.Dispose(); }
             finally {

@@ -59,7 +59,7 @@ test('actual Windows shutdown separates confirmed input release from bounded bro
   const controlOutput = await execute(dotnet, [join(temporary, 'bin/Release/net8.0/NativeShutdown.dll')], options)
   const result = JSON.parse(controlOutput.trim())
   assert.equal(result.passed, true)
-  assert.equal(result.tests.length, 19)
+  assert.equal(result.tests.length, 21)
   assert(result.tests.every(row => row.passed === true))
   assert.equal(new Set(result.tests.map(row => row.name)).size, result.tests.length)
   for (const key of ['GUI', 'Host', 'PD', 'model', 'input', 'nativeWindows']) assert.equal(result[key], 0)

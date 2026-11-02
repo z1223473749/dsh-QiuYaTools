@@ -144,7 +144,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
           }
           else if (input.op === 'openSettings') {
             if (!['screenRecording', 'accessibility', 'inputMonitoring', 'administrator'].includes(input.kind)) throw new Error('系统权限类型无效。')
-            value = manager ? await manager.openSystemSettings(input.kind as ComputerSystemPermission, request.signal) : await driver?.openSystemSettings?.(input.kind as ComputerSystemPermission, request.signal)
+            value = manager ? await manager.openSystemSettings(input.kind as ComputerSystemPermission, request.signal, sessionId) : await driver?.openSystemSettings?.(input.kind as ComputerSystemPermission, request.signal)
             if (value === undefined) throw new Error('当前执行器不支持打开系统权限设置。')
           }
           else if (input.op === 'applications') value = manager ? await manager.applicationsFor(sessionId, request.signal) : driver?.applications ? await driver.applications(request.signal) : []
@@ -201,6 +201,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
               if (current.epoch === input.expectedEpoch) { invalidate(sessionId); value = await service.pause(sessionId) } else value = current
             } else { invalidate(sessionId); value = await service.pause(sessionId) }
           }
+          else if (input.op === 'inputMode') { invalidate(sessionId); value = service.setInputMode(sessionId, input.mode) }
           else if (input.op === 'takeover') { invalidate(sessionId); value = await service.takeover(sessionId) }
           else if (input.op === 'resume') { invalidate(sessionId); value = await service.resume(sessionId) }
           else if (input.op === 'stop') { invalidate(sessionId); value = await service.stop(sessionId) }

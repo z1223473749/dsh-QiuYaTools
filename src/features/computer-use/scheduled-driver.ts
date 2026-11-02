@@ -99,7 +99,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
     if (this.inner.applications) return this.inner.applications(signal)
     return this.inner.targets(signal).then(targets => [...new Map(targets.map(target => [target.appId, { appId: target.appId, name: target.appId, running: true, launchable: false }])).values()])
   }
-  get requiresOwnerReconnect(): boolean { return this.scheduler.requiresOwnerReconnect(this.surface) }
+  get requiresOwnerReconnect(): boolean { return this.scheduler.requiresOwnerReconnect(this.surface) || (this.inner as DeviceDriver & { requiresOwnerReconnect?: boolean }).requiresOwnerReconnect === true }
   acknowledgeOwnerReconnect(): void { this.assertLive(); this.scheduler.acknowledgeOwnerReconnect(this.surface, this) }
   launchApplication(appId: string, signal?: AbortSignal) {
     this.assertLive(); requireIdentity(appId, '应用')
@@ -120,7 +120,19 @@ export class ScheduledComputerDriver implements DeviceDriver {
     void operation.then(() => this.pending.delete(operation), () => this.pending.delete(operation))
     return operation
   }
-  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) { this.assertLive(); if (!this.inner.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '此设备不支持直接打开系统设置'); return this.inner.openSystemSettings(kind, signal) }
+  openSystemSettings(kind: ComputerSystemPermission, signal?: AbortSignal) {
+    this.assertLive()
+    if (!this.inner.openSystemSettings) throw new ComputerError('SETTINGS_UNSUPPORTED', '此设备不支持直接打开系统设置')
+    if (kind !== 'administrator') return this.inner.openSystemSettings(kind, signal)
+    const operationSignal = signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal
+    const operation = this.scheduler.run(this.surface, operationSignal, async () => {
+      this.assertLive(); operationSignal.throwIfAborted(); this.scheduler.clearForeground(this.surface)
+      try { return await this.inner.openSystemSettings!(kind, operationSignal) }
+      catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'PERMISSION_CHANGE_UNCONFIRMED') this.scheduler.launchUnconfirmed(this.surface, this); throw error }
+    })
+    this.pending.add(operation); void operation.then(() => this.pending.delete(operation), () => this.pending.delete(operation))
+    return operation
+  }
   targets(signal?: AbortSignal) { this.assertLive(); return this.inner.targets(signal) }
   observe(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.inner.observe(targetId, signal) }
   preview(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.inner.preview ? this.inner.preview(targetId, signal) : this.inner.observe(targetId, signal) }

@@ -65,3 +65,22 @@ test('disposal covers in-flight acquisitions whose fetch implementation replies 
   pending.resolve(reply(acquisition)); await rejected
   assert.deepEqual(releases, [23])
 })
+
+test('a lost remote input reply is never replayed and fences new leases until owner reconnect', async()=>{
+ const sent=[]
+ const driver=remote(async input=>{sent.push(input);if(input.op==='act')throw new Error('reply lost after input');return reply(input)})
+ await driver.lease(1)
+ await assert.rejects(driver.act(1,'window',{kind:'key',key:'Left',inputMode:'compatibility',holdMs:150}),{code:'REMOTE_ACTION_UNCONFIRMED'})
+ assert.equal(sent.filter(row=>row.op==='act').length,1)
+ assert.equal(sent.find(row=>row.op==='act').payload.action.holdMs,150)
+ assert.equal(sent.filter(row=>row.op==='release').length,1)
+ assert.equal(driver.requiresOwnerReconnect,true)
+ await assert.rejects(driver.lease(2),{code:'REMOTE_ACTION_UNCONFIRMED'})
+ assert.equal(sent.filter(row=>row.op==='lease').length,1)
+ await driver.dispose()
+})
+test('an acknowledged remote input rejection retains its actual error and does not claim an unknown result',async()=>{
+ const driver=remote(async input=>input.op==='act'?Response.json({version:1,requestId:input.requestId,ok:false,error:{code:'administrator-required',message:'Permission required'}}):reply(input))
+ await driver.lease(1);await assert.rejects(driver.act(1,'window',{kind:'key',key:'Left'}),{code:'administrator-required'})
+ assert.equal(driver.requiresOwnerReconnect,false);await driver.dispose()
+})
