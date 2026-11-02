@@ -86,8 +86,13 @@ export function inspectSettingsTab(section, expected) {
     require([...form.querySelectorAll('button')].some(node => text(node) === '保存阈值'), 'the explicit threshold save action is missing')
   }
   if (expected.kind === 'theme') {
-    require([...panel.querySelectorAll('h4')].some(node => text(node) === '鲸与海'), 'the theme preview title is missing')
-    require(panel.querySelector('[role="img"][aria-label="鲸与海主题：手绘鲸鱼与白发少年、半透明纸面阅读区和海面侧栏。"]'), 'the accessible theme preview is missing')
+    const choices = [...panel.querySelectorAll('.qyt-theme-choice[role="radio"][aria-checked="true"]')]
+    require(choices.length === 1, 'the selected theme is missing or duplicated')
+    const choice = choices[0], card = panel.querySelector('.qyt-theme-card')
+    require(card && card.dataset.theme === choice.dataset.theme && text(card.querySelector('h4')) === choice.getAttribute('aria-label'), 'the theme preview title does not match the selected theme')
+    const preview = card.querySelector('[role="img"]'), frame = preview?.querySelector('iframe[data-qyt-theme-preview]')
+    require(preview?.getAttribute('aria-label')?.trim() && frame?.title === preview.getAttribute('aria-label'), 'the accessible theme preview is missing')
+    evidence.theme = choice.dataset.theme
   }
   if (expected.kind === 'about') {
     require(panel.querySelector('img[alt="白发少年坐在鲸鱼上"]'), 'the project artwork is missing')

@@ -103,6 +103,7 @@ test('all eleven real React settings pages satisfy their own public semantics wi
   assert.deepEqual(pages.find(row => row.id === 'pastedTextEnabled').thresholds, { '字符数': 1000, '行数': 15 })
   assert.equal(pages.find(row => row.id === 'computer').checked, false, 'computer access is not enabled just to capture settings')
   assert.equal(pages.find(row => row.id === 'qTheme').checked, true, 'an unset theme preference inherits the enabled default without a settings write')
+  assert.equal(pages.find(row => row.id === 'qTheme').theme, 'moonfrost', 'the settings tour validates the current default theme')
   assert.deepEqual(pages.find(row => row.id === 'planCommentsEnabled').features, [
     { heading: '计划批注与修改建议', checked: true, guideSteps: 3 },
     { heading: '会话批注与修改建议', checked: true, guideSteps: 3 },
