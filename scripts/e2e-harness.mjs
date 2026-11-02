@@ -24,6 +24,7 @@ import { assertHarnessMacEntryPrepared } from './harness-macos-entry-preflight.m
 import { startHarnessWindowsWindowRetirement } from './harness-windows-window-retirement.mjs'
 import { stagePassiveObserverForProvider } from './harness-passive-observer-artifact.mjs'
 import { HARNESS_PASSIVE_OBSERVER_SHA256 } from '../tests/fixtures/harness-passive-input-source.mjs'
+import { wordPreviewFixture, spreadsheetPreviewFixture, pdfPreviewFixture } from '../tests/fixtures/composer-attachment-files.mjs'
 
 assertHarnessMacEntryPrepared({ prepared: false, headlessSubset: false })
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -34,9 +35,10 @@ if (process.argv.includes('--screenshots-dir') && (!screenshotDirectoryArgument 
 const imageLayout = createHarnessImageLayout(output, screenshotDirectoryArgument)
 const imagePath = imageLayout.path, imageReference = imageLayout.reference
 const candidate = arg('--package')
-const featureEvidenceOnly = process.argv.includes('--feature-evidence-only') || process.argv.includes('--pasted-text-only')
-const pastedTextOnly = process.argv.includes('--pasted-text-only')
-const featureEvidenceCases = new Set(['account-menu-settings-and-all-feature-tabs', 'settings-persist-thresholds-and-theme', 'real-local-model-session', 'paste-browser-event-to-official-txt-upload', ...pastedTextOnly ? [] : ['native-independent-window-and-reuse', 'computer-main-agent-tools-and-image-adapter-pipeline', 'batch-archive-real-sessions', 'plan-review-comment-and-draft-preservation']])
+const attachmentsOnly = process.argv.includes('--attachments-only')
+const featureEvidenceOnly = process.argv.includes('--feature-evidence-only') || process.argv.includes('--pasted-text-only') || attachmentsOnly
+const pastedTextOnly = process.argv.includes('--pasted-text-only') || attachmentsOnly
+const featureEvidenceCases = new Set(['account-menu-settings-and-all-feature-tabs', 'settings-persist-thresholds-and-theme', 'real-local-model-session', 'paste-browser-event-to-official-txt-upload', ...attachmentsOnly ? ['mixed-file-drop-content-preview-and-send', 'unified-file-picker-and-file-paste-preview'] : [], ...pastedTextOnly ? [] : ['native-independent-window-and-reuse', 'computer-main-agent-tools-and-image-adapter-pipeline', 'batch-archive-real-sessions', 'plan-review-comment-and-draft-preservation']])
 const windowStateDiagnostic = process.argv.includes('--preview-window-state-diagnostic')
 if (windowStateDiagnostic && process.platform !== 'win32') throw new Error('Window-state diagnostics require the actual Windows Host')
 const cli = JSON.parse(arg('--cli-json', JSON.stringify(['/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'])))
@@ -215,6 +217,14 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   // The isolated browser owns this API spy; the user's system clipboard is never read or changed.
   await context.addInitScript(() => { window.__e2eClipboard = null; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { async writeText(text) { window.__e2eClipboard = text } } }) })
+  if (attachmentsOnly) await context.addInitScript(() => {
+    globalThis.__DSH_HOST_PATHS__ = { pathFor: file => file.__e2eNativePath ?? '' }
+    window.addEventListener('change', event => {
+      if (event.target instanceof HTMLInputElement && event.target.type === 'file') {
+        for (const file of event.target.files ?? []) Object.defineProperty(file, '__e2eNativePath', { value: '/test-only/' + file.name })
+      }
+    }, true)
+  })
   await context.route('**/*', route => { const requestURL = new URL(route.request().url()); return ['http:', 'https:'].includes(requestURL.protocol) && !['127.0.0.1', 'localhost'].includes(requestURL.hostname) ? route.abort() : route.continue() })
   page = await context.newPage(); page.on('pageerror', error => errors.push(sanitizeHarnessDiagnostic(error.message))); page.setDefaultTimeout(15000)
   page.on('response', response => {
@@ -260,6 +270,7 @@ try {
     await waitFor(async () => (await page.locator('.qyt-status').innerText()).includes('已保存'), 'Threshold save was not acknowledged')
     await page.getByRole('tab', { name: 'Q 主题', exact: true }).click()
     const toggle = page.getByRole('switch', { name: '启用 Q 主题', exact: true }); if (await toggle.getAttribute('aria-checked') !== 'true') await toggle.click()
+    await page.getByRole('radio', { name: '鲸与海', exact: true }).click()
     await waitFor(() => page.locator('body').getAttribute('data-qyt-q-theme').then(value => value === 'ocean'), 'Theme did not apply')
     await screenshot('theme'); await page.getByRole('button', { name: '关闭', exact: true }).click()
     await openSettings(); await page.getByRole('tab', { name: '长文本', exact: true }).click()
@@ -304,14 +315,145 @@ try {
     await page.getByText(name, { exact: true }).first().waitFor()
     const card = page.locator('[data-composer-card]')
     await waitFor(async () => {
-      if (await card.getByText('上传失败，点击重试', { exact: true }).count()) throw new Error('The actual TXT upload UI reports failure')
-      return await card.getByText('上传中…', { exact: true }).count() === 0 && await card.getByRole('button', { name: '移除文件 ' + name, exact: true }).count() === 1 && await card.getByRole('button', { name: '重试上传 ' + name, exact: true }).count() === 0
+      if (await card.locator('.qyt-attachment-card[data-status="error"]').count()) throw new Error('The actual TXT upload UI reports failure')
+      return await card.locator('.qyt-attachment-card[data-status="ready"]').count() === 1 && await card.getByRole('button', { name: '移除附件 ' + name, exact: true }).count() === 1
     }, 'The actual TXT upload did not reach the ready UI')
     assert.equal((await editor().innerText()).trim(), '')
     await writeFile(join(output, 'pasted-text-upload-evidence.json'), JSON.stringify({ source: 'Actual browser ClipboardEvent → nonce File → official binary upload HTTP metadata → independent own profile/file-handle read → official composer ready UI', sessionId: alphaId, httpSessionBound: true, httpStatus: response.status(), binaryUpload: true, before, stored, expectedBytes: bytes.length, expectedSHA256: sha256, receiptIdReadDirectly: false, responseBodyRead: false, readyUI: true, inputReplayed: false }, null, 2))
     await screenshot('pasted-txt')
-    await card.getByRole('button', { name: '移除文件 ' + name, exact: true }).click()
+    if (attachmentsOnly) await screenshot('pasted-txt-composer', card)
+    assert.ok((await card.locator('.qyt-attachment-text').textContent()).includes('E2E attachment'), 'Generated TXT must show its real content thumbnail')
+    await card.getByRole('button', { name: '移除附件 ' + name, exact: true }).click()
     return { input: 'browser ClipboardEvent', path: 'actual Harness attachment intake, binary upload and ready UI', storedBytesVerified: true, bytes: bytes.length, sha256 }
+  })
+  await test('mixed-file-drop-content-preview-and-send', async () => {
+    const suffix = randomUUID().slice(0, 8)
+    const fixtures = [
+      { name: `组合文本-${suffix}.txt`, type: 'text/plain', text: '文件附件统一预览\r\n' + Array.from({ length: 35 }, (_, i) => `第 ${i + 1} 行：中文内容缩略预览😀，文件拖入后保留已有草稿。`).join('\r\n') + '\r\n<script>inert</script>' },
+      { name: `问题反馈-${suffix}.docx`, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', base64: wordPreviewFixture().toString('base64') },
+      { name: `汇总回执-${suffix}.xlsx`, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: spreadsheetPreviewFixture().toString('base64') },
+      { name: `计划预览-${suffix}.pdf`, type: 'application/pdf', base64: pdfPreviewFixture().toString('base64') },
+      { name: `table-${suffix}.csv`, type: 'text/csv', text: '项目,数量\r\n图片,3\r\n文本,5' },
+      { name: `archive-${suffix}.zip`, type: 'application/zip', text: 'opaque archive attachment byte preservation' },
+      { name: `unknown-${suffix}.custom`, type: '', text: 'arbitrary extension' },
+      { name: `empty-${suffix}.txt`, type: 'text/plain', text: '' },
+    ]
+    const observed = new Map()
+    const receive = response => {
+      const url = new URL(response.url())
+      if (url.pathname === '/api/session/uploadFileBinary' && url.searchParams.get('sessionId') === alphaId && fixtures.some(file => file.name === url.searchParams.get('name'))) observed.set(url.searchParams.get('name'), response.status())
+    }
+    context.on('response', receive)
+    const draft = `E2E:Drop-${suffix}`
+    try {
+      await editor().fill(draft)
+      const imageData = (await readFile(join(root, 'assets/icon-color.webp'))).toString('base64')
+      await editor().evaluate((element, { fixtures, imageData }) => {
+        globalThis.pdfjsLib = { __qytPreviousRuntime: true }
+        const data = new DataTransfer()
+        const image = Uint8Array.from(atob(imageData), c => c.charCodeAt(0))
+        data.items.add(new File([image], '图片预览.webp', { type: 'image/webp' }))
+        for (const fixture of fixtures) {
+          const payload = fixture.base64 ? Uint8Array.from(atob(fixture.base64), c => c.charCodeAt(0)) : fixture.text
+          const file = new File([payload], fixture.name, { type: fixture.type })
+          // A desktop-shell path identity must not turn the picked file into @path.
+          Object.defineProperty(file, '__e2eNativePath', { value: '/test-only/' + fixture.name })
+          data.items.add(file)
+        }
+        const over = new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true })
+        element.dispatchEvent(over)
+        if (!over.defaultPrevented) throw Error('File drag was not accepted')
+        element.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
+      }, { fixtures, imageData })
+      const card = page.locator('[data-composer-card]:visible').first()
+      await waitFor(async () => await card.locator('.qyt-attachment-card[data-status="ready"]').count() === fixtures.length + 1, 'Mixed attachments did not become ready')
+      assert.equal(observed.size, fixtures.length, 'Exactly one real upload per non-image file')
+      for (const fixture of fixtures) {
+        assert.equal(observed.get(fixture.name), 200)
+        const expected = fixture.base64 ? Buffer.from(fixture.base64, 'base64') : Buffer.from(fixture.text), hash = createHash('sha256').update(expected).digest('hex')
+        const stored = await readFile(join(profileHome, 'attachments/v1/files', hash.slice(0, 2), hash, fixture.name))
+        assert.deepEqual(stored, expected, `Host bytes changed for ${fixture.name}`)
+      }
+      assert.equal(await editor().innerText(), draft)
+      assert.ok((await card.locator('.qyt-attachment-text').first().textContent()).includes('中文内容缩略预览😀'))
+      assert.equal(await card.locator('.qyt-attachment-text script').count(), 0)
+      assert.ok((await card.locator('.qyt-attachment-table').first().textContent()).includes('图片'))
+      await card.locator('.qyt-attachment-document').waitFor()
+      assert.ok((await card.locator('.qyt-attachment-document').textContent()).includes('功能反馈与改进建议'))
+      await card.locator('.qyt-attachment-page').waitFor()
+      assert.equal(await card.locator('.qyt-attachment-page').evaluate(image => image.complete && image.naturalWidth > 0), true)
+      assert.equal(await page.evaluate(() => globalThis.pdfjsLib?.__qytPreviousRuntime), true, 'PDF thumbnails must not overwrite another preview plugin runtime')
+      assert.equal(await card.locator('.qyt-attachment-image').evaluate(image => image.complete && image.naturalWidth > 0), true)
+      await screenshot('mixed-attachments-light')
+      await screenshot('mixed-attachments-composer-light', card)
+      await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
+      await screenshot('mixed-attachments-dark')
+      await screenshot('mixed-attachments-composer-dark', card)
+      await card.getByRole('button', { name: `预览附件 ${fixtures[0].name}`, exact: true }).click()
+      await page.locator('dialog.qyt-attachment-dialog[open]').waitFor()
+      await screenshot('text-attachment-preview')
+      await page.keyboard.press('Escape')
+      assert.equal(await page.locator('dialog.qyt-attachment-dialog').count(), 0)
+      await card.getByRole('button', { name: `预览附件 ${fixtures[3].name}`, exact: true }).click()
+      await page.locator('dialog.qyt-attachment-dialog[open]').waitFor()
+      await screenshot('pdf-attachment-preview')
+      await page.keyboard.press('Escape')
+      await page.setViewportSize({ width: 560, height: 720 })
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await screenshot('mixed-attachments-narrow')
+      await page.setViewportSize({ width: 1440, height: 1000 })
+      await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+      const submissionResponses = []
+      const record = async response => {
+        if (new URL(response.url()).pathname === '/api/session/prompt' && response.request().method() === 'POST') {
+          submissionResponses.push({ path: new URL(response.url()).pathname, status: response.status(), body: await response.text().catch(() => 'unavailable') })
+        }
+      }
+      context.on('response', record)
+      await card.getByRole('button', { name: '发送消息', exact: true }).click()
+      try {
+        await waitFor(async () => await card.locator('.qyt-attachment-card').count() === 0 && submissionResponses.length === 1, 'The accepted mixed submission did not retire the draft')
+        assert.equal(submissionResponses[0].status, 200)
+        assert.equal(JSON.parse(submissionResponses[0].body).result.value.accepted, true)
+        await page.getByText(draft, { exact: true }).waitFor()
+        assert.equal((await editor().innerText()).trim(), '')
+      }
+      finally { context.off('response', record); await writeFile(join(output, 'attachment-submission-responses.json'), JSON.stringify(submissionResponses, null, 2)) }
+      assert.equal(await card.locator('.qyt-attachment-card').count(), 0, 'Accepted send must retire every draft attachment')
+      await screenshot('mixed-attachments-sent')
+      return { files: fixtures.length + 1, nonImageUploads: observed.size, storedBytesVerified: true, preservedDraft: true, contentThumbnails: ['image', 'text', 'Word document', 'Excel worksheet', 'PDF first page', 'CSV', 'generated TXT in prior case'], source: 'Browser DragEvent/File through actual Harness intake/upload/send; OS source application drag is not exercised' }
+    } finally {
+      context.off('response', receive)
+      await page.setViewportSize({ width: 1440, height: 1000 })
+      await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+    }
+  })
+  await test('unified-file-picker-and-file-paste-preview', async () => {
+    const card = page.locator('[data-composer-card]:visible').first()
+    const name = `picker-${randomUUID().slice(0, 8)}.docx`
+    const bytes = wordPreviewFixture()
+    await editor().fill('保留输入草稿')
+    await card.locator('input[type="file"]').setInputFiles({ name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: bytes })
+    await card.locator('.qyt-attachment-card[data-status="ready"]').waitFor()
+    await card.locator('.qyt-attachment-document').waitFor()
+    assert.equal(await editor().innerText(), '保留输入草稿')
+    assert.ok((await card.locator('.qyt-attachment-document').textContent()).includes('功能反馈与改进建议'))
+    await card.getByRole('button', { name: '移除附件 ' + name, exact: true }).click()
+    const pastedName = `pasted-${randomUUID().slice(0, 8)}.xlsx`
+    await editor().evaluate((element, { name, base64 }) => {
+      const file = new File([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      Object.defineProperty(file, '__e2eNativePath', { value: '/test-only/' + name })
+      const data = new DataTransfer(); data.items.add(file); data.setData('text/plain', '/test-only/' + name)
+      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+    }, { name: pastedName, base64: spreadsheetPreviewFixture().toString('base64') })
+    await card.locator('.qyt-attachment-card[data-status="ready"]').waitFor()
+    await card.locator('.qyt-attachment-table').waitFor()
+    assert.equal(await editor().innerText(), '保留输入草稿', 'File paste must not also insert its text/path payload')
+    assert.ok((await card.locator('.qyt-attachment-table').textContent()).includes('图片预览'))
+    await screenshot('picker-and-paste-composer', card)
+    await card.getByRole('button', { name: '移除附件 ' + pastedName, exact: true }).click()
+    await editor().fill('')
+    return { nativePathIdentitySimulated: true, picker: 'actual file input change', paste: 'browser ClipboardEvent', contentPreview: true, draftPreserved: true }
   })
   const betaId = pastedTextOnly ? undefined : await newSession(beta), gammaId = pastedTextOnly ? undefined : await newSession(gamma)
   const featureBinding = { workspaceId: ownedWorkspace.workspaceId, workspacePath: await realpath(workspacePath), selectedSessionIds: [betaId, gammaId], preservedSessionIds: [alphaId] }

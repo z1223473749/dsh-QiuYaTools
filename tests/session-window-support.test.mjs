@@ -15,6 +15,7 @@ const compiled = (await build({
     setup(builder) {
       builder.onResolve({ filter: /^\.\.\/features\/.+\/index\.tsx?$/ }, () => ({ path: 'installers', namespace: 'test-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, () => ({ contents: `
+        export function installComposerAttachments() { return () => {} }
         export function installPastedText() {}
         export function installBulkArchive() {}
         export function installSessionWindows() {}

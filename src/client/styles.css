@@ -1,3 +1,66 @@
+/* Attachment presentation uses the composer's existing surface/theme tokens. */
+[data-composer-card]:has(.qyt-attachments) { position: relative; }
+.qyt-attachments { min-width: 0; color: var(--dsw-alias-label-primary, #253247); }
+.qyt-attachments *, .qyt-attachment-dialog * { box-sizing: border-box; }
+.qyt-attachment-rail { display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; padding: 12px 12px 8px; scrollbar-width: thin; }
+.qyt-attachment-card { position: relative; flex: 0 0 160px; height: 122px; min-width: 0; overflow: hidden; border: 1px solid var(--dsw-alias-border-general, #8092a326); border-radius: 8px; background: var(--dsw-alias-bg-layer-2, #fff); }
+.qyt-attachment-card[data-kind="image"] { flex-basis: 122px; border: 0; }
+.qyt-attachment-open { display: flex; align-items: flex-start; justify-content: center; width: 100%; height: 95px; overflow: hidden; padding: 0; border: 0; border-radius: 0; background: #fff; color: #26303c; cursor: pointer; text-align: left; }
+.qyt-attachment-card[data-kind="image"] .qyt-attachment-open { height: 122px; background: transparent; }
+.qyt-attachment-image { display: block; width: 100%; height: 100%; object-fit: contain; }
+.qyt-attachment-card[data-kind="image"] .qyt-attachment-image { object-fit: cover; border-radius: 8px; }
+.qyt-attachment-page { display: block; width: 100%; height: auto; min-height: 100%; object-fit: cover; object-position: top; }
+.qyt-attachment-text { align-self: stretch; width: 100%; overflow: hidden; margin: 0; padding: 7px 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 4px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace; color: inherit; text-align: left; }
+.qyt-attachment-document { width: 100%; min-height: 100%; padding: 12px 14px; color: #26303c; background: white; text-align: left; font: 4.8px/1.6 system-ui, sans-serif; overflow-wrap: anywhere; }
+.qyt-attachment-document p { margin: 0 0 4px; white-space: pre-wrap; }
+.qyt-attachment-document p[data-bold="true"] { font-weight: 700; font-size: 6px; }
+.qyt-attachment-document p[data-center="true"] { text-align: center; }
+.qyt-attachment-table { width: 100%; height: 100%; overflow: hidden; padding: 6px; color: #26303c; background: #fff; }
+.qyt-attachment-table table { width: 100%; table-layout: fixed; border-collapse: collapse; font: 5px/1.6 ui-monospace, Consolas, monospace; }
+.qyt-attachment-table td { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #8092a340; padding: 2px 4px; }
+.qyt-attachment-table tr:first-child { background: #439a9422; font-weight: 600; }
+.qyt-attachment-file { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 100%; color: #66768a; }
+.qyt-attachment-file svg { width: 31px; height: 38px; }
+.qyt-attachment-file b { font-size: 11px; letter-spacing: .6px; }
+.qyt-attachment-info { display: flex; align-items: center; gap: 5px; height: 26px; min-width: 0; padding: 3px 7px 5px; font-size: 11px; }
+.qyt-attachment-info strong { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 400; }
+.qyt-attachment-type { flex: none; width: 13px; height: 13px; color: #1689ee; }
+.qyt-attachment-type[data-type="table"] { color: #1db75b; }
+.qyt-attachment-type[data-type="pdf"] { color: #d65c55; }
+.qyt-attachment-state { position: absolute; top: 5px; left: 5px; max-width: calc(100% - 36px); padding: 3px 5px; border-radius: 4px; color: var(--dsw-alias-label-primary, #253247); background: var(--dsw-alias-bg-layer-2, #fff); font-size: 9px; }
+.qyt-attachment-remove { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid #8092a333; border-radius: 50%; background: var(--dsw-alias-bg-layer-2, #fff); color: inherit; font: 16px/1 system-ui; cursor: pointer; opacity: 0; }
+.qyt-attachment-card:hover .qyt-attachment-remove, .qyt-attachment-card:focus-within .qyt-attachment-remove { opacity: 1; }
+@media (hover: none) { .qyt-attachment-remove { opacity: 1; } }
+.qyt-attachment-remove:disabled { opacity: .4; cursor: default; }
+.qyt-attachment-card[data-status="error"] { border-color: #c06363; }
+.qyt-attachment-retry { position: absolute; right: 0; left: 0; bottom: 26px; display: flex; align-items: center; gap: 4px; padding: 5px 8px; color: #b04d4d; background: var(--dsw-alias-bg-layer-2, #fff); font-size: 10px; }
+.qyt-attachment-retry span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.qyt-attachment-retry button { flex: none; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.qyt-attachment-drop { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; border: 2px dashed #4e8bcb; border-radius: inherit; background: color-mix(in srgb, var(--dsw-alias-bg-layer-2, #fff) 94%, #4e8bcb); color: var(--dsw-alias-label-primary, #253247); pointer-events: none; }
+.qyt-attachment-drop > span { font-size: 22px; line-height: 1; }
+.qyt-attachment-drop strong { font-size: 13px; }
+.qyt-attachment-drop small { font-size: 11px; }
+.qyt-attachment-drop[data-blocked="true"] { border-color: #b88e63; }
+.qyt-attachment-error { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; color: var(--dsw-alias-state-error-primary, #b04d4d); font-size: 12px; }
+.qyt-attachment-error button { border: 0; background: transparent; color: inherit; font-size: 18px; cursor: pointer; }
+.qyt-attachment-dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid #8092a355; border-radius: 14px; background: var(--dsw-alias-bg-layer-2, #fff); color: var(--dsw-alias-label-primary, #253247); box-shadow: 0 18px 70px #0003; }
+.qyt-attachment-dialog::backdrop { background: #07132088; }
+.qyt-attachment-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #8092a333; }
+.qyt-attachment-dialog header strong { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.qyt-attachment-dialog button { flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: #8092a318; color: inherit; font-size: 22px; cursor: pointer; }
+.qyt-attachment-dialog-content { min-height: 180px; max-height: calc(100dvh - 190px); overflow: auto; padding: 16px; }
+.qyt-attachment-dialog-content .qyt-attachment-image { max-height: calc(100dvh - 225px); }
+.qyt-attachment-dialog-content .qyt-attachment-text { font-size: 13px; line-height: 1.7; overflow: auto; }
+.qyt-attachment-dialog-content .qyt-attachment-page { max-width: 600px; min-height: 0; margin: 0 auto; object-fit: contain; }
+.qyt-attachment-dialog-content .qyt-attachment-document { max-width: 650px; min-height: 500px; margin: 0 auto; padding: 36px 42px; font-size: 13px; }
+.qyt-attachment-dialog-content .qyt-attachment-document p { margin-bottom: 12px; }
+.qyt-attachment-dialog-content .qyt-attachment-document p[data-bold="true"] { font-size: 17px; }
+.qyt-attachment-dialog-content .qyt-attachment-table { overflow: auto; }
+.qyt-attachment-dialog-content .qyt-attachment-table table { font-size: 13px; }
+.qyt-attachment-dialog-content .qyt-attachment-file { justify-content: center; min-height: 180px; }
+.qyt-attachment-dialog footer { padding: 10px 18px; color: var(--dsw-alias-label-secondary, #66768a); font-size: 12px; }
+.qyt-attachment-open:focus-visible, .qyt-attachment-remove:focus-visible, .qyt-attachment-retry button:focus-visible, .qyt-attachment-dialog button:focus-visible { outline: 2px solid #4e8bcb; outline-offset: -2px; }
+
 /* The official settings outlet is display:contents inside a scrolling options
    div. Contain that div only while our own section is mounted. */
 [data-shortcut-modal="settings"] div:has(> [data-slot="settings.section"] > .qyt-settings) {

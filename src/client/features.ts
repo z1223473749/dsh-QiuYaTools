@@ -3,6 +3,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_PREFERENCES, type FeatureField, type Preferences } from '../shared.ts'
 import { FeatureSwitchboard } from './feature-switchboard.ts'
 import { installPastedText } from '../features/pasted-text/index.tsx'
+import { installComposerAttachments } from '../features/composer-attachments/index.tsx'
 import { installBulkArchive } from '../features/bulk-archive/index.ts'
 import { installSessionWindows } from '../features/session-windows/index.tsx'
 import { installPlanComments } from '../features/plan-comments/index.tsx'
@@ -26,6 +27,21 @@ const dependencies: Record<FeatureField, string[]> = {
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
 export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): void {
+  // File drag/drop and previews also apply when long-text conversion is off.
+  ctx.inject(['slots'], scope => {
+    scope.effect(() => {
+      let stop: (() => void) | undefined
+      const sync = (): void => {
+        const snapshot = form.getSnapshot()
+        const enabled = snapshot.status === 'ready' && snapshot.value?.enabled !== false
+        if (enabled && !stop) stop = installComposerAttachments(scope)
+        else if (!enabled && stop) { stop(); stop = undefined }
+      }
+      const unsubscribe = form.subscribe(sync)
+      sync()
+      return () => { unsubscribe(); stop?.() }
+    })
+  })
   // Reference decoding belongs to the plugin, not to a visible feature toggle:
   // saved drafts must remain sendable with either UI switch turned off.
   ctx.inject(['inputTriggers', 'sessions', 'uiSession'], scope => {
