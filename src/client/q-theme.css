@@ -2,9 +2,14 @@
    the same quiet reading surfaces. Native appearance, syntax and semantic
    status colors keep their original owners. */
 body[data-qyt-q-theme] {
+  --qyt-q-panel-image: linear-gradient(var(--qyt-q-paper), var(--qyt-q-paper)), var(--qyt-theme-art);
   --dsw-alias-bg-base: var(--qyt-q-base);
   --dsw-alias-bg-layer-2: var(--qyt-q-surface);
   --dsw-alias-bg-layer-3: var(--qyt-q-raised);
+  --dsw-alias-bg-l1: var(--qyt-q-base);
+  --dsw-alias-bg-l2: var(--qyt-q-surface);
+  --dsw-alias-bg-document-preview: var(--qyt-q-raised);
+  --dsw-alias-bg-skeleton: var(--qyt-q-selected);
   --dsw-alias-bg-multi-select: var(--qyt-q-selected);
   --dsw-alias-label-primary: var(--qyt-q-ink);
   --dsw-alias-label-secondary: var(--qyt-q-secondary);
@@ -42,9 +47,9 @@ body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child {
   --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
   --dsw-specific-sidebar-nav-item-active-accent: var(--qyt-q-sidebar-active-accent);
   background-color: var(--qyt-q-sidebar);
-  background-image: linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%), var(--qyt-theme-art);
-  background-position: center, right bottom;
-  background-size: 100% 100%, auto 310px;
+  background-image: var(--qyt-q-sidebar-gradient, linear-gradient(180deg, var(--qyt-q-sidebar) 0%, var(--qyt-q-sidebar-wash) 50%, var(--qyt-q-sidebar-wash) 100%)), var(--qyt-theme-art);
+  background-position: center, var(--qyt-q-sidebar-art-position, right bottom);
+  background-size: 100% 100%, var(--qyt-q-sidebar-art-size, auto 310px);
   background-repeat: no-repeat;
 }
 body[data-qyt-q-theme] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
@@ -103,6 +108,18 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] [
   background-size: 100% 100%;
   background-position: center top;
   background-repeat: no-repeat;
+}
+/* Alternate conversation views (trajectory, context and team panels) used
+   solid native base fills. Rebind only those local ground tokens so they
+   reveal the same reading paper, preserving cards, highlights and status ink. */
+body[data-qyt-q-theme] [data-slot="conversation.view"] {
+  --dsw-alias-bg-base: transparent;
+  --dsw-alias-bg-layer-1: transparent;
+}
+body[data-qyt-q-theme] [data-conversation-composer-overlay]:has([data-timeline-domain]) > :first-child,
+body[data-qyt-q-theme] [data-conversation-composer-overlay]:has([data-timeline-domain]) > :nth-child(2),
+body[data-qyt-q-theme] [data-conversation-composer-overlay]:has([data-timeline-domain]) th {
+  background-color: var(--qyt-q-chrome);
 }
 body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > [data-slot="conversation.header"] > header {
   background: linear-gradient(110deg, var(--qyt-q-chrome), var(--qyt-q-paper) 75%);
@@ -225,8 +242,41 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] >
   scrollbar-gutter: stable;
 }
 
-body[data-qyt-q-theme] [data-rightbar-col] {
-  background-color: var(--dsw-alias-bg-layer-1);
+/* The frame, first-level pages and right-hand dock share one viewport-aligned
+   backdrop. Public owner markers survive native CSS-module name changes.
+   Individual document pixels, code highlighting and terminal canvases retain
+   their own rendering; only their surrounding app surfaces receive the art. */
+body[data-qyt-q-theme] [data-slot="root"] > :has(> [data-rightbar-col]),
+body[data-qyt-q-theme] [data-plugin-panel],
+body[data-qyt-q-theme] [data-testid="task-manager-page"],
+body[data-qyt-q-theme] [data-rightbar-col],
+body[data-qyt-q-theme] [data-dockkit-content],
+body[data-qyt-q-theme] [data-dockkit-empty] {
+  background-color: var(--qyt-q-base);
+  background-image: var(--qyt-q-panel-image);
+  background-position: center, right bottom;
+  background-size: 100% 100%, cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+body[data-qyt-q-theme] [data-slot="root"] > :has(> [data-rightbar-col]) > :has(> [data-slot="main"]) {
+  background: transparent;
+}
+body[data-qyt-q-theme] [data-dockkit-strip],
+body[data-qyt-q-theme] [data-dockkit-float-grip],
+body[data-qyt-q-theme] [data-textpreview-state] > :has(> [data-textpreview-path]),
+body[data-qyt-q-theme] [data-files-state] > :has(> [data-files-path]) {
+  color: var(--qyt-q-secondary);
+  background: var(--qyt-q-chrome);
+  border-color: var(--qyt-q-line);
+}
+body[data-qyt-q-theme] [data-dockkit-tab][aria-selected="true"] {
+  color: var(--qyt-q-ink);
+  background: var(--qyt-q-selected);
+  border-color: var(--qyt-q-line);
+}
+body[data-qyt-q-theme] [data-textpreview-unsupported] {
+  color: var(--qyt-q-secondary);
 }
 body[data-qyt-q-theme] [data-shortcut-modal="settings"][role="dialog"] {
   border-radius: 20px;
@@ -249,11 +299,17 @@ body[data-qyt-q-theme] :is([role="menu"], [role="listbox"]) {
   border-color: var(--dsw-alias-border-l2);
   box-shadow: 0 14px 38px -12px var(--qyt-q-shadow-float), 0 2px 7px -3px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
 }
+body[data-qyt-q-theme] :is([role="dialog"], [role="alertdialog"]):not([data-shortcut-modal="settings"]),
+body[data-qyt-q-theme] [role="tooltip"] {
+  color: var(--qyt-q-ink);
+  background-color: var(--qyt-q-surface);
+  border-color: var(--qyt-q-line);
+}
 
-/* Harness 0.2.1's public Session header emits this exact marker and direct
+/* Harness 0.2.1's public Session header emits this marker beneath its slot wrapper, followed by direct
    tab buttons. Its native active ::after is a 2px underline: retract it before
    introducing a floating pill. No other tablist (including QiuYaTools) matches. */
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] {
   justify-self: start;
   align-items: center;
   gap: 4px;
@@ -263,7 +319,7 @@ body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-convers
   overflow-x: auto;
   scrollbar-width: none;
 }
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"] {
   flex: 0 0 auto;
   box-sizing: border-box;
   min-height: 28px;
@@ -274,21 +330,21 @@ body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-convers
   color: var(--qyt-q-secondary);
   box-shadow: none;
 }
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]::after {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"]::after {
   content: none;
   display: none;
 }
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:not([aria-selected="true"]):hover {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"]:not([aria-selected="true"]):hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--qyt-q-ink);
 }
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
   border-color: var(--qyt-q-tab-line);
   background: var(--qyt-q-tab-fill);
   color: var(--qyt-q-tab-ink);
   box-shadow: 0 1px 3px var(--qyt-q-shadow);
 }
-body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"]:focus-visible {
+body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"]:focus-visible {
   outline: 2px solid var(--dsw-focus-ring-color);
   outline-offset: -2px;
 }
@@ -316,6 +372,14 @@ body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-convers
   }
   body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before { content: none; }
   body[data-qyt-q-theme] [data-slot="sidebar"] > :first-child,
+  body[data-qyt-q-theme] [data-slot="root"] > :has(> [data-rightbar-col]),
+  body[data-qyt-q-theme] [data-plugin-panel],
+  body[data-qyt-q-theme] [data-testid="task-manager-page"],
+  body[data-qyt-q-theme] [data-rightbar-col],
+  body[data-qyt-q-theme] [data-dockkit-content],
+  body[data-qyt-q-theme] [data-dockkit-empty],
+  body[data-qyt-q-theme] [data-dockkit-strip],
+  body[data-qyt-q-theme] [data-dockkit-float-grip],
   body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav,
   body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase],
   body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="hero"],
@@ -327,7 +391,7 @@ body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-convers
     background: Canvas;
     box-shadow: none;
   }
-  body[data-qyt-q-theme] [data-slot="conversation.session.header"] > [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
+  body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversation-tabs][role="tablist"] > button[role="tab"][aria-selected="true"] {
     border-color: Highlight;
     color: HighlightText;
     background: Highlight;

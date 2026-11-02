@@ -383,7 +383,7 @@ test('the approved illustrated sidebar keeps its own art opacity and selected-ro
   const rules = allRules(f.styles()[0].sheet.cssRules)
   const sidebar = rules.find(rule => rule.selectorText === `${body} [data-slot="sidebar"] > :first-child`)
   assert.ok(sidebar)
-  assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, auto 310px')
+  assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, var(--qyt-q-sidebar-art-size, auto 310px)')
   assert.ok(sidebar.style.getPropertyValue('background-image').includes('var(--qyt-theme-art)'))
   const selected = rules.find(rule => rule.selectorText?.includes('[data-row-key^="session:"][aria-selected="true"]'))
   assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-accent)')
@@ -428,7 +428,7 @@ test('native conversation tabs get one light pill treatment and lose their under
   const tabRules = rules.filter(rule => rule.selectorText?.includes('button[role="tab"]'))
   assert.ok(tabRules.length >= 5)
   for (const rule of tabRules) {
-    assert.match(rule.selectorText, /\[data-slot="conversation\.session\.header"\] > \[data-conversation-tabs\]\[role="tablist"\] > button\[role="tab"\]/u)
+    assert.match(rule.selectorText, /\[data-slot="conversation\.session\.header"\] \[data-conversation-tabs\]\[role="tablist"\] > button\[role="tab"\]/u)
     const selector = rule.selectorText.replace(/::after/gu, '')
     for (const element of f.doc.querySelectorAll(selector)) assert.ok(header.contains(element), 'theme tab styling stays inside the native Session header')
   }
