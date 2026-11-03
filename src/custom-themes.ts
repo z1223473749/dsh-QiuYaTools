@@ -4,6 +4,14 @@ export const MAX_CUSTOM_THEMES = 8
 export const MAX_THEME_IMAGE_BYTES = 256 * 1024
 export const CUSTOM_THEME_ID = /^custom:[a-z0-9-]{1,48}$/
 export const THEME_IMAGE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/
+export const THEME_MOVEMENTS = ['parallax', 'pan', 'breathe', 'float', 'orbit', 'none'] as const
+export const THEME_ATMOSPHERES = ['glow', 'petals', 'snow', 'fireflies', 'stars', 'bubbles', 'aurora', 'none'] as const
+export type ThemeMovement = typeof THEME_MOVEMENTS[number]
+export type ThemeAtmosphere = typeof THEME_ATMOSPHERES[number]
+export const ATMOSPHERE_COLORS: Record<ThemeAtmosphere, string> = {
+  glow: '#ffe4a3', petals: '#f5b5cd', snow: '#e5f3ff', fireflies: '#bdffb0',
+  stars: '#d5dcff', bubbles: '#b7eaff', aurora: '#8ce8d2', none: '#e5f3ff',
+}
 export interface CustomTheme {
   id: `custom:${string}`
   name: string
@@ -12,8 +20,10 @@ export interface CustomTheme {
   height: number
   accent: string
   motion: 'dynamic' | 'static'
-  movement: 'parallax' | 'pan' | 'none'
-  atmosphere: 'glow' | 'petals' | 'snow' | 'none'
+  movement: ThemeMovement
+  atmosphere: ThemeAtmosphere
+  /** Omitted in older themes; each effect then uses its own soft palette. */
+  atmosphereColor?: string
   intensity: number
   speed: number
   x: number
@@ -30,9 +40,10 @@ export function isCustomTheme(value: unknown): value is CustomTheme {
     && typeof v.image === 'string' && v.image.length <= Math.ceil(MAX_THEME_IMAGE_BYTES / 3) * 4 + 40 && THEME_IMAGE.test(v.image)
     && range(v.width, 1, 1600) && range(v.height, 1, 1600)
     && typeof v.accent === 'string' && /^#[a-f0-9]{6}$/i.test(v.accent)
-    && ['dynamic', 'static'].includes(v.motion) && ['parallax', 'pan', 'none'].includes(v.movement)
-    && ['glow', 'petals', 'snow', 'none'].includes(v.atmosphere)
-    && range(v.intensity, 0, 1) && range(v.speed, .1, 2) && range(v.x, 0, 100) && range(v.y, 0, 100)
+    && ['dynamic', 'static'].includes(v.motion) && THEME_MOVEMENTS.includes(v.movement)
+    && THEME_ATMOSPHERES.includes(v.atmosphere)
+    && (v.atmosphereColor === undefined || (typeof v.atmosphereColor === 'string' && /^#[a-f0-9]{6}$/i.test(v.atmosphereColor)))
+    && range(v.intensity, 0, 1) && range(v.speed, .1, 5) && range(v.x, 0, 100) && range(v.y, 0, 100)
     && range(v.zoom, 1, 2) && range(v.mask, .5, 1)
 }
 export function getCustomThemes(preferences?: { qCustomThemes?: unknown }): CustomTheme[] {

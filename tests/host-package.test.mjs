@@ -64,6 +64,7 @@ assert.deepEqual(unwrap(host.Config({})), expected,
 const custom = { id: 'custom:sample', name: '我的风景', image: 'data:image/webp;base64,UklGRg==', width: 800, height: 600, accent: '#ad563e', motion: 'dynamic', movement: 'pan', atmosphere: 'snow', intensity: .35, speed: .45, x: 50, y: 62, zoom: 1.2, mask: .9 }
 for (const input of [
   { qThemeId: custom.id, qCustomThemes: [custom] },
+  { qCustomThemes: [{ ...custom, movement: 'orbit', atmosphere: 'aurora', atmosphereColor: '#8ce8d2', speed: 5 }] },
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
@@ -94,6 +95,8 @@ for (const input of [{ qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }])
 const invalid = [
   { qCustomThemes: [{ ...custom, image: 'https://example.com/a.png' }] },
   { qCustomThemes: [{ ...custom, mask: .1 }] },
+  { qCustomThemes: [{ ...custom, speed: 5.05 }] },
+  { qCustomThemes: [{ ...custom, atmosphereColor: '#fff;}' }] },
   { qCustomThemes: [{ ...custom, zoom: Infinity }] },
   { qCustomThemes: Array.from({ length: 9 }, (_, i) => ({ ...custom, id: 'custom:t' + i })) },
   { qThemeId: 'custom:invalid[css]' },
@@ -197,7 +200,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 25, applied: true,
+    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 27, applied: true,
   })
 })
 

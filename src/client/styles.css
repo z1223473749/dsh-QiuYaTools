@@ -421,7 +421,7 @@ button.qyt-update-badge { cursor:pointer; }
 .qyt-theme-add:focus-visible, .qyt-theme-edit:focus-visible { outline: 2px solid var(--qyt-theme-accent); outline-offset: 2px; }
 .qyt-custom-dialog {
   --editor-accent: var(--qyt-q-accent, #ad563e); --editor-line: var(--qyt-q-line, #e7d6d0); --editor-surface: var(--qyt-q-surface, #fffdfb); --editor-muted: var(--qyt-q-muted, #725a55);
-  width: min(600px, calc(100vw - 24px)); max-width: none; max-height: min(940px, calc(100dvh - 32px)); padding: 0; border: 1px solid var(--editor-line); border-radius: 16px; color: var(--dsw-alias-label-primary, #322726); background: var(--editor-surface); box-shadow: 0 20px 80px #0003; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow: hidden;
+  width: min(600px, calc(100vw - 24px)); max-width: none; max-height: min(1120px, calc(100dvh - 32px)); padding: 0; border: 1px solid var(--editor-line); border-radius: 16px; color: var(--dsw-alias-label-primary, #322726); background: var(--editor-surface); box-shadow: 0 20px 80px #0003; font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow: hidden;
 }
 .qyt-custom-dialog[open] { display: flex; flex-direction: column; }
 .qyt-custom-dialog::backdrop { background: #23181655; backdrop-filter: blur(3px); }
@@ -459,6 +459,34 @@ button.qyt-update-badge { cursor:pointer; }
 .qyt-editor-range input { width: 100%; min-width: 30px; accent-color: var(--editor-accent); }
 .qyt-editor-range output { min-width: 38px; text-align: right; color: var(--editor-muted); font-size: 11px; }
 .qyt-editor-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; }
+/* Effect controls keep color separate from the interface accent. */
+.qyt-editor-effect-group { display: grid; gap: 8px; margin: 14px 0; }
+.qyt-editor-effect-group > span { font-size: 12px; color: var(--editor-muted); }
+.qyt-atmosphere-choices > button { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; }
+.qyt-effect-icon { width: 13px; height: 13px; display: inline-block; flex: none; background: radial-gradient(circle,#fff 8%,#eabd67 30%,transparent 70%); }
+.qyt-effect-icon-petals { width: 10px; height: 12px; margin-inline: 1.5px; border-radius: 80% 10% 80% 25%; background: linear-gradient(135deg,#ffe4ef,#d97eaa); transform: rotate(-25deg); }
+.qyt-effect-icon-snow { background: #c0dcf5; clip-path: polygon(44% 0,56% 0,56% 38%,87% 20%,94% 31%,62% 50%,94% 69%,87% 80%,56% 62%,56% 100%,44% 100%,44% 62%,13% 80%,6% 69%,38% 50%,6% 31%,13% 20%,44% 38%); }
+.qyt-effect-icon-fireflies { background: radial-gradient(circle,#dcff9c 20%,#91b55077 40%,transparent 70%); }
+.qyt-effect-icon-stars { background: #b1b7e8; clip-path: polygon(50% 0,63% 37%,100% 50%,63% 63%,50% 100%,37% 63%,0 50%,37% 37%); }
+.qyt-effect-icon-bubbles { border: 1px solid #80b7d1; border-radius: 50%; background: radial-gradient(circle at 30% 25%,#fff 10%,transparent 25%,#add9ea55 70%); }
+.qyt-effect-icon-aurora { border-radius: 60% 15%; background: linear-gradient(130deg,#a5a9e788,#80dbc9,#c0e7ce22); }
+.qyt-effect-icon-none { border: 1px solid var(--editor-muted); border-radius: 50%; background: linear-gradient(135deg,transparent 45%,var(--editor-muted) 47%,var(--editor-muted) 53%,transparent 55%); opacity: .6; }
+.qyt-atmosphere-color { display: flex; align-items: center; gap: 22px; padding: 16px; margin: 14px 0; border: 1px solid var(--editor-line); border-radius: 12px; background: color-mix(in srgb,var(--editor-accent) 3%,var(--editor-surface)); }
+.qyt-atmosphere-color[data-disabled] { opacity: .45; }
+.qyt-color-wheel { position: relative; flex: none; width: 142px; height: 142px; border-radius: 50%; touch-action: none; cursor: crosshair; background: linear-gradient(rgb(0 0 0 / var(--wheel-shade)),rgb(0 0 0 / var(--wheel-shade))),radial-gradient(circle,#fff,transparent 70%),conic-gradient(from 90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); box-shadow: 0 0 0 5px var(--editor-surface),0 0 0 6px var(--editor-line); }
+.qyt-color-wheel:focus-visible { outline: 2px solid var(--editor-accent); outline-offset: 8px; }
+.qyt-color-thumb { position: absolute; width: 14px; height: 14px; border: 2px solid #fff; border-radius: 50%; transform: translate(-50%,-50%); box-shadow: 0 1px 4px #0009,0 0 0 1px #0004; pointer-events: none; }
+.qyt-color-controls { flex: 1; min-width: 0; }
+.qyt-color-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.qyt-custom-dialog .qyt-color-heading > button { padding: 2px 6px; font-size: 11px; color: var(--editor-muted); }
+.qyt-color-heading > button[aria-pressed="true"] { border-color: var(--editor-accent); color: var(--editor-accent); }
+.qyt-color-value { display: flex; align-items: center; gap: 8px; }
+.qyt-color-value > span { width: 22px; height: 22px; border: 1px solid #8884; border-radius: 6px; }
+.qyt-color-value > input { min-width: 0; width: 104px; padding: 3px 7px; border: 1px solid var(--editor-line); border-radius: 5px; color: inherit; background: var(--editor-surface); font-family: monospace; }
+.qyt-color-swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.qyt-custom-dialog .qyt-color-swatches > button { width: 22px; height: 22px; padding: 0; border: 2px solid var(--editor-surface); border-radius: 50%; box-shadow: 0 0 0 1px var(--editor-line); }
+.qyt-color-swatches > button[aria-pressed="true"] { outline: 2px solid var(--editor-accent); outline-offset: 2px; }
+@media(max-width:460px) { .qyt-atmosphere-color { gap: 16px; padding: 14px 10px; } .qyt-color-wheel { width: 110px; height: 110px; } .qyt-color-heading { align-items: flex-start; flex-direction: column; gap: 4px; } }
 .qyt-editor-error { color: var(--dsw-alias-state-error-primary, #ad2633); font-size: 12px; }
 .qyt-custom-dialog > footer { border-top: 1px solid var(--editor-line); }
 .qyt-custom-dialog > footer > span { flex: 1; }

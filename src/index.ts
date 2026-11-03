@@ -18,7 +18,7 @@ import { installWorkbench } from './features/workbench/integration.ts'
 import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 import { installGitHost } from './features/git/host.ts'
-import { CUSTOM_THEME_ID, THEME_IMAGE, MAX_CUSTOM_THEMES, MAX_THEME_IMAGE_BYTES, type CustomTheme } from './custom-themes.ts'
+import { CUSTOM_THEME_ID, THEME_IMAGE, MAX_CUSTOM_THEMES, MAX_THEME_IMAGE_BYTES, THEME_MOVEMENTS, THEME_ATMOSPHERES, type CustomTheme } from './custom-themes.ts'
 import { DEFAULT_Q_THEME_ID, DEFAULT_Q_THEME_SETTINGS, Q_THEME_IDS, type QThemeId, type QThemeSettings } from './shared.ts'
 
 /** Preferences persisted by Harness in the active profile. */
@@ -63,9 +63,10 @@ export const Config = z.object({
     width: z.number().step(1).min(1).max(1600), height: z.number().step(1).min(1).max(1600),
     accent: z.string().pattern(/^#[a-f0-9]{6}$/i),
     motion: z.union([z.const('dynamic'), z.const('static')]),
-    movement: z.union([z.const('parallax'), z.const('pan'), z.const('none')]),
-    atmosphere: z.union([z.const('glow'), z.const('petals'), z.const('snow'), z.const('none')]),
-    intensity: z.number().min(0).max(1), speed: z.number().min(.1).max(2),
+    movement: z.union(THEME_MOVEMENTS.map(value => z.const(value))),
+    atmosphere: z.union(THEME_ATMOSPHERES.map(value => z.const(value))),
+    atmosphereColor: z.string().pattern(/^#[a-f0-9]{6}$/i),
+    intensity: z.number().min(0).max(1), speed: z.number().min(.1).max(5),
     x: z.number().min(0).max(100), y: z.number().min(0).max(100),
     zoom: z.number().min(1).max(2), mask: z.number().min(.5).max(1),
   })).max(MAX_CUSTOM_THEMES).default([]).description('用户自定义主题和压缩图片，随当前配置保存').volatile(),

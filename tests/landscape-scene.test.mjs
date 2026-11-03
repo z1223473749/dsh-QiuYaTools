@@ -71,3 +71,31 @@ test('a failed art renderer leaves the original static background without retry 
   f.visibility(true); f.visibility(false)
   assert.equal(allocations, 1)
 })
+
+for (const movement of ['breathe', 'float', 'orbit']) test(movement + ' moves artwork and obeys zero intensity', t => {
+  const f = fixture(t, { movement, atmosphere: 'none', speed: 5 })
+  const art = f.doc.querySelector('[data-qyt-landscape-art]')
+  f.frame(0); const initial = art.style.transform
+  f.frame(80); f.frame(160); assert.notEqual(art.style.transform, initial)
+  const zero = fixture(t, { movement, intensity: 0 })
+  zero.frame(0); const still = zero.doc.querySelector('[data-qyt-landscape-art]').style.transform
+  zero.frame(80); assert.equal(zero.doc.querySelector('[data-qyt-landscape-art]').style.transform, still)
+  assert.ok([...zero.doc.querySelectorAll('[data-qyt-atmosphere]')].every(dot => dot.style.opacity === '0'))
+})
+for (const atmosphere of ['glow', 'petals', 'snow', 'fireflies', 'stars', 'bubbles', 'aurora']) test(atmosphere + ' has bounded colored artwork and suspends with reduced motion', t => {
+  const f = fixture(t, { atmosphere, atmosphereColor: '#81d5ff', intensity: .8 })
+  const dots = [...f.doc.querySelectorAll('[data-qyt-atmosphere]')]
+  assert.ok(dots.length > 0 && dots.length <= 38)
+  assert.ok(dots.every(dot => dot.dataset.qytAtmosphere === atmosphere))
+  f.frame(0); f.frame(80)
+  assert.ok(dots.some(dot => Number(dot.style.opacity) > 0))
+  assert.ok(dots.every(dot => !/NaN|Infinity/.test(dot.style.transform)))
+  f.media[0].change(true); assert.equal(f.doc.querySelector('[data-qyt-atmosphere]'), null)
+  assert.equal(f.frames.size, 0)
+})
+test('5x speed advances motion proportionally beyond the old 2x limit', t => {
+  const slow = fixture(t, { movement: 'pan', speed: 1 }), fast = fixture(t, { movement: 'pan', speed: 5 })
+  for (const f of [slow, fast]) { f.frame(0); f.frame(80) }
+  const offset = f => Number(f.doc.querySelector('[data-qyt-landscape-art]').style.transform.match(/translate\(([-.\d]+)/)[1])
+  assert.ok(offset(fast) > offset(slow) * 4.9)
+})

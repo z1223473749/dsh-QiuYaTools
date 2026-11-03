@@ -36,3 +36,15 @@ test('editing a selected custom theme refreshes art and palette without changing
   assert.equal(dom.window.document.body.dataset.qytQTheme, 'moonfrost')
   stop(); assert.equal(listeners.size, 0); dom.window.close()
 })
+
+test('all motion/atmosphere choices persist, old themes remain valid, and effect colors are safe', () => {
+  for (const movement of api.THEME_MOVEMENTS) for (const atmosphere of api.THEME_ATMOSPHERES) {
+    const theme = { ...sample, movement, atmosphere, atmosphereColor: '#81d5ff', speed: 5 }
+    assert.equal(api.isCustomTheme(theme), true)
+    assert.deepEqual(JSON.parse(JSON.stringify(api.getCustomThemes({ qCustomThemes: [theme] })))[0], theme)
+  }
+  for (const invalid of [{ speed: 5.05 }, { atmosphereColor: 'red' }, { atmosphereColor: '#abc;}' }, { atmosphereColor: null }, { movement: 'invalid' }, { atmosphere: 'invalid' }]) {
+    assert.equal(api.isCustomTheme({ ...sample, ...invalid }), false)
+  }
+  assert.equal(api.isCustomTheme(sample), true, 'preexisting themes need no color migration')
+})

@@ -3,11 +3,15 @@ import { createPortal } from 'react-dom'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_PREFERENCES, type Preferences } from '../shared.ts'
-import { isCustomTheme, type CustomTheme } from '../custom-themes.ts'
+import { isCustomTheme, THEME_MOVEMENTS, THEME_ATMOSPHERES, ATMOSPHERE_COLORS, type CustomTheme } from '../custom-themes.ts'
 import { createCustomTheme } from './custom-theme-definition.ts'
+import { ThemeColorWheel } from './theme-color-wheel.tsx'
 import { ThemePreview } from './theme-preview.tsx'
 import { importThemeImage } from './theme-image.ts'
 import type { LocaleKey } from './locales.ts'
+
+const movementLabels: Record<CustomTheme['movement'], LocaleKey> = { parallax: 'qThemeParallax', pan: 'qThemePan', breathe: 'qThemeBreathe', float: 'qThemeFloat', orbit: 'qThemeOrbit', none: 'qThemeNone' }
+const atmosphereLabels: Record<CustomTheme['atmosphere'], LocaleKey> = { glow: 'qThemeGlow', petals: 'qThemePetals', snow: 'qThemeSnow', fireflies: 'qThemeFireflies', stars: 'qThemeStars', bubbles: 'qThemeBubbles', aurora: 'qThemeAurora', none: 'qThemeNone' }
 
 function currentThemeAccent(): string {
   const accent = typeof document === 'undefined' ? '' : document.defaultView?.getComputedStyle(document.body).getPropertyValue('--qyt-q-accent').trim() ?? ''
@@ -94,9 +98,10 @@ export function CustomThemeEditor({ ctx, original, disabled, t, onClose, onSave,
         <div className="qyt-editor-columns">{range('x', 'qThemeImageX', 0, 100, 1, `${Math.round(draft.x)}%`)}{range('y', 'qThemeImageY', 0, 100, 1, `${Math.round(draft.y)}%`)}</div>
         <div className="qyt-editor-section"><strong>{t('qThemeEffects')}</strong><div className="qyt-editor-pills">{(['dynamic', 'static'] as const).map(mode => <button type="button" key={mode} aria-pressed={draft.motion === mode} onClick={() => change('motion', mode)}>{t(mode === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</button>)}</div></div>
         <fieldset disabled={busy || draft.motion === 'static'}>
-          <div className="qyt-editor-options"><span>{t('qThemeMovement')}</span><div className="qyt-editor-pills">{(['parallax', 'pan', 'none'] as const).map(value => <button type="button" key={value} aria-pressed={draft.movement === value} onClick={() => change('movement', value)}>{t(value === 'parallax' ? 'qThemeParallax' : value === 'pan' ? 'qThemePan' : 'qThemeNone')}</button>)}</div></div>
-          <div className="qyt-editor-options"><span>{t('qThemeAtmosphere')}</span><div className="qyt-editor-pills">{(['glow', 'petals', 'snow', 'none'] as const).map(value => <button type="button" key={value} aria-pressed={draft.atmosphere === value} onClick={() => change('atmosphere', value)}>{t(value === 'glow' ? 'qThemeGlow' : value === 'petals' ? 'qThemePetals' : value === 'snow' ? 'qThemeSnow' : 'qThemeNone')}</button>)}</div></div>
-          <div className="qyt-editor-columns">{range('intensity', 'qThemeIntensity', 0, 1, .05, `${Math.round(draft.intensity * 100)}%`)}{range('speed', 'qThemeSpeed', .1, 2, .05, `${draft.speed.toFixed(2)}×`)}</div>
+          <div className="qyt-editor-effect-group"><span>{t('qThemeMovement')}</span><div className="qyt-editor-pills">{THEME_MOVEMENTS.map(value => <button type="button" key={value} aria-pressed={draft.movement === value} onClick={() => change('movement', value)}>{t(movementLabels[value])}</button>)}</div></div>
+          <div className="qyt-editor-effect-group"><span>{t('qThemeAtmosphere')}</span><div className="qyt-editor-pills qyt-atmosphere-choices">{THEME_ATMOSPHERES.map(value => <button type="button" key={value} aria-pressed={draft.atmosphere === value} onClick={() => change('atmosphere', value)}><span className={`qyt-effect-icon qyt-effect-icon-${value}`} aria-hidden="true"/>{t(atmosphereLabels[value])}</button>)}</div></div>
+          <ThemeColorWheel value={draft.atmosphereColor ?? ATMOSPHERE_COLORS[draft.atmosphere]} automatic={!draft.atmosphereColor} disabled={busy || draft.motion === 'static' || draft.atmosphere === 'none'} t={t} onChange={color => change('atmosphereColor', color)} onReset={() => change('atmosphereColor', undefined)}/>
+          <div className="qyt-editor-columns">{range('intensity', 'qThemeIntensity', 0, 1, .05, `${Math.round(draft.intensity * 100)}%`)}{range('speed', 'qThemeSpeed', .1, 5, .05, `${draft.speed.toFixed(2)}×`)}</div>
         </fieldset>
         <div className="qyt-editor-options"><label htmlFor={`${id}-color`}>{t('qThemeColor')}</label><input id={`${id}-color`} type="color" value={draft.accent} onChange={e => change('accent', e.target.value)}/><button type="button" disabled={!draft.image} onClick={() => change('accent', extracted)}>{t('qThemeExtractColor')}</button></div>
         {range('mask', 'qThemeReadingMask', .5, 1, .01, `${Math.round(draft.mask * 100)}%`)}
