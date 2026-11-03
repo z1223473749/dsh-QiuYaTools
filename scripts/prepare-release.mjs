@@ -6,6 +6,7 @@ import { packageCandidate } from './package-candidates.mjs'
 import { verifyPackage } from './verify-package.mjs'
 import { verifyReleaseSources } from './release-source-guard.mjs'
 import { nativePackages, packageNative, packageUniversal } from './package-native.mjs'
+import { checkNativeVersion } from './native-version.mjs'
 
 // Assemble only local assets. Publishing remains a separate workflow step.
 if (process.platform !== 'darwin') throw new Error('Assemble the universal Mac and Windows release on macOS')
@@ -13,6 +14,7 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const output = join(root, 'artifacts')
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const { sourceCommit, productionSourceStatus } = await verifyReleaseSources({ root })
+await checkNativeVersion(root)
 const assets = []
 for (const [platform, architecture] of [['darwin', 'universal'], ['win32', 'arm64'], ['win32', 'x64']]) {
   // Validates platform manifests, native architecture, both Mac helpers and the
@@ -25,7 +27,7 @@ for (const [platform, architecture] of [['darwin', 'universal'], ['win32', 'arm6
 // packages are installed by pnpm before activation, without build scripts.
 const alias = 'dsh-qiuya-tools.tgz'
 const nativeAssets = []
-for (const target of nativePackages) nativeAssets.push(await packageNative(target.name, { root, output }))
+for (const target of nativePackages) nativeAssets.push(await packageNative(target.name, { root, output, reusePublished: true }))
 const universal = await packageUniversal({ root, output })
 await verifyPackage(join(output, alias))
 const names = [alias, ...assets.map(asset => asset.name), ...nativeAssets.map(asset => asset.name)]

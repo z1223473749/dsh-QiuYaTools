@@ -20,7 +20,8 @@ export const nativePackages = Object.freeze([
   ...['arm64', 'x64'].map(architecture => ({ name: `dsh-qiuya-tools-native-win32-${architecture}`, platform: 'win32', architecture, cpu: [architecture], manifest: 'lib/native/windows-manifest.json', executables: [`win32-${architecture}/qiuya-windows.exe`] })),
 ].map(value => Object.freeze({ ...value, cpu: Object.freeze(value.cpu), executables: Object.freeze(value.executables) })))
 
-export function nativeOptionalDependencies(version) {
+export function nativeOptionalDependencies(input) {
+  const version = typeof input === 'string' ? input : input?.qiuyaNative?.version ?? input?.version
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) throw Error('Invalid native package version')
   return Object.fromEntries(nativePackages.map(target => [target.name, version]))
 }
@@ -33,10 +34,10 @@ function targetByName(name) {
 
 export function nativePackageMetadata(metadata, name) {
   const target = targetByName(name)
-  nativeOptionalDependencies(metadata.version)
+  const version = nativeOptionalDependencies(metadata)[name]
   if (metadata.name !== 'dsh-qiuya-tools' || metadata.repository?.url !== repository) throw Error('Unexpected parent package identity')
   return {
-    name: target.name, version: metadata.version, description: `Precompiled ${target.platform} ${target.architecture} helpers for QiuYaTools`,
+    name: target.name, version, description: `Precompiled ${target.platform} ${target.architecture} helpers for QiuYaTools`,
     type: 'module', license: metadata.license, repository: metadata.repository,
     main: `./${target.manifest}`, exports: { './package.json': './package.json' },
     os: [target.platform], cpu: [...target.cpu], files: ['lib/', 'LICENSE', 'NOTICE'],
@@ -168,8 +169,8 @@ export function validateUniversalArchive(bytes, { version }) {
   const files = readDistributionArchive(bytes), metadata = jsonMember(files, 'package/package.json')
   if (metadata.name !== 'dsh-qiuya-tools' || metadata.version !== version || metadata.repository?.url !== repository || !metadata.dsh?.bundle) failure('universal package identity mismatch')
   if (metadata.scripts !== undefined || metadata.os !== undefined || metadata.cpu !== undefined) failure('universal package must be script-free and platform-neutral')
-  const expected = nativeOptionalDependencies(version)
-  if (JSON.stringify(Object.entries(metadata.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(expected).sort())) failure('native optional dependencies must match the exact package version')
+  const expected = nativeOptionalDependencies(metadata)
+  if (JSON.stringify(Object.entries(metadata.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(expected).sort())) failure('native optional dependencies must match the exact native version')
   for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'cordis.patch.yml']) if (!files.get(`package/${file}`)?.bytes.length) failure('missing universal public entry')
   for (const path of files.keys()) if (path.startsWith('package/lib/') && !['package/lib/index.js', 'package/lib/client.js', 'package/lib/computer-agent.js'].includes(path)) failure('universal package must not carry native files')
   return { name: metadata.name, version, files: [...files.keys()] }
@@ -191,8 +192,45 @@ async function pack(stage, destination, validate) {
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }
 
-export async function packageNative(packageName, { root = rootDirectory, output = join(root, 'artifacts') } = {}) {
+/** Reuse immutable published bytes: rebuilding a fixed version can change code signatures. */
+export async function publishedNativeArchive(packageName, version, request = fetch) {
+  targetByName(packageName)
+  nativeOptionalDependencies(version)
+  const base = `https://registry.npmjs.org/${packageName}`
+  const response = await request(`${base}/${version}`, { signal: AbortSignal.timeout(30_000), redirect: 'error' })
+  if (response.status === 404) return undefined
+  if (!response.ok) throw Error('Cannot confirm published native package')
+  const metadata = await response.json()
+  const expected = `${base}/-/${packageName}-${version}.tgz`
+  if (metadata.name !== packageName || metadata.version !== version || metadata.dist?.tarball !== expected || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(metadata.dist?.integrity ?? '')) throw Error('Invalid published native identity')
+  const archive = await request(expected, { signal: AbortSignal.timeout(60_000), redirect: 'error' })
+  if (!archive.ok) throw Error('Cannot download published native package')
+  const chunks = []; let size = 0
+  for await (const chunk of archive.body) {
+    size += chunk.length
+    if (size > maximumArchive) { await archive.body.cancel().catch(() => {}); throw Error('Published native archive exceeds size limit') }
+    chunks.push(chunk)
+  }
+  const bytes = Buffer.concat(chunks)
+  if (`sha512-${createHash('sha512').update(bytes).digest('base64')}` !== metadata.dist.integrity) throw Error('Published native integrity mismatch')
+  validateNativeArchive(bytes, { packageName, version })
+  return bytes
+}
+
+export async function packageNative(packageName, { root = rootDirectory, output = join(root, 'artifacts'), reusePublished = false, fetch: request = fetch } = {}) {
   const target = targetByName(packageName), parent = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const version = nativeOptionalDependencies(parent)[packageName]
+  if (reusePublished) {
+    const bytes = await publishedNativeArchive(packageName, version, request)
+    if (bytes) {
+      await mkdir(output, { recursive: true })
+      const name = `${packageName}.tgz`
+      await writeFile(join(output, name), bytes)
+      const result = { name, package: packageName, version, platform: target.platform, architectures: [...target.cpu], bytes: bytes.length, sha256: sha256(bytes), status: 'package-validated', signed: false, reused: true }
+      await writeFile(join(output, `${name}.json`), JSON.stringify(result, null, 2) + '\n')
+      return result
+    }
+  }
   const temporary = await mkdtemp(join(tmpdir(), 'qiuya-native-stage-')), stage = join(temporary, 'package')
   try {
     await mkdir(join(stage, 'lib'), { recursive: true })
@@ -209,14 +247,14 @@ export async function packageNative(packageName, { root = rootDirectory, output 
     }
     await mkdir(dirname(join(stage, target.manifest)), { recursive: true })
     await writeFile(join(stage, target.manifest), JSON.stringify(manifest, null, 2) + '\n')
-    return await pack(stage, join(output, `${packageName}.tgz`), bytes => validateNativeArchive(bytes, { packageName, version: parent.version }))
+    return await pack(stage, join(output, `${packageName}.tgz`), bytes => validateNativeArchive(bytes, { packageName, version: nativeOptionalDependencies(parent)[packageName] }))
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }
 
 export async function packageUniversal({ root = rootDirectory, output = join(root, 'artifacts') } = {}) {
   const parent = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')), temporary = await mkdtemp(join(tmpdir(), 'qiuya-universal-stage-')), stage = join(temporary, 'package')
   try {
-    const dependencies = nativeOptionalDependencies(parent.version)
+    const dependencies = nativeOptionalDependencies(parent)
     if (JSON.stringify(Object.entries(parent.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(dependencies).sort())) failure('checkout native dependencies must match the exact package version')
     const metadata = { ...parent, optionalDependencies: dependencies }
     for (const key of ['scripts', 'devDependencies', 'os', 'cpu']) delete metadata[key]
@@ -225,7 +263,7 @@ export async function packageUniversal({ root = rootDirectory, output = join(roo
     for (const file of ['README.md', 'LICENSE', 'NOTICE', 'cordis.patch.yml']) await cp(join(root, file), join(stage, file))
     for (const file of ['index.js', 'client.js', 'computer-agent.js']) await cp(join(root, 'lib', file), join(stage, 'lib', file))
     for (const directory of ['assets', 'locale']) await cp(join(root, directory), join(stage, directory), { recursive: true, filter: path => !path.endsWith('.DS_Store') })
-    for (const file of ['scripts/computer-agent.mjs', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
+    for (const file of ['scripts/computer-agent.mjs', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md', 'docs/native-updates.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
     return await pack(stage, join(output, 'dsh-qiuya-tools.tgz'), bytes => validateUniversalArchive(bytes, { version: parent.version }))
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }

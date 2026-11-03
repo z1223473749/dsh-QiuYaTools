@@ -66,6 +66,6 @@ if (process.platform === 'darwin') {
     const binary = await readFile(new URL(`../lib/${file}`, import.meta.url))
     artifacts.push({ file, bytes: binary.length, sha256: createHash('sha256').update(binary).digest('hex') })
   }
-  await writeFile('lib/macos-manifest.json', JSON.stringify({ protocolVersion: 1, version: pkg.version, artifacts }, null, 2) + '\n')
+  await writeFile('lib/macos-manifest.json', JSON.stringify({ protocolVersion: 1, version: pkg.qiuyaNative?.version ?? pkg.version, artifacts }, null, 2) + '\n')
 }
 console.log(`Built ${pkg.name}@${pkg.version} (Host + Client)`)

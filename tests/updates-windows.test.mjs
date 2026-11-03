@@ -36,8 +36,8 @@ function archive(arch, binary = pe(arch)) {
   ]))
 }
 test('Windows assets bind OS and architecture without falling back to Mac/universal', () => {
-  assert.deepEqual(updateAssetNames('dsh-qiuya-tools', 'arm64', 'win32'), ['dsh-qiuya-tools-win32-arm64.tgz'])
-  assert.deepEqual(updateAssetNames('dsh-qiuya-tools', 'x64', 'win32'), ['dsh-qiuya-tools-win32-x64.tgz'])
+  assert.deepEqual(updateAssetNames('dsh-qiuya-tools', 'arm64', 'win32'), ['dsh-qiuya-tools.tgz', 'dsh-qiuya-tools-win32-arm64.tgz'])
+  assert.deepEqual(updateAssetNames('dsh-qiuya-tools', 'x64', 'win32'), ['dsh-qiuya-tools.tgz', 'dsh-qiuya-tools-win32-x64.tgz'])
   assert.throws(() => updateAssetNames('dsh-qiuya-tools', 'x64', 'linux'))
 })
 test('Windows PE architecture and section bounds are inspected before installation', () => {

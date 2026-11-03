@@ -286,6 +286,22 @@ export function validateUpdateArchive(bytes: Uint8Array, options: ArchiveValidat
     const relative = patch.startsWith('./') ? patch.slice(2) : patch
     if (!files.has(`package/${safePath(relative)}`)) invalid('missing bundle patch')
   }
+  // Small updates contain only Host/UI code. Harness resolves exact native
+  // dependencies through its persistent pnpm store before activating the plugin.
+  const capabilities = manifest.qiuyaNative as Record<string, unknown> | undefined
+  if (capabilities && manifest.optionalDependencies !== undefined) {
+    const version = capabilities.version ?? manifest.version
+    if (typeof version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/u.test(version)
+      || capabilities.protocolVersion !== 1 || capabilities.computerUse !== true) invalid('unsupported independent native version')
+    const dependencies = manifest.optionalDependencies as Record<string, unknown>
+    const names = ['dsh-qiuya-tools-native-darwin-universal', 'dsh-qiuya-tools-native-win32-arm64', 'dsh-qiuya-tools-native-win32-x64']
+    if (!dependencies || Array.isArray(dependencies) || Object.keys(dependencies).length !== names.length || names.some(name => dependencies[name] !== version)) invalid('native dependencies must pin the independent version exactly')
+    if (manifest.scripts !== undefined || manifest.os !== undefined || manifest.cpu !== undefined) invalid('small update must be script-free and platform-neutral')
+    if (!files.get('package/lib/computer-agent.js')?.bytes.length) invalid('missing or empty computer agent entry')
+    const allowed = new Set(['package/lib/index.js', 'package/lib/client.js', 'package/lib/computer-agent.js'])
+    for (const path of files.keys()) if (path.startsWith('package/lib/') && !allowed.has(path)) invalid('small update must not carry native files')
+    return { packageName: options.packageName, version: options.version, unpackedBytes, files: [...files.keys()], architectures: [options.architecture] }
+  }
   const helper = files.get(platform === 'win32' ? `package/lib/native/win32-${options.architecture}/qiuya-windows.exe` : HELPER)
   if (!helper || (platform === 'darwin' && (helper.mode & 0o111) === 0)) invalid('missing executable native helper')
   const architectures = platform === 'win32' ? [windowsExecutableArchitecture(helper.bytes)] : helperArchitectures(helper.bytes)

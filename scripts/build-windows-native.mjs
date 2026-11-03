@@ -34,7 +34,7 @@ export async function buildWindowsNative({ architectures = ['arm64', 'x64'], dot
     manifests.push({ platform: 'win32', architecture, protocolVersion: 1, file: `win32-${architecture}/qiuya-windows.exe`, bytes: (await stat(path)).size, sha256: createHash('sha256').update(bytes).digest('hex'), selfContained: true })
   }
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  await writeFile(join(outputRoot, 'windows-manifest.json'), JSON.stringify({ protocolVersion: 1, version: pkg.version, sdk: WINDOWS_NATIVE_SDK_VERSION, artifacts: manifests }, null, 2) + '\n')
+  await writeFile(join(outputRoot, 'windows-manifest.json'), JSON.stringify({ protocolVersion: 1, version: pkg.qiuyaNative?.version ?? pkg.version, sdk: WINDOWS_NATIVE_SDK_VERSION, artifacts: manifests }, null, 2) + '\n')
   return manifests
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

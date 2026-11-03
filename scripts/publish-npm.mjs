@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -61,8 +61,8 @@ export async function publishNpmRelease({
   const tag = `v${metadata.version}`
   if (metadata.repository?.url !== `git+https://github.com/${repository}.git`) throw new Error('Package repository does not match the trusted publisher')
   const withNativePackages = !newer('0.6.1', metadata.version)
-  if (withNativePackages && JSON.stringify(Object.entries(metadata.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(nativeOptionalDependencies(metadata.version)).sort())) {
-    throw new Error('Checkout must pin every native optional package to the exact release version')
+  if (withNativePackages && JSON.stringify(Object.entries(metadata.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(nativeOptionalDependencies(metadata)).sort())) {
+    throw new Error('Checkout must pin every native optional package to the exact native version')
   }
   const childEnv = { ...env }
   delete childEnv.NODE_AUTH_TOKEN
@@ -102,14 +102,16 @@ export async function publishNpmRelease({
       if (matches.length !== 1 || matches[0][1].toLowerCase() !== createHash('sha256').update(bytes).digest('hex')) throw new Error('GitHub release archive SHA256 mismatch')
       const packed = json(await requireSuccess('tar', ['-xzOf', archive, 'package/package.json'], 'Package metadata read'), 'packed package.json')
       const expectedName = name === archiveName ? packageName : nativePackages.find(target => `${target.name}.tgz` === name)?.name
-      if (packed.name !== expectedName || packed.version !== metadata.version || packed.repository?.url !== metadata.repository.url) throw new Error('Release archive package, version or repository mismatch')
+      const expectedVersion = name === archiveName ? metadata.version : nativeOptionalDependencies(metadata)[expectedName]
+      if (packed.name !== expectedName || packed.version !== expectedVersion || packed.repository?.url !== metadata.repository.url) throw new Error('Release archive package, version or repository mismatch')
       if (name === archiveName) {
         if (!packed.dsh?.bundle) throw new Error('Release archive declares no plugin bundle')
         if (withNativePackages) validateUniversalArchive(bytes, { version: metadata.version })
+        if (withNativePackages && JSON.stringify(Object.entries(packed.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(nativeOptionalDependencies(metadata)).sort())) throw new Error('Release wrapper native dependencies differ from the tagged checkout')
         const checked = await verify(archive)
         if (checked.name !== packageName || checked.version !== metadata.version) throw new Error('Verified Host identity does not match the release')
-      } else validateNativeArchive(bytes, { packageName: expectedName, version: metadata.version })
-      publications.push({ name: expectedName, archive, integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}` })
+      } else validateNativeArchive(bytes, { packageName: expectedName, version: expectedVersion })
+      publications.push({ name: expectedName, version: expectedVersion, archive, integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}` })
     }
     const registryValue = async (spec, field) => {
       const result = await invoke('npm', ['view', spec, field, '--json',
@@ -120,8 +122,8 @@ export async function publishNpmRelease({
       }
       return json(result.stdout, 'npm registry response')
     }
-    const publishedIntegrity = async name => {
-      const value = await registryValue(`${name}@${metadata.version}`, 'dist.integrity')
+    const publishedIntegrity = async publication => {
+      const value = await registryValue(`${publication.name}@${publication.version}`, 'dist.integrity')
       if (value === undefined) return undefined
       if (typeof value !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(value)) throw new Error('npm registry returned no valid SHA512 integrity')
       return value
@@ -140,10 +142,10 @@ export async function publishNpmRelease({
       return true
     }
     for (const publication of publications) {
-      publication.existing = compare(publication, await publishedIntegrity(publication.name))
+      publication.existing = compare(publication, await publishedIntegrity(publication))
       publication.latest = await latestVersion(publication.name)
-      publication.distTag = publication.latest && newer(publication.latest, metadata.version) ? `version-${metadata.version}` : 'latest'
-      if (publication.existing && publication.distTag === 'latest' && (!publication.latest || newer(metadata.version, publication.latest))) {
+      publication.distTag = publication.latest && newer(publication.latest, publication.version) ? `version-${publication.version}` : 'latest'
+      if (publication.existing && publication.distTag === 'latest' && (!publication.latest || newer(publication.version, publication.latest))) {
         throw new Error('npm package bytes match, but latest was not advanced; explicitly repair the npm dist-tag before retrying')
       }
     }
@@ -151,10 +153,10 @@ export async function publishNpmRelease({
     const alreadyPublished = async publication => {
       const current = await latestVersion(publication.name)
       const { distTag, integrity } = publication
-      if (distTag === 'latest' && (!current || newer(metadata.version, current))) {
+      if (distTag === 'latest' && (!current || newer(publication.version, current))) {
         throw new Error('npm package bytes match, but latest was not advanced; explicitly repair the npm dist-tag before retrying')
       }
-      return { status: 'already-published', version: metadata.version, integrity, latestVersion: current }
+      return { status: 'already-published', version: publication.version, integrity, latestVersion: current }
     }
     const publishOne = async publication => {
       const { name, archive, integrity, distTag, latest } = publication
@@ -162,22 +164,22 @@ export async function publishNpmRelease({
       const result = await invoke('npm', ['publish', archive, '--ignore-scripts', '--access', 'public', '--tag', distTag, `--registry=${registry}`, '--json'])
       if (result.code !== 0) {
         // A competing run or lost successful response is safe only after byte-for-byte confirmation.
-        if (compare(publication, await publishedIntegrity(name))) return alreadyPublished(publication)
+        if (compare(publication, await publishedIntegrity(publication))) return alreadyPublished(publication)
         throw new Error(`npm publish failed${npmError(result)?.code ? ` (${npmError(result).code})` : ''}`)
       }
       // Do not mistake dry-run configuration or an unconfirmed registry response for a publish.
       // npm scans accepted publishes before exposing them. Allow 45 bounded waits
       // (15 minutes); keep checking the original bytes and the actual stable tag.
       for (let attempt = 0; attempt < confirmationAttempts; attempt++) {
-        if (compare(publication, await publishedIntegrity(name))) {
+        if (compare(publication, await publishedIntegrity(publication))) {
           const current = await latestVersion(name, { processing: true })
-          const minimumLatest = distTag === 'latest' ? metadata.version : latest
+          const minimumLatest = distTag === 'latest' ? publication.version : latest
           if (current && !newer(minimumLatest, current)) {
-            return { status: 'published', version: metadata.version, integrity, distTag }
+            return { status: 'published', version: publication.version, integrity, distTag }
           }
         }
         if (attempt < confirmationAttempts - 1) {
-          report(`npm is still processing ${name}@${metadata.version}; confirmation ${attempt + 1}/${confirmationAttempts}, retrying in 20 seconds`)
+          report(`npm is still processing ${name}@${publication.version}; confirmation ${attempt + 1}/${confirmationAttempts}, retrying in 20 seconds`)
           await wait(confirmationIntervalMs)
         }
       }
@@ -187,6 +189,11 @@ export async function publishNpmRelease({
     // Every native package must be publicly confirmed before the parent can
     // advertise that exact optional version to Git/npm installers.
     for (const publication of publications) results.push({ name: publication.name, ...await publishOne(publication) })
+    if (withNativePackages) {
+      const marker = join(temporary, `${packageName}-native-ready.json`)
+      await writeFile(marker, JSON.stringify({ version: metadata.version, nativePackages: nativeOptionalDependencies(metadata) }) + '\n')
+      await requireSuccess('gh', ['release', 'upload', tag, marker, '--repo', repository, '--clobber'], 'Native readiness marker upload')
+    }
     const { name: ignored, ...parent } = results.at(-1)
     return withNativePackages ? { ...parent, nativePackages: results.slice(0, -1) } : parent
   } finally { await rm(temporary, { recursive: true, force: true }) }

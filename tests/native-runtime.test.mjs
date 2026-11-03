@@ -104,3 +104,13 @@ test('wrong package version, protocol, executable architecture and modified byte
 test('unsupported platforms and architectures never fall back to a different native binary', () => {
   for (const [platform, architecture] of [['win32', 'ia32'], ['linux', 'x64']]) assert.throws(() => nativePackageName(platform, architecture), { code: 'PLATFORM_UNSUPPORTED' })
 })
+
+test('new Host/UI versions reuse the independently pinned native package and reject a different native version', async () => {
+  for (const platform of ['darwin', 'win32']) {
+    const fixture = await installation(platform); await fixture.install()
+    const options = { ...fixture.options, version: '99.0.0', nativeVersion: version }
+    assert.equal(resolve('computer', options), fixture.executable())
+    assert.equal(resolve('session-window', { ...options, version: '99.0.1' }), fixture.executable(fixture.dependency, platform === 'darwin' ? 1 : 0))
+    assert.throws(() => resolve('computer', { ...options, nativeVersion: '99.0.2' }), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
+  }
+})

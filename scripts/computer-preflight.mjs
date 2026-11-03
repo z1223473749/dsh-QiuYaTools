@@ -23,7 +23,7 @@ try {
   record('native-payload-present', true, { platform: platform(), architecture: arch() })
   const manifestPath = platform() === 'darwin' ? 'lib/macos-manifest.json' : 'lib/native/windows-manifest.json'
   const manifest = JSON.parse(await readFile(join(root, manifestPath), 'utf8'))
-  let integrity = manifest.version === pkg.version
+  let integrity = manifest.version === (pkg.qiuyaNative?.version ?? pkg.version) || manifest.version === pkg.version
   for (const asset of manifest.artifacts) {
     const path = join(root, 'lib', platform() === 'win32' ? 'native' : '', asset.file)
     const bytes = await readFile(path)

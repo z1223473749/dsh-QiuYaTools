@@ -34,6 +34,7 @@ export async function packageCandidate(platform, architecture, output = join(roo
     await cp(join(sourceRoot, 'docs/computer-use-guide.md'), join(stage, 'docs/computer-use-guide.md'))
     await cp(join(sourceRoot, 'docs/git-guide.md'), join(stage, 'docs/git-guide.md'))
     await cp(join(sourceRoot, 'docs/q-theme-framework.md'), join(stage, 'docs/q-theme-framework.md'))
+    await cp(join(sourceRoot, 'docs/native-updates.md'), join(stage, 'docs/native-updates.md'))
     // Menu/scene images are already embedded in lib/client.js. Redistributing
     // their source copies wastes ~90 KiB and breaks the existing Windows x64
     // 64 MiB installer budget. The package icon remains a real public asset.
@@ -52,11 +53,18 @@ export async function packageCandidate(platform, architecture, output = join(roo
       await stat(join(stage, 'lib', 'native', `win32-${architecture}`, 'qiuya-windows.exe'))
       const manifestPath = join(stage, 'lib/native/windows-manifest.json')
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-      if (manifest.version !== pkg.version) throw new Error('Windows native manifest version does not match the package; rebuild the native helpers')
+      if (manifest.version !== (pkg.qiuyaNative?.version ?? pkg.version)) throw new Error('Windows native manifest version does not match the native version; rebuild the native helpers')
+      // Old updaters bind bundled manifests to the application version.
+      manifest.version = pkg.version
       manifest.artifacts = manifest.artifacts.filter(asset => asset.architecture === architecture)
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
     }
     else {
+      const manifestPath = join(stage, 'lib/macos-manifest.json')
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+      if (manifest.version !== (pkg.qiuyaNative?.version ?? pkg.version)) throw new Error('Mac native manifest version does not match the native version; rebuild the native helpers')
+      manifest.version = pkg.version
+      await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
       const binary = join(stage, 'lib', 'QiuYaTools Computer.app', 'Contents', 'MacOS', 'qiuya-computer')
       const { stdout } = await run('/usr/bin/lipo', ['-archs', binary])
       for (const arch of architecture === 'universal' ? ['arm64', 'x86_64'] : [architecture === 'x64' ? 'x86_64' : architecture]) if (!stdout.includes(arch)) throw new Error(`Missing Mac computer helper architecture ${arch}`)

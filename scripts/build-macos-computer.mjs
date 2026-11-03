@@ -53,7 +53,7 @@ export async function buildMacOSComputer({ outputDirectory = new URL('../lib/', 
   const inputFiles = [...files, iconSource, fileURLToPath(import.meta.url), fileURLToPath(new URL('./macos-computer-build-cache.mjs', import.meta.url))]
   async function inputs() {
     const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-    const plist = computerAppInfoPlist(pkg.version)
+    const plist = computerAppInfoPlist(pkg.qiuyaNative?.version ?? pkg.version)
     const commands = [['/usr/bin/swiftc', ['--version']], ['/usr/bin/xcrun', ['--find', 'swiftc']],
       ['/usr/bin/xcrun', ['--show-sdk-path']], ['/usr/bin/xcrun', ['--show-sdk-version']], ['/usr/bin/sw_vers', ['-buildVersion']],
       ...(signingIdentity === '-' ? [] : [['/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning']]])]

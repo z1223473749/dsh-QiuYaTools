@@ -45,7 +45,7 @@ export async function buildSessionWindowHelper(outputDirectory = new URL('../../
   await mkdir(macOS, { recursive: true })
   await mkdir(chinese, { recursive: true })
   const pkg = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8'))
-  await writeFile(new URL('./Info.plist', contents), sessionWindowAppInfoPlist(pkg.version))
+  await writeFile(new URL('./Info.plist', contents), sessionWindowAppInfoPlist(pkg.qiuyaNative?.version ?? pkg.version))
   await writeFile(new URL('./InfoPlist.strings', chinese), '"CFBundleName" = "QiuYaTools 会话窗口";\n"CFBundleDisplayName" = "QiuYaTools 会话窗口";\n')
   const output = fileURLToPath(new URL('./qiuya-session-window', macOS))
   const architecture = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x86_64' : undefined

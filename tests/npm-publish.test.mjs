@@ -329,11 +329,12 @@ test('post-publish malformed latest, lookup failures and different bytes still f
 async function nativeReleaseFixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'qiuya-npm-native-test-')), temporaryRoot = join(root, 'temporary')
   t.after(() => rm(root, { recursive: true, force: true })); await mkdir(temporaryRoot)
-  await writeFile(join(root, 'package.json'), JSON.stringify({ ...rootPackage, ...options.checkout }))
-  const env = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'z1223473749/dsh-QiuYaTools', GITHUB_EVENT_NAME: 'push', GITHUB_REF: `refs/tags/v${rootPackage.version}`, GITHUB_SHA: sha, ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.test/', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc', ...options.env }
+  const checkout = { ...rootPackage, ...options.checkout }
+  await writeFile(join(root, 'package.json'), JSON.stringify(checkout))
+  const env = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'z1223473749/dsh-QiuYaTools', GITHUB_EVENT_NAME: 'push', GITHUB_REF: `refs/tags/v${checkout.version}`, GITHUB_SHA: sha, ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.test/', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc', ...options.env }
   const archives = new Map(nativeNames.map(name => [name, distributionTarball(nativeEntries(name, options.native?.[name]))]))
   archives.set(rootPackage.name, distributionTarball([
-    ['package/package.json', JSON.stringify({ ...rootPackage, ...options.wrapper })], ['package/lib/index.js', host],
+    ['package/package.json', JSON.stringify({ ...checkout, ...options.wrapper })], ['package/lib/index.js', host],
     ['package/lib/client.js', 'public client'], ['package/lib/computer-agent.js', 'public agent'], ['package/cordis.patch.yml', '[]\n'],
   ]))
   const integrities = new Map([...archives].map(([name, bytes]) => [name, `sha512-${createHash('sha512').update(bytes).digest('base64')}`]))
@@ -342,7 +343,12 @@ async function nativeReleaseFixture(t, options = {}) {
     calls.push({ command, args: [...args], execution })
     if (command === 'git') return { code: 0, stdout: sha, stderr: '' }
     if (command === 'npm' && args[0] === '--version') return { code: 0, stdout: '11.21.0', stderr: '' }
-    if (command === 'gh' && args[1] === 'view') return ok({ ...release, tagName: `v${rootPackage.version}` })
+    if (command === 'gh' && args[1] === 'view') return ok({ ...release, tagName: `v${checkout.version}` })
+    if (command === 'gh' && args[1] === 'upload') {
+      assert.deepEqual(JSON.parse(await readFile(args[3], 'utf8')), { version: options.checkout?.version ?? rootPackage.version, nativePackages: options.checkout?.optionalDependencies ?? rootPackage.optionalDependencies })
+      assert.equal(visible.size, archives.size, 'Readiness is advertised only after every package is confirmed')
+      events.push(['ready']); return ok({})
+    }
     if (command === 'gh' && args[1] === 'download') {
       const directory = args[args.indexOf('--dir') + 1], lines = []
       for (const [name, bytes] of archives) {
@@ -356,7 +362,7 @@ async function nativeReleaseFixture(t, options = {}) {
     if (command === 'tar') return { code: 0, ...await exec(command, args, { encoding: 'utf8' }) }
     if (command === 'npm' && args[0] === 'view') {
       const name = args[1].split('@')[0], field = args[2]
-      if (field === 'dist-tags.latest') return ok(visible.has(name) ? rootPackage.version : '0.6.0')
+      if (field === 'dist-tags.latest') return ok(visible.has(name) ? JSON.parse(readDistributionArchive(archives.get(name)).get('package/package.json').bytes.toString('utf8')).version : '0.6.0')
       if (options.different === name) return ok(`sha512-${Buffer.alloc(64, 3).toString('base64')}`)
       const waiting = scans.get(name)
       if (waiting !== undefined) {
@@ -427,4 +433,14 @@ test('the unified publisher rejects unpinned checkout dependencies and missing O
   await assert.rejects(unpinned.publish(), /pin every native/); assert.deepEqual(unpinned.published, [])
   const noOidc = await nativeReleaseFixture(t, { existing: nativeNames, env: { ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' } })
   await assert.rejects(noOidc.publish(), /OIDC is unavailable/); assert.deepEqual(noOidc.published, [])
+})
+
+test('a newer UI release keeps existing native versions and publishes only the parent', async t => {
+  const f = await nativeReleaseFixture(t, { checkout: { version: '99.0.0', qiuyaNative: { ...rootPackage.qiuyaNative, version: rootPackage.version } }, existing: nativeNames })
+  const result = await f.publish()
+  assert.equal(result.version, '99.0.0')
+  assert.deepEqual(f.published, [rootPackage.name])
+  assert.ok(result.nativePackages.every(item => item.version === rootPackage.version && item.status === 'already-published'))
+  for (const name of nativeNames) assert.ok(f.calls.some(call => call.command === 'npm' && call.args[0] === 'view' && call.args[1] === `${name}@${rootPackage.version}`))
+  assert.deepEqual(f.events.at(-1), ['ready'])
 })

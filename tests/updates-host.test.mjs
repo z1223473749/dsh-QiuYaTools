@@ -7,6 +7,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile, realpath, symlink } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { rootPackage, tarball } from './fixtures/native-packaging.mjs'
 
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-update-host-test-'))
 await build({ entryPoints: [fileURLToPath(new URL('../src/updates/host.ts', import.meta.url))], bundle: true, outfile: join(temporary, 'host.mjs'), platform: 'node', format: 'esm', packages: 'external' })
@@ -104,10 +105,10 @@ async function fixture(t, extra = {}) {
         id: 1, tag_name: `v${releaseVersion}`, draft: false, prerelease: false,
         url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/1',
         html_url: `${repository}/releases/tag/v${releaseVersion}`, published_at: '2026-10-20T10:00:00Z',
-        assets: [{ id: 2, name: assetName, state: 'uploaded', size: packageBytes.length,
+        assets: [{ id: 2, name: extra.small ? 'dsh-qiuya-tools.tgz' : assetName, state: 'uploaded', size: packageBytes.length,
           url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/assets/2',
-          browser_download_url: `${repository}/releases/download/v${releaseVersion}/${assetName}`,
-          digest: `sha256:${digest}` }],
+          browser_download_url: `${repository}/releases/download/v${releaseVersion}/${extra.small ? 'dsh-qiuya-tools.tgz' : assetName}`,
+          digest: `sha256:${digest}` }, ...(extra.small ? [{ id: 3, name: 'dsh-qiuya-tools-native-ready.json', state: 'uploaded', size: 200, digest: `sha256:${'a'.repeat(64)}`, url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/assets/3', browser_download_url: `${repository}/releases/download/v${releaseVersion}/dsh-qiuya-tools-native-ready.json` }] : [])],
       }))
     }
     if (extra.assetResponse) return extra.assetResponse({ packageBytes, url, options })
@@ -370,4 +371,19 @@ test('updates refuse cache symlinks and preserve profile files when the official
   assert.equal(await readFile(join(failed.directory, 'package.json'), 'utf8'), before)
   failed.dispose()
   assert.equal(failed.routes.size, 0)
+})
+
+test('automatic install passes the small independently versioned wrapper to Harness without downloading a full native asset', { skip: !supportedPlatform }, async t => {
+  const packageBytes = tarball([
+    ['package/package.json', JSON.stringify({ ...rootPackage, version: '1.1.0', qiuyaNative: { ...rootPackage.qiuyaNative, version: rootPackage.version } })],
+    ['package/cordis.patch.yml', '[]\n'], ['package/lib/index.js', 'export function apply() {}'],
+    ['package/lib/client.js', '/* UI update */'], ['package/lib/computer-agent.js', 'export {}'],
+  ])
+  const f = await fixture(t, { small: true, packageBytes })
+  const result = await f.call(installEndpoint, { version: '1.1.0' })
+  assert.equal(result.status, 'restart-required')
+  assert.deepEqual(f.calls[0].bytes, packageBytes)
+  assert.equal(f.network.filter(call => call.url.endsWith('/dsh-qiuya-tools.tgz')).length, 1)
+  assert.equal(f.network.some(call => /-(?:win32|darwin)-.*\.tgz$/.test(call.url)), false)
+  f.dispose()
 })

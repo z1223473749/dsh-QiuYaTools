@@ -42,7 +42,7 @@ function nativeTargets(pkg) {
   return Object.entries(pkg.optionalDependencies ?? {}).map(([name, version]) => {
     const match = /(?:^|-)(darwin|win32)-(arm64|x64|universal)$/.exec(name)
     assert.ok(match, `Unexpected native optional dependency: ${name}`)
-    assert.equal(version, pkg.version, 'Native package versions must match the plugin exactly')
+    assert.equal(version, pkg.qiuyaNative.version, 'Native packages must pin the independent native version')
     assert.ok(match[2] !== 'universal' || match[1] === 'darwin', 'Only macOS has a universal native package')
     return { name, version, os: match[1], cpu: match[2], cpus: match[2] === 'universal' ? ['arm64', 'x64'] : [match[2]] }
   })
@@ -81,6 +81,7 @@ test('Git installation and npm ci deliver native dependencies without build appr
       'package/native-fixture.txt': `INSTALLATION FIXTURE ONLY: ${target.os}/${target.cpu}\n`,
     }) })
   }
+  const history = new Map([...packs.values()].map(pack => [`${pack.target.name}@${pack.target.version}`, pack]))
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url, 'http://localhost').pathname).replace(/^\//, '')
     requests.push(path)
@@ -90,12 +91,12 @@ test('Git installation and npm ci deliver native dependencies without build appr
       response.setHeader('content-type', 'application/json')
       response.end(JSON.stringify({ name: pack.target.name, 'dist-tags': { latest: pack.target.version },
         time: { created: publishedAt, modified: publishedAt, [pack.target.version]: publishedAt },
-        versions: { [pack.target.version]: { ...pack.metadata, dist: { tarball: `${base}/tarballs/${encodeURIComponent(pack.target.name)}.tgz`,
-          integrity: `sha512-${createHash('sha512').update(pack.bytes).digest('base64')}`, shasum: createHash('sha1').update(pack.bytes).digest('hex') } } },
+        versions: Object.fromEntries([...history.values()].filter(item => item.target.name === path).map(item => [item.target.version, { ...item.metadata, dist: { tarball: `${base}/tarballs/${encodeURIComponent(item.target.name)}-${item.target.version}.tgz`,
+          integrity: `sha512-${createHash('sha512').update(item.bytes).digest('base64')}`, shasum: createHash('sha1').update(item.bytes).digest('hex') } }])),
       }))
       return
     }
-    const payload = [...packs.values()].find(item => path === `tarballs/${item.target.name}.tgz`)
+    const payload = [...history.values()].find(item => path === `tarballs/${item.target.name}-${item.target.version}.tgz`)
     if (payload && registryState.available) { response.setHeader('content-type', 'application/octet-stream'); response.end(payload.bytes); return }
     response.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: `Unexpected fixture registry request: ${path}` }))
   })
@@ -156,6 +157,38 @@ test('Git installation and npm ci deliver native dependencies without build appr
     }
     const workspace = await readFile(join(profile, 'pnpm-workspace.yaml'), 'utf8')
     assert.doesNotMatch(workspace, /allowBuilds|onlyBuiltDependencies|dangerouslyAllowAllBuilds/)
+    const nativeFetches = requests.filter(path => path.startsWith('tarballs/')).length
+    for (const version of ['99.0.0', '99.0.1']) {
+      const update = join(profile, `ui-${version}.tgz`)
+      await writeFile(update, tarball({
+        'package/package.json': JSON.stringify({ ...manifest, scripts: undefined, version }),
+        'package/lib/index.js': `export const uiVersion = '${version}'\n`,
+      }))
+      await run(process.execPath, [pnpm, 'add', '--ignore-scripts', '--reporter=append-only', '--fetch-retries=0', pathToFileURL(update).href], { cwd: profile, env, timeout: 20_000 })
+      assert.equal(JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version, version)
+      for (const target of expected) assert.equal(await readFile(join(profile, 'node_modules', target.name, 'native-fixture.txt'), 'utf8'), `INSTALLATION FIXTURE ONLY: ${target.os}/${target.cpu}\n`)
+    }
+    assert.equal(requests.filter(path => path.startsWith('tarballs/')).length, nativeFetches, 'Two UI upgrades must download zero native tarballs')
+    const originalPacks = new Map(packs), nativeVersion = '99.1.0'
+    try {
+      for (const [name, pack] of originalPacks) {
+        const metadata = { ...pack.metadata, version: nativeVersion }
+        packs.set(name, { target: { ...pack.target, version: nativeVersion }, metadata, bytes: tarball({
+          'package/package.json': JSON.stringify(metadata), 'package/index.js': 'module.exports = {}\n',
+          'package/native-fixture.txt': `NEW NATIVE VERSION ${nativeVersion}\n`,
+        }) })
+        history.set(`${name}@${nativeVersion}`, packs.get(name))
+      }
+      const update = join(profile, 'native-upgrade.tgz')
+      await writeFile(update, tarball({
+        'package/package.json': JSON.stringify({ ...manifest, scripts: undefined, version: '99.0.2', optionalDependencies: Object.fromEntries(targets.map(target => [target.name, nativeVersion])) }),
+        'package/lib/index.js': 'export const uiVersion = "99.0.2"\n',
+      }))
+      await run(process.execPath, [pnpm, 'add', '--ignore-scripts', '--reporter=append-only', '--fetch-retries=0', pathToFileURL(update).href], { cwd: profile, env, timeout: 20_000 })
+      const fetched = requests.filter(path => path.startsWith('tarballs/')).slice(nativeFetches)
+      assert.deepEqual(fetched, expected.map(target => `tarballs/${target.name}-${nativeVersion}.tgz`), 'A native version change downloads exactly the matching platform package')
+      for (const target of expected) assert.equal(await readFile(join(profile, 'node_modules', target.name, 'native-fixture.txt'), 'utf8'), `NEW NATIVE VERSION ${nativeVersion}\n`)
+    } finally { for (const [name, pack] of originalPacks) packs.set(name, pack) }
     t.diagnostic(`${scenario.label} (${scenario.os}/${scenario.cpu}): installation passed without script approval; ${scenario.simulated ? 'selection simulated with supportedArchitectures' : 'actual Host platform'}; inert fixture only, no native binary executed`)
   })
 
@@ -168,7 +201,7 @@ test('Git installation and npm ci deliver native dependencies without build appr
     const metadata = { name: 'qiuya-native-ci-fixture', version: pkg.version, private: true, optionalDependencies: pkg.optionalDependencies }
     const lock = { name: metadata.name, version: metadata.version, lockfileVersion: 3, requires: true, packages: { '': metadata } }
     if (scenario !== 'missing-lock-entries') for (const target of targets) lock.packages[`node_modules/${target.name}`] = {
-      version: target.version, resolved: `${registry}/tarballs/${encodeURIComponent(target.name)}.tgz`, optional: true, os: [target.os], cpu: target.cpus,
+      version: target.version, resolved: `${registry}/tarballs/${encodeURIComponent(target.name)}-${target.version}.tgz`, optional: true, os: [target.os], cpu: target.cpus,
       // Registry availability is independent of the future CI-produced bytes.
       // No local fixture integrity is persisted in this version-only lock.
     }

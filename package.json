@@ -30,6 +30,7 @@
     "scripts/computer-agent.mjs",
     "docs/computer-use-guide.md",
     "docs/git-guide.md",
+    "docs/native-updates.md",
     "docs/q-theme-framework.md"
   ],
   "dsh": {
@@ -147,6 +148,7 @@
   },
   "author": "QiuYa",
   "qiuyaNative": {
+    "version": "0.7.1",
     "protocolVersion": 1,
     "computerUse": true
   }

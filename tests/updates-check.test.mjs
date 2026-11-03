@@ -28,6 +28,16 @@ function release(overrides = {}) {
 }
 const checker = (fetch, extra = {}) => new GitHubReleaseChecker({ repository, currentVersion: '1.1.0', packageName: 'dsh-qiuya-tools', fetch, ...extra })
 
+test('small universal updates take precedence over full archives on both platforms', () => {
+  const data = release()
+  const small = { ...data.assets[0], id: 23, name: 'dsh-qiuya-tools.tgz', url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/assets/23', browser_download_url: `${repository}/releases/download/v1.2.0/dsh-qiuya-tools.tgz` }
+  data.assets.push(small)
+  // No marker: new native dependencies may still be in npm's scan queue.
+  assert.equal(validateReleaseMetadata(data, resolveGitHubRepository(repository), 'dsh-qiuya-tools', 'arm64').asset.name, data.assets[0].name)
+  data.assets.push({ ...small, id: 24, name: 'dsh-qiuya-tools-native-ready.json', url: 'https://api.github.com/repos/QiuYa/QiuYaTools/releases/assets/24', browser_download_url: `${repository}/releases/download/v1.2.0/dsh-qiuya-tools-native-ready.json` })
+  for (const platform of ['darwin', 'win32']) for (const architecture of ['arm64', 'x64']) assert.equal(validateReleaseMetadata(data, resolveGitHubRepository(repository), 'dsh-qiuya-tools', architecture, platform).asset.name, small.name)
+})
+
 test('update semver follows numeric and prerelease precedence without integer precision loss', () => {
   const sequence = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta', '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0', '1.0.1', '1.2.0', '1.10.0', '2.0.0']
   for (let index = 1; index < sequence.length; index++) {

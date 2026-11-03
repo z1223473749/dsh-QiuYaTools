@@ -14,6 +14,8 @@ export interface NativeRuntimeOptions {
   /** Directory containing the installed Host bundle, never the source tree. */
   base?: URL
   version?: string
+  /** Native payload version is independent of the Host/UI release. */
+  nativeVersion?: string
 }
 
 export function nativePackageName(platform: NodeJS.Platform, architecture: string): string {
@@ -61,19 +63,22 @@ function verify(root: string, component: NativeComponent, platform: NodeJS.Platf
 /**
  * Git/npm installs receive script-free, platform-filtered optional packages.
  * Resolve those alongside the installed plugin; never download, compile, or
- * mutate pnpm's store at runtime. Complete .tgz installs remain self-contained.
+ * mutate pnpm's store at runtime. UI releases keep the exact native version so
+ * Harness reuses its persistent package cache. Legacy full archives still work.
  */
 export function resolveNativeExecutable(component: NativeComponent, options: NativeRuntimeOptions = {}): string {
   const platform = options.platform ?? process.platform, architecture = options.architecture ?? process.arch
   const name = nativePackageName(platform, architecture)
   const base = options.base ?? new URL('./', import.meta.url), version = options.version ?? pkg.version
+  const nativeVersion = options.nativeVersion ?? options.version ?? pkg.qiuyaNative.version ?? version
   const bundledRoot = dirname(fileURLToPath(base))
+  try { return verify(bundledRoot, component, platform, architecture, nativeVersion) } catch { /* Development builds use the independent native version. */ }
   try { return verify(bundledRoot, component, platform, architecture, version) } catch { /* Git trees may contain only the older session helper. */ }
   try {
     const dependency = createRequire(new URL('index.js', base)).resolve(`${name}/package.json`)
     const metadata = JSON.parse(readFileSync(dependency, 'utf8'))
-    if (metadata.name !== name || metadata.version !== version || !metadata.os?.includes(platform) || !metadata.cpu?.includes(architecture)) throw new Error('package')
-    return verify(dirname(dependency), component, platform, architecture, version)
+    if (metadata.name !== name || metadata.version !== nativeVersion || !metadata.os?.includes(platform) || !metadata.cpu?.includes(architecture)) throw new Error('package')
+    return verify(dirname(dependency), component, platform, architecture, nativeVersion)
   } catch {
     const label = platform === 'win32' ? `Windows ${architecture}` : 'macOS'
     throw new ComputerError('NATIVE_INSTALLATION_INCOMPLETE', `${label} 原生组件未完整安装或与插件版本不匹配。请在 Harness 插件管理中重新安装 QiuYaTools，并确认安装未跳过可选依赖；也可安装同版本的对应系统 .tgz 完整包。无需单独启动执行器或安装开发工具。`)

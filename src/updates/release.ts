@@ -51,7 +51,7 @@ function exactUrl(input: unknown, expected: string): string {
 export function updateAssetNames(packageName: string, architecture: 'arm64' | 'x64', platform: 'darwin' | 'win32' = 'darwin'): readonly string[] {
   if (!/^[a-z0-9][a-z0-9._-]{0,213}$/.test(packageName)) throw new Error('Invalid update package name')
   if (!['darwin', 'win32'].includes(platform) || !['arm64', 'x64'].includes(architecture)) throw new Error('Unsupported update platform')
-  return platform === 'win32' ? [`${packageName}-win32-${architecture}.tgz`] : [`${packageName}-darwin-universal.tgz`, `${packageName}-darwin-${architecture}.tgz`]
+  return [`${packageName}.tgz`, ...(platform === 'win32' ? [`${packageName}-win32-${architecture}.tgz`] : [`${packageName}-darwin-universal.tgz`, `${packageName}-darwin-${architecture}.tgz`])]
 }
 
 /** Check one public stable Release and bind every selected asset to that exact repository and tag. */
@@ -65,7 +65,22 @@ export function validateReleaseMetadata(input: unknown, repository: GitHubReposi
   if (typeof data.published_at !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(data.published_at) || !Number.isFinite(Date.parse(data.published_at))) throw new Error('Invalid release publication time')
   if (!Array.isArray(data.assets) || data.assets.length > 1000) throw new Error('Invalid release assets')
   let asset: ReleaseAsset | undefined
+  // A Release is visible before npm finishes scanning its native packages.
+  // The publisher uploads this marker only after all exact native versions are
+  // public; until then the complete archive remains safe to install.
+  const readyName = `${packageName}-native-ready.json`
+  const ready = data.assets.filter(item => item !== null && typeof item === 'object' && (item as { name?: unknown }).name === readyName)
+  if (ready.length > 1) throw new Error('Ambiguous native readiness marker')
+  let smallReady = false
+  if (ready.length === 1) {
+    const marker = object(ready[0])
+    if (marker.state !== 'uploaded' || !positiveInteger(marker.id) || !positiveInteger(marker.size) || marker.size > 16_384 || typeof marker.digest !== 'string' || !/^sha256:[a-fA-F0-9]{64}$/.test(marker.digest)) throw new Error('Invalid native readiness marker')
+    exactUrl(marker.browser_download_url, `${repository.url}/releases/download/${encodeURIComponent(tag)}/${readyName}`)
+    exactUrl(marker.url, `https://api.github.com/repos/${repository.owner}/${repository.repo}/releases/assets/${marker.id}`)
+    smallReady = true
+  }
   for (const expectedName of updateAssetNames(packageName, architecture, platform)) {
+    if (expectedName === `${packageName}.tgz` && !smallReady) continue
     const matches = data.assets.filter(item => item !== null && typeof item === 'object' && (item as { name?: unknown }).name === expectedName)
     if (matches.length > 1) throw new Error('Ambiguous release asset')
     if (matches.length === 0) continue

@@ -4,11 +4,58 @@ import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { join } from 'node:path'
 import test from 'node:test'
-import { nativePackages, nativeOptionalDependencies, packageNative, packageUniversal, readDistributionArchive, validateNativeArchive, validateUniversalArchive } from '../scripts/package-native.mjs'
+import { build } from 'esbuild'
+import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { nativePackages, nativeOptionalDependencies, packageNative, packageUniversal, publishedNativeArchive, readDistributionArchive, validateNativeArchive, validateUniversalArchive } from '../scripts/package-native.mjs'
 import { packageCandidate } from '../scripts/package-candidates.mjs'
 import { digest, nativeEntries, nativeNames, nativeSource, rootPackage, tarball, version, windowsBinary } from './fixtures/native-packaging.mjs'
 
 const metadata = bytes => JSON.parse(readDistributionArchive(bytes).get('package/package.json').bytes.toString('utf8'))
+
+test('UI-only releases retain the native version and validate as small updates on both systems', async t => {
+  const { root, put } = await nativeSource(t)
+  const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  pkg.version = '99.0.0'; pkg.qiuyaNative.version = version
+  await put('package.json', JSON.stringify(pkg))
+  const output = join(root, 'out'), result = await packageUniversal({ root, output })
+  const bytes = await readFile(join(output, result.name))
+  assert.equal(metadata(bytes).version, '99.0.0')
+  assert.deepEqual(metadata(bytes).optionalDependencies, rootPackage.optionalDependencies)
+  validateUniversalArchive(bytes, { version: '99.0.0' })
+  const compiled = await build({ entryPoints: [fileURLToPath(new URL('../src/updates/archive.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' })
+  const { validateUpdateArchive } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
+  const entries = [...readDistributionArchive(bytes)].map(([path, entry]) => [path, entry.bytes, entry.mode])
+  for (const platform of ['darwin', 'win32']) for (const architecture of ['arm64', 'x64']) {
+    const options = { packageName: pkg.name, version: pkg.version, platform, architecture }
+    validateUpdateArchive(bytes, options)
+    for (const patch of [{ scripts: { postinstall: 'unsafe' } }, { qiuyaNative: { ...pkg.qiuyaNative, version: '99.0.1' } }, { optionalDependencies: { ...pkg.optionalDependencies, [nativeNames[0]]: `^${version}` } }]) {
+      const invalid = entries.map(([path, content, mode]) => [path, path === 'package/package.json' ? JSON.stringify({ ...metadata(bytes), ...patch }) : content, mode])
+      assert.throws(() => validateUpdateArchive(tarball(invalid), options))
+    }
+    assert.throws(() => validateUpdateArchive(tarball([...entries, ['package/lib/hidden.exe', 'unsafe']]), options), /must not carry native/)
+  }
+  // Complete legacy packages retain the application-version manifest expected
+  // by old updaters, while native packages keep their independent identity.
+  const full = await packageCandidate('win32', 'x64', output, { sourceRoot: root })
+  validateUpdateArchive(await readFile(join(output, full.name)), { packageName: pkg.name, version: pkg.version, platform: 'win32', architecture: 'x64' })
+  const native = await packageNative(nativeNames[2], { root, output })
+  assert.equal(native.version, version)
+})
+
+test('release assembly reuses exact published native bytes and refuses mismatched integrity', async t => {
+  const { root } = await nativeSource(t), name = nativeNames[2], bytes = tarball(nativeEntries(name))
+  const base = `https://registry.npmjs.org/${name}`
+  const identity = { name, version, dist: { tarball: `${base}/-/${name}-${version}.tgz`, integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}` } }
+  const request = async url => url.endsWith('.tgz') ? new Response(bytes) : Response.json(identity)
+  const result = await packageNative(name, { root, output: join(root, 'out'), reusePublished: true, fetch: request })
+  assert.equal(result.reused, true)
+  assert.deepEqual(await readFile(join(root, 'out', result.name)), bytes)
+  const corrupt = async url => url.endsWith('.tgz') ? new Response(Buffer.from('corrupt')) : Response.json(identity)
+  await assert.rejects(publishedNativeArchive(name, version, corrupt), /integrity/)
+  assert.equal(await publishedNativeArchive(name, version, async () => new Response('', { status: 404 })), undefined)
+  await assert.rejects(publishedNativeArchive(name, version, async () => new Response('', { status: 503 })), /Cannot confirm/)
+})
 
 test('three real npm native archives contain only their exact precompiled platform and require no lifecycle scripts', async t => {
   const { root } = await nativeSource(t), output = join(root, 'out')
