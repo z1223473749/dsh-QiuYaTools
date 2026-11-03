@@ -1,5 +1,5 @@
 import type { ThemeMovement, ThemeAtmosphere } from '../custom-themes.ts'
-import { createAtmosphere, drawAtmosphere } from './landscape-atmosphere.ts'
+import { createAtmosphere, drawAtmosphere, type ParticleStyle } from './landscape-atmosphere.ts'
 
 export interface LandscapeArt {
   readonly element: HTMLElement
@@ -12,6 +12,7 @@ export interface LandscapeOptions {
   movement?: ThemeMovement
   atmosphere?: ThemeAtmosphere
   atmosphereColor?: string
+  particleStyle?: ParticleStyle
   intensity?: number
   speed?: number
   zoom?: number
@@ -104,7 +105,7 @@ export function installLandscapeScene(doc: Document, options: LandscapeOptions =
       const wash = doc.createElement('div')
       wash.style.cssText = 'position:absolute;inset:0;background-image:var(--qyt-q-canvas-wash);'
       layer.append(art, wash)
-      particles = createAtmosphere(doc, atmosphere, options.atmosphereColor)
+      particles = createAtmosphere(doc, atmosphere, options.atmosphereColor, options.particleStyle)
       layer.append(...particles)
       next.prepend(layer); resize.observe(next); intersection?.observe(next)
       next.addEventListener('pointermove', pointer, { passive: true }); next.addEventListener('pointerleave', leave)

@@ -1,7 +1,7 @@
 import { getCustomThemes, type CustomTheme } from './custom-themes.ts'
 export const SETTINGS_ID = 'qiuya-tools'
 
-export const Q_THEME_IDS = ['moonfrost', 'ocean', 'begonia', 'sunset'] as const
+export const Q_THEME_IDS = ['moonfrost', 'ocean', 'begonia', 'sunset', 'buliangren'] as const
 export type QPresetThemeId = typeof Q_THEME_IDS[number]
 export const DEFAULT_Q_THEME_ID: QPresetThemeId = 'moonfrost'
 export type QThemeId = QPresetThemeId | `custom:${string}`
@@ -14,6 +14,7 @@ export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   begonia: Object.freeze({ motion: 'dynamic' }),
   sunset: Object.freeze({ motion: 'dynamic' }),
   moonfrost: Object.freeze({ motion: 'dynamic' }),
+  buliangren: Object.freeze({ motion: 'dynamic' }),
 })
 
 /** Serialized values projected by the Host configuration form. */

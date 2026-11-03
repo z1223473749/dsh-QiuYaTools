@@ -12,7 +12,9 @@ const output = join(root, 'artifacts/q-themes')
 await mkdir(output, { recursive: true })
 const fixture = `
 import {installQTheme} from './src/client/q-theme.ts';
-let preferences={qThemeEnabled:true,qThemeSettings:{moonfrost:{motion:'static'},ocean:{motion:'static'},begonia:{motion:'static'}}};
+const previewTheme=new URLSearchParams(location.search).get('theme');
+if(new URLSearchParams(location.search).has('dark'))document.body.setAttribute('data-ds-dark-theme','');
+let preferences={qThemeEnabled:true,qThemeId:previewTheme??'moonfrost',qThemeSettings:{moonfrost:{motion:'static'},ocean:{motion:'static'},begonia:{motion:'static'}}};
 const listeners=new Set();
 const form={getSnapshot:()=>({status:'ready',value:preferences}),subscribe(listener){listeners.add(listener);return()=>listeners.delete(listener)}};
 const main=document.querySelector('[data-slot="main.conversation"]');
@@ -20,6 +22,7 @@ function rebuild(phase='hero'){
  main.innerHTML='<section data-phase="'+phase+'"><div data-slot="conversation.header"><header>Q 主题 · 本地效果预览</header></div><div data-conversation-content><div data-conversation-scroll><article><h1>让风景留在阅读之外</h1><p>海棠花瓣轻轻飘落，女孩安静地望向远方。</p><p>同一套主题框架保留阅读留白与半透明纸面，跟随原生浅色和深色外观。</p><pre><code>const theme = { motion: "static" };</code></pre></article><div data-composer-seat><div data-composer-card><textarea aria-label="消息" placeholder="继续聊聊你的想法…"></textarea><button aria-label="发送">↑</button></div></div></div></div></section>';
 }
 rebuild();
+if(previewTheme==='buliangren')document.querySelector('article h1').textContent='不良人 · 玄冥夜行';
 const cleanup=installQTheme({},form);
 window.__themes={rebuild,cleanup,update(next){preferences={...preferences,...next};for(const listener of [...listeners])listener()},motion(id,motion){preferences={...preferences,qThemeSettings:{...preferences.qThemeSettings,[id]:{motion}}};for(const listener of [...listeners])listener()}};
 `
@@ -91,7 +94,7 @@ try {
   await page.getByRole('heading').evaluate(node => { node.textContent = '月阙清霜 · 月照仙山' })
   await page.screenshot({ path: join(output, 'moonfrost-home.png') })
   const moonLayer = page.locator('[data-qyt-landscape-scene]')
-  assert.equal(await moonLayer.locator('i').count(), 32)
+  assert.equal(await moonLayer.locator('i').count(), 38)
   assert.deepEqual(await moonLayer.evaluate(layer => ({ hidden: layer.getAttribute('aria-hidden'), inert: layer.hasAttribute('inert'), events: getComputedStyle(layer).pointerEvents })), { hidden: 'true', inert: true, events: 'none' })
   const snowBefore = await moonLayer.locator('i').first().evaluate(node => node.style.transform)
   await page.waitForFunction(previous => document.querySelector('[data-qyt-landscape-scene] i')?.style.transform !== previous, snowBefore)
@@ -122,14 +125,87 @@ try {
   await moonLayer.waitFor({ state: 'detached' })
   await page.evaluate(() => window.__themes.update({ qThemeId: 'moonfrost' }))
   await moonLayer.waitFor()
+  // Buliangren uses the same lifecycle with registered cloud, fog, cloth and hair art.
+  await page.setViewportSize({ width: 1672, height: 941 })
+  await page.evaluate(() => { window.__themes.update({ qThemeId: 'buliangren' }); window.__themes.rebuild('hero') })
+  const buliangren = page.locator('canvas[data-qyt-buliangren-art][data-ready="true"]')
+  await buliangren.waitFor()
+  assert.equal(await page.locator('canvas[data-qyt-moonfrost-cloth]').count(), 0)
+  assert.equal(await page.locator('[data-qyt-leaf="maple"]').count(), 36)
+  await page.getByRole('heading').evaluate(node => { node.textContent = '不良人 · 玄冥夜行' })
+  const buliangrenBefore = await buliangren.evaluate(canvas => canvas.toDataURL())
+  await page.waitForFunction(previous => document.querySelector('canvas[data-qyt-buliangren-art]')?.toDataURL() !== previous, buliangrenBefore)
+  await page.screenshot({ path: join(output, 'buliangren-home-dark.png') })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await moonLayer.waitFor({ state: 'detached' })
+  assert.equal(await marker(), 'buliangren')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await buliangren.waitFor()
+  await page.emulateMedia({ forcedColors: 'active' })
+  await moonLayer.waitFor({ state: 'detached' })
+  await page.emulateMedia({ forcedColors: 'none' })
+  await buliangren.waitFor()
+  await page.evaluate(() => window.__themes.rebuild('active'))
+  await buliangren.waitFor()
+  await page.getByRole('heading').evaluate(node => { node.textContent = '不良人 · 玄冥夜行' })
+  await page.locator('article p').first().evaluate(node => { node.textContent = '云过城阙，雾隐江湖，红枫随风轻落。' })
+  await page.getByRole('textbox', { name: '消息' }).fill('云雾、头发、衣袍与红枫不会阻挡输入')
+  await page.screenshot({ path: join(output, 'buliangren-reading-dark.png') })
+  await page.evaluate(() => window.__themes.motion('buliangren', 'static'))
+  await moonLayer.waitFor({ state: 'detached' })
+  await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+  await page.screenshot({ path: join(output, 'buliangren-reading-light.png') })
+  await page.setViewportSize({ width: 420, height: 900 })
+  await page.screenshot({ path: join(output, 'buliangren-narrow.png') })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+  await page.evaluate(() => window.__themes.update({ qThemeId: 'moonfrost' }))
+  await moonLayer.waitFor()
+  await page.evaluate(() => window.__themes.update({ qThemeId: 'buliangren' }))
+  assert.equal(await moonLayer.count(), 0, 'Buliangren retains its own static preference across switches')
+  await page.evaluate(() => window.__themes.motion('buliangren', 'dynamic'))
+  await buliangren.waitFor()
   await page.evaluate(() => window.__themes.update({ qThemeEnabled: false }))
-  assert.equal(await moonLayer.count(), 0, 'disabling the theme releases Moonfrost motion')
+  assert.equal(await moonLayer.count(), 0, 'disabling the theme releases motion')
   assert.equal(await marker(), null)
   assert.equal(await page.locator('style[data-plugin="dsh-qiuya-tools"]').count(), 0)
   await page.evaluate(() => window.__themes.cleanup())
+  if (process.argv.includes('--record')) {
+    // Encode complete compositor screenshots. Chrome's native screencast on
+    // macOS can omit the bottom 87px; this also avoids an ffmpeg dependency.
+    const videoPage = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+    await videoPage.goto(`http://127.0.0.1:${server.address().port}/?theme=buliangren&dark=1`)
+    await videoPage.locator('canvas[data-qyt-buliangren-art][data-ready="true"]').waitFor()
+    const encoder = await browser.newPage()
+    await encoder.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720
+      const stream = canvas.captureStream(0), chunks = []
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8', videoBitsPerSecond: 2_500_000 })
+      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data) }
+      window.__video = { canvas, stream, recorder, chunks }; recorder.start()
+    })
+    const start = performance.now()
+    for (let index = 0; index < 60; index++) {
+      const remaining = start + index * 100 - performance.now()
+      if (remaining > 0) await videoPage.waitForTimeout(remaining)
+      const frame = await videoPage.screenshot()
+      await encoder.evaluate(async data => {
+        const image = new Image(); image.src = data; await image.decode()
+        window.__video.canvas.getContext('2d').drawImage(image, 0, 0)
+        window.__video.stream.getVideoTracks()[0].requestFrame()
+      }, `data:image/png;base64,${frame.toString('base64')}`)
+    }
+    const bytes = await encoder.evaluate(() => new Promise(resolve => {
+      const { recorder, chunks, stream } = window.__video
+      recorder.onstop = async () => { const blob = new Blob(chunks, { type: recorder.mimeType }); resolve([...new Uint8Array(await blob.arrayBuffer())]); stream.getTracks().forEach(track => track.stop()) }
+      recorder.stop()
+    }))
+    await writeFile(join(output, 'buliangren-dynamic.webm'), Buffer.from(bytes))
+    await encoder.close()
+    await videoPage.close()
+  }
   assert.deepEqual(errors, [])
   assert.ok(requests.every(url => url.startsWith(`http://127.0.0.1:${server.address().port}`)), 'no external artwork requests')
-  const report = { passed: true, staticDynamic: true, realCanvasMotion: true, oceanTransition: true, reducedMotion: true, moonfrost: true, forcedColors: true, inputClickable: true, darkAndNarrow: true, errors, screenshots: ['begonia-home.png', 'begonia-reading.png', 'begonia-dark.png', 'begonia-narrow.png', 'moonfrost-home.png', 'moonfrost-reading.png', 'moonfrost-dark.png', 'moonfrost-narrow.png'] }
+  const report = { passed: true, staticDynamic: true, realCanvasMotion: true, oceanTransition: true, reducedMotion: true, moonfrost: true, buliangren: true, forcedColors: true, inputClickable: true, darkAndNarrow: true, errors, screenshots: ['begonia-home.png', 'begonia-reading.png', 'begonia-dark.png', 'begonia-narrow.png', 'moonfrost-home.png', 'moonfrost-reading.png', 'moonfrost-dark.png', 'moonfrost-narrow.png', 'buliangren-home-dark.png', 'buliangren-reading-dark.png', 'buliangren-reading-light.png', 'buliangren-narrow.png'] }
   await writeFile(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n')
   console.log(JSON.stringify(report, null, 2))
 } finally {

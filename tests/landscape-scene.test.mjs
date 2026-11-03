@@ -99,3 +99,17 @@ test('5x speed advances motion proportionally beyond the old 2x limit', t => {
   const offset = f => Number(f.doc.querySelector('[data-qyt-landscape-art]').style.transform.match(/translate\(([-.\d]+)/)[1])
   assert.ok(offset(fast) > offset(slow) * 4.9)
 })
+
+test('particle speed accelerates falling leaves without accelerating registered artwork', t => {
+  const times = [[], []]
+  const scenes = [1, 2.8].map((speed, index) => fixture(t, {
+    movement: 'none', atmosphere: 'petals', speed: 1, particleStyle: { shape: 'maple', speed },
+    createArt(doc) { return { element: doc.createElement('canvas'), draw(time) { times[index].push(time) }, dispose() {} } },
+  }))
+  const y = f => Number(f.doc.querySelector('[data-qyt-leaf]').style.transform.match(/translate\([^,]+,([-\d.]+)px/)[1])
+  scenes.forEach(f => f.frame(0))
+  const initial = scenes.map(y)
+  scenes.forEach(f => f.frame(80))
+  assert.ok((y(scenes[1]) - initial[1]) > (y(scenes[0]) - initial[0]) * 2.79)
+  assert.deepEqual(times[0], times[1], 'clouds, cloth and hair retain their own scene clock')
+})

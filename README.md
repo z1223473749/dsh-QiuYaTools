@@ -91,7 +91,7 @@ npm 与仓库地址安装使用相同的平台组件依赖。安装时请保留�
     </tr>
     <tr>
       <td><strong>🎨 Q 主题与自定义主题</strong></td>
-      <td>提供四款预设主题，也可上传图片自定义配色、构图和动态氛围，适配浅深色界面。<a href="docs/q-theme-framework.md">主题接入说明</a></td>
+      <td>提供五款预设主题，包含「不良人 · 玄冥夜行」；也可上传图片自定义配色、构图和动态氛围，适配浅深色界面。<a href="docs/q-theme-framework.md">主题接入说明</a></td>
     </tr>
     <tr>
       <td><strong>✨ AI 智能动态主题</strong></td>

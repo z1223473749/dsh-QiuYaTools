@@ -3,15 +3,17 @@ import { getCustomThemes } from '../custom-themes.ts'
 import { createCustomTheme } from './custom-theme-definition.ts'
 import { DEFAULT_Q_THEME_ID, Q_THEME_IDS, type QThemeId, type QPresetThemeId, type Preferences } from '../shared.ts'
 import type { LocaleKey } from './locales.ts'
-import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL, MOONFROST_SCENE_DATA_URL } from './brand-assets.ts'
+import { OCEAN_SCENE_DATA_URL, BEGONIA_SCENE_DATA_URL, SUNSET_SCENE_DATA_URL, MOONFROST_SCENE_DATA_URL, BULIANGREN_SCENE_DATA_URL } from './brand-assets.ts'
 import { installOceanScene } from './ocean-scene.ts'
 import { installBegoniaScene } from './begonia-scene.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
 import { installMoonfrostScene } from './moonfrost-scene.ts'
+import { installBuliangrenScene } from './buliangren-scene.ts'
 import sunsetPalette from './themes/sunset.css'
 import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
 import moonfrostPalette from './themes/moonfrost.css'
+import buliangrenPalette from './themes/buliangren.css'
 
 /** A theme supplies art, colors and an optional motion adapter. The settings,
  * reading surfaces and installation lifecycle belong to the common framework. */
@@ -63,6 +65,13 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
     bannerPosition: 'right top', previewPosition: 'right top',
     palette: moonfrostPalette,
     installScene: installMoonfrostScene,
+  },
+  buliangren: {
+    id: 'buliangren', name: 'qThemeBuliangren', description: 'qThemeBuliangrenDescription',
+    hint: 'qThemeBuliangrenHint', motionLabel: 'qThemeBuliangrenMotion', label: 'Q Buliangren · 不良人 · 玄冥夜行',
+    art: BULIANGREN_SCENE_DATA_URL, accent: '#82602e', accentDark: '#d1b078', soft: '#b67863',
+    bannerPosition: 'right top', previewPosition: 'right top',
+    palette: buliangrenPalette, installScene: installBuliangrenScene,
   },
 }
 

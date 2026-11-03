@@ -1,0 +1,22 @@
+{
+  "tool": "Built-in image_gen",
+  "theme": "不良人 · 玄冥夜行",
+  "assets": [
+    {
+      "path": "assets/q-buliangren-scene.jpg",
+      "reference": "User-approved concept image in this chat",
+      "prompt": "Use case: precise-object-edit. Edit this approved Chinese 不良人 theme concept into a CLEAN BACKGROUND WALLPAPER asset for the real app. Remove ALL app UI, ALL text, letters, code, title bar, window controls, sidebar borders, chat bubbles, panels, composer, icons, avatars, rectangles and rounded boxes. Seamlessly inpaint those regions with the SAME continuous moonlit ancient Chinese city, charcoal blue mist, dark rooftops and distant tiny red lanterns. Preserve the EXACT dominant right-side 不良帅 masked character's identity, bronze demonic mask, conical straw hat, pose, engraved black antique-gold armor, black flowing cloak and vermilion trailing ribbon, his scale and rightmost placement. Preserve the moon and the existing architecture on the right. Left 60 percent is quiet very dark low-contrast atmospheric city and fog with gentle architectural depth, suited to overlay text; NO new characters, NO text, NO UI, NO border or frame whatsoever. Fill full 16:9 canvas edge to edge. Premium cinematic donghua painterly 3D art, restrained gold details, blue charcoal night, subdued cinnabar. Full-resolution standalone scenic illustration."
+    },
+    {
+      "path": "assets/q-buliangren-clean-plate.jpg",
+      "reference": "assets/q-buliangren-scene.jpg",
+      "prompt": "Use case: precise-object-edit. Create a precisely registered CLEAN BACKGROUND PLATE for animation from this image. Keep exactly the same 1672x941 canvas dimensions, camera, lighting, moon, sky, distant city, roof silhouettes and existing background locations. Remove ONLY the entire masked man on the right, including ALL his hat, hair, mask, armor, robes, ALL black trailing cloak fragments that reach leftwards into the center/lower picture, and ALL red ribbons/cloth strips. Inpaint his former region with the matching continuous ancient Chinese city rooftops, charcoal-blue mist and cloudy night, following existing perspective. Preserve every pixel of unaffected background as closely as possible, do not move or recompose the scene, do not add people, no lettering or UI. This is a clean plate used only beneath locally moving cloak fabric, so accurate background continuation behind the lower-center loose black cloak and center-right red ribbons is especially important. No character remnants, no new big focal object. Standalone landscape."
+    }
+  ],
+  "export": {
+    "width": 1672,
+    "height": 941,
+    "format": "JPEG",
+    "quality": 90
+  }
+}

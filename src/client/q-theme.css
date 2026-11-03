@@ -133,7 +133,7 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > [data-sl
    Focus strengthens that same edge instead of adding a second heavy frame. */
 body[data-qyt-q-theme] [data-composer-card] {
   border-radius: 22px;
-  background: var(--qyt-q-surface);
+  background: var(--qyt-q-composer-card-fill, var(--qyt-q-surface));
   box-shadow: 0 8px 28px -12px var(--qyt-q-shadow-float), 0 2px 6px -3px var(--qyt-q-shadow), 0 0 0 1px var(--dsw-alias-border-l2);
 }
 body[data-qyt-q-theme] [data-composer-card]:focus-within {

@@ -1,0 +1,171 @@
+/* Buliangren: parchment and antique gold by day, charcoal and cinnabar by night.
+   All surfaces, selection controls and reading masks use the common framework. */
+body[data-qyt-q-theme="buliangren"] {
+  --qyt-theme-art: url("__QYT_THEME_SCENE__");
+  --qyt-q-sea: #82602e;
+  --qyt-q-accent: #82602e;
+  --qyt-q-accent-hover: #68491f;
+  --qyt-q-sidebar-hover: #e9e2d7;
+  --qyt-q-sidebar-active-accent: #d4c3a6;
+  --qyt-q-sea-hover: #68491f;
+  --qyt-q-ink: #181c19;
+  --qyt-q-secondary: #242622;
+  --qyt-q-muted: #2b2c28;
+  --qyt-q-base: #f6f3ed;
+  --qyt-q-surface: #fdfbf6;
+  --qyt-q-raised: #eee8de;
+  --qyt-q-sidebar: #ede7dd;
+  --qyt-q-selected: #e2d8c8;
+  --qyt-q-line: #d6ccba;
+  --qyt-q-mist: rgba(163, 137, 90, .09);
+  --qyt-q-shadow: rgba(40, 33, 23, .10);
+  --qyt-q-shadow-float: rgba(40, 33, 23, .17);
+  --qyt-q-tab-fill: #e9dfce;
+  --qyt-q-tab-ink: #68491f;
+  --qyt-q-tab-line: rgba(98, 77, 45, .13);
+  --qyt-q-focus-line: rgba(130, 96, 46, .42);
+  --qyt-q-paper: rgba(246, 243, 237, .62);
+  --qyt-q-chrome: rgba(237, 231, 221, .86);
+  --qyt-q-sidebar-wash: rgba(237, 231, 221, .58);
+  --qyt-q-sidebar-art-position: left center;
+  --qyt-q-sidebar-caption: #181c19;
+  --qyt-q-hero-gold: #e6c58b;
+  --qyt-q-art-wash: rgba(246, 243, 237, .06);
+  --qyt-q-hero-wash: rgba(246, 243, 237, .04);
+  --qyt-q-composer-card-fill: var(--qyt-q-composer-fill);
+  --qyt-q-composer-fill: rgba(247, 242, 233, .88);
+  --qyt-q-composer-dock: rgba(247, 242, 233, .18);
+  --qyt-q-stat-fill: rgba(247, 242, 233, .94);
+  --qyt-q-task-fill: rgba(250, 246, 239, .98);
+  --qyt-q-task-line: rgba(130, 96, 46, .24);
+  --qyt-q-sky-glow: rgba(171, 157, 129, .12);
+  --qyt-q-sand-glow: rgba(157, 57, 53, .07);
+
+  --dsw-alias-bg-layer-1: #f0ebe2;
+  --dsw-alias-bg-module-platform: #eae3d7;
+  --dsw-alias-bg-overlay: #f3eee5;
+  --dsw-alias-border-l1: rgba(64, 50, 30, .06);
+  --dsw-alias-border-l2: rgba(64, 50, 30, .11);
+  --dsw-alias-border-l2-darkmode-thin: rgba(64, 50, 30, .10);
+  --dsw-alias-border-l3: rgba(64, 50, 30, .14);
+  --dsw-alias-border-l4: rgba(64, 50, 30, .20);
+  --dsw-alias-label-primary-dimmed: #514d44;
+  --dsw-alias-button-primary-dimmed: #e8dece;
+  --dsw-alias-button-floating-hover: #eee6d9;
+  --dsw-alias-button-ghost-active-border: #c6b28e;
+  --dsw-alias-button-ghost-active-fill: #e7dccb;
+  --dsw-alias-interactive-bg-hover: rgba(98, 77, 45, .06);
+  --dsw-alias-interactive-bg-hover-accent: rgba(98, 77, 45, .10);
+  --dsw-alias-interactive-bg-hover-solid: #e9e0d2;
+  --dsw-alias-interactive-bg-active: rgba(98, 77, 45, .12);
+  --dsw-alias-scrollbar-bg-l1: #d7cbb7;
+  --dsw-alias-scrollbar-bg-l2: #c8b89d;
+  --dsw-alias-scrollbar-hover-l1: #b5a080;
+  --dsw-alias-scrollbar-hover-l2: #a28b68;
+  --dsw-specific-selector: #e8ddcb;
+  --dsw-specific-bubble: #ece2d2;
+  --dsw-specific-bubble-highlight: #ddcdb3;
+  --dsw-specific-tip: #f2eadb;
+  --dsw-menu-surface-fill: rgba(252, 249, 243, .985);
+  --dsw-alias-menu-group-header-fill: rgba(242, 236, 226, .99);
+}
+
+body[data-qyt-q-theme="buliangren"][data-ds-dark-theme] {
+  --qyt-q-sea: #d1b078;
+  --qyt-q-accent: #d1b078;
+  --qyt-q-accent-hover: #ebca90;
+  --qyt-q-sidebar-hover: #2b2c2b;
+  --qyt-q-sidebar-active-accent: #5a4931;
+  --qyt-q-sea-hover: #ebca90;
+  --qyt-q-ink: #f2ede4;
+  --qyt-q-secondary: #e7e0d3;
+  --qyt-q-muted: #dfd7ca;
+  --qyt-q-base: #14181c;
+  --qyt-q-surface: #1d2227;
+  --qyt-q-raised: #282d32;
+  --qyt-q-sidebar: #191e23;
+  --qyt-q-selected: #37332b;
+  --qyt-q-line: #4c4941;
+  --qyt-q-mist: rgba(181, 158, 117, .04);
+  --qyt-q-shadow: rgba(0, 0, 0, .26);
+  --qyt-q-shadow-float: rgba(0, 0, 0, .40);
+  --qyt-q-tab-fill: #383126;
+  --qyt-q-tab-ink: #e6c68e;
+  --qyt-q-tab-line: rgba(222, 196, 150, .14);
+  --qyt-q-focus-line: rgba(209, 176, 120, .45);
+  --qyt-q-paper: rgba(20, 24, 28, .70);
+  --qyt-q-chrome: rgba(25, 30, 35, .86);
+  --qyt-q-sidebar-wash: rgba(17, 21, 25, .64);
+  --qyt-q-sidebar-caption: #f2ede4;
+  --qyt-q-art-wash: rgba(10, 14, 18, .09);
+  --qyt-q-hero-wash: rgba(10, 14, 18, .05);
+  --qyt-q-composer-fill: rgba(28, 33, 38, .86);
+  --qyt-q-composer-dock: rgba(20, 24, 28, .18);
+  --qyt-q-stat-fill: rgba(28, 33, 38, .94);
+  --qyt-q-task-fill: rgba(28, 33, 38, .98);
+  --qyt-q-task-line: rgba(209, 176, 120, .26);
+  --qyt-q-sky-glow: rgba(85, 105, 126, .07);
+  --qyt-q-sand-glow: rgba(157, 57, 53, .045);
+
+  --dsw-alias-bg-layer-1: #1a1f24;
+  --dsw-alias-bg-module-platform: #23292e;
+  --dsw-alias-bg-overlay: #282d32;
+  --dsw-alias-border-l1: rgba(225, 210, 184, .06);
+  --dsw-alias-border-l2: rgba(225, 210, 184, .11);
+  --dsw-alias-border-l2-darkmode-thin: rgba(225, 210, 184, .09);
+  --dsw-alias-border-l3: rgba(225, 210, 184, .15);
+  --dsw-alias-border-l4: rgba(225, 210, 184, .21);
+  --dsw-alias-label-primary-dimmed: #d6cfc2;
+  --dsw-alias-button-primary-fill: #d1b078;
+  --dsw-alias-button-primary-hover: #ebca90;
+  --dsw-alias-button-primary-dimmed: #3d362b;
+  /* The native send icon is white; cinnabar preserves its contrast. */
+  --dsw-alias-button-info-fill: #a63e3a;
+  --dsw-alias-button-info-hover: #92312e;
+  --dsw-alias-button-floating-hover: #33332f;
+  --dsw-alias-button-ghost-active-border: #796141;
+  --dsw-alias-button-ghost-active-fill: #393228;
+  --dsw-alias-button-ghost-active-hover: #4a3d2a;
+  --dsw-alias-interactive-bg-hover: rgba(228, 208, 173, .065);
+  --dsw-alias-interactive-bg-hover-accent: rgba(228, 208, 173, .11);
+  --dsw-alias-interactive-bg-hover-solid: #39362f;
+  --dsw-alias-interactive-bg-active: rgba(228, 208, 173, .13);
+  --dsw-alias-scrollbar-bg-l1: #464640;
+  --dsw-alias-scrollbar-bg-l2: #575448;
+  --dsw-alias-scrollbar-hover-l1: #716753;
+  --dsw-alias-scrollbar-hover-l2: #87765a;
+  --dsw-specific-selector: #393329;
+  --dsw-specific-bubble: #302d28;
+  --dsw-specific-bubble-highlight: #4a3d2b;
+  --dsw-specific-tip: #2b2c2b;
+  --dsw-menu-surface-fill: rgba(28, 33, 38, .985);
+  --dsw-alias-menu-group-header-fill: rgba(35, 40, 44, .99);
+}
+
+/* The hero and its workspace / mode / Git row sit directly on dark artwork
+   even in light appearance. Scope their gold tokens to that content only;
+   input cards and portal menus retain the normal reading palette. */
+body[data-qyt-q-theme="buliangren"] [data-slot="main.conversation"] > [data-phase="hero"] [data-conversation-content] {
+  --dsw-alias-label-primary: var(--qyt-q-hero-gold);
+  --dsw-alias-label-secondary: var(--qyt-q-hero-gold);
+  --dsw-alias-label-tertiary: var(--qyt-q-hero-gold);
+  --dsw-alias-label-caption: var(--qyt-q-hero-gold);
+  --dsw-alias-brand-primary: var(--qyt-q-hero-gold);
+  --dsw-alias-brand-text: var(--qyt-q-hero-gold);
+  color: var(--qyt-q-hero-gold);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .85);
+}
+body[data-qyt-q-theme="buliangren"] [data-slot="main.conversation"] > [data-phase="hero"] [data-composer-card] {
+  --dsw-alias-label-primary: var(--qyt-q-ink);
+  --dsw-alias-label-secondary: var(--qyt-q-secondary);
+  --dsw-alias-label-tertiary: var(--qyt-q-muted);
+  --dsw-alias-label-caption: var(--qyt-q-muted);
+  --dsw-alias-brand-primary: var(--qyt-q-ink);
+  --dsw-alias-brand-text: var(--qyt-q-ink);
+  color: var(--qyt-q-ink);
+  text-shadow: none;
+}
+@media (forced-colors: active) {
+  body[data-qyt-q-theme="buliangren"] { --qyt-q-hero-gold: CanvasText; }
+  body[data-qyt-q-theme="buliangren"] [data-slot="main.conversation"] > [data-phase="hero"] [data-conversation-content] { text-shadow: none; }
+}

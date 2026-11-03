@@ -314,7 +314,7 @@ function contrast(a, b) {
 const readingInk = ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']
 
 function forEachThemeAppearance(t, check) {
-  for (const themeId of ['ocean', 'begonia', 'moonfrost']) {
+  for (const themeId of ['ocean', 'begonia', 'moonfrost', 'buliangren']) {
     for (const dark of [false, true]) {
       const f = fixture(t, { dark, sharedForm: formFixture({
         qThemeEnabled: true, qThemeId: themeId,
@@ -326,7 +326,7 @@ function forEachThemeAppearance(t, check) {
   }
 }
 
-test('Ocean, Begonia and Moonfrost keep small text readable on base, raised, sidebar and selected surfaces in both schemes', t => {
+test('Preset themes keep small text readable on base, raised, sidebar and selected surfaces in both schemes', t => {
   forEachThemeAppearance(t, (f, label) => {
     for (const ink of readingInk) {
       for (const surface of ['--qyt-q-base', '--qyt-q-surface', '--qyt-q-raised', '--qyt-q-sidebar', '--qyt-q-selected']) {
@@ -335,7 +335,7 @@ test('Ocean, Begonia and Moonfrost keep small text readable on base, raised, sid
     }
     assert.ok(contrast(f.token('--qyt-q-tab-ink'), f.token('--qyt-q-tab-fill')) >= 4.5, `${label} native tab label`)
   })
-  for (const fill of ['#116d83', '#bc353c', '#b32c3a', '#456493']) {
+  for (const fill of ['#116d83', '#bc353c', '#b32c3a', '#456493', '#82602e', '#a63e3a']) {
     assert.ok(contrast(fill, '#ffffff') >= 4.5, `${fill} send button keeps its fixed white icon readable`)
   }
 })
@@ -359,7 +359,7 @@ function allRules(rules) {
 
 test('preset themes embed their own illustration and withdraw it without external image requests', t => {
   const illustrations = []
-  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost']) {
+  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren']) {
     const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
     const cleanup = f.install()
     const installed = f.styles()[0].textContent
@@ -390,7 +390,7 @@ test('the approved illustrated sidebar keeps its own art opacity and selected-ro
   assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-accent)')
 })
 
-test('Ocean, Begonia and Moonfrost keep reading ink legible over the darkest and lightest possible illustration pixels', t => {
+test('Preset themes keep reading ink legible over the darkest and lightest possible illustration pixels', t => {
   forEachThemeAppearance(t, (f, label) => {
     const match = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([.\d]+)\)$/u.exec(f.token('--qyt-q-paper'))
     assert.ok(match, `${label} defines translucent reading paper`)
@@ -656,5 +656,28 @@ test('Sunset is a separate preset with persistent static mode and its own palett
   f.doc.body.setAttribute('data-ds-dark-theme', '')
   assert.equal(f.token('--qyt-q-accent'), '#f4b393')
   stop()
+  assert.equal(f.styles().length, 0)
+})
+
+test('Buliangren keeps its own static preference across switches and shares the motion lifecycle', t => {
+  const scene = motionFixture('buliangren')
+  const preferences = { qThemeEnabled: true, qThemeId: 'buliangren', qThemeSettings: { buliangren: { motion: 'static' }, moonfrost: { motion: 'static' } } }
+  const f = fixture(t, { sharedForm: formFixture(preferences), landscapeScene: scene })
+  const stop = f.install(), style = f.styles()[0]
+  assert.equal(scene.installs, 0)
+  assert.equal(f.token('--qyt-q-accent'), '#82602e')
+  f.doc.body.setAttribute('data-ds-dark-theme', '')
+  assert.equal(f.token('--qyt-q-accent'), '#d1b078')
+  f.update({ ...preferences, qThemeSettings: { ...preferences.qThemeSettings, buliangren: { motion: 'dynamic' } } })
+  assert.equal(scene.active, 1)
+  assert.equal(f.styles()[0], style)
+  f.update({ ...preferences, qThemeId: 'moonfrost' })
+  assert.equal(scene.active, 0)
+  f.update(preferences)
+  assert.equal(f.doc.body.getAttribute('data-qyt-q-theme'), 'buliangren')
+  assert.equal(scene.installs, 1, 'returning to the saved static choice does not start animation')
+  assert.equal(f.styles()[0], style)
+  stop()
+  assert.equal(scene.cleanups, 1)
   assert.equal(f.styles().length, 0)
 })
