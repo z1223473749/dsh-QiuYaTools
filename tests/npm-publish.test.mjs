@@ -13,6 +13,13 @@ import { readDistributionArchive } from '../scripts/package-native.mjs'
 import { nativeEntries, nativeNames, rootPackage, tarball as distributionTarball } from './fixtures/native-packaging.mjs'
 
 const exec = promisify(execFile)
+
+test('npm publication can upload the native readiness marker after confirming registry bytes', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+  const publisher = workflow.slice(workflow.indexOf('\n  publish-npm:'))
+  assert.match(publisher, /permissions:\s*(?:#[^\n]*\n\s*)*contents: write\s+id-token: write/u)
+})
+
 const sha = 'a'.repeat(40)
 const pkg = {
   name: 'dsh-qiuya-tools', version: '0.5.2', type: 'module',

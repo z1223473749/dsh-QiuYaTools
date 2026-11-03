@@ -105,7 +105,8 @@ jobs:
       group: npm-publish
       cancel-in-progress: false
     permissions:
-      contents: read
+      # The publisher uploads the readiness marker after registry confirmation.
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
