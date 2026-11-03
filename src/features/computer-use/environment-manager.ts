@@ -296,6 +296,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
       return result
     } finally { this.authorizationStarts.delete(sessionId) }
   }
+  approvePhysicalInput(sessionId: string, expectedEpoch: number, failedActionId: string) { return this.forSession(sessionId).service.approvePhysicalInput(sessionId, expectedEpoch, failedActionId) }
   observe(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.observe(sessionId, signal) }
   preview(sessionId: string, signal?: AbortSignal) { return this.forSession(sessionId).service.preview(sessionId, signal) }
   act(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal) { return this.forSession(sessionId).service.act(sessionId, request, signal) }

@@ -14,7 +14,7 @@ async function fixture(t, options = {}) {
   const listeners = new Set()
   const driver = {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-    async status() { return { available: true, platform: 'win32' } },
+    async status() { return { available: true, platform: 'win32', capabilities: { virtualInput: true } } },
     async targets() { return [target] },
     async observe(targetId) { return { targetId, frameId: `frame-${++sequence}`, imageBase64: '/9j/2Q==', mediaType: 'image/jpeg', width: 100, height: 100, elements: 'button', geometry: { x: 0, y: 0, width: 100, height: 100, scale: 1 } } },
     async lease(epoch) { assert.ok(epoch > Math.max(0, ...leased)); leased.push(epoch); active = epoch },
@@ -177,7 +177,7 @@ test('late older lease response cannot replace a newer client heartbeat/disposal
     const input = JSON.parse(options.body)
     if (input.op === 'release') releases.push(input.payload.epoch)
     if (input.op === 'lease' && input.payload.epoch === 11) { first = input; return delayed.promise }
-    return Response.json({ version: 1, requestId: input.requestId, ok: true, result: {} })
+    return Response.json({ version: 1, requestId: input.requestId, ok: true, result: input.op === 'status' ? { capabilities: { virtualInput: true } } : {} })
   } })
   const older = remote.lease(11), rejected = assert.rejects(older, { code: 'CONTROL_CHANGED' })
   await remote.lease(12)
@@ -252,4 +252,20 @@ test('a pending remote administrator decision prevents another input lease',asyn
  const other=f.remote('other-owner')
  try{await assert.rejects(other.lease(1),{code:'elevation-pending'})}finally{decision.resolve()}
  await asking;await other.lease(2)
+})
+
+test('paired legacy executor is rejected before it acquires any native input lease', async t => {
+  const f = await fixture(t), remote = f.remote('legacy-check')
+  f.driver.status = async () => ({ available: true })
+  await assert.rejects(remote.lease(1), { code: 'VIRTUAL_INPUT_UPGRADE_REQUIRED' })
+  assert.deepEqual(f.leased, [])
+})
+
+test('paired transport preserves explicit one-action physical authority and defaults to virtual', async t => {
+  const f = await fixture(t), remote = f.remote('virtual-check'), authority = []
+  f.driver.act = async (_epoch, _targetId, _action, _signal, privateOptions) => { authority.push(privateOptions); return {} }
+  await remote.lease(1)
+  await remote.act(1, 'window-1', { kind: 'click', x: 1, y: 1 })
+  await remote.act(1, 'window-1', { kind: 'click', x: 1, y: 1 }, undefined, { physicalInputApproved: true })
+  assert.deepEqual(authority, [{ physicalInputApproved: false }, { physicalInputApproved: true }])
 })

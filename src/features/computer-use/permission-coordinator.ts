@@ -14,17 +14,18 @@ export interface ComputerEntryBackend {
   authorizationGeneration(sessionId: string): number
   authorizationStatus(sessionId: string, signal?: AbortSignal): Promise<ComputerStatus>
   launchApplicationFor?(sessionId: string, appId: string, signal?: AbortSignal): Promise<unknown>
+  approvePhysicalInput?(sessionId: string, expectedEpoch: number, failedActionId: string): ComputerSessionSnapshot
   authorizationStart(sessionId: string, targetId: string, options: { allowOnce: boolean; signal: AbortSignal; expectedGeneration: number; expectedTarget: Pick<NativeTarget, 'id' | 'appId' | 'pid'> }): Promise<ComputerSessionSnapshot>
 }
 export interface ComputerPermissionPreflight { available: boolean; platform?: string; mode?: string; permissionOwner?: ComputerPermissionOwner; permissions: Record<string, boolean>; capabilities: Record<string, boolean>; message?: string }
 export interface ComputerPendingPermission {
-  requestId: string; requestVersion: 1; sessionId: string; taskId?: string; appId: string; appName: string
+  scope?: 'physicalInput'; targetTitle?: string; requestId: string; requestVersion: 1; sessionId: string; taskId?: string; appId: string; appName: string
   reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight: ComputerPermissionPreflight
 }
 interface Binding { sessionId: string; agent: NonNullable<ComputerEntryExecution['agent']>; generation: number }
 interface Candidate extends Binding { id: string; application: NativeApplication; expiresAt: number; preflight: ComputerPermissionPreflight }
 interface Pending extends Binding {
-  card: ComputerPendingPermission; candidate: Candidate; controller: AbortController
+  physical?: { epoch: number; actionId: string; targetId: string; pid: number }; card: ComputerPendingPermission; candidate: Candidate; controller: AbortController
   resolve(value: ComputerSessionSnapshot): void; reject(error: unknown): void
   cleanup(): void; deciding?: Promise<DecisionResult>; decidingChoice?: string
 }
@@ -171,6 +172,45 @@ export class ComputerPermissionCoordinator {
     this.calls.set(key, { generation: binding.generation, candidateId, agent: binding.agent, promise, expiresAt: this.now() + 180_000 })
     return promise
   }
+  async requestPhysicalInput(exec: ComputerEntryExecution, reason: string): Promise<ComputerSessionSnapshot> {
+    const binding = this.bind(exec); this.sweep(); this.check(binding, exec.signal)
+    const current = this.options.backend.get(binding.sessionId)
+    if (!current?.target || current.state !== 'ready' || current.error?.code !== 'VIRTUAL_INPUT_UNSUPPORTED' || current.lastAction?.phase !== 'failed') throw failure('VIRTUAL_INPUT_REQUIRED', '请先尝试虚拟输入，仅明确不支持的操作可以申请真实鼠标。')
+    if (typeof reason !== 'string' || !reason.trim() || reason.length > 600) throw failure('INVALID_REQUEST', '请说明使用真实鼠标的原因。')
+    if (!this.options.backend.approvePhysicalInput) throw failure('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新电脑操控服务。')
+    const key = `${binding.sessionId}\0${exec.callId}`, candidateId = `physical:${current.epoch}:${current.lastAction.actionId}`
+    const prior = this.calls.get(key)
+    if (prior) {
+      if (prior.agent !== binding.agent || prior.generation !== binding.generation || prior.candidateId !== candidateId) throw failure('CALL_REPLAY_MISMATCH')
+      return prior.promise
+    }
+    if (this.options.canRequest?.(binding.agent) === false) throw failure('APPROVAL_DISABLED')
+    if (this.calls.size >= 128 || this.requests.size >= 32) throw failure('REQUEST_LIMIT')
+    if ([...this.requests.values()].some(item => item.sessionId === binding.sessionId)) throw failure('REQUEST_PENDING')
+    const status = await this.options.backend.authorizationStatus(binding.sessionId, exec.signal); this.check(binding, exec.signal)
+    const raced = this.calls.get(key)
+    if (raced) { if (raced.agent !== binding.agent || raced.generation !== binding.generation || raced.candidateId !== candidateId) throw failure('CALL_REPLAY_MISMATCH'); return raced.promise }
+    if ([...this.requests.values()].some(item => item.sessionId === binding.sessionId)) throw failure('REQUEST_PENDING')
+    const requestId = randomUUID(), controller = new AbortController()
+    let resolve!: Pending['resolve'], reject!: Pending['reject']
+    const promise = new Promise<ComputerSessionSnapshot>((yes, no) => { resolve = yes; reject = no }); void promise.catch(() => {})
+    const preflight = permissionProjection(status), application = { appId: current.target.appId, name: safeName(current.target.appId), running: true }
+    const aborted = () => this.cancelRequest(binding.sessionId, requestId, 1)
+    const pending: Pending = { ...binding, physical: { epoch: current.epoch, actionId: current.lastAction.actionId, targetId: current.target.id, pid: current.target.pid },
+      candidate: { ...binding, id: candidateId, application, expiresAt: this.now() + 120_000, preflight }, controller, resolve, reject,
+      card: { scope: 'physicalInput', targetTitle: current.target.title, requestId, requestVersion: 1, sessionId: binding.agent.id, ...(binding.sessionId === binding.agent.id ? {} : { taskId: binding.sessionId }), appId: application.appId, appName: application.name, reason: reason.trim(), createdAt: this.now(), expiresAt: this.now() + (this.options.requestTtlMs ?? 120_000), state: 'pending', preflight },
+      cleanup: () => exec.signal.removeEventListener('abort', aborted) }
+    this.checkPhysical(pending)
+    this.requests.set(requestId, pending); exec.signal.addEventListener('abort', aborted, { once: true })
+    this.calls.set(key, { generation: binding.generation, candidateId, agent: binding.agent, promise, expiresAt: this.now() + 180_000 })
+    if (exec.signal.aborted) aborted()
+    return promise
+  }
+  private checkPhysical(pending: Pending): void {
+    if (!pending.physical) return
+    const current = this.options.backend.get(pending.sessionId), expected = pending.physical
+    if (current?.state !== 'ready' || current.epoch !== expected.epoch || current.target?.id !== expected.targetId || current.target.pid !== expected.pid || current.error?.code !== 'VIRTUAL_INPUT_UNSUPPORTED' || current.lastAction?.actionId !== expected.actionId) throw failure('REQUEST_STALE', '目标或操作状态已变化，真实鼠标请求已失效。')
+  }
   private hasSessionGrant(sessionId: string, appId: string): boolean {
     const current = this.options.backend.get(sessionId)
     return !!current && ['ready', 'running'].includes(current.state) && current.target?.appId === appId
@@ -238,7 +278,8 @@ export class ComputerPermissionCoordinator {
     const pending = this.requests.get(requestId)
     if (!pending || pending.sessionId !== sessionId) throw failure('REQUEST_STALE', '授权请求已过期或不属于此聊天。')
     if (pending.deciding) { if (pending.decidingChoice !== decision) throw failure('REQUEST_STALE', '授权决定已在处理中。'); return pending.deciding }
-    if (decision === 'deny') return this.finish(pending, { requestId, state: 'denied', decision: 'deny' }, failure('APP_DENIED', '用户拒绝了应用操控授权。'))
+    if (pending.physical && decision === 'always') throw failure('INVALID_REQUEST', '真实鼠标仅允许本次动作，不支持持续授权。')
+    if (decision === 'deny') return this.finish(pending, { requestId, state: 'denied', decision: 'deny' }, failure(pending.physical ? 'PHYSICAL_INPUT_DENIED' : 'APP_DENIED', pending.physical ? '用户拒绝了真实鼠标授权。' : '用户拒绝了应用操控授权。'))
     pending.decidingChoice = String(decision)
     pending.deciding = (async () => {
       try {
@@ -247,6 +288,11 @@ export class ComputerPermissionCoordinator {
         await this.assertPreflight(pending, pending.controller.signal)
         this.check(pending, pending.controller.signal)
         if (this.options.canRequest?.(pending.agent) === false) throw failure('APPROVAL_DISABLED', '当前聊天已禁止新的交互授权。')
+        this.checkPhysical(pending)
+        if (pending.physical) {
+          const session = this.options.backend.approvePhysicalInput!(pending.sessionId, pending.physical.epoch, pending.physical.actionId)
+          return this.finish(pending, { requestId, state: 'approved', decision: 'once', session })
+        }
         if (decision === 'always') {
           await this.options.backend.setAppAllowed(pending.candidate.application.appId, true)
           this.check(pending, pending.controller.signal)
@@ -296,7 +342,7 @@ export class ComputerPermissionCoordinator {
     for (const [id, call] of this.calls) if (call.expiresAt <= now) this.calls.delete(id)
     for (const [id, decision] of this.decisions) if (decision.expiresAt <= now) this.decisions.delete(id)
     for (const item of [...this.requests.values()]) {
-      try { this.check(item, item.controller.signal); if (item.card.expiresAt <= now) throw failure('REQUEST_EXPIRED', '授权请求已超时，请重新申请。') }
+      try { this.check(item, item.controller.signal); this.checkPhysical(item); if (item.card.expiresAt <= now) throw failure('REQUEST_EXPIRED', '授权请求已超时，请重新申请。') }
       catch (error) { item.controller.abort(error); this.requests.delete(item.card.requestId); item.cleanup(); item.reject(error) }
     }
   }

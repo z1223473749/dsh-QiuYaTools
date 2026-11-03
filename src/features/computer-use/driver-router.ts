@@ -116,10 +116,10 @@ export class ComputerDriverRouter implements DeviceDriver {
   preview(targetId: string, signal?: AbortSignal) { this.assertLive(); return this.current.preview ? this.current.preview(targetId, signal) : this.current.observe(targetId, signal) }
   lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { this.assertLive(); return this.current.lease(epoch, signal, options) }
   release(epoch: number, signal?: AbortSignal) { this.assertLive(); return this.current.release(epoch, signal) }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) {
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, authority?: import('./contract.ts').ComputerInputAuthority) {
     this.assertLive()
     if (this.mode !== 'browser' && ['navigate', 'openTab', 'closeTab', 'selectorClick', 'selectorType'].includes(action.kind)) throw new ComputerError('BROWSER_ACTION_UNSUPPORTED', '浏览器专用操作需要先连接浏览器通道。')
-    return this.current.act(epoch, targetId, action, signal)
+    return this.current.act(epoch, targetId, action, signal, authority)
   }
   async resolveActionTarget(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal) {
     this.assertLive()

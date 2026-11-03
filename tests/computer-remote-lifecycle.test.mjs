@@ -13,7 +13,7 @@ async function within(promise, milliseconds = 2000) {
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Expected heartbeat was not dispatched')), milliseconds) })]) }
   finally { clearTimeout(timer) }
 }
-const reply = request => Response.json({ version: 1, requestId: request.requestId, ok: true, result: {} })
+const reply = request => Response.json({ version: 1, requestId: request.requestId, ok: true, result: request.op === 'status' ? { capabilities: { virtualInput: true } } : {} })
 function remote(handle, extra = {}) { return new RemoteComputerDriver({ endpoint: 'http://127.0.0.1:1', token, heartbeatMs: 10_000, fetch: async (_url, options) => handle(JSON.parse(options.body), options), ...extra }) }
 
 test('failed release remains owned and dispose retries the actual epoch instead of acknowledging cleanup', async () => {

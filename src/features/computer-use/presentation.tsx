@@ -2,7 +2,7 @@ import React from 'react'
 import type { ComputerPermissionOwner } from './contract.ts'
 
 export const computerStateLabels: Record<string, string> = { idle: '等待任务', awaitingPermission: '等待授权', ready: '已就绪', running: '正在操作', paused: '已暂停', humanControl: '你正在接管', resuming: '正在继续', stopping: '正在停止', stopped: '已停止', faulted: '需要处理', disconnected: '连接断开', connecting: '正在连接', pausing: '正在暂停', handingOver: '正在接管' }
-export interface ComputerApprovalRequest { requestId: string; requestVersion: number; sessionId: string; taskId?: string; appId: string; appName: string; targetTitle?: string; reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight?: ComputerNativeView }
+export interface ComputerApprovalRequest { scope?: 'physicalInput'; requestId: string; requestVersion: number; sessionId: string; taskId?: string; appId: string; appName: string; targetTitle?: string; reason: string; createdAt: number; expiresAt: number; state: 'pending'; preflight?: ComputerNativeView }
 export type { NativeApplication } from './contract.ts'
 export interface ComputerNativeView { available?: boolean; platform?: string; permissions?: Record<string, boolean>; permissionOwner?: ComputerPermissionOwner | null; message?: string; mode?: 'local' | 'remote' | 'browser' }
 export type SystemPermissionKind = 'screenRecording' | 'accessibility' | 'inputMonitoring' | 'administrator'
@@ -38,11 +38,12 @@ export function SystemPermissionNotice({ native, busy, full = false, onOpenSetti
 export type ComputerDecision = 'once' | 'always' | 'deny'
 export function ComputerIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8 21h8M12 17v4M7 9h4M7 12h7"/></svg> }
 export function ComputerApprovalCard({ request, busy, allowDisabled = false, onDecision }: { request: ComputerApprovalRequest; busy: boolean; allowDisabled?: boolean; onDecision(decision: ComputerDecision): void }) {
-  const expired = request.expiresAt <= Date.now()
-  return <section className="qyt-computer-approval" aria-label="电脑操作授权" data-qyt-computer-request={request.requestId}>
-    <div className="qyt-computer-card-heading"><span className="qyt-feature-icon"><ComputerIcon/></span><div><strong>{request.appName || '应用请求授权'}</strong><span className="qyt-computer-caption">{expired ? '请求已过期' : '需要你的允许'}</span></div></div>
+  const expired = request.expiresAt <= Date.now(), physical = request.scope === 'physicalInput'
+  return <section className="qyt-computer-approval" aria-label={physical ? "真实鼠标授权" : "电脑操作授权"} data-qyt-computer-request={request.requestId}>
+    <div className="qyt-computer-card-heading"><span className="qyt-feature-icon"><ComputerIcon/></span><div><strong>{request.appName || '应用请求授权'}</strong><span className="qyt-computer-caption">{expired ? '请求已过期' : physical ? '申请使用真实鼠标' : '需要你的允许'}</span></div></div>
     {request.targetTitle && <p className="qyt-computer-request-target">{request.targetTitle}</p>}
     <p>{expired ? '请让模型重新请求本次操作。' : request.reason || '模型需要查看并操作这个应用，以完成当前聊天的任务。'}</p>
-    {!expired && <><div className="qyt-computer-actions"><button type="button" className="qyt-button qyt-button-primary" disabled={busy || allowDisabled} onClick={() => onDecision('once')}>允许一次</button><button type="button" className="qyt-button" disabled={busy || allowDisabled} onClick={() => onDecision('always')}>始终允许</button><button type="button" className="qyt-button qyt-computer-button-quiet" disabled={busy} onClick={() => onDecision('deny')}>拒绝</button></div><p className="qyt-computer-caption">一次授权仅用于本次任务；持续授权可在电脑操控设置中撤销。</p></>}
+    {physical && <p role="note">当前动作无法使用虚拟输入。允许后将占用系统鼠标和前台焦点，可能打断你正在进行的操作；仅执行当前目标的这一次动作，完成后恢复虚拟输入。</p>}
+    {!expired && <><div className="qyt-computer-actions"><button type="button" className="qyt-button qyt-button-primary" disabled={busy || allowDisabled} onClick={() => onDecision('once')}>{physical ? '允许本次真实鼠标操作' : '允许一次'}</button>{!physical && <button type="button" className="qyt-button" disabled={busy || allowDisabled} onClick={() => onDecision('always')}>始终允许</button>}<button type="button" className="qyt-button qyt-computer-button-quiet" disabled={busy} onClick={() => onDecision('deny')}>拒绝</button></div><p className="qyt-computer-caption">{physical ? '授权仅用于刚才不支持虚拟输入的动作；暂停、停止或切换目标会使授权失效。' : '应用授权默认使用虚拟输入；一次授权仅用于本次任务，持续授权可在设置中撤销。'}</p></>}
   </section>
 }

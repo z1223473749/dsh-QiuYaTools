@@ -24,6 +24,8 @@ internal sealed class ComputerDriver : IDisposable
     private readonly Func<Native.INPUT[], uint> writeInputs;
     private readonly DesktopLeaseGuard? desktopLease;
     private readonly AiCursorOverlay aiCursor;
+    private readonly VirtualInput virtualInput = new();
+    private volatile bool physicalInputActive;
     private readonly HashSet<ushort> journalUnicodeSuperset = new();
     private long epoch;
     private long lastEpoch;
@@ -72,6 +74,7 @@ internal sealed class ComputerDriver : IDisposable
     }
     private void OnPhysicalInput(bool ownWindow, bool emergency)
     {
+        if (!physicalInputActive && leaseActor != "human") return;
         // A low-level hook must never wait for the input lock, SendInput, the journal or stdout.
         if (Volatile.Read(ref disposed) || (ownWindow && !emergency && actionGate.CurrentCount != 0)) return;
         if (Volatile.Read(ref epoch) == 0 && Volatile.Read(ref leaseAcquiring) == 0) return;
@@ -90,7 +93,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive && ProcessPermissions.SessionActive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = !ProcessPermissions.SessionActive ? "The target desktop session is locked or inactive. Restore its interactive session before control." : Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = false, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive && ProcessPermissions.SessionActive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = !ProcessPermissions.SessionActive ? "The target desktop session is locked or inactive. Restore its interactive session before control." : Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = true, virtualInput = true, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
     internal void RequireIdleForPermissionChange()
     {
         lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
@@ -242,7 +245,7 @@ internal sealed class ComputerDriver : IDisposable
         if (after.Rect != target.Rect || Native.GetDpiForWindow(target.Handle) != dpi) throw new NativeFailure("geometry-changed", "Target geometry or scale changed while observing");
         observations[targetId] = (target.Rect, dpi);
         var cursorPosition = Cursor.Position;
-        return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, aiCursor = aiCursor.Snapshot(targetId), targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
+        return new { cursor = new { x = cursorPosition.X - after.Rect.X, y = cursorPosition.Y - after.Rect.Y, visible = after.Rect.Contains(cursorPosition) }, aiCursor = virtualInput.Snapshot(targetId, after.Rect) ?? aiCursor.Snapshot(targetId), targetId, frameId = Guid.NewGuid().ToString("N"), imageBase64 = Convert.ToBase64String(image), mediaType = "image/jpeg", width = target.Rect.Width, height = target.Rect.Height, elements, geometry = new { x = target.Rect.X, y = target.Rect.Y, width = target.Rect.Width, height = target.Rect.Height, scale = Native.GetDpiForWindow(target.Handle) / 96.0 } };
     }
     private static byte[] Capture((IntPtr Handle, Rectangle Rect) target)
     {
@@ -327,15 +330,15 @@ internal sealed class ComputerDriver : IDisposable
         lock (inputLock) {
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
             if (desktopLease != null && !ProcessPermissions.SessionActive) throw new NativeFailure("session-unavailable", "The target Windows desktop session is not active");
-        if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
+        if (actor == "human" && !physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; retire this companion before reconnecting");
             if (Volatile.Read(ref physicalCleanupPending) != 0) throw new NativeFailure("human-input-pending", "Wait for interrupted input to finish releasing before reconnecting");
-            RefreshForeground(true); foregroundHandoff?.Core.BeforeLease(requested);
+            RefreshForeground(true);
             if (disposed || requested <= lastEpoch) throw new NativeFailure("stale-epoch", "Lease epoch is stale");
             Volatile.Write(ref leaseAcquiring, 1);
             var generation = Volatile.Read(ref physicalGeneration);
             try {
                 aiCursor.Revoke(epoch);
-                ClearHeld(); desktopLease?.Release(); desktopLease?.Acquire(); Interlocked.Exchange(ref epoch, requested);
+                ClearHeld(); desktopLease?.Release(); if (actor == "human") desktopLease?.Acquire(); Interlocked.Exchange(ref epoch, requested);
                 if (Volatile.Read(ref physicalCleanupPending) != 0 || Volatile.Read(ref physicalGeneration) != generation) {
                     Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release();
                     throw new NativeFailure("human-input-pending", "Physical input interrupted acquisition; reconnect after release");
@@ -371,7 +374,7 @@ internal sealed class ComputerDriver : IDisposable
     {
         if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
         if (disposed || Volatile.Read(ref epoch) == 0 || Volatile.Read(ref epoch) != requested) throw new NativeFailure("stale-epoch", "Input lease has been revoked");
-        if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; input has stopped");
+        if (physicalInputActive && !physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input detection is unavailable; input has stopped");
     }
     private void Send(long requested, params Native.INPUT[] inputs)
     {
@@ -383,9 +386,22 @@ internal sealed class ComputerDriver : IDisposable
     internal async Task<object> Act(JsonElement request)
     {
         if (!actionGate.Wait(0)) throw new NativeFailure("input-busy", "Another input action is still running");
-        try { return await ActCore(request); }
+        var physical = request.TryGetProperty("physicalInputApproved", out var approved) && approved.ValueKind == JsonValueKind.True || leaseActor == "human";
+        try {
+            if (physical) {
+                lock (inputLock) {
+                    Check(Epoch(request));
+                    if (!physicalInput.Available) throw new NativeFailure("human-monitor-unavailable", "Physical input monitoring is required");
+                    virtualInput.Hide(); physicalInputActive = true; desktopLease?.Acquire();
+                }
+            }
+            return await ActCore(request);
+        }
         catch { lock (inputLock) { foregroundHandoff?.Core.ActionFailed(); } if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.Hide(requested); throw; }
-        finally { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.OperationEnd(requested); actionGate.Release(); }
+        finally { if (request.TryGetProperty("epoch", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var requested)) aiCursor.OperationEnd(requested);
+            try { if (physical) lock (inputLock) { ClearHeld(); aiCursor.Hide(Epoch(request)); desktopLease?.Release(); } }
+            finally { physicalInputActive = false; actionGate.Release(); }
+        }
     }
     private async Task<object> ActCore(JsonElement request)
     {
@@ -402,6 +418,16 @@ internal sealed class ComputerDriver : IDisposable
         lock (inputLock) { Check(requested); }
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
         if (observed.Rect != target.Rect || observed.Dpi != Native.GetDpiForWindow(target.Handle)) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
+        if (!physicalInputActive) {
+            void CheckVirtual() {
+                Check(requested);
+                var current = Target(targetId);
+                if (current.Rect != observed.Rect || Native.GetDpiForWindow(current.Handle) != observed.Dpi) throw new NativeFailure("geometry-changed", "Target moved; observe again");
+            }
+            return await Task.Run(() => virtualInput.Act(targetId, target.Handle, target.Rect, action,
+                () => { lock (inputLock) { CheckVirtual(); } },
+                operation => { lock (inputLock) { CheckVirtual(); operation(); } }));
+        }
         var trajectory = new List<Point>();
         if (kind == "moveRelative") {
             var dx = Program.Number(action, "deltaX"); var dy = Program.Number(action, "deltaY");
@@ -419,6 +445,7 @@ internal sealed class ComputerDriver : IDisposable
             Check(requested); RefreshForeground(true);
             var ticket = request.TryGetProperty("foregroundTicket", out _) ? ForegroundRecord<ForegroundActionTicket>(request, "foregroundTicket") : null;
             if (foregroundHandoff == null && ticket != null) throw new NativeFailure("foreground-handoff-unavailable", "Foreground handoff is unavailable for this companion");
+            foregroundHandoff?.Core.BeforeLease(requested);
             foregroundHandoff?.Core.Consume(ticket, requested, targetId, GeometryDigest(observed.Rect), ForegroundHandoff.Hash(action.GetRawText()));
         }
         BrowserWindow.UncoverPointer(trajectory);

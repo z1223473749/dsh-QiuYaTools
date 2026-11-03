@@ -13,6 +13,7 @@ import Security
         precondition(AICursorOverlay.rasterPoint(scaledPoint, geometry: scaled) == CGPoint(x: 800, y: 400), "AI cursor uses screenshot scale and negative display coordinates")
         let edge = AICursorOverlay.clippedFrame(at: CGPoint(x: -1279, y: 101), target: geometry.frame)
         precondition(geometry.frame.contains(edge), "AI cursor and glow stay inside the authorized target")
+        try virtualLeaseDoesNotOwnDesktop()
         try approvedSmallGlyph()
         try await cursorSuppressionStateMachine()
         try exactWindowReadiness()
@@ -226,6 +227,19 @@ import Security
         rejected([a,b],[FocusWindowState(windowId:11,pid:99,frame:frame.offsetBy(dx:0.1,dy:0)),b])
         try check([component,a,b],[component,a]) // Behind-selected order does not own its input.
         precondition(FocusInputRoute.pointer(CGPoint(x:200,y:300)).kind=="pointer" && FocusInputRoute.keyboard.kind=="keyboard")
+    }
+
+    @MainActor private static func virtualLeaseDoesNotOwnDesktop() throws {
+        let input = NativeInput()
+        try input.lease(1, actor: .ai)
+        precondition(input.inputState["ownerId"] is NSNull, "A virtual AI lease never owns or locks desktop input")
+        precondition(!input.physicalInputActive && !input.busy)
+        input.humanInputDetected()
+        precondition(input.fence.active == 1, "Ordinary human input does not revoke background virtual input")
+        precondition(input.inputState["ownerId"] is NSNull)
+        try input.release(1)
+        precondition(input.fence.active == nil)
+        print("Virtual input lease checks passed: no desktop owner, no physical action, human input leaves virtual lease active")
     }
 
     @MainActor private static func exactPointerRouting() throws {

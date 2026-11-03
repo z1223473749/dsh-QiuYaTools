@@ -62,6 +62,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     authorizationStatus: (_id, signal) => legacyService!.status(signal),
     authorizationGeneration: id => legacyGenerations.get(id) ?? 0,
     ...(driver?.launchApplication ? { launchApplicationFor: (_id: string, appId: string, signal?: AbortSignal) => driver.launchApplication!(appId, signal) } : {}),
+    approvePhysicalInput: (id, epoch, failedActionId) => legacyService!.approvePhysicalInput(id, epoch, failedActionId),
     authorizationStart: async (id, targetId, options) => {
       options.signal.throwIfAborted()
       if ((legacyGenerations.get(id) ?? 0) !== options.expectedGeneration) throw new ComputerError('REQUEST_STALE', '控制权已变化，请重新申请。')

@@ -52,6 +52,11 @@ const entryErrors: Record<string, string> = {
   SESSION_LIMIT: '电脑环境数量已达上限，请用户清理闲置环境。', ENVIRONMENT_RETIRING: '旧电脑环境尚未完成清理，请稍后重试。',
 }
 const toolErrors: Record<string, string> = {
+  PHYSICAL_INPUT_DENIED: '用户拒绝了本次真实鼠标操作，不得占用系统鼠标或自动重新申请。',
+  VIRTUAL_INPUT_UNSUPPORTED: '当前动作不支持虚拟输入，未执行真实鼠标操作。可调用 qiuya_computer_request_physical_input 申请这一次动作；用户批准后重新观察并执行同一动作。',
+  VIRTUAL_INPUT_REQUIRED: '必须先尝试虚拟输入，仅明确不支持的动作可以申请真实鼠标。',
+  VIRTUAL_INPUT_UPGRADE_REQUIRED: '目标执行器版本不支持虚拟输入隔离，请用户更新执行器。',
+  VIRTUAL_INPUT_UNCONFIRMED: '虚拟操作结果未确认，请先检查实际画面，不要重复操作或申请真实鼠标重放。',
   ...entryErrors,
   COMPUTER_TOOL_FAILED: '电脑工具未能完成，请核对当前状态；不要自动重复未确认的输入。',
   FOCUS_CHANGED: '目标窗口焦点已变化。请停止输入，等待用户确认目标窗口后重新观察；不要自动重放操作。',
@@ -172,6 +177,11 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       register({
         name: 'qiuya_computer_discover', description: 'Discover application names in this chat’s current computer environment, including installed applications when supported. Returns short-lived candidate IDs and permission preflight only, without screenshots or window contents. Call this first when the user asks to operate an application. No control or grant is acquired.', parameters: { type: 'object', additionalProperties: false, properties: { taskId: taskParameter, query: { type: 'string', maxLength: 160, description: 'Application name to search, such as Chrome or 微信. Filter is applied before result limits.' }, kind: { type: 'string', enum: ['all', 'application', 'browser'] } } }, output,
         async execute(args, exec) { return entryRun(exec, () => { const input = parameters(args, ['taskId', 'query', 'kind']), binding = bindSession(exec, input); return options.entry!.discover(operationExecution(exec, binding.id), { query: input.query, kind: input.kind } as { query?: string; kind?: 'all' | 'application' | 'browser' }).then(result => { binding.assertCurrent(); return taskResult(result, binding.taskId) }) }) },
+      }),
+      register({
+        name: 'qiuya_computer_request_physical_input', description: 'Only after VIRTUAL_INPUT_UNSUPPORTED: request owner permission for the exact failed action to use the real system mouse/focus once. Always-allowed applications do not bypass this decision. After approval observe again, then execute the same action. Never retry unconfirmed input.',
+        parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { taskId: taskParameter, reason: { type: 'string', maxLength: 600 } } }, output,
+        async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['taskId', 'reason']), binding = bindSession(exec, input); const result = await options.entry!.requestPhysicalInput(operationExecution(exec, binding.id), input.reason as string); binding.assertCurrent(); return taskResult({ approved: true, scope: 'physicalInput', targetId: result.target?.id, failedActionId: result.lastAction?.actionId, next: 'Observe again, then execute the exact failed action with a new actionId. This permission is consumed once.' }, binding.taskId) }) },
       }),
       register({
         name: 'qiuya_computer_request_control', description: 'Request control of a discovered application for this chat. Supply its candidateId and a short explanation of the user’s task. The owner chooses allow once, always allow, or deny in the UI; this tool waits for that decision. Existing owner grants may start directly. Cannot self-authorize, resume a paused/human-controlled session, choose another chat, or alter OS permissions.',

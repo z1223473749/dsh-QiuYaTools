@@ -128,6 +128,8 @@ enum CompletedKeyboardInputPolicy {
     var prepareFocus: (() -> Void)?
     private var humanInputGeneration: UInt64 = 0
     private(set) var focusAttempt: [String: Any]?
+    private let virtualInput = VirtualInput()
+    private(set) var physicalInputActive = false
     private(set) var busy = false
     var inputState: [String: Any] { ["mouseHeld": heldMouse != nil, "keysHeld": heldKeys.count, "ownerId": desktopLease?.ownerId as Any? ?? NSNull(),
         "leftButtonDown": CGEventSource.buttonState(.combinedSessionState, button: .left)] }
@@ -246,8 +248,10 @@ enum CompletedKeyboardInputPolicy {
     func lease(_ epoch: Int, actor: NativeLeaseActor = .ai) throws {
         guard epoch > fence.highest else { throw ComputerError("STALE_EPOCH", "The control lease is stale.") }
         guard aiPointer.hide() else { throw ComputerError("CURSOR_CLEANUP_FAILED", "The previous cursor owner has not been restored. Control remains blocked.") }
-        if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
-        try desktopLease!.acquire()
+        if actor == .human {
+            if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
+            try desktopLease!.acquire()
+        }
         do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
         leaseActor = actor; aiPointer.beginLease(epoch); operationBadge.beginLease(epoch)
     }
@@ -267,17 +271,29 @@ enum CompletedKeyboardInputPolicy {
         try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
     }
 
-    func act(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any]) async throws -> [String: Any] {
+    func act(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], physicalInputApproved: Bool = false) async throws -> [String: Any] {
+        try fence.check(epoch)
+        guard inputSessionAvailable() else { throw ComputerError("SESSION_UNAVAILABLE", "The target desktop session is locked or inactive.") }
+        if !physicalInputApproved && leaseActor == .ai {
+            return try virtualInput.act(target: target, geometry: geometry, action: action, checkpoint: { try self.fence.check(epoch) })
+        }
+        virtualInput.hide()
+        if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
+        try desktopLease!.acquire()
+        physicalInputActive = true
+        defer { physicalInputActive = false }
         defer { operationBadge.hide(epoch: epoch) }
         var ownsInput = false
         do {
             let result = try await performAct(epoch: epoch, target: target, geometry: geometry, action: action, started: { ownsInput = true })
             try releaseHeldInput()
             aiPointer.settled(epoch: epoch)
+            try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() }) // PHYSICAL_ACTION_CLEANUP
             return result
         } catch {
             let cursorRestored = fence.active == epoch ? aiPointer.hide() : aiPointer.restorationComplete
             if ownsInput { do { try releaseHeldInput() } catch { fence.release(epoch); throw error } }
+            if cursorRestored && heldMouse == nil && heldKeys.isEmpty { try desktopLease?.release() }
             if !cursorRestored { fence.release(epoch); throw ComputerError("CURSOR_CLEANUP_FAILED", "The owned cursor restoration is not confirmed. Control remains blocked.") }
             throw error
         }
@@ -285,11 +301,12 @@ enum CompletedKeyboardInputPolicy {
 
     @discardableResult func hideAICursor() -> Bool { aiPointer.hide() }
     func humanInputDetected() {
+        guard physicalInputActive || leaseActor == .human else { return }
         humanInputGeneration &+= 1
         if let epoch = fence.active { operationBadge.interrupt(epoch); _ = aiPointer.humanIntervened(epoch) } else { operationBadge.hide(); aiPointer.hide() }
     }
     var aiCursorState: [String: Any] { aiPointer.desktopSnapshot() }
-    func aiCursor(target: NativeTarget, geometry: FrameGeometry) -> [String: Any] { aiPointer.snapshot(target: target, geometry: geometry) }
+    func aiCursor(target: NativeTarget, geometry: FrameGeometry) -> [String: Any] { virtualInput.snapshot(target: target, geometry: geometry) ?? aiPointer.snapshot(target: target, geometry: geometry) }
 
     private func performAct(epoch: Int, target: NativeTarget, geometry: FrameGeometry, action: [String: Any], started: () -> Void) async throws -> [String: Any] {
         try fence.check(epoch)

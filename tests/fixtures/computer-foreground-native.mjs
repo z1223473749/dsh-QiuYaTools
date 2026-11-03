@@ -20,7 +20,7 @@ const record = row => appendFileSync(journal, JSON.stringify({ ...row, pid: proc
 const reply = (request, result) => process.stdout.write(JSON.stringify({ requestId: request.requestId, ok: true, result }) + '\n')
 const fail = (request, code) => process.stdout.write(JSON.stringify({ requestId: request.requestId, ok: false, error: { code, message: code } }) + '\n')
 const status = () => ({ available: true, platform: fault === 'mac' ? 'darwin' : 'win32', protocolVersion: 1,
-  capabilities: { foregroundHandoff: fault !== 'legacy' }, foregroundPhysicalSequence: sequence,
+  capabilities: { virtualInput: true, foregroundHandoff: fault !== 'legacy' }, foregroundPhysicalSequence: sequence,
   pendingTicket: ticket?.ticketId ?? null, controlled, epoch })
 const lines = createInterface({ input: process.stdin })
 lines.on('line', line => {

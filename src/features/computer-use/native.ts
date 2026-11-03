@@ -363,7 +363,11 @@ export class NativeCompanionDriver implements DeviceDriver {
   }
   observe(targetId: string, signal?: AbortSignal) { return this.capture(targetId, false, signal) }
   preview(targetId: string, signal?: AbortSignal) { return this.capture(targetId, true, signal) }
-  lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) { return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal) }
+  async lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) {
+    const status = await this.compatible()
+    if (!(Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-input') : status.capabilities?.virtualInput === true)) throw new ComputerError('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新目标执行器以支持虚拟输入和真实鼠标单独授权。')
+    return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal)
+  }
   async release(epoch: number, signal?: AbortSignal) {
     const foreground = this.foreground, child = this.child
     const result = await this.rpc<unknown>('release', { epoch }, signal, Boolean(foreground), child, Boolean(foreground))
@@ -379,10 +383,11 @@ export class NativeCompanionDriver implements DeviceDriver {
       throw error
     }
   }
-  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }) {
+  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: import('./contract.ts').ComputerInputAuthority) {
     const status = await this.compatible()
+    if (!(Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-input') : status.capabilities?.virtualInput === true)) throw new ComputerError('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新目标执行器以支持虚拟输入隔离。')
     if ((action.kind === 'moveRelative' || action.holdMs !== undefined || action.inputMode !== undefined) && !(Array.isArray(status.capabilities) ? status.capabilities.includes('input-compatibility') : status.capabilities?.inputCompatibility === true)) throw new ComputerError('INPUT_MODE_UNSUPPORTED', '请更新目标电脑的原生执行器后使用此输入方式')
-    return this.checked('act', { epoch, targetId, action, ...(privateOptions ? { foregroundTicket: privateOptions.foregroundTicket } : {}) }, signal)
+    return this.checked('act', { epoch, targetId, action, ...(privateOptions ?? {}) }, signal)
   }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { return this.checked('closePreview', options?.preserveSession ? { preserveSession: true } : {}, signal) }

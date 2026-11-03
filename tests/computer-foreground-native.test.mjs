@@ -29,7 +29,7 @@ test('real JSONL capability binds actual child PID, parent, executable hash and 
   const f = await fixture(), scheduler = new ComputerInputScheduler(), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', scheduler)
   try {
     assert.equal((await driver.status()).available, true); assert.ok(f.driver.foregroundHandoff)
-    await driver.lease(0); const result = await driver.act(0, 'fixture', move); assert.equal(result.performed, true)
+    await driver.lease(0); const result = await driver.act(0, 'fixture', move, undefined, { physicalInputApproved: true }); assert.equal(result.performed, true)
     const rows = await f.read(), prepared = rows.find(row => row.phase === 'prepare-ack'), act = rows.find(row => row.op === 'act')
     assert.equal(rows.filter(row => row.op === 'foregroundPrepare').length, 1)
     assert.equal(rows.filter(row => row.op === 'act').length, 1)
@@ -44,7 +44,7 @@ test('pause after native prepare but before its JSONL ACK retains exact cancella
   const f = await fixture({ gated: true }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
     await driver.status(); await driver.lease(1)
-    const rejected = assert.rejects(driver.act(1, 'fixture', move), { code: 'CONTROL_CHANGED' })
+    const rejected = assert.rejects(driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true }), { code: 'CONTROL_CHANGED' })
     const preparedRows = await f.wait(rows => rows.some(row => row.phase === 'prepared'))
     const ticketId = preparedRows.find(row => row.phase === 'prepared').ticketId
     await driver.release(1)
@@ -55,7 +55,7 @@ test('pause after native prepare but before its JSONL ACK retains exact cancella
     assert.equal(rows.filter(row => row.op === 'foregroundPrepare').length, 1)
     assert.equal(rows.filter(row => row.op === 'act' || row.op === 'lease').length, 0)
     assert.equal((await f.driver.status()).pendingTicket, null)
-    await driver.lease(2); await driver.act(2, 'fixture', move)
+    await driver.lease(2); await driver.act(2, 'fixture', move, undefined, { physicalInputApproved: true })
     rows = await f.read(); assert.equal(rows.filter(row => row.op === 'foregroundPrepare').length, 2)
     assert.equal(rows.filter(row => row.op === 'act').length, 1)
     assert.notEqual(rows.filter(row => row.phase === 'prepared')[1].ticketId, ticketId)
@@ -72,14 +72,14 @@ test('a signal already aborted before prepare sends no mutating request', async 
 for (const fault of ['pid', 'parent', 'path', 'image']) test('actual JSONL identity mismatch rejects ' + fault + ' before any physical lease or action', async () => {
   const f = await fixture({ fault }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
-    await driver.status(); await assert.rejects(driver.lease(1), { code: 'NATIVE_PROTOCOL' })
+    await driver.status(); await driver.lease(1); await assert.rejects(driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true }), { code: 'NATIVE_PROTOCOL' })
     assert.ok(!(await f.read()).some(row => row.op === 'foregroundPrepare' || row.op === 'lease' || row.op === 'act'))
   } finally { await driver.dispose() }
 })
 test('actual JSONL ticket action mismatch cannot reach physical input', async () => {
   const f = await fixture({ fault: 'ticket-action' }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
-    await driver.status(); await driver.lease(1); await assert.rejects(driver.act(1, 'fixture', move), { code: 'NATIVE_PROTOCOL' })
+    await driver.status(); await driver.lease(1); await assert.rejects(driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true }), { code: 'NATIVE_PROTOCOL' })
     const rows = await f.read(); assert.ok(!rows.some(row => row.op === 'lease' || row.op === 'act'))
     assert.deepEqual(rows.filter(row => row.op === 'foregroundCancel').map(row => row.ticketId), rows.filter(row => row.phase === 'prepared').map(row => row.ticketId))
     assert.equal((await f.driver.status()).pendingTicket, null)
@@ -89,7 +89,7 @@ for (const fault of ['legacy', 'mac']) test('actual JSONL ' + fault + ' helper r
   const f = await fixture({ fault }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
     await driver.status(); assert.equal(f.driver.foregroundHandoff, undefined)
-    await driver.lease(1); await driver.act(1, 'fixture', move)
+    await driver.lease(1); await driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true })
     const rows = await f.read(); assert.ok(!rows.some(row => row.op.startsWith('foreground')))
     assert.equal(rows.filter(row => row.op === 'act').length, 1)
   } finally { await driver.dispose() }
@@ -104,7 +104,7 @@ test('an adapter from a naturally disposed child cannot send a ticket request to
 test('an unidentifiable prepare ACK retires that exact worker without sending a broad cancellation', async () => {
   const f = await fixture({ fault: 'ticket-malformed' }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
-    await driver.status(); await driver.lease(1); await assert.rejects(driver.act(1, 'fixture', move), { code: 'NATIVE_PROTOCOL' })
+    await driver.status(); await driver.lease(1); await assert.rejects(driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true }), { code: 'NATIVE_PROTOCOL' })
     await f.wait(rows => rows.some(row => row.phase === 'eof'))
     const rows = await f.read(); assert.ok(!rows.some(row => row.op === 'foregroundCancel' || row.op === 'lease' || row.op === 'act'))
     assert.equal(new Set(rows.map(row => row.pid)).size, 1)
@@ -114,7 +114,7 @@ test('a failed exact ticket cleanup retains the binding error and cleanup error 
   const f = await fixture({ fault: 'ticket-cancel-failure' }), driver = new ScheduledComputerDriver(f.driver, 'local-desktop', new ComputerInputScheduler())
   try {
     await driver.status(); await driver.lease(1)
-    await assert.rejects(driver.act(1, 'fixture', move), error => error.code === 'INPUT_CLEANUP_FAILED' && error.actionError?.code === 'NATIVE_PROTOCOL' && error.cleanupErrors[0]?.code === 'fixture-exact-cancel-failed')
+    await assert.rejects(driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true }), error => error.code === 'INPUT_CLEANUP_FAILED' && error.actionError?.code === 'NATIVE_PROTOCOL' && error.cleanupErrors[0]?.code === 'fixture-exact-cancel-failed')
     await f.wait(rows => rows.some(row => row.phase === 'eof'))
     const rows = await f.read(); assert.deepEqual(rows.filter(row => row.op === 'foregroundCancel').map(row => row.ticketId), rows.filter(row => row.phase === 'prepared').map(row => row.ticketId))
     assert.ok(!rows.some(row => row.op === 'lease' || row.op === 'act')); assert.equal(new Set(rows.map(row => row.pid)).size, 1)
@@ -124,7 +124,7 @@ test('a failed exact ticket cleanup retains the binding error and cleanup error 
 test('a malformed release ACK with its exact token ID is cancelled before the validation error is returned', async () => {
   const f = await fixture({ fault: 'release-malformed' })
   try {
-    await f.driver.status(); await f.driver.lease(1); await f.driver.act(1, 'fixture', move)
+    await f.driver.status(); await f.driver.lease(1); await f.driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true })
     await assert.rejects(f.driver.release(1), { code: 'NATIVE_PROTOCOL' })
     const rows = await f.read(), cancels = rows.filter(row => row.op === 'foregroundCancel')
     assert.equal(cancels.length, 1); assert.match(cancels[0].releaseTokenId, /^[a-f0-9]{32}$/u); assert.equal(cancels[0].ticketId, undefined)
@@ -133,7 +133,7 @@ test('a malformed release ACK with its exact token ID is cancelled before the va
 test('a malformed release ACK without an identifiable token retires the exact child without a broad cancel', async () => {
   const f = await fixture({ fault: 'release-unidentifiable' })
   try {
-    await f.driver.status(); await f.driver.lease(1); await f.driver.act(1, 'fixture', move)
+    await f.driver.status(); await f.driver.lease(1); await f.driver.act(1, 'fixture', move, undefined, { physicalInputApproved: true })
     await assert.rejects(f.driver.release(1), { code: 'NATIVE_PROTOCOL' })
     await f.wait(rows => rows.some(row => row.phase === 'eof'))
     const rows = await f.read(); assert.ok(!rows.some(row => row.op === 'foregroundCancel')); assert.equal(new Set(rows.map(row => row.pid)).size, 1)

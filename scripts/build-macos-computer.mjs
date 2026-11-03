@@ -43,7 +43,7 @@ export async function buildMacOSComputer({ outputDirectory = new URL('../lib/', 
   const executable = fileURLToPath(new URL('./qiuya-computer', macOS))
   const application = fileURLToPath(new URL(`./${COMPUTER_APP_NAME}`, outputDirectory))
   const architectures = universal ? ['arm64', 'x86_64'] : [process.arch === 'arm64' ? 'arm64' : 'x86_64']
-  const files = ['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'Applications.swift', 'MacTransport.swift', 'PermissionGuide.swift', 'OperationBadge.swift', 'CursorOverlay.swift', 'FocusPreparation.swift', 'Input.swift', 'Preview.swift', 'main.swift'].map(name => fileURLToPath(new URL(`../src/native/macos/${name}`, import.meta.url)))
+  const files = ['Protocol.swift', 'Capture.swift', 'LeaseGuard.swift', 'Applications.swift', 'MacTransport.swift', 'PermissionGuide.swift', 'OperationBadge.swift', 'CursorOverlay.swift', 'FocusPreparation.swift', 'VirtualInput.swift', 'Input.swift', 'Preview.swift', 'main.swift'].map(name => fileURLToPath(new URL(`../src/native/macos/${name}`, import.meta.url)))
   const iconSource = fileURLToPath(new URL('../assets/icon-color.webp', import.meta.url))
   const compilerArguments = architecture => ['-O', '-swift-version', '5', '-target', `${architecture}-apple-macosx13.0`,
     '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'ScreenCaptureKit', '-framework', 'ApplicationServices',

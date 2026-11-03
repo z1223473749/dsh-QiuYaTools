@@ -1,0 +1,51 @@
+import AppKit
+import ApplicationServices
+
+@main struct VirtualInputAcceptanceFixture {
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let path = CommandLine.arguments[1]
+        let controller = Fixture(path: path)
+        app.delegate = controller
+        app.run()
+    }
+    @MainActor final class Fixture: NSObject, NSApplicationDelegate {
+        let path: String
+        var window: NSWindow!
+        let field = NSTextField(string: "")
+        var button: NSButton!
+        var clicks = 0
+        init(path: String) { self.path = path }
+        func applicationDidFinishLaunching(_ notification: Notification) {
+            window = NSWindow(contentRect: NSRect(x: 80, y: 100, width: 360, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Disposable virtual input fixture"
+            window.isReleasedWhenClosed = false
+            window.animationBehavior = .none
+            field.frame = NSRect(x: 30, y: 45, width: 280, height: 28)
+            field.placeholderString = "Virtual text target"
+            button = NSButton(title: "Virtual button", target: self, action: #selector(clicked))
+            button.frame = NSRect(x: 30, y: 115, width: 170, height: 34)
+            window.contentView?.addSubview(field)
+            window.contentView?.addSubview(button)
+            window.orderBack(nil)
+            Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.publish() }
+            }
+            publish()
+        }
+        @objc func clicked() { clicks += 1; publish() }
+        func publish() {
+            guard let row = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(window.windowNumber)) as? [[String: Any]])?.first,
+                  let bounds = row[kCGWindowBounds as String] as? [String: Any] else { return }
+            func point(_ view: NSView) -> [String: Double] {
+                let p = window.convertPoint(toScreen: view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil))
+                return ["x": p.x, "y": (NSScreen.screens.first?.frame.height ?? 0) - p.y]
+            }
+            let state: [String: Any] = ["pid": Int(getpid()), "windowId": window.windowNumber, "bounds": bounds,
+                "button": point(button), "field": point(field), "clicks": clicks, "text": field.stringValue,
+                "keyWindow": window.isKeyWindow, "fieldEditorActive": field.currentEditor() != nil]
+            if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) { try? data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+        }
+    }
+}

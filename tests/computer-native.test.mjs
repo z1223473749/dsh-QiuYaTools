@@ -12,13 +12,13 @@ const source = (await build({ entryPoints: [fileURLToPath(new URL('../src/featur
 const { NativeCompanionDriver, computerCompanionPath } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 test.after(() => rm(directory, { recursive: true, force: true }))
 const script = join(directory, 'fixture.cjs'), records = join(directory, 'requests.jsonl')
-await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
+await writeFile(script, `const fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({...r,pid:process.pid,argv:process.argv.slice(2)})+'\\n');if(r.op==='observe')return;if(r.op==='closePreview'){process.stdout.write(JSON.stringify({event:'previewClosed',sessionId:'fixture'})+'\\n')}if(r.op==='act'){process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CONTROL_CHANGED',message:'fenced'}})+'\\n');return}process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,capabilities:{virtualInput:true},protocolVersion:process.argv.includes('--wrong-protocol')?99:1}:r})+'\\n')});rl.on('close',()=>process.exit(0));`)
 
 async function settingsFixture(name) {
   const executable = join(directory, `${name}.cjs`), journal = join(directory, `${name}.jsonl`), receipt = join(directory, `${name}-receipt.json`)
   const permissions = { screenRecording: false, accessibility: false, postEvents: false, inputMonitoring: false }
   await writeFile(receipt, '{}')
-  await writeFile(executable, `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({event:'started'})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify(r)+'\\n');const result=r.op==='status'?{platform:'darwin',available:true,protocolVersion:1,permissions:${JSON.stringify(permissions)}}:JSON.parse(fs.readFileSync(${JSON.stringify(receipt)},'utf8')).result;process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n')});rl.on('close',()=>process.exit(0));`)
+  await writeFile(executable, `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({event:'started'})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify(r)+'\\n');const result=r.op==='status'?{platform:'darwin',available:true,protocolVersion:1,capabilities:{virtualInput:true},permissions:${JSON.stringify(permissions)}}:JSON.parse(fs.readFileSync(${JSON.stringify(receipt)},'utf8')).result;process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n')});rl.on('close',()=>process.exit(0));`)
   return { driver: new NativeCompanionDriver({ executable: process.execPath, args: [executable] }), permissions, reply: value => writeFile(receipt, JSON.stringify({ result: value })), read: async () => (await readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse), journal }
 }
 
@@ -74,7 +74,7 @@ test('invalid permission kinds never start a native process or pass paths and UR
 let captureFixtureSequence = 0
 async function captureFixture({ captureDelay = 120, timeoutMs = 10_000, gated = false, exitOnCapture = false } = {}) {
   const number = ++captureFixtureSequence, executable = join(directory, `capture-slot-${number}.cjs`), journal = join(directory, `capture-slot-${number}.jsonl`), gate = join(directory, `capture-slot-${number}.gate`)
-  await writeFile(executable, `const fs=require('node:fs');let busy=false,sequence=0;const record=r=>fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({...r,pid:process.pid})+'\\n'),reply=(r,result)=>process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);record({...r,phase:'received',busy});if(r.op==='observe'){if(busy){record({...r,phase:'rejected',code:'CAPTURE_BUSY'});process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CAPTURE_BUSY',message:'Another frame is being prepared.'}})+'\\n');return}busy=true;if(${exitOnCapture})process.exit(77);const frameId=String(++sequence),finish=()=>{busy=false;record({...r,phase:'completed'});reply(r,{targetId:r.targetId,frameId,imageBase64:'/9j/2Q==',mediaType:'image/jpeg',width:1,height:1,elements:r.preview?'':'fixture AX',geometry:{x:0,y:0,width:1,height:1,scale:1}})};if(${gated}){const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(gate)})){clearInterval(timer);finish()}},5)}else setTimeout(finish,${captureDelay});return}reply(r,r.op==='status'?{available:true,protocolVersion:1,busy}:r)});rl.on('close',()=>{record({phase:'eof'});process.exit(0)});`)
+  await writeFile(executable, `const fs=require('node:fs');let busy=false,sequence=0;const record=r=>fs.appendFileSync(${JSON.stringify(journal)},JSON.stringify({...r,pid:process.pid})+'\\n'),reply=(r,result)=>process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result})+'\\n');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const r=JSON.parse(line);record({...r,phase:'received',busy});if(r.op==='observe'){if(busy){record({...r,phase:'rejected',code:'CAPTURE_BUSY'});process.stdout.write(JSON.stringify({requestId:r.requestId,ok:false,error:{code:'CAPTURE_BUSY',message:'Another frame is being prepared.'}})+'\\n');return}busy=true;if(${exitOnCapture})process.exit(77);const frameId=String(++sequence),finish=()=>{busy=false;record({...r,phase:'completed'});reply(r,{targetId:r.targetId,frameId,imageBase64:'/9j/2Q==',mediaType:'image/jpeg',width:1,height:1,elements:r.preview?'':'fixture AX',geometry:{x:0,y:0,width:1,height:1,scale:1}})};if(${gated}){const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(gate)})){clearInterval(timer);finish()}},5)}else setTimeout(finish,${captureDelay});return}reply(r,r.op==='status'?{available:true,protocolVersion:1,capabilities:{virtualInput:true},busy}:r)});rl.on('close',()=>{record({phase:'eof'});process.exit(0)});`)
   const read = async () => (await readFile(journal, 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).trim().split('\n').filter(Boolean).map(JSON.parse)
   const waitFor = async check => {
     const deadline = performance.now() + 2000
@@ -165,7 +165,7 @@ test('incompatible companion is rejected before target enumeration or input', as
 
 test('unexpected worker exit clears its recorded owned inputs in a separate cleanup process without replaying the action', async () => {
   const worker = join(directory, 'crash.cjs'), cleanup = join(directory, 'released.json')
-  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else if(r.op==='observe'){process.stdout.write(JSON.stringify({event:'inputHeld',keys:[17],mouseButtons:['left']})+'\\n',()=>process.exit(77))}})`)
+  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1,capabilities:{virtualInput:true}}})+'\\n');else if(r.op==='observe'){process.stdout.write(JSON.stringify({event:'inputHeld',keys:[17],mouseButtons:['left']})+'\\n',()=>process.exit(77))}})`)
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
   await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
   await driver.dispose()
@@ -174,7 +174,7 @@ test('unexpected worker exit clears its recorded owned inputs in a separate clea
 
 test('failed emergency cleanup blocks subsequent workers and makes disposal report the failure', async () => {
   const worker = join(directory, 'cleanup-failure.cjs')
-  await writeFile(worker, `if(process.argv.includes('--release-input')){process.stdin.resume();process.stdin.once('end',()=>process.exit(2))}else{require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else process.stdout.write(JSON.stringify({event:'inputHeld',keys:[],mouseButtons:['left']})+'\\n',()=>process.exit(77))})}`)
+  await writeFile(worker, `if(process.argv.includes('--release-input')){process.stdin.resume();process.stdin.once('end',()=>process.exit(2))}else{require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1,capabilities:{virtualInput:true}}})+'\\n');else process.stdout.write(JSON.stringify({event:'inputHeld',keys:[],mouseButtons:['left']})+'\\n',()=>process.exit(77))})}`)
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
   await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
   await assert.rejects(driver.targets(), { code: 'NATIVE_CLEANUP_FAILED' })
@@ -184,7 +184,7 @@ test('failed emergency cleanup blocks subsequent workers and makes disposal repo
 test('emergency cleanup preserves the native owner and Unicode units while ignoring malformed held-input events', async () => {
   const worker = join(directory, 'unicode-crash.cjs'), cleanup = join(directory, 'unicode-released.json')
   const owned = { ownerId: 'a'.repeat(32), keys: [], mouseButtons: [], unicodeUnits: [0xd83d, 0xde00] }
-  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n');else{process.stdout.write(JSON.stringify({event:'inputHeld',...${JSON.stringify(owned)}})+'\\n');process.stdout.write(JSON.stringify({event:'inputHeld',ownerId:'invalid',keys:[],mouseButtons:[],unicodeUnits:[]})+'\\n',()=>process.exit(77))}})`)
+  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{if(process.argv.includes('--release-input')){fs.writeFileSync(${JSON.stringify(cleanup)},line);process.exit(0)}const r=JSON.parse(line);if(r.op==='status')process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1,capabilities:{virtualInput:true}}})+'\\n');else{process.stdout.write(JSON.stringify({event:'inputHeld',...${JSON.stringify(owned)}})+'\\n');process.stdout.write(JSON.stringify({event:'inputHeld',ownerId:'invalid',keys:[],mouseButtons:[],unicodeUnits:[]})+'\\n',()=>process.exit(77))}})`)
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker], releaseInputArgs: [worker, '--release-input'] })
   await assert.rejects(driver.observe('fixture'), { code: 'NATIVE_EXITED' })
   await driver.dispose()
@@ -316,7 +316,7 @@ test('unexpected native exit rejects active and queued captures without creating
 
 test('native application metadata accepts bounded Unicode scalars and strips unlisted transport fields', async () => {
   const worker = join(directory, 'catalog.cjs'), name = '🖥'.repeat(160)
-  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1}:{applications:[{appId:'fixture',name:${JSON.stringify(name)},running:false,launchable:true,executablePath:'/private/should-not-project'}]}})+'\\n')})`)
+  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1,capabilities:{virtualInput:true}}:{applications:[{appId:'fixture',name:${JSON.stringify(name)},running:false,launchable:true,executablePath:'/private/should-not-project'}]}})+'\\n')})`)
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker] })
   try {
     assert.deepEqual(await driver.applications(), [{ appId: 'fixture', name, running: false, launchable: true }])
@@ -334,7 +334,7 @@ test('native application catalog retains a bounded embedded icon and keeps legac
     { appId: 'svg.app', name: '矢量图标应用', running: true, iconDataUrl: 'data:image/svg+xml;base64,PHN2Zy8+' },
     { appId: 'bad.app', name: '损坏图标应用', running: false, iconDataUrl: 'data:image/png;base64,!!!!' },
   ]
-  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1}:{applications:${JSON.stringify(rows)}}})+'\\n')})`)
+  await writeFile(worker, `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:r.op==='status'?{available:true,protocolVersion:1,capabilities:{virtualInput:true}}:{applications:${JSON.stringify(rows)}}})+'\\n')})`)
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker] })
   try {
     assert.deepEqual(await driver.applications(), [
@@ -360,5 +360,16 @@ test('an older companion rejects compatibility requests before issuing an unsupp
   const driver = new NativeCompanionDriver({ executable: process.execPath, args: [script] })
   try {
     for (const action of [{kind:'key',key:'Left',holdMs:200},{kind:'key',key:'Left',inputMode:'compatibility'},{kind:'moveRelative',deltaX:4}]) await assert.rejects(driver.act(10,'target',action),{code:'INPUT_MODE_UNSUPPORTED'})
+  } finally { await driver.dispose() }
+})
+
+test('legacy helper cannot acquire a lease or receive an action without virtual input isolation', async () => {
+  const worker = join(directory, 'legacy-input.cjs'), journal = join(directory, 'legacy-input.jsonl')
+  await writeFile(worker, `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(journal)},r.op+'\\n');process.stdout.write(JSON.stringify({requestId:r.requestId,ok:true,result:{available:true,protocolVersion:1}})+'\\n')})`)
+  const driver = new NativeCompanionDriver({ executable: process.execPath, args: [worker] })
+  try {
+    await assert.rejects(driver.lease(1), { code: 'VIRTUAL_INPUT_UPGRADE_REQUIRED' })
+    await assert.rejects(driver.act(1, 'window', { kind: 'click', x: 1, y: 1 }), { code: 'VIRTUAL_INPUT_UPGRADE_REQUIRED' })
+    assert.deepEqual((await readFile(journal, 'utf8')).trim().split('\n'), ['status'])
   } finally { await driver.dispose() }
 })

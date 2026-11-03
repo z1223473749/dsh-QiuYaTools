@@ -19,6 +19,8 @@ export interface ComputerAction {
   holdMs?: number; inputMode?: 'standard' | 'compatibility'
 }
 export interface ComputerActionRequest { actionId: string; frameId: string; action: ComputerAction }
+/** Host-only one-action authority, never accepted in model action parameters. */
+export interface ComputerInputAuthority { foregroundTicket?: ForegroundActionTicket; physicalInputApproved?: boolean }
 export interface ComputerActionResult { actionId: string; targetId: string; epoch: number; result: unknown }
 export interface ComputerPermissionOwner { kind: 'host' | 'companion'; appName: string; bundleIdentifier: string }
 export interface ComputerStatus { available: boolean; platform?: string; permissionOwner?: ComputerPermissionOwner | null; permissions?: Record<string, boolean>; capabilities?: Record<string, boolean> | string[]; message?: string; [key: string]: unknown }
@@ -65,7 +67,7 @@ export interface DeviceDriver {
   preview?(targetId: string, signal?: AbortSignal): Promise<ComputerObservation>
   lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown>
   release(epoch: number, signal?: AbortSignal): Promise<unknown>
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: { foregroundTicket: ForegroundActionTicket }): Promise<unknown>
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, privateOptions?: ComputerInputAuthority): Promise<unknown>
   resolveActionTarget?(target: NativeTarget, action: ComputerAction, result: unknown, signal?: AbortSignal): Promise<NativeTarget | null>
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal): Promise<unknown>
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }): Promise<unknown>

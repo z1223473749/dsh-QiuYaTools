@@ -69,6 +69,7 @@ import ScreenCaptureKit
     private func humanInput(_ event: NSEvent) {
         guard let cgEvent = event.cgEvent,
               cgEvent.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) else { return }
+        guard input.physicalInputActive || input.leaseActor == .human else { return }
         input.humanInputDetected()
         guard let epoch = input.fence.active else { return }
         let escape = event.type == .keyDown && event.keyCode == 53
@@ -107,7 +108,7 @@ import ScreenCaptureKit
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
                 "permissionOwner": permissionGuide.permissionOwner as Any? ?? NSNull(),
-                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator", "input-compatibility"],
+                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator", "input-compatibility", "virtual-input"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
                 "aiCursor": input.aiCursorState, "aiOperation": input.aiOperationState,
@@ -190,7 +191,7 @@ import ScreenCaptureKit
                     try input.fence.check(epoch)
                     guard let geometry = geometries[id] else { throw ComputerError("OBSERVATION_REQUIRED", "Observe this window before sending input.") }
                     let (target, _) = try await capture.resolve(id)
-                    Wire.success(requestId, try await input.act(epoch: epoch, target: target, geometry: geometry, action: action))
+                    Wire.success(requestId, try await input.act(epoch: epoch, target: target, geometry: geometry, action: action, physicalInputApproved: command["physicalInputApproved"] as? Bool == true))
                 default: throw ComputerError("UNKNOWN_OPERATION", "Unsupported native operation.")
                 }
             } catch { Wire.failure(requestId, error) }

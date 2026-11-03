@@ -2,7 +2,8 @@ import { beginModelObservation, commitModelObservation, clearModelObservations }
 import { ComputerError, checkActionBounds, computerError, parseComputerAction, requireIdentity, sameGeometry, validGeometry } from './contract.ts'
 import type { ComputerActionRequest, ComputerActionResult, ComputerObservation, ComputerSessionSnapshot, ComputerState, DeviceDriver, NativeTarget } from './contract.ts'
 
-interface SessionRecord { snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewFrames: Map<string, { metadata: NonNullable<ComputerSessionSnapshot['lastObservation']>; capturedAt: number }>; transition?: Promise<ComputerSessionSnapshot> }
+const inputFingerprint = (action: object): string => JSON.stringify(Object.fromEntries(Object.entries(action).sort(([a], [b]) => a.localeCompare(b))))
+interface SessionRecord { physicalAction?: string; snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewFrames: Map<string, { metadata: NonNullable<ComputerSessionSnapshot['lastObservation']>; capturedAt: number }>; transition?: Promise<ComputerSessionSnapshot> }
 export interface ComputerSessionOptions {
   enabled?: () => boolean
   readAllowedApps?: () => readonly string[]
@@ -151,6 +152,7 @@ export class ComputerSessionService {
     if (!this.isAllowed(record)) throw new ComputerError('APP_NOT_ALLOWED', '应用授权已撤销')
   }
   private invalidate(record: SessionRecord): number {
+    delete record.physicalAction
     const oldEpoch = record.snapshot.epoch
     record.snapshot = { ...record.snapshot, epoch: ++this.nextEpoch }
     delete record.snapshot.lastObservation
@@ -239,6 +241,16 @@ export class ComputerSessionService {
       return observation
     })
   }
+  /** Called only by the owner approval coordinator, bound to the failed action. */
+  approvePhysicalInput(sessionId: string, expectedEpoch: number, failedActionId: string): ComputerSessionSnapshot {
+    const record = this.record(sessionId)
+    this.fence(record, expectedEpoch)
+    if (record.snapshot.state !== 'ready' || record.snapshot.error?.code !== 'VIRTUAL_INPUT_UNSUPPORTED' || record.snapshot.lastAction?.phase !== 'failed' || record.snapshot.lastAction.actionId !== failedActionId) throw new ComputerError('REQUEST_STALE', '虚拟输入失败状态已变化，请重新观察。')
+    record.physicalAction = inputFingerprint(record.snapshot.lastAction.action)
+    delete record.snapshot.lastObservation
+    record.previewFrames.clear()
+    return this.get(sessionId)!
+  }
   act(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal): Promise<ComputerActionResult> { return this.dispatch(sessionId, request, signal, false) }
   humanAct(sessionId: string, request: ComputerActionRequest, signal?: AbortSignal): Promise<ComputerActionResult> { return this.dispatch(sessionId, request, signal, true) }
   private dispatch(sessionId: string, request: ComputerActionRequest, signal: AbortSignal | undefined, human: boolean): Promise<ComputerActionResult> {
@@ -268,6 +280,8 @@ export class ComputerSessionService {
     const execute = async (): Promise<ComputerActionResult> => {
       this.fence(record, epoch, human)
       if (readObservation()?.frameId !== request.frameId) throw new ComputerError('STALE_OBSERVATION', '截图已过期，请重新观察')
+      const physicalInputApproved = !human && record.physicalAction === inputFingerprint(action)
+      delete record.physicalAction
       if (!human) this.change(record, 'running')
       try {
         const result = await this.operation(record, signal, async operationSignal => {
@@ -276,7 +290,7 @@ export class ComputerSessionService {
           this.fence(record, epoch, human); operationSignal.throwIfAborted()
           if (!current || current.pid !== target.pid || current.appId !== target.appId || !sameGeometry(current, observation.geometry)) throw new ComputerError('STALE_OBSERVATION', '目标窗口或缩放已变化，请重新观察')
           record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, actor: human ? 'human' : 'ai', phase: 'executing', at: this.clock() }; this.notify()
-          return this.driver.act(epoch, target.id, action, operationSignal)
+          return this.driver.act(epoch, target.id, action, operationSignal, { physicalInputApproved: human || physicalInputApproved })
         })
         this.fence(record, epoch, human)
         if (['navigate', 'openTab', 'closeTab', 'goBack', 'goForward', 'reload'].includes(action.kind)) {
@@ -308,6 +322,10 @@ export class ComputerSessionService {
         delete record.snapshot.lastObservation
         record.previewFrames.clear()
         if (record.snapshot.lastAction?.actionId === request.actionId) { record.snapshot.lastAction = { ...record.snapshot.lastAction, phase: 'failed', at: this.clock() }; this.notify() }
+        if (!human && !physicalInputApproved && error instanceof ComputerError && error.code === 'VIRTUAL_INPUT_UNSUPPORTED' && record.snapshot.epoch === epoch) {
+          this.change(record, 'ready', error)
+          throw error
+        }
         if (record.snapshot.epoch === epoch) {
           this.invalidate(record)
           this.change(record, 'pausing', error)

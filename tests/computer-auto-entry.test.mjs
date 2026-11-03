@@ -43,7 +43,7 @@ async function fixture({ mode = 'local', policy = 'ask', profile = false } = {})
 test('model discovery/request -> owner-only decision -> actual service observation needs no preselected chat or target', async () => {
   const f = await fixture({ mode: 'remote' })
   try {
-    assert.equal(f.tools.size, 8)
+    assert.equal(f.tools.size, 9)
     const exec = f.exec(), discover = f.tools.get('qiuya_computer_discover'), request = f.tools.get('qiuya_computer_request_control')
     const catalog = await discover.execute({ query: 'Fixture' }, exec)
     assert.equal(catalog.applications[0].appName, 'Fixture App'); assert.equal(JSON.stringify(catalog).includes('Owner private title'), false)
@@ -156,7 +156,7 @@ test('actual public SDK runtime preserves exact live Agent identity for new disc
   await layer.await(); await injection.await()
   try {
     const runtime = root.get('tools'), execution = f.exec()
-    assert.equal(runtime.schemas().filter(tool => tool.name.startsWith('qiuya_computer_')).length, 8)
+    assert.equal(runtime.schemas().filter(tool => tool.name.startsWith('qiuya_computer_')).length, 9)
     const discovered = await runtime.execute({ ...execution, name: 'qiuya_computer_discover', arguments: { query: 'Fixture', kind: 'application' } })
     assert.equal(discovered.isError, false); const candidateId = discovered.value.applications[0].candidateId
     const waiting = runtime.execute({ ...execution, callId: 'sdk-owned-request', name: 'qiuya_computer_request_control', arguments: { candidateId, reason: 'task' } })

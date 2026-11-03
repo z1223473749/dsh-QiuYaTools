@@ -58,7 +58,7 @@ const failed = (result, code) => { assert.equal(result.isError, true); assert.ma
 
 test('actual ToolRuntime publishes one explicit create/list schema only when tasks and Coordinator are installed', async t => {
   const f = await fixture(t), schemas = f.runtime.schemas(), task = schemas.find(row => row.name === 'qiuya_computer_task')
-  assert(task); assert.equal(schemas.length, 9); assert.deepEqual(task.parameters.properties.op.enum, ['create', 'list']); assert.equal(task.parameters.additionalProperties, false); assert.equal('chatSessionId' in task.parameters.properties, false)
+  assert(task); assert.equal(schemas.length, 10); assert.deepEqual(task.parameters.properties.op.enum, ['create', 'list']); assert.equal(task.parameters.additionalProperties, false); assert.equal('chatSessionId' in task.parameters.properties, false)
   for (const schema of schemas.filter(row => row.name !== 'qiuya_computer_task')) { assert.equal(schema.parameters.properties.taskId.type, 'string'); assert.match(schema.parameters.properties.taskId.description, /default task.*last-selected/iu) }
 })
 for (const missing of ['tasks', 'entry']) test('missing ' + missing + ' preserves legacy tools and does not advertise a task allocator', async t => { const f = await fixture(t, { withTasks: missing !== 'tasks', withEntry: missing !== 'entry' }); assert.equal(f.runtime.schemas().some(s => s.name === 'qiuya_computer_task'), false); const value = ok(await f.call('status')); assert.equal(value.sessionId, f.a.id) })

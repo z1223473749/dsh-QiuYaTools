@@ -194,6 +194,8 @@ export function instrumentMacCursorSources({ cursor, input }) {
     ['aiPointer.hide(); throw ComputerError("FOCUS_CHANGED"', 'aiPointer.hide(diagnosticReason: "focus-identity-missing"); throw ComputerError("FOCUS_CHANGED"', 'focus identity'],
     ['catch { aiPointer.hide(); throw error }', 'catch { aiPointer.hide(diagnosticReason: "focus-check-failed"); throw error }', 'focus checks'],
   ]
+  input = once(input, 'restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() }) // PHYSICAL_ACTION_CLEANUP',
+    'restoreCursor: { aiPointer.hide(diagnosticReason: "physical-release") }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() }) // PHYSICAL_ACTION_CLEANUP', 'physical action cleanup')
   // Distinguish the two cleanup call sites before applying exact-once replacements.
   input = once(input, 'func shutdownCleanup() throws {', 'func shutdownCleanup() throws {\n        // DIAGNOSTIC_SHUTDOWN_BOUNDARY', 'shutdown boundary')
   const shutdownIndex = input.indexOf('        // DIAGNOSTIC_SHUTDOWN_BOUNDARY')
@@ -206,7 +208,7 @@ export function instrumentMacCursorSources({ cursor, input }) {
   return { cursor, input }
 }
 
-const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'MacTransport', 'PermissionGuide', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
+const nativeNames = ['Protocol', 'Capture', 'LeaseGuard', 'Applications', 'MacTransport', 'PermissionGuide', 'OperationBadge', 'CursorOverlay', 'FocusPreparation', 'VirtualInput', 'Input', 'Preview', 'main'].map(name => `src/native/macos/${name}.swift`)
 
 /** Freeze source and a build plan only. This function cannot compile, start a Host, or send input. */
 export async function prepareMacCursorSourceSnapshot({ root, base, expectedHelperSHA256 = currentCursorBaseline, buildReceiptPath = 'artifacts/computer-use/macos-keyboard-pair-formal-build/1c5b471e-9d6e-4d3d-9f83-bb58b1a311de/report.json' }) {

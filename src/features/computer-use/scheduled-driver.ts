@@ -143,11 +143,6 @@ export class ScheduledComputerDriver implements DeviceDriver {
     if (options?.actor !== undefined && !['ai', 'human'].includes(options.actor)) throw new ComputerError('INVALID_ACTOR', '输入来源无效')
     this.highest = epoch
     const active = { epoch, actor: options?.actor ?? 'ai', controller: new AbortController() }; this.active = active
-    const foreground = this.surface === 'local-desktop' ? this.inner.foregroundHandoff : undefined
-    if (foreground) try {
-      await foreground.context(signal ? AbortSignal.any([signal, active.controller.signal]) : active.controller.signal)
-      this.fence(epoch); signal?.throwIfAborted()
-    } catch (error) { if (this.active === active) { active.controller.abort(error); this.active = undefined }; throw error }
     return { epoch, scheduled: true }
   }
   private releasePhysical(physical = this.physical): Promise<unknown> {
@@ -179,9 +174,9 @@ export class ScheduledComputerDriver implements DeviceDriver {
     if (errors.length) throw new ComputerActionCleanupError(undefined, errors)
     return { released: true }
   }
-  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal): Promise<unknown> {
+  act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, authority?: import('./contract.ts').ComputerInputAuthority): Promise<unknown> {
     const lease = this.fence(epoch), operationSignal = signal ? AbortSignal.any([signal, lease.controller.signal]) : lease.controller.signal
-    const foreground = this.surface === 'local-desktop' ? this.inner.foregroundHandoff : undefined, queuedSequence = foreground?.physicalSequence
+    const foreground = authority?.physicalInputApproved === true && this.surface === 'local-desktop' ? this.inner.foregroundHandoff : undefined, queuedSequence = foreground?.physicalSequence
     const operation = this.scheduler.run(this.surface, operationSignal, async () => {
       this.fence(epoch); operationSignal.throwIfAborted()
       // Retry only an acknowledged cleanup boundary, never the target action.
@@ -224,7 +219,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
         physical = { epoch: nativeEpoch, logicalEpoch: epoch }; this.physical = physical
         await this.inner.lease(physical.epoch, operationSignal, { actor: lease.actor })
         this.fence(epoch); operationSignal.throwIfAborted()
-        result = await this.inner.act(physical.epoch, targetId, action, operationSignal, pending ? { foregroundTicket: pending.ticket } : undefined)
+        result = await this.inner.act(physical.epoch, targetId, action, operationSignal, { physicalInputApproved: authority?.physicalInputApproved === true, ...(pending ? { foregroundTicket: pending.ticket } : {}) })
         this.fence(epoch); operationSignal.throwIfAborted(); succeeded = true
       } catch (error) { actionError = error; actionFailed = true }
       if (physical) try { released = await this.releasePhysical(physical) } catch (error) { cleanupErrors.push(error) }

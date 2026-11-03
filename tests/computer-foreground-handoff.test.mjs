@@ -27,7 +27,7 @@ function create(label, scheduler, order, { surface = 'local-desktop', enabled = 
   const driver = new ScheduledComputerDriver(inner, surface, scheduler)
   return { driver, inner, foreground, identity, state, emit(event) { for (const fn of listeners) fn(event) }, physical() { state.sequence = String(BigInt(state.sequence) + 1n); state.token = null; state.ticket = null; for (const fn of listeners) fn({ event: 'foregroundContextInvalidated', physicalSequence: state.sequence, identity }) } }
 }
-const move = { kind: 'move', x: 2, y: 3 }, act = fixture => fixture.driver.act(1, fixture.identity.pid === 101 ? 'A' : 'B', move)
+const move = { kind: 'move', x: 2, y: 3 }, act = fixture => fixture.driver.act(1, fixture.identity.pid === 101 ? 'A' : 'B', move, undefined, { physicalInputApproved: true })
 async function pair() { const scheduler = new ComputerInputScheduler(), order = [], a = create('A', scheduler, order), b = create('B', scheduler, order); await a.driver.lease(1); await b.driver.lease(1); return { scheduler, order, a, b } }
 async function close(...items) { await Promise.all(items.map(f => f.driver.dispose())) }
 
@@ -95,7 +95,7 @@ test('the original action error and failed release remain separate, and neither 
   assert.equal(scheduler.foregroundDonor('local-desktop'), undefined); fail = false; await close(a, b)
 })
 test('human actor and logical zero are preserved while each controlled action still gets a ticket', async () => {
-  const f = create('A', new ComputerInputScheduler(), []); await f.driver.lease(0, undefined, { actor: 'human' }); await f.driver.act(0, 'A', move); assert.equal(f.state.actor, 'human'); assert.equal(f.state.prepare, 1); assert.equal(f.state.act, 1); await close(f)
+  const f = create('A', new ComputerInputScheduler(), []); await f.driver.lease(0, undefined, { actor: 'human' }); await f.driver.act(0, 'A', move, undefined, { physicalInputApproved: true }); assert.equal(f.state.actor, 'human'); assert.equal(f.state.prepare, 1); assert.equal(f.state.act, 1); await close(f)
 })
 test('private wire validators strip payloads and reject malformed identities, tickets and grant receipts', () => {
   const f = create('A', new ComputerInputScheduler(), []), identity = f.identity

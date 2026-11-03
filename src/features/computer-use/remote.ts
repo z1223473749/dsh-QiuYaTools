@@ -183,6 +183,8 @@ export class RemoteComputerDriver implements DeviceDriver {
   async lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }): Promise<unknown> {
     if (this.disposed) throw new ComputerError('DISPOSED', '独立电脑连接已关闭')
     if (this.inputUncertain) throw new ComputerError('REMOTE_ACTION_UNCONFIRMED', '远端输入结果未确认，请用户重新连接并观察实际状态')
+    const status = await this.status(signal)
+    if (!(Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-input') : status.capabilities?.virtualInput === true)) throw new ComputerError('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新目标电脑的执行器以支持虚拟输入隔离。')
     epochNumber(epoch)
     if (epoch <= this.issuedEpoch) throw new ComputerError('STALE_EPOCH', '远端控制周期必须递增')
     this.issuedEpoch = epoch
@@ -202,8 +204,8 @@ export class RemoteComputerDriver implements DeviceDriver {
     if (this.activeEpoch === epoch) this.activeEpoch = undefined
     return result
   }
-  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal) {
-    try { return await this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action) }, signal) }
+  async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, authority?: import('./contract.ts').ComputerInputAuthority) {
+    try { return await this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action), physicalInputApproved: authority?.physicalInputApproved === true }, signal) }
     catch (error) {
       if (error instanceof ComputerError && error.code === 'REMOTE_ACTION_UNCONFIRMED') {
         this.inputUncertain = true
@@ -428,7 +430,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
             const targetId = requireIdentity(payload.targetId, '目标'), action = parseComputerAction(payload.action)
             const aborted = () => { if (active === lease) void revokeLease().catch(() => {}) }
             controller.signal.addEventListener('abort', aborted, { once: true })
-            try { result = await driver.act(lease.nativeEpoch, targetId, action, controller.signal); if (active !== lease) throw new ComputerError('CONTROL_CHANGED', '执行期间控制权已变化') }
+            try { result = await driver.act(lease.nativeEpoch, targetId, action, controller.signal, { physicalInputApproved: payload.physicalInputApproved === true }); if (active !== lease) throw new ComputerError('CONTROL_CHANGED', '执行期间控制权已变化') }
             finally { controller.signal.removeEventListener('abort', aborted) }
           }
         }

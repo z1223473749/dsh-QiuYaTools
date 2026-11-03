@@ -23,7 +23,7 @@ function device(label) {
   const listeners = new Set(), calls = []; let frame = 0
   return { calls, label, emit(event) { for (const callback of listeners) callback(event) },
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback) },
-    async status() { return { available: true, label } }, async targets() { return [target] },
+    async status() { return { available: true, label, capabilities: { virtualInput: true } } }, async targets() { return [target] },
     async observe() { return { targetId: target.id, frameId: `${label}-${++frame}`, imageBase64: '/9j/2Q==', mediaType: 'image/jpeg', width: 100, height: 80, elements: label, geometry } },
     async lease(epoch, _signal, options) { calls.push(['lease', epoch, options?.actor]) }, async release(epoch) { calls.push(['release', epoch]) },
     async act(epoch, _id, _action, signal) { signal?.throwIfAborted(); calls.push(['act', epoch]); return { label } },
