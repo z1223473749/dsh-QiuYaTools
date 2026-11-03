@@ -88,7 +88,7 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>, targ
       if (getThemeMotion(snapshot.value, theme.id) === 'dynamic') {
         // Art and reading surfaces are already installed. Unsupported motion
         // must never prevent selecting a theme or using its static fallback.
-        try { mount.disposeScene = theme.installScene?.(doc) } catch { /* retain static art */ }
+        try { mount.disposeScene = theme.installScene?.(doc, _ctx) } catch { /* retain static art */ }
       }
     }
   }

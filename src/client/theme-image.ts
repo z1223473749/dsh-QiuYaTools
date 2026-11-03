@@ -1,6 +1,6 @@
 import { MAX_THEME_IMAGE_BYTES } from '../custom-themes.ts'
 export type ThemeImageError = 'qThemeImageInvalid' | 'qThemeImageLarge'
-export interface ImportedThemeImage { image: string; width: number; height: number; accent: string }
+export interface ImportedThemeImage { image: string; width: number; height: number; accent: string; workingImage: string }
 /** Decode and re-encode locally to remove metadata and bound profile size. */
 export async function importThemeImage(file: File): Promise<ImportedThemeImage> {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || !file.size) throw new Error('qThemeImageInvalid')
@@ -16,6 +16,9 @@ export async function importThemeImage(file: File): Promise<ImportedThemeImage> 
     const painter = canvas.getContext('2d')
     if (!painter) throw new Error('qThemeImageInvalid')
     painter.fillStyle = '#fffaf5'; painter.fillRect(0, 0, canvas.width, canvas.height); painter.drawImage(img, 0, 0, canvas.width, canvas.height)
+    // Preserve a separate high-quality working image for analysis and cutouts.
+    let workingImage = canvas.toDataURL('image/webp', .95)
+    if (workingImage.length > 2_800_000) workingImage = canvas.toDataURL('image/webp', .82)
     let image = ''
     for (const quality of [.84, .7, .54, .38]) {
       image = canvas.toDataURL('image/webp', quality)
@@ -41,6 +44,6 @@ export async function importThemeImage(file: File): Promise<ImportedThemeImage> 
     }
     const chosen = [...colors.values()].sort((a, b) => b.count - a.count)[0]
     const accent = chosen ? '#' + chosen.sum.map(v => Math.round(v / chosen.count).toString(16).padStart(2, '0')).join('') : '#ad563e'
-    return { image, width: canvas.width, height: canvas.height, accent }
+    return { image, width: canvas.width, height: canvas.height, accent, workingImage }
   } finally { URL.revokeObjectURL(url) }
 }

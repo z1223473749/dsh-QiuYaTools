@@ -62,8 +62,10 @@ assert.deepEqual(unwrap(host.Config({})), expected,
   'callable Config and Standard Schema must agree')
 
 const custom = { id: 'custom:sample', name: '我的风景', image: 'data:image/webp;base64,UklGRg==', width: 800, height: 600, accent: '#ad563e', motion: 'dynamic', movement: 'pan', atmosphere: 'snow', intensity: .35, speed: .45, x: 50, y: 62, zoom: 1.2, mask: .9 }
+const smart = { version: 1, assetId: 'a'.repeat(64), sourceHash: 'b'.repeat(64), regions: [{ id: 'r0', kind: 'sway', label: '柳枝', polygon: [[.1,.1],[.3,.1],[.3,.8]], anchor: [.2,.1], tip: [.2,.8], amplitude: .008, speed: 1, direction: 0, enabled: true }], protect: [[[.4,.3],[.5,.3],[.5,.4]]], strokes: [{ regionId: 'r0', mode: 'protect', radius: .01, points: [[.4,.3]] }] }
 for (const input of [
   { qThemeId: custom.id, qCustomThemes: [custom] },
+  { qCustomThemes: [{ ...custom, smartMotion: smart }] },
   { qCustomThemes: [{ ...custom, movement: 'orbit', atmosphere: 'aurora', atmosphereColor: '#8ce8d2', speed: 5 }] },
   { pasteCharacterThreshold: 1, pasteLineThreshold: 1 },
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
@@ -95,6 +97,9 @@ for (const input of [{ qThemeSettings: {} }, { qThemeSettings: { ocean: {} } }])
 const invalid = [
   { qCustomThemes: [{ ...custom, image: 'https://example.com/a.png' }] },
   { qCustomThemes: [{ ...custom, mask: .1 }] },
+  { qCustomThemes: [{ ...custom, smartMotion: { ...smart, assetId: '../file' } }] },
+  { qCustomThemes: [{ ...custom, smartMotion: { ...smart, regions: [{ ...smart.regions[0], kind: 'script' }] } }] },
+  { qCustomThemes: [{ ...custom, smartMotion: { ...smart, regions: [{ ...smart.regions[0], amplitude: 100 }] } }] },
   { qCustomThemes: [{ ...custom, speed: 5.05 }] },
   { qCustomThemes: [{ ...custom, atmosphereColor: '#fff;}' }] },
   { qCustomThemes: [{ ...custom, zoom: Infinity }] },
@@ -151,6 +156,7 @@ host.apply({
 assert.deepEqual(injections, [
   ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
   ['connection', 'webServer'], ['connection'], ['settings'], ['connection', 'webServer'],
+  ['connection', 'llm', 'attachments', 'profileContext'],
   ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
 ])
 assert.equal(settingsOwner, owner)
@@ -200,7 +206,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 27, applied: true,
+    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 30, applied: true,
   })
 })
 

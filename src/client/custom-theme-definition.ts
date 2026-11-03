@@ -1,5 +1,6 @@
 import type { CustomTheme } from '../custom-themes.ts'
 import type { ThemeDefinition } from './theme-catalog.ts'
+import { createSmartThemeArt } from './smart-theme-art.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
 import basePalette from './themes/sunset.css'
 function mix(hex: string, target: number, weight: number): string {
@@ -24,6 +25,6 @@ ${selector} [data-slot="main.conversation"] > [data-phase]{background-position:c
     motionLabel: 'qThemeCustomMotion', label: 'Q Custom', art: theme.image, accent, accentDark: dark, soft: theme.accent,
     previewPosition: position, bannerPosition: position, palette,
     revision: JSON.stringify(theme),
-    installScene: doc => installLandscapeScene(doc, { ...theme, position }),
+    installScene: (doc, ctx) => installLandscapeScene(doc, { ...theme, position, ...(theme.smartMotion ? { createArt: (doc: Document) => createSmartThemeArt(doc, theme, ctx) } : {}) }),
   }
 }

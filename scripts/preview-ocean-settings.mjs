@@ -31,7 +31,7 @@ const form={getSnapshot:()=>snapshot,subscribe(fn){listeners.add(fn);return()=>l
   snapshot={...snapshot,value,revision:snapshot.revision+1};localStorage.setItem('qyt.ocean.preview.settings',JSON.stringify(value));for(const listener of [...listeners])listener();return true;
 }};
 const support={status:'ready',harnessVersion:'0.2.1-rc.2',minimumHarnessVersion:'0.2.1-rc.2',versionSupported:true};
-const ctx={sessionWindowSupport:{getSnapshot:()=>support,subscribe:()=>()=>{}},get(){return undefined}};
+const ctx={sessionWindowSupport:{getSnapshot:()=>support,subscribe:()=>()=>{}},connection:{rpc:{async call(channel,endpoint,payload,signal){if(!/^[/][A-Za-z0-9._~-]+$/.test(channel))throw Error('Invalid native RPC channel');const response=await fetch(channel+'/'+endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'client-request',rpcId:crypto.randomUUID(),method:endpoint,payload}),signal});if(!response.ok)throw Error('unavailable');return(await response.json()).result}}},get(name){return name==='connection'?this.connection:undefined}};
 installRealQTheme(ctx,form);
 createRoot(document.querySelector('[data-slot="settings.section"]')).render(React.createElement(QiuYaToolsSettings,{form,ctx,t:key=>zh[key]}));
 window.__oceanSettingsFixture={mutations,getSnapshot:()=>structuredClone(snapshot),setFailure(value){failure=value}};

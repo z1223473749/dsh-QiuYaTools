@@ -1,4 +1,5 @@
 import { CustomThemeEditor } from './custom-theme-editor.tsx'
+import { discardMotionAssets } from './smart-theme-api.ts'
 import { getCustomThemes, MAX_CUSTOM_THEMES, type CustomTheme } from '../custom-themes.ts'
 import { installBrowserDiagnosticClient } from '../features/browser-diagnostics/client.tsx'
 import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
@@ -299,7 +300,11 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                   { op: 'set', path: ['qCustomThemes'], value: original ? current.map(item => item.id === value.id ? value : item) : [...current, value] },
                   { op: 'set', path: ['qThemeId'], value: value.id },
                 ])
-                if (accepted) setThemeEditor(null)
+                if (accepted) {
+                  const previous = original?.smartMotion?.assetId
+                  if (previous && previous !== value.smartMotion?.assetId) await discardMotionAssets(ctx, previous).catch(() => {})
+                  setThemeEditor(null)
+                }
                 return accepted
               }} onDelete={themeEditor.original ? async id => {
                 const original = themeEditor.original
@@ -310,7 +315,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                   { op: 'set', path: ['qCustomThemes'], value: current.filter(item => item.id !== id) },
                   ...(latest?.qThemeId === id ? [{ op: 'set' as const, path: ['qThemeId'], value: DEFAULT_Q_THEME_ID }] : []),
                 ])
-                if (accepted) setThemeEditor(null)
+                if (accepted) {
+                  if (original?.smartMotion) await discardMotionAssets(ctx, original.smartMotion.assetId).catch(() => {})
+                  setThemeEditor(null)
+                }
                 return accepted
               } : undefined}/>}
             </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className={`qyt-feature-panel${feature.field === 'pastedTextEnabled' ? ' qyt-attachment-panel' : ''}`} key={feature.field}>

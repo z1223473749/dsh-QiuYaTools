@@ -1,3 +1,4 @@
+import type { Context } from '@deepseek-ai/cordis'
 import { getCustomThemes } from '../custom-themes.ts'
 import { createCustomTheme } from './custom-theme-definition.ts'
 import { DEFAULT_Q_THEME_ID, Q_THEME_IDS, type QThemeId, type QPresetThemeId, type Preferences } from '../shared.ts'
@@ -31,7 +32,7 @@ export interface ThemeDefinition {
   readonly bannerPosition?: string
   readonly previewPosition?: string
   readonly palette: string
-  readonly installScene?: (doc: Document) => () => void
+  readonly installScene?: (doc: Document, ctx?: Context) => () => void
 }
 
 const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {

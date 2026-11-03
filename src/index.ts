@@ -3,6 +3,8 @@ import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { installSessionWindowsHost } from './features/session-windows/host.ts'
 import { installPluginUpdatesHost } from './updates/host.ts'
+import { installSmartThemeHost } from './features/smart-theme/host.ts'
+import { MOTION_KINDS } from './smart-motion.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
 import { installComputerHost } from './features/computer-use/host.ts'
@@ -66,6 +68,23 @@ export const Config = z.object({
     movement: z.union(THEME_MOVEMENTS.map(value => z.const(value))),
     atmosphere: z.union(THEME_ATMOSPHERES.map(value => z.const(value))),
     atmosphereColor: z.string().pattern(/^#[a-f0-9]{6}$/i),
+    smartMotion: z.union([z.never(), z.object({
+      version: z.const(1), assetId: z.string().pattern(/^[a-f0-9]{64}$/), sourceHash: z.string().pattern(/^[a-f0-9]{64}$/),
+      regions: z.array(z.object({
+        id: z.string().pattern(/^r[0-7]$/), kind: z.union(MOTION_KINDS.map(v => z.const(v))), label: z.string().min(1).max(32),
+        polygon: z.array(z.array(z.number().min(0).max(1)).min(2).max(2)).min(3).max(64),
+        segmentation: z.union([z.never(), z.object({
+          crop: z.object({ id: z.string().pattern(/^r[0-7]$/), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().min(.005).max(1), height: z.number().min(.005).max(1) }),
+          choice: z.union([z.never(), z.number().min(0).max(23)]),
+          positive: z.array(z.array(z.number().min(0).max(1)).min(2).max(2)).max(4),
+          negative: z.array(z.array(z.number().min(0).max(1)).min(2).max(2)).max(4),
+        })]),
+        anchor: z.array(z.number().min(0).max(1)).min(2).max(2), tip: z.array(z.number().min(0).max(1)).min(2).max(2),
+        amplitude: z.number().min(0).max(.025), speed: z.number().min(.1).max(3), direction: z.number().min(-180).max(180), enabled: z.boolean(),
+      })).max(8),
+      protect: z.array(z.array(z.array(z.number().min(0).max(1)).min(2).max(2)).min(3).max(64)).max(16),
+      strokes: z.array(z.object({ regionId: z.string().pattern(/^r[0-7]$/), mode: z.union(['paint', 'erase', 'protect'].map(v => z.const(v))), radius: z.number().min(.002).max(.1), points: z.array(z.array(z.number().min(0).max(1)).min(2).max(2)).min(1).max(128) })).max(128),
+    })]),
     intensity: z.number().min(0).max(1), speed: z.number().min(.1).max(5),
     x: z.number().min(0).max(100), y: z.number().min(0).max(100),
     zoom: z.number().min(1).max(2), mask: z.number().min(.5).max(1),
@@ -138,6 +157,9 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.inject(['connection', 'webServer'], child => {
     child.effect(() => installSessionWindowsHost(child, () => config.enabled.get() && config.sessionWindowsEnabled.get()))
+  })
+  ctx.inject(['connection', 'llm', 'attachments', 'profileContext'], child => {
+    child.effect(() => installSmartThemeHost(child, { isAssetReferenced: assetId => config.qCustomThemes.get().some(theme => theme.smartMotion?.assetId === assetId) }))
   })
   ctx.inject(['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'], child => {
     child.effect(() => installPromptSuggestionsHost(child, () => config.enabled.get() && config.promptSuggestionsEnabled.get()))

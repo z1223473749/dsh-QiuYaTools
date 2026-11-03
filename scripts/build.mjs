@@ -1,5 +1,5 @@
 import { build } from 'esbuild'
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile, cp } from 'node:fs/promises'
 import { buildSessionWindowHelper } from '../src/features/session-windows/build-helper.mjs'
 import { buildMacOSComputer } from './build-macos-computer.mjs'
 import { createHash } from 'node:crypto'
@@ -20,6 +20,10 @@ const moonfrostScene = await readFile(new URL('../assets/q-moonfrost-scene.jpg',
 const moonfrostPlate = await readFile(new URL('../assets/q-moonfrost-clean-plate.jpg', import.meta.url))
 await writeFile(new URL('../src/client/brand-assets.ts', import.meta.url), `// Generated from assets/ by scripts/build.mjs before bundling.\nexport const MONO_ICON_DATA_URL: string = ${JSON.stringify(`data:image/png;base64,${menuIcon.toString('base64')}`)}\nexport const COLOR_ICON_DATA_URL: string = ${JSON.stringify(`data:image/webp;base64,${colorIcon.toString('base64')}`)}\nexport const OCEAN_SCENE_DATA_URL: string = ${JSON.stringify(`data:image/webp;base64,${oceanScene.toString('base64')}`)}\nexport const OCEAN_CLEAN_PLATE_DATA_URL: string = ${JSON.stringify(`data:image/jpeg;base64,${oceanCleanPlate.toString('base64')}`)}\nexport const SUNSET_SCENE_DATA_URL: string = ${JSON.stringify(`data:image/jpeg;base64,${sunsetScene.toString('base64')}`)}\nexport const MOONFROST_CLEAN_PLATE_DATA_URL: string = ${JSON.stringify(`data:image/jpeg;base64,${moonfrostPlate.toString('base64')}`)}\nexport const MOONFROST_SCENE_DATA_URL: string = ${JSON.stringify(`data:image/jpeg;base64,${moonfrostScene.toString('base64')}`)}\nexport const BEGONIA_SCENE_DATA_URL: string = ${JSON.stringify(`data:image/jpeg;base64,${begoniaScene.toString('base64')}`)}\n`)
 await mkdir('lib', { recursive: true })
+await mkdir('lib/smart-segmentation', { recursive: true })
+await build({ entryPoints: ['src/client/smart-segmentation-worker.ts'], outfile: 'lib/smart-segmentation/worker.js', bundle: true, platform: 'browser', format: 'esm', target: 'es2022' })
+for (const file of ['ort.wasm.min.mjs', 'ort-wasm-simd-threaded.mjs']) await cp(resolve('node_modules/onnxruntime-web/dist', file), resolve('lib/smart-segmentation', file))
+await writeFile('lib/smart-segmentation/NOTICE.txt', 'ONNX Runtime Web 1.20.1 — Copyright (c) Microsoft Corporation. All rights reserved. MIT license: https://github.com/microsoft/onnxruntime/blob/v1.20.1/LICENSE\nSlimSAM quantized ONNX weights (downloaded on first use, not included in this package): Xenova/slimsam-77-uniform, revision 5850ab45f587c112167512ffef949107115e26a0, Apache-2.0. https://huggingface.co/Xenova/slimsam-77-uniform\n')
 await build({
   entryPoints: ['src/index.ts'], outfile: 'lib/index.js', bundle: true,
   // Ship schema validation with the Host; installed/linked plugins cannot rely

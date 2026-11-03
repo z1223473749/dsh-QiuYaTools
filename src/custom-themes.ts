@@ -1,3 +1,4 @@
+import { isSmartMotion, type SmartMotion } from './smart-motion.ts'
 /** Small self-contained images persist with the active Host profile. No blob
  * URL, browser-local cache or remote image service is needed on reload. */
 export const MAX_CUSTOM_THEMES = 8
@@ -24,6 +25,7 @@ export interface CustomTheme {
   atmosphere: ThemeAtmosphere
   /** Omitted in older themes; each effect then uses its own soft palette. */
   atmosphereColor?: string
+  smartMotion?: SmartMotion
   intensity: number
   speed: number
   x: number
@@ -43,6 +45,7 @@ export function isCustomTheme(value: unknown): value is CustomTheme {
     && ['dynamic', 'static'].includes(v.motion) && THEME_MOVEMENTS.includes(v.movement)
     && THEME_ATMOSPHERES.includes(v.atmosphere)
     && (v.atmosphereColor === undefined || (typeof v.atmosphereColor === 'string' && /^#[a-f0-9]{6}$/i.test(v.atmosphereColor)))
+    && (v.smartMotion === undefined || isSmartMotion(v.smartMotion))
     && range(v.intensity, 0, 1) && range(v.speed, .1, 5) && range(v.x, 0, 100) && range(v.y, 0, 100)
     && range(v.zoom, 1, 2) && range(v.mask, .5, 1)
 }
