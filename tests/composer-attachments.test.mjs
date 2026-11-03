@@ -1,3 +1,4 @@
+import { Context } from '@deepseek-ai/cordis'
 import assert from 'node:assert/strict'
 import test, { after } from 'node:test'
 import { createRequire } from 'node:module'
@@ -18,8 +19,13 @@ dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = tru
 dom.window.HTMLDialogElement.prototype.close = function () { this.open = false }
 const { createRoot } = require('react-dom/client')
 const compiled = await build({
-  stdin: { contents: "export * from './src/features/composer-attachments/drop.ts'; export * from './src/features/composer-attachments/preview.ts'; export * from './src/features/composer-attachments/index.tsx'; export {createPastedTextFile} from './src/features/pasted-text/index.tsx'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'tsx' },
+  stdin: { contents: "export * from './src/features/composer-attachments/drop.ts'; export * from './src/features/composer-attachments/preview.ts'; export * from './src/features/composer-attachments/index.tsx'; export {createPastedTextFile} from './src/features/pasted-text/index.tsx'; export {installFeatures} from './src/client/features.ts'; export {FEATURE_FIELDS} from './src/shared.ts'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'tsx' },
   bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external',
+  plugins: [{ name: 'isolate-unrelated-features', setup(builder) {
+    builder.onResolve({ filter: /\/(?:bulk-archive|session-windows|plan-comments|conversation-comments|sidebar-tools|prompt-suggestions|git)\/index\.tsx?$/ }, () => ({ path: 'installers', namespace: 'attachment-test' }))
+    builder.onResolve({ filter: /conversation-comments\/composer-reference\.ts$/ }, () => ({ path: 'installers', namespace: 'attachment-test' }))
+    builder.onLoad({ filter: /.*/, namespace: 'attachment-test' }, () => ({ contents: ['installBulkArchive', 'installSessionWindows', 'installPlanComments', 'installConversationComments', 'installConversationCommentReferences', 'installSidebarTools', 'installPromptSuggestions', 'installGit'].map(name => `export function ${name}(){}`).join('\n') }))
+  } }],
 })
 const module = { exports: {} }
 vm.runInNewContext(compiled.outputFiles[0].text, { module, exports: module.exports, require, File, WeakMap, TextDecoder, Uint8Array, crypto, HTMLElement, document, window, DOMParser: dom.window.DOMParser, btoa })
@@ -218,4 +224,52 @@ test('attachment rail follows official upload/retry/remove state and text previe
     props = { ...props, attachments: [] }; await render()
     assert.equal(document.querySelector('.qyt-attachment-rail'), null)
   } finally { await act(async () => root.unmount()) }
+})
+
+test('one saved attachment switch controls both real installers and restores the slots on disable and unload', async () => {
+  const root = new Context(), active = new Map(), listeners = new Set()
+  const starts = [], stops = []
+  let snapshot = { status: 'ready', value: Object.fromEntries(feature.FEATURE_FIELDS.map(field => [field, false])) }
+  const provider = root.plugin({ name: 'attachment-switch-test-services', apply(ctx) {
+    ctx.provide('slots', {
+      inject(name, register) { return register() },
+      register(options, component) {
+        assert.equal(active.has(options.name), false, 're-enabling must not duplicate a slot owner')
+        active.set(options.name, component); starts.push(options.name)
+        return () => { active.delete(options.name); stops.push(options.name) }
+      },
+    })
+  } })
+  await provider.await()
+  const form = { getSnapshot: () => snapshot, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) } }
+  const owner = root.plugin({ name: 'attachment-switch-test-owner', apply(ctx) { feature.installFeatures(ctx, form) } })
+  const settle = async () => { await tick(); await tick() }
+  const update = async (value, status = 'ready') => { snapshot = { status, value: { ...snapshot.value, ...value } }; for (const listener of listeners) listener(); await settle() }
+  const slots = ['conversation.input.attachments', 'conversation.input.overlay']
+  try {
+    await owner.await(); await settle()
+    assert.equal(active.size, 0, 'a saved false must also leave native attachment presentation in place')
+    for (let round = 0; round < 2; round++) {
+      await update({ enabled: true, pastedTextEnabled: true })
+      assert.deepEqual([...active.keys()].sort(), slots)
+      await update({ pasteCharacterThreshold: 2000, pasteLineThreshold: 30 })
+      assert.equal(starts.length, (round + 1) * 2, 'threshold edits do not reinstall listeners')
+      await update({ pastedTextEnabled: false })
+      assert.equal(active.size, 0, 'one switch removes conversion, file drop and previews together')
+    }
+    await update({ pastedTextEnabled: true })
+    assert.equal(active.size, 2)
+    await update({ enabled: false })
+    assert.equal(active.size, 0, 'the toolbox master also removes both installers')
+    await update({ enabled: true }, 'loading')
+    assert.equal(active.size, 0, 'an unresolved settings snapshot cannot install either feature')
+    await update({ enabled: true })
+    assert.equal(active.size, 2)
+  } finally {
+    await owner.dispose(); await settle()
+    await provider.dispose()
+  }
+  assert.equal(active.size, 0)
+  assert.equal(listeners.size, 0)
+  assert.deepEqual(starts.sort(), stops.sort(), 'each slot contribution is removed exactly once')
 })

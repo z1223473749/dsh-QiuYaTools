@@ -44,7 +44,7 @@ export interface Config {
 
 export const Config = z.object({
   enabled: z.boolean().default(true).description('启用工具箱功能').volatile(),
-  pastedTextEnabled: z.boolean().default(true).description('将长文本粘贴为 TXT 附件').volatile(),
+  pastedTextEnabled: z.boolean().default(true).description('附件增强：长文本转 TXT、跨应用文件拖入与内容预览').volatile(),
   sessionWindowsEnabled: z.boolean().default(true).description('在独立窗口中打开会话').volatile(),
   bulkArchiveEnabled: z.boolean().default(true).description('多选会话并批量归档，或归档工作区内的全部会话').volatile(),
   planCommentsEnabled: z.boolean().default(true).description('为计划添加批注并提交修改建议').volatile(),

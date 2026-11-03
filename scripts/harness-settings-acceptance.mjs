@@ -6,7 +6,7 @@ import { join, relative, resolve, sep, win32 } from 'node:path'
 
 export const SETTINGS_ACCEPTANCE_PAGES = [
   { id: 'computer', label: '电脑操控', heading: '电脑操控', toggle: '启用电脑操控', regions: ['系统权限', '始终允许的应用', '电脑任务概览'] },
-  { id: 'pastedTextEnabled', label: '长文本', heading: '大文本粘贴转 TXT 附件', toggle: '大文本粘贴转 TXT 附件', kind: 'thresholds' },
+  { id: 'pastedTextEnabled', label: '附件增强', heading: '附件增强', toggle: '附件增强', kind: 'thresholds' },
   { id: 'sessionWindowsEnabled', label: '独立窗口', heading: '会话独立窗口', toggle: '会话独立窗口', steps: ['新窗口打开', '拖出列表'], kind: 'windows' },
   { id: 'bulkArchiveEnabled', label: '批量归档', heading: '会话多选与批量归档', toggle: '会话多选与批量归档', steps: ['Shift', '右键已选会话', '右键工作区'] },
   { id: 'planCommentsEnabled', label: '计划批注', heading: '计划批注与修改建议', toggle: '计划批注与修改建议', features: [
@@ -150,9 +150,9 @@ export async function captureSettingsTabs(page, { screenshot }) {
     await panel.evaluate(node => { node.scrollTop = 0 })
     results.push({ ...state, screenshots: images })
   }
-  // Preserve the original case's initial long-text page for later functional
+  // Preserve the original case's initial attachment page for later functional
   // assertions, without writing a single preference during the visual tour.
-  await page.getByRole('tab', { name: '长文本', exact: true }).click()
+  await page.getByRole('tab', { name: '附件增强', exact: true }).click()
   return { pages: results, boundary: 'Eleven actual settings pages, feature-specific semantic and writable-state checks (including both independent comment cards), and cropped installed-UI screenshots. Browsing does not exercise every feature or prove real-model reasoning.' }
 }
 

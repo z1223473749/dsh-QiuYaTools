@@ -77,6 +77,9 @@ test('portable transformer preserves reviewed native business body with current 
   ["      await waitFor(async () => await page.locator(`[data-qyt-computer-environment=${JSON.stringify(alphaId)}]:visible`).getByRole('button', { name: '操作环境：这台电脑', exact: true }).count() === 1, 'The exact chat did not return to its local environment')",
    "      await page.getByLabel('设置', { exact: true }).getByRole('button', { name: '关闭', exact: true }).click()"],
  ]){assert.equal(body.split(before).length,2);body=body.replace(before,after)}
+ // Only the public settings tab was renamed; preserve the historical body guard.
+ const attachmentTab="getByRole('tab', { name: '附件增强', exact: true })";
+ assert.equal(body.split(attachmentTab).length,3);body=body.replaceAll(attachmentTab,"getByRole('tab', { name: '长文本', exact: true })");
  // Reviewed additions are the gated attachment cases, current attachment-rail
  // assertions and explicit theme selection; native case order/deadlines remain.
  assert.notEqual(hash(Buffer.from(s)),hash(Buffer.from(body)));assert.equal(hash(Buffer.from(body)),'9e91477a2942118bf16d22a4817357bf85772b07612a71177a3067be143b91a0');assert(s.includes('timeoutMs = 30000'));assert(s.includes('within3000ms'));assert(!s.includes("host.kill('SIGKILL')"));assert(s.includes('readFinalOwnUploadedFile'));

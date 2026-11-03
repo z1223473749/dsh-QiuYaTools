@@ -285,7 +285,7 @@ if (process.argv.includes('--generate-only')) {
     assert.equal(both.qThemeSettings.begonia.motion, 'static')
     assert.equal(both.qThemeSettings.moonfrost.motion, 'static')
     await page.evaluate(() => { window.__detachedThemePreview = document.querySelector('iframe[data-qyt-theme-preview]').contentDocument })
-    await page.getByRole('tab', { name: '长文本', exact: true }).click()
+    await page.getByRole('tab', { name: '附件增强', exact: true }).click()
     assert.equal(await page.locator('iframe[data-qyt-theme-preview]').count(), 0)
     assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
     assert.deepEqual(errors, [])

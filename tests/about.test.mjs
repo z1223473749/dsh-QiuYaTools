@@ -61,7 +61,7 @@ test('About presents the chosen brand art, keeps every public entry and hides de
     const story = hero.querySelector('.qyt-about-story')
     assert.ok(story, 'the story belongs to the illustrated brand card')
     assert.equal(story.querySelector('h4').textContent, '从日常的小事开始')
-    assert.deepEqual([...story.querySelectorAll('.qyt-about-features > span')].map(chip => chip.textContent), ['长文本附件', '会话分窗', '批量归档', '计划批注'])
+    assert.deepEqual([...story.querySelectorAll('.qyt-about-features > span')].map(chip => chip.textContent), ['附件增强', '会话分窗', '批量归档', '计划批注'])
     assert.equal(f.container.querySelectorAll('.qyt-about-story').length, 1, 'there is no detached story below the brand card')
     for (const selector of ['.qyt-about-sky', '.qyt-about-halo', '.qyt-about-sea']) {
       assert.equal(f.container.querySelector(selector).getAttribute('aria-hidden'), 'true')

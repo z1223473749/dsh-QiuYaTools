@@ -14,7 +14,7 @@ export function AboutPanel(_props: { version: string; ctx: Context }) {
         <div className="qyt-about-art"><span className="qyt-about-halo" aria-hidden="true"/><img src={COLOR_ICON_DATA_URL} width="108" height="108" alt="白发少年坐在鲸鱼上" /></div>
         <div className="qyt-about-copy"><span className="qyt-about-eyebrow">QiuYa 增强工具箱</span><h3 className="qyt-about-title">QiuYaTools<span aria-hidden="true">.</span></h3><p className="qyt-about-tagline">给 Harness 加一点顺手的小功能。</p></div>
       </div>
-      <section className="qyt-about-story"><h4>从日常的小事开始</h4><p>从一次粘贴，到多个并行会话，把常用操作做得更顺手。</p><div className="qyt-about-features"><span>长文本附件</span><span>会话分窗</span><span>批量归档</span><span>计划批注</span></div></section>
+      <section className="qyt-about-story"><h4>从日常的小事开始</h4><p>从一次粘贴，到多个并行会话，把常用操作做得更顺手。</p><div className="qyt-about-features"><span>附件增强</span><span>会话分窗</span><span>批量归档</span><span>计划批注</span></div></section>
       <div className="qyt-about-sea" aria-hidden="true"/>
     </header>
     <nav className="qyt-about-links" aria-label="项目与反馈">

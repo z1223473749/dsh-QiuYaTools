@@ -132,7 +132,6 @@ test('built client follows the Harness loader and settings contribution lifecycl
     ['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'],
     ['connection'],
     ['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'],
-    ['slots'],
     ['inputTriggers', 'sessions', 'uiSession'],
     ['connection'],
   ], 'background updates and chat contributions wait for their real public connection and sidebar services')

@@ -27,21 +27,6 @@ const dependencies: Record<FeatureField, string[]> = {
 
 /** The shared form is Host-backed, so changes also reach independent Session windows. */
 export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): void {
-  // File drag/drop and previews also apply when long-text conversion is off.
-  ctx.inject(['slots'], scope => {
-    scope.effect(() => {
-      let stop: (() => void) | undefined
-      const sync = (): void => {
-        const snapshot = form.getSnapshot()
-        const enabled = snapshot.status === 'ready' && snapshot.value?.enabled !== false
-        if (enabled && !stop) stop = installComposerAttachments(scope)
-        else if (!enabled && stop) { stop(); stop = undefined }
-      }
-      const unsubscribe = form.subscribe(sync)
-      sync()
-      return () => { unsubscribe(); stop?.() }
-    })
-  })
   // Reference decoding belongs to the plugin, not to a visible feature toggle:
   // saved drafts must remain sendable with either UI switch turned off.
   ctx.inject(['inputTriggers', 'sessions', 'uiSession'], scope => {
@@ -55,12 +40,14 @@ export function installFeatures(ctx: Context, form: ConfigForm<Preferences>): vo
         name: `qiuya-tools/${field}`,
         inject: dependencies[field],
         apply(scope: Context) {
-          if (field === 'pastedTextEnabled') scope.effect(() => installPastedText({
-            ctx: scope,
-            readThresholds: () => ({ characters: current().pasteCharacterThreshold, lines: current().pasteLineThreshold }),
-            readFileNamePrefix: () => ctx.locale.getSnapshot().active.startsWith('zh') ? '粘贴文本' : 'Pasted text',
-          }))
-          else if (field === 'sessionWindowsEnabled') scope.effect(() => installSessionWindows(scope))
+          if (field === 'pastedTextEnabled') {
+            scope.effect(() => installComposerAttachments(scope))
+            scope.effect(() => installPastedText({
+              ctx: scope,
+              readThresholds: () => ({ characters: current().pasteCharacterThreshold, lines: current().pasteLineThreshold }),
+              readFileNamePrefix: () => ctx.locale.getSnapshot().active.startsWith('zh') ? '粘贴文本' : 'Pasted text',
+            }))
+          } else if (field === 'sessionWindowsEnabled') scope.effect(() => installSessionWindows(scope))
           else if (field === 'bulkArchiveEnabled') scope.effect(() => installBulkArchive(scope))
           else if (field === 'planCommentsEnabled') scope.effect(() => installPlanComments(scope))
           else if (field === 'conversationCommentsEnabled') scope.effect(() => installConversationComments(scope))

@@ -263,7 +263,7 @@ try {
     return details
   })
   await test('settings-persist-thresholds-and-theme', async () => {
-    await page.getByRole('tab', { name: '长文本', exact: true }).click()
+    await page.getByRole('tab', { name: '附件增强', exact: true }).click()
     await page.getByRole('spinbutton').nth(0).fill('60'); await page.getByRole('spinbutton').nth(1).fill('4')
     await page.getByRole('button', { name: '保存阈值', exact: true }).click()
     await waitFor(async () => (await page.locator('.qyt-status').innerText()).includes('已保存'), 'Threshold save was not acknowledged')
@@ -272,7 +272,7 @@ try {
     await page.getByRole('radio', { name: '鲸与海', exact: true }).click()
     await waitFor(() => page.locator('body').getAttribute('data-qyt-q-theme').then(value => value === 'ocean'), 'Theme did not apply')
     await screenshot('theme'); await page.getByRole('button', { name: '关闭', exact: true }).click()
-    await openSettings(); await page.getByRole('tab', { name: '长文本', exact: true }).click()
+    await openSettings(); await page.getByRole('tab', { name: '附件增强', exact: true }).click()
     assert.equal(await page.getByRole('spinbutton').nth(0).inputValue(), '60')
     assert.equal(await page.getByRole('spinbutton').nth(1).inputValue(), '4')
     await page.getByRole('button', { name: '关闭', exact: true }).click()

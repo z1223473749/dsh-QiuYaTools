@@ -78,7 +78,7 @@ function SettingsIcon({ name }: { name: SettingsTab }) {
   if (name === 'computer') return <ComputerIcon/>
   if (name === 'gitEnabled') return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v2a6 6 0 0 1-6 6H6"/></svg>
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    {name === 'pastedTextEnabled' ? <><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" /><path d="M14 3v5h5M8 12h8M8 16h6" /></>
+    {name === 'pastedTextEnabled' ? <><path d="m8 12 6-6a3.5 3.5 0 0 1 5 5l-8 8a5 5 0 0 1-7-7l8-8M8 12l-2 2a2 2 0 0 0 3 3l8-8" /></>
       : name === 'sessionWindowsEnabled' ? <><rect x="3" y="7" width="14" height="14" rx="2" /><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M3 12h14" /></>
         : name === 'bulkArchiveEnabled' ? <><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9 13h6M9 16h6" /></>
           : name === 'planCommentsEnabled' || name === 'conversationCommentsEnabled' ? <><path d="M12 20H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v6M7 7h9M7 11h5" /><path d="m14 17 5-5 3 3-5 5-4 1zM18 13l3 3" /></>
@@ -313,31 +313,48 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                 if (accepted) setThemeEditor(null)
                 return accepted
               } : undefined}/>}
-            </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className="qyt-feature-panel" key={feature.field}>
-          <div className="qyt-card qyt-feature-summary">
+            </div> : activeTab === tab.id && FEATURES.filter(feature => feature.field === tab.id || tab.id === 'planCommentsEnabled' && feature.field === 'conversationCommentsEnabled').map(feature => <div className={`qyt-feature-panel${feature.field === 'pastedTextEnabled' ? ' qyt-attachment-panel' : ''}`} key={feature.field}>
+          <div className={`qyt-card qyt-feature-summary${feature.field === 'pastedTextEnabled' ? ' qyt-attachment-settings' : ''}`}>
             <div className="qyt-toggle-row">
               <div className="qyt-feature-heading"><span className="qyt-feature-icon"><SettingsIcon name={feature.field} /></span><h3>{t(feature.label)}</h3></div>
               <Switch className="qyt-switch" checked={isFeatureEnabled(preferences, feature.field) && (feature.field !== 'sessionWindowsEnabled' || windowCompatibility.versionSupported)} label={t(feature.label)} disabled={disabled || (feature.field === 'sessionWindowsEnabled' && !windowCompatibility.versionSupported)} onChange={value => { void setFeature(feature.field, value) }} />
             </div>
             <p className="qyt-muted">{t(feature.hint)}</p>
+            {feature.field === 'pastedTextEnabled' && <>
+              <ul className="qyt-attachment-capabilities">
+                {([
+                  ['attachmentTextTitle', 'attachmentTextHint', 'text'],
+                  ['attachmentImportTitle', 'attachmentImportHint', 'import'],
+                  ['attachmentPreviewTitle', 'attachmentPreviewHint', 'preview'],
+                ] as const).map(([title, hint, icon]) => <li key={title}>
+                  <span className="qyt-capability-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    {icon === 'text' ? <><path d="M14 3H6v18h12V7zM14 3v5h4M8 12h8M8 16h5"/></>
+                      : icon === 'import' ? <><path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5"/></>
+                        : <><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8" cy="10" r="1.5"/><path d="m4 17 5-4 4 3 3-5 4 6"/></>}
+                  </svg></span>
+                  <div><strong>{t(title)}</strong><p className="qyt-muted">{t(hint)}</p></div>
+                </li>)}
+              </ul>
+              <form className="qyt-thresholds" noValidate aria-label={t('pasteThresholds')} onSubmit={event => { void saveThresholds(event) }}>
+                <h4>{t('pasteThresholds')}</h4>
+                <p className="qyt-muted">{t('pasteThresholdHint')}</p>
+                <div className="qyt-threshold-fields">
+                  <label className="qyt-number-field">
+                    <span>{t('characterThreshold')}</span>
+                    <input type="number" inputMode="numeric" min={1} max={1_000_000} step={1} value={draft.characters} disabled={disabled} aria-invalid={thresholdError === 'invalidCharacters'} onChange={event => { editThreshold('characters', event.target.value) }} />
+                    <span className="qyt-muted">{t('characterRange')}</span>
+                  </label>
+                  <label className="qyt-number-field">
+                    <span>{t('lineThreshold')}</span>
+                    <input type="number" inputMode="numeric" min={1} max={100_000} step={1} value={draft.lines} disabled={disabled} aria-invalid={thresholdError === 'invalidLines'} onChange={event => { editThreshold('lines', event.target.value) }} />
+                    <span className="qyt-muted">{t('lineRange')}</span>
+                  </label>
+                </div>
+                <div className="qyt-threshold-footer"><p className="qyt-feedback" role={thresholdError === null ? 'status' : 'alert'}>{thresholdError === null ? t('thresholdDraft') : t(thresholdError)}</p><button className="qyt-button" type="submit" disabled={disabled || !thresholdDirty}>{t('saveThresholds')}</button></div>
+              </form>
+            </>}
           </div>
-          {feature.field === 'pastedTextEnabled' ? <form className="qyt-card qyt-thresholds" noValidate aria-label={t('pasteThresholds')} onSubmit={event => { void saveThresholds(event) }}>
-            <h4>{t('pasteThresholds')}</h4>
-            <p className="qyt-muted">{t('pasteThresholdHint')}</p>
-            <div className="qyt-threshold-fields">
-              <label className="qyt-number-field">
-                <span>{t('characterThreshold')}</span>
-                <input type="number" inputMode="numeric" min={1} max={1_000_000} step={1} value={draft.characters} disabled={disabled} aria-invalid={thresholdError === 'invalidCharacters'} onChange={event => { editThreshold('characters', event.target.value) }} />
-                <span className="qyt-muted">{t('characterRange')}</span>
-              </label>
-              <label className="qyt-number-field">
-                <span>{t('lineThreshold')}</span>
-                <input type="number" inputMode="numeric" min={1} max={100_000} step={1} value={draft.lines} disabled={disabled} aria-invalid={thresholdError === 'invalidLines'} onChange={event => { editThreshold('lines', event.target.value) }} />
-                <span className="qyt-muted">{t('lineRange')}</span>
-              </label>
-            </div>
-            <div className="qyt-threshold-footer"><p className="qyt-feedback" role={thresholdError === null ? 'status' : 'alert'}>{thresholdError === null ? t('thresholdDraft') : t(thresholdError)}</p><button className="qyt-button" type="submit" disabled={disabled || !thresholdDirty}>{t('saveThresholds')}</button></div>
-          </form> : <div className="qyt-card qyt-guide"><h4>{t('howToUse')}</h4>
+          {feature.field !== 'pastedTextEnabled' && <div className="qyt-card qyt-guide"><h4>{t('howToUse')}</h4>
             {feature.field === 'sessionWindowsEnabled' && <>
               <p className="qyt-muted">{t('sessionWindowsMinimum')} <strong>{MINIMUM_SESSION_WINDOW_HARNESS_VERSION}</strong></p>
               {!windowCompatibility.versionSupported && <p className="qyt-feedback" role="status">{t(windowCompatibility.status === 'checking' ? 'sessionWindowsVersionChecking' : windowCompatibility.status === 'ready' ? 'sessionWindowsVersionUnsupported' : 'sessionWindowsVersionUnknown')}{windowCompatibility.harnessVersion && <> {t('sessionWindowsCurrentVersion')} {windowCompatibility.harnessVersion}</>}</p>}

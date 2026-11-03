@@ -61,7 +61,7 @@ async function settings(t) {
 }
 
 test('the installed-Harness settings case rejects eleven tab labels with empty page content', async () => {
-  const labels = ['电脑操控', '长文本', '独立窗口', '批量归档', '计划批注', '会话菜单', '提示词', 'Git', 'Q 主题', '关于我们', '版本更新']
+  const labels = ['电脑操控', '附件增强', '独立窗口', '批量归档', '计划批注', '会话菜单', '提示词', 'Git', 'Q 主题', '关于我们', '版本更新']
   const dom = new JSDOM('<section class="qyt-settings"><button class="qyt-master-toggle"></button><span class="qyt-status" data-state="ready"></span>' + labels.map((label, index) => `<button role="tab" id="tab-${index}" aria-controls="panel-${index}" aria-selected="${index === 0}">${label}</button><div role="tabpanel" id="panel-${index}" aria-labelledby="tab-${index}" ${index === 0 ? '' : 'hidden'}></div>`).join('') + '</section>')
   const locator = nodes => ({
     async waitFor() { assert.equal(nodes.length, 1) },
