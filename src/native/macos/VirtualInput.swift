@@ -8,6 +8,7 @@ import ApplicationServices
     private var targetId: String?
     private var textAnchor: AXUIElement?
     private var anchorWindow: AXUIElement?
+    var onPoint: ((CGPoint, NativeTarget) -> Void)?
     private var deadline: TimeInterval = 0
     private func unsupported() -> ComputerError { ComputerError("VIRTUAL_INPUT_UNSUPPORTED", "The selected control does not support this background action. Request owner permission for physical input.") }
     private func read(_ element: AXUIElement, _ name: String) throws -> CFTypeRef? {
@@ -40,22 +41,42 @@ import ApplicationServices
         guard siblings.count == 1, (siblings[0][kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId else { throw unsupported() }
         return matches[0]
     }
-    private func path(_ root: AXUIElement, at point: CGPoint) throws -> [AXUIElement] {
-        var current = root, result = [root], visited = Set<CFHashCode>()
-        for _ in 0..<24 {
-            guard visited.insert(CFHash(current)).inserted else { throw unsupported() }
-            let children = try read(current, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    private func path(_ root: AXUIElement, at point: CGPoint, action: String) throws -> [AXUIElement] {
+        // Chromium exposes overlapping structural groups over its tab strip.
+        // Resolve all containing branches to their deepest usable control;
+        // never choose a sibling by AX child order or by smallest rectangle.
+        var budget = 512
+        func visit(_ element: AXUIElement, ancestors: [AXUIElement]) throws -> [[AXUIElement]] {
+            budget -= 1
+            guard budget >= 0, ancestors.count < 24, !ancestors.contains(where: { CFEqual($0, element) }) else { throw unsupported() }
+            let chain = ancestors + [element]
+            let children = try read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
             guard children.count <= 256 else { throw unsupported() }
-            let hits = try children.filter { try rect($0)?.contains(point) == true }
-            guard hits.count <= 1 else { throw unsupported() }
-            guard let child = hits.first else { return result }
-            result.append(child); current = child
+            var candidates: [[AXUIElement]] = []
+            for child in children where try rect(child)?.contains(point) == true {
+                for candidate in try visit(child, ancestors: chain) {
+                    if !candidates.contains(where: { CFEqual($0.last!, candidate.last!) }) { candidates.append(candidate) }
+                }
+            }
+            if !candidates.isEmpty { return candidates }
+            var names: CFArray?
+            let actions = AXUIElementCopyActionNames(element, &names) == .success ? names as? [String] ?? [] : []
+            let editable = try action == kAXPressAction && isTextControl(element)
+            return actions.contains(action) || editable ? [chain] : []
         }
-        throw unsupported()
+        let candidates = try visit(root, ancestors: [])
+        guard candidates.count == 1 else { throw unsupported() }
+        return candidates[0]
     }
     private func settable(_ element: AXUIElement, _ attribute: String) -> Bool {
         var value = DarwinBoolean(false)
         return AXUIElementIsAttributeSettable(element, attribute as CFString, &value) == .success && value.boolValue
+    }
+    private func isTextControl(_ element: AXUIElement) throws -> Bool {
+        guard let role = try read(element, kAXRoleAttribute) as? String,
+              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
+              try read(element, kAXValueAttribute) is String else { return false }
+        return settable(element, kAXSelectedTextAttribute) || settable(element, kAXValueAttribute)
     }
     private func mutate(_ element: AXUIElement, _ operation: () -> AXError) throws {
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
@@ -74,6 +95,31 @@ import ApplicationServices
     }
     func hide() { point = nil; targetId = nil; clearAnchor() }
     func clearAnchor() { textAnchor = nil; anchorWindow = nil }
+    func browserTabIdentity(target: NativeTarget) -> [String: Any]? {
+        // Metadata for the browser's native grouping API. Input itself stays
+        // generic: no application-specific click path or real mouse fallback.
+        guard ["com.google.Chrome", "com.google.Chrome.canary", "com.microsoft.edgemac"].contains(target.appId) else { return nil }
+        deadline = ProcessInfo.processInfo.systemUptime + 0.2
+        var budget = 256
+        func selected(_ element: AXUIElement, depth: Int = 0) throws -> [String] {
+            budget -= 1
+            guard budget > 0, depth < 16 else { return [] }
+            let role = try read(element, kAXRoleAttribute) as? String
+            if role == "AXWebArea" { return [] }
+            let children = try read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+            guard children.count <= 256 else { return [] }
+            if role == kAXTabGroupRole {
+                return try children.compactMap { child in
+                    guard try read(child, kAXRoleAttribute) as? String == kAXRadioButtonRole,
+                          (try read(child, kAXValueAttribute) as? NSNumber)?.boolValue == true else { return nil }
+                    return try read(child, kAXTitleAttribute) as? String
+                }
+            }
+            return try children.flatMap { try selected($0, depth: depth + 1) }
+        }
+        guard let root = try? window(target), let titles = try? selected(root), titles.count == 1 else { return nil }
+        return ["appId": target.appId, "title": titles[0], "window": ["left": target.frame.minX, "top": target.frame.minY, "width": target.frame.width, "height": target.frame.height]]
+    }
     func act(target: NativeTarget, geometry: FrameGeometry, action: [String: Any], checkpoint: () throws -> Void) throws -> [String: Any] {
         try checkpoint()
         guard AXIsProcessTrusted() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Accessibility permission is required.") }
@@ -86,8 +132,10 @@ import ApplicationServices
             let next = try geometry.point(x: x, y: y)
             if targetId != target.id { clearAnchor() }
             point = next; targetId = target.id
+            onPoint?(next, target)
         }
         if kind == "move" { return ["performed": true, "delivery": "virtual", "kind": kind] }
+        if targetId == target.id, let point { onPoint?(point, target) }
         let root = try window(target)
         if kind == "type" {
             guard targetId == target.id, let element = textAnchor, let oldWindow = anchorWindow, CFEqual(root, oldWindow),
@@ -108,13 +156,12 @@ import ApplicationServices
                 try checkpoint(); try mutate(element) { AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, next as CFString) }
             }
         } else if kind == "click" {
-            guard action["button"] == nil || action["button"] as? String == "left", let point else { throw unsupported() }
-            let elements = try path(root, at: point)
             clearAnchor()
+            guard action["button"] == nil || action["button"] as? String == "left", let point else { throw unsupported() }
+            let elements = try path(root, at: point, action: kAXPressAction)
             var dispatched = false
             for element in elements.reversed() {
-                let role = try read(element, kAXRoleAttribute) as? String
-                if settable(element, kAXSelectedTextAttribute) || settable(element, kAXValueAttribute) && role.map({ [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains($0) }) == true {
+                if try isTextControl(element) {
                     // A background click must locate its own caret. Keeping an
                     // unrelated old caret would insert text at the wrong place.
                     guard let value = try read(element, kAXValueAttribute) as? String else { throw unsupported() }
@@ -150,7 +197,7 @@ import ApplicationServices
             guard (dx == 0) != (dy == 0) else { throw unsupported() }
             let name = dx != 0 ? (dx > 0 ? "AXScrollRightByPage" : "AXScrollLeftByPage") : (dy > 0 ? "AXScrollDownByPage" : "AXScrollUpByPage")
             var dispatched = false
-            for element in try path(root, at: point).reversed() {
+            for element in try path(root, at: point, action: name).reversed() {
                 var names: CFArray?
                 if AXUIElementCopyActionNames(element, &names) == .success, (names as? [String] ?? []).contains(name) {
                     try checkpoint(); try mutate(element) { AXUIElementPerformAction(element, name as CFString) }; dispatched = true; break

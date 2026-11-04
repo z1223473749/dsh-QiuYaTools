@@ -199,3 +199,15 @@ test('a late file status cannot read the replacement remote directory when its c
   assert.deepEqual(f.calls.map(row => [row.expectedEnvironmentId, row.request.action]), [['environment-A', 'status']])
   assert.equal(f.dom.window.document.querySelector('input[type=file]'), null)
 })
+
+test('optional tab grouping offers a download without disabling normal local operations', async t => {
+  const grouping = { optional: true, connected: false, downloadHref: 'http://127.0.0.1:1234/api/qiuya-tools.browser-extension.zip' }
+  const f = await fixture(t, { status: { native: available, browserGrouping: grouping } }); await f.render()
+  assert.match(f.dom.window.document.body.textContent, /浏览器操作仍可正常使用/)
+  assert.equal(f.dom.window.document.querySelector('a[download="qiuya-task-groups.zip"]').href, grouping.downloadHref)
+  assert.equal(f.button('使用此环境').disabled, false)
+  assert.deepEqual(f.calls, [])
+  await f.render({ status: { native: available, browserGrouping: { ...grouping, connected: true } } })
+  assert.match(f.dom.window.document.body.textContent, /配套扩展已连接/)
+  assert.equal(f.dom.window.document.querySelector('a[download="qiuya-task-groups.zip"]'), null)
+})

@@ -40,6 +40,7 @@ export async function packageCandidate(platform, architecture, output = join(roo
     // 64 MiB installer budget. The package icon remains a real public asset.
     await mkdir(join(stage, 'assets'))
     await cp(join(sourceRoot, 'assets/icon-color.webp'), join(stage, 'assets/icon-color.webp'))
+    await cp(join(sourceRoot, 'browser-extension'), join(stage, 'browser-extension'), { recursive: true })
     await cp(join(sourceRoot, 'locale'), join(stage, 'locale'), { recursive: true })
     await cp(join(sourceRoot, 'lib'), join(stage, 'lib'), { recursive: true, filter: source => {
       const path = source.slice(join(sourceRoot, 'lib').length).replaceAll('\\', '/')

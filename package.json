@@ -23,6 +23,7 @@
     "lib/",
     "assets/",
     "locale/",
+    "browser-extension/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",

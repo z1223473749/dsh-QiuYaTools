@@ -72,8 +72,9 @@ export class ScheduledComputerDriver implements DeviceDriver {
   private highest = -1
   private issuedNativeEpoch = 0
   private active?: { epoch: number; actor: 'ai' | 'human'; controller: AbortController }
-  private physical?: { epoch: number; logicalEpoch: number; release?: Promise<unknown> }
+  private physical?: { epoch: number; logicalEpoch: number; virtualInput?: boolean; release?: Promise<unknown> }
   private readonly pending = new Set<Promise<unknown>>()
+  private readonly operationIds = new Map<number, { id: string; nativeEpoch: number }>()
   private readonly lifetime = new AbortController()
   private disposed = false
   private disposing?: Promise<void>
@@ -148,7 +149,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
   private releasePhysical(physical = this.physical): Promise<unknown> {
     if (!physical) return Promise.resolve({ released: true })
     if (physical.release) return physical.release
-    const release = Promise.resolve().then(() => this.inner.release(physical.epoch))
+    const release = Promise.resolve().then(() => this.inner.release(physical.epoch, undefined, physical.virtualInput ? { preserveVirtualState: true } : undefined))
     physical.release = release
     void release.then(() => { if (this.physical === physical) this.physical = undefined }, () => { physical.release = undefined })
     return release
@@ -168,6 +169,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
     // A late old release cannot cancel a newer chat/native epoch.
     const errors: unknown[] = []
     if (this.physical && this.physical.logicalEpoch <= epoch) try { await this.releasePhysical() } catch (error) { errors.push(error) }
+    for (const [value, id] of this.operationIds) if (value <= epoch) { try { await this.inner.endOperation?.(id.id, id.nativeEpoch) } catch (error) { errors.push(error) }; this.operationIds.delete(value) }
     if (this.pendingForeground && this.pendingForeground.logicalEpoch <= epoch) try { await this.cancelForeground(this.pendingForeground) } catch (error) { errors.push(error) }
     if (donor) try { await donor.api.cancel({ releaseTokenId: donor.token.tokenId }) } catch (error) { errors.push(error) }
     if (errors.length === 1) throw errors[0]
@@ -176,6 +178,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
   }
   act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, authority?: import('./contract.ts').ComputerInputAuthority): Promise<unknown> {
     const lease = this.fence(epoch), operationSignal = signal ? AbortSignal.any([signal, lease.controller.signal]) : lease.controller.signal
+    if (authority?.operationId) this.operationIds.set(epoch, { id: authority.operationId, nativeEpoch: this.issuedNativeEpoch })
     const foreground = authority?.physicalInputApproved === true && this.surface === 'local-desktop' ? this.inner.foregroundHandoff : undefined, queuedSequence = foreground?.physicalSequence
     const operation = this.scheduler.run(this.surface, operationSignal, async () => {
       this.fence(epoch); operationSignal.throwIfAborted()
@@ -184,7 +187,7 @@ export class ScheduledComputerDriver implements DeviceDriver {
       if (this.issuedNativeEpoch >= Number.MAX_SAFE_INTEGER) throw new ComputerError('EPOCH_LIMIT', '请重新连接此电脑')
       const nativeEpoch = ++this.issuedNativeEpoch, foregroundVersion = this.scheduler.foregroundVersion(this.surface)
       const fence = () => { this.fence(epoch); operationSignal.throwIfAborted(); this.scheduler.assertForeground(this.surface, foregroundVersion) }
-      let physical: { epoch: number; logicalEpoch: number; release?: Promise<unknown> } | undefined, pending: PendingForeground | undefined, result: unknown, actionError: unknown, actionFailed = false, succeeded = false, released: unknown
+      let physical: { epoch: number; logicalEpoch: number; virtualInput?: boolean; release?: Promise<unknown> } | undefined, pending: PendingForeground | undefined, result: unknown, actionError: unknown, actionFailed = false, succeeded = false, released: unknown
       const cleanupErrors: unknown[] = []
       try {
         if (foreground) {
@@ -216,10 +219,11 @@ export class ScheduledComputerDriver implements DeviceDriver {
           }
           fence(); this.scheduler.clearForeground(this.surface)
         } else this.scheduler.clearForeground(this.surface)
-        physical = { epoch: nativeEpoch, logicalEpoch: epoch }; this.physical = physical
+        if (authority?.operationId) this.operationIds.set(epoch, { id: authority.operationId, nativeEpoch })
+        physical = { epoch: nativeEpoch, logicalEpoch: epoch, virtualInput: lease.actor === 'ai' && authority?.physicalInputApproved !== true }; this.physical = physical
         await this.inner.lease(physical.epoch, operationSignal, { actor: lease.actor })
         this.fence(epoch); operationSignal.throwIfAborted()
-        result = await this.inner.act(physical.epoch, targetId, action, operationSignal, { physicalInputApproved: authority?.physicalInputApproved === true, ...(pending ? { foregroundTicket: pending.ticket } : {}) })
+        result = await this.inner.act(physical.epoch, targetId, action, operationSignal, { physicalInputApproved: authority?.physicalInputApproved === true, ...(pending ? { foregroundTicket: pending.ticket } : {}), ...(authority?.operationId ? { operationId: authority.operationId, operationLabel: authority.operationLabel } : {}) })
         this.fence(epoch); operationSignal.throwIfAborted(); succeeded = true
       } catch (error) { actionError = error; actionFailed = true }
       if (physical) try { released = await this.releasePhysical(physical) } catch (error) { cleanupErrors.push(error) }
@@ -262,6 +266,8 @@ export class ScheduledComputerDriver implements DeviceDriver {
       await Promise.allSettled([...this.pending])
       try {
         await this.releasePhysical()
+        for (const id of this.operationIds.values()) await this.inner.endOperation?.(id.id, id.nativeEpoch)
+        this.operationIds.clear()
         if (this.pendingForeground) await this.cancelForeground(this.pendingForeground)
         if (donor) await donor.api.cancel({ releaseTokenId: donor.token.tokenId })
       } finally { this.unsubscribeForeground?.(); await this.inner.dispose?.() }

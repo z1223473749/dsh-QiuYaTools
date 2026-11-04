@@ -129,6 +129,7 @@ internal sealed class NativeContext : ApplicationContext
                 "foregroundCancel" => computer.ForegroundCancel(request),
                 "lease" => computer.Lease(request),
                 "release" => computer.Release(request),
+                "endVirtualInput" => computer.EndVirtualInput(request),
                 "act" => await computer.Act(request),
                 "openPreview" => await windows.OpenPreview(request),
                 "closePreview" => await windows.ClosePreview(request),

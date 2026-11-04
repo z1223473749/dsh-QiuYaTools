@@ -202,6 +202,7 @@ enum NativeLeaseActor: String {
     private var phase = "hidden"
     private var point = CGPoint.zero
     private var pendingReadback = false
+    private var virtualMode = false
     private var restorationTimer: Timer?
     private var restorationStarted: TimeInterval?
     private var restorationGeneration: UInt64 = 0
@@ -240,7 +241,7 @@ enum NativeLeaseActor: String {
     /// Called only after CGEvent.post. A requested endpoint alone is never shown.
     func posted(_ requested: CGPoint, phase: String, epoch: Int, target: NativeTarget) {
         guard isLeaseCurrent?(epoch) == true, let ownerId = physicalLeaseOwner?(epoch), !ownerId.isEmpty, !suppression.interrupted(epoch) else { return }
-        if self.epoch != epoch || self.target?.id != target.id || self.target?.frame != target.frame {
+        if virtualMode || self.epoch != epoch || self.target?.id != target.id || self.target?.frame != target.frame {
             hide()
             self.epoch = epoch; self.target = target
         }
@@ -251,6 +252,18 @@ enum NativeLeaseActor: String {
         pendingReadback = true
         beginWatching()
         refresh()
+    }
+
+    /// A background semantic action has its own pointer. It neither follows nor
+    /// hides the human's system cursor, and never needs a physical desktop lease.
+    func virtualPoint(_ requested: CGPoint, epoch: Int, target: NativeTarget) {
+        guard isLeaseCurrent?(epoch) == true, target.frame.contains(requested) else { return }
+        if !virtualMode || self.epoch != epoch || self.target?.id != target.id || self.target?.frame != target.frame {
+            guard hide() else { return }
+            self.epoch = epoch; self.target = target; virtualMode = true
+        }
+        point = requested; phase = "virtual"
+        beginWatching(); refresh()
     }
 
     func settled(epoch: Int) {
@@ -266,7 +279,7 @@ enum NativeLeaseActor: String {
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         workspaceObservers.removeAll()
         panel?.orderOut(nil); panel?.close(); panel = nil; arrowView = nil
-        target = nil; epoch = nil; postedPoints.removeAll(); pendingReadback = false; phase = "hidden"
+        target = nil; epoch = nil; postedPoints.removeAll(); pendingReadback = false; phase = "hidden"; virtualMode = false
         let restored = suppression.restore("overlay-hidden")
         maintainRestoration(restored)
         return restored
@@ -393,6 +406,14 @@ enum NativeLeaseActor: String {
 
     private func refresh() {
         guard let target, let epoch else { return }
+        if virtualMode {
+            guard !sessionInactive, Self.sessionActive(), isLeaseCurrent?(epoch) == true,
+                  target.frame.contains(point), targetOwnsVisiblePoint(target, point: point) else { hide(); return }
+            let clipped = Self.clippedFrame(at: point, target: target.frame)
+            guard !clipped.isNull, !clipped.isEmpty else { hide(); return }
+            present(at: point, clipped: clipped, target: target)
+            return
+        }
         guard !sessionInactive, Self.sessionActive(), isLeaseCurrent?(epoch) == true, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
               let actual = CGEvent(source: nil)?.location else { hide(); return }
         let matchesPosted = postedPoints.contains { hypot($0.x - actual.x, $0.y - actual.y) <= 1.5 }
@@ -419,6 +440,10 @@ enum NativeLeaseActor: String {
             maintainRestoration(suppression.clear || suppression.phase == "hidden")
             guard suppression.phase != "blocked" else { hide(); return }
         }
+        present(at: actual, clipped: clipped, target: target)
+    }
+
+    private func present(at actual: CGPoint, clipped: CGRect, target: NativeTarget) {
         if panel == nil {
             let view = AICursorView(frame: .zero)
             let overlay = AICursorPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -428,7 +453,7 @@ enum NativeLeaseActor: String {
             overlay.animationBehavior = .none
             overlay.isOpaque = false; overlay.backgroundColor = .clear; overlay.hasShadow = false
             overlay.ignoresMouseEvents = true; overlay.hidesOnDeactivate = false; overlay.isReleasedWhenClosed = false
-            overlay.isFloatingPanel = true; overlay.level = .floating
+            overlay.isFloatingPanel = !virtualMode; overlay.level = virtualMode ? .normal : .floating
             overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
             overlay.contentView = view; overlay.setAccessibilityElement(false); view.setAccessibilityElement(false)
             panel = overlay; arrowView = view
@@ -437,7 +462,8 @@ enum NativeLeaseActor: String {
         panel?.setFrame(CGRect(x: clipped.minX, y: primaryHeight - clipped.maxY, width: clipped.width, height: clipped.height), display: false)
         arrowView?.tip = CGPoint(x: actual.x - clipped.minX, y: actual.y - clipped.minY)
         arrowView?.needsDisplay = true
-        panel?.orderFrontRegardless()
+        if virtualMode { panel?.order(.above, relativeTo: Int(target.windowId)) }
+        else { panel?.orderFrontRegardless() }
     }
 
     private static func sessionActive() -> Bool {

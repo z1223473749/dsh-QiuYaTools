@@ -79,3 +79,20 @@ test('preview GET declares the body mode required by the real Connection bridge'
     assert.match(await response.text(), /id="screen"[\s\S]*id="pause"|id="pause"[\s\S]*id="screen"/u)
   } finally { await plugin.dispose(); await connection.dispose(); await server.dispose() }
 })
+
+test('the optional browser companion download is owner-only and never gates computer controls', async () => {
+  const f = fixture(), host = await installComputerHost(f.ctx, () => true, { driver: f.driver, browserExtensionDirectory: new URL('../browser-extension/', import.meta.url) })
+  try {
+    const status = (await f.call('status')).value
+    assert.deepEqual(status.browserGrouping, { optional: true, connected: false, downloadHref: 'http://127.0.0.1:5000/api/qiuya-tools.browser-extension.zip' })
+    assert.equal((await f.call('start', { targetId: 'fixture:1' })).ok, true)
+    const response = await f.routes.get('/api/qiuya-tools.browser-extension.zip').fetch(new Request(status.browserGrouping.downloadHref))
+    assert.equal(response.status, 200); assert.equal(response.headers.get('Content-Type'), 'application/zip')
+    const { unzipSync } = await import('fflate'), files = unzipSync(new Uint8Array(await response.arrayBuffer()))
+    assert.deepEqual(Object.keys(files).sort(), ['background.js', 'groups.js', 'manifest.json', 'popup.html', 'popup.css', 'popup.js', 'icons/icon-16.png', 'icons/icon-32.png', 'icons/icon-48.png', 'icons/icon-128.png'].sort())
+    for (const size of [16, 32, 48, 128]) { const png = Buffer.from(files[`icons/icon-${size}.png`]); assert.equal(png.subarray(1, 4).toString(), 'PNG'); assert.equal(png.readUInt32BE(16), size); assert.equal(png.readUInt32BE(20), size) }
+    assert.equal(JSON.parse(new TextDecoder().decode(files['manifest.json'])).name, 'QiuYaTools 任务标签组')
+    f.ctx.connection.browserPeer.principal.kind = 'guest'
+    assert.equal((await f.routes.get('/api/qiuya-tools.browser-extension.zip').fetch(new Request(status.browserGrouping.downloadHref))).status, 403)
+  } finally { await host.dispose() }
+})

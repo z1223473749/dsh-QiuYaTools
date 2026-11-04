@@ -1,6 +1,18 @@
 import AppKit
 import ApplicationServices
 
+/// Chromium's tab strip has an empty structural sibling over the actionable
+/// branch. Keep that layout in a real AX fixture so child-order routing fails.
+@MainActor final class OverlappingAccessibilityContent: NSView {
+    override func accessibilityChildren() -> [Any]? {
+        let decoration = NSAccessibilityElement()
+        decoration.setAccessibilityRole(.group)
+        decoration.setAccessibilityParent(self)
+        decoration.setAccessibilityFrame(accessibilityFrame())
+        return (super.accessibilityChildren() ?? []) + [decoration]
+    }
+}
+
 @main struct VirtualInputAcceptanceFixture {
     @MainActor static func main() {
         let app = NSApplication.shared
@@ -15,6 +27,7 @@ import ApplicationServices
         var window: NSWindow!
         let field = NSTextField(string: "")
         var button: NSButton!
+        var ambiguousButton: NSButton!
         var clicks = 0
         init(path: String) { self.path = path }
         func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,12 +35,21 @@ import ApplicationServices
             window.title = "Disposable virtual input fixture"
             window.isReleasedWhenClosed = false
             window.animationBehavior = .none
+            let content = OverlappingAccessibilityContent(frame: NSRect(x: 0, y: 0, width: 360, height: 220))
+            content.setAccessibilityElement(true); content.setAccessibilityRole(.group)
+            window.contentView = content
             field.frame = NSRect(x: 30, y: 45, width: 280, height: 28)
             field.placeholderString = "Virtual text target"
             button = NSButton(title: "Virtual button", target: self, action: #selector(clicked))
             button.frame = NSRect(x: 30, y: 115, width: 170, height: 34)
             window.contentView?.addSubview(field)
             window.contentView?.addSubview(button)
+            for title in ["Ambiguous A", "Ambiguous B"] {
+                let duplicate = NSButton(title: title, target: self, action: #selector(clicked))
+                duplicate.frame = NSRect(x: 220, y: 115, width: 110, height: 34)
+                window.contentView?.addSubview(duplicate)
+                ambiguousButton = duplicate
+            }
             window.orderBack(nil)
             Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.publish() }
@@ -43,8 +65,8 @@ import ApplicationServices
                 return ["x": p.x, "y": (NSScreen.screens.first?.frame.height ?? 0) - p.y]
             }
             let state: [String: Any] = ["pid": Int(getpid()), "windowId": window.windowNumber, "bounds": bounds,
-                "button": point(button), "field": point(field), "clicks": clicks, "text": field.stringValue,
-                "keyWindow": window.isKeyWindow, "fieldEditorActive": field.currentEditor() != nil]
+                "button": point(button), "field": point(field), "ambiguous": point(ambiguousButton), "clicks": clicks, "text": field.stringValue,
+                "overlappingStructuralGroup": true, "keyWindow": window.isKeyWindow, "fieldEditorActive": field.currentEditor() != nil]
             if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) { try? data.write(to: URL(fileURLWithPath: path), options: .atomic) }
         }
     }

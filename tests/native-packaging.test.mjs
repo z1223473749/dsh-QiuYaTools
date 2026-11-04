@@ -84,6 +84,7 @@ test('the npm alias is a script-free universal wrapper with all native dependenc
   assert.equal(result.name, 'dsh-qiuya-tools.tgz')
   const checked = validateUniversalArchive(bytes, { version }), packed = metadata(bytes)
   assert.deepEqual(packed.optionalDependencies, Object.fromEntries(nativeNames.map(name => [name, version])))
+  assert.ok(readDistributionArchive(bytes).has('package/browser-extension/manifest.json'), 'The optional browser grouping companion is included in the UI wrapper')
   assert.equal(packed.scripts, undefined); assert.equal(packed.devDependencies, undefined)
   assert.deepEqual(checked.files.filter(path => path.startsWith('package/lib/')).sort(), ['package/lib/client.js', 'package/lib/computer-agent.js', 'package/lib/index.js'])
   assert.equal(readDistributionArchive(bytes).get('package/docs/git-guide.md').bytes.toString('utf8'), 'fixture data\n', 'The npm wrapper carries its linked Git guide')

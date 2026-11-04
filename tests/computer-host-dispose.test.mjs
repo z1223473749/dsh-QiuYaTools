@@ -10,8 +10,8 @@ test('Host removes every exact route even when driver shutdown and one route dis
   const ctx = { get() {}, webServer: { port: 5000 }, connection: { browserPeer: { principal: { kind: 'owner' } }, authenticatedUrl: url => url, fetch: { register(route) { routes.set(route.path, route); return async () => { removed.push(route.path); routes.delete(route.path); if (removed.length === 1) throw new Error('route cleanup failed') } } } } }
   const driver = { async status() {}, async targets() {}, async observe() {}, async lease() {}, async release() {}, async act() {}, async openPreview() {}, async closePreview() {}, async dispose() { throw new Error('native cleanup failed') } }
   const host = await installComputerHost(ctx, () => true, { driver })
-  assert.equal(routes.size, 2)
+  assert.equal(routes.size, 3)
   await assert.rejects(host.dispose(), /native cleanup failed/)
-  assert.equal(removed.length, 2); assert.equal(routes.size, 0)
-  await host.dispose(); assert.equal(removed.length, 2)
+  assert.equal(removed.length, 3); assert.equal(routes.size, 0)
+  await host.dispose(); assert.equal(removed.length, 3)
 })

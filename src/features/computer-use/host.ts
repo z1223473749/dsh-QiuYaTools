@@ -1,7 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile, rename, copyFile } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { zipSync } from 'fflate'
+import { BrowserTaskGroups } from './browser-groups.ts'
+import { BROWSER_GROUP_ASSETS } from './browser-group-identity.ts'
 import { ComputerSessionService } from './session.ts'
 import { ComputerDriverRouter } from './driver-router.ts'
 import { ComputerEnvironmentManager, type ComputerServiceFacade, type ComputerEnvironmentOptions, type ComputerConnectionOptions } from './environment-manager.ts'
@@ -11,6 +14,7 @@ import { ComputerPermissionCoordinator, type ComputerEntryBackend } from './perm
 
 export const COMPUTER_ENDPOINT = 'qiuya-tools.computer.control'
 export const COMPUTER_PREVIEW_PATH = '/api/qiuya-tools.computer.preview'
+export const BROWSER_GROUP_DOWNLOAD_PATH = '/api/qiuya-tools.browser-extension.zip'
 interface Route { path: string; methods: readonly ('POST' | 'GET')[]; requestBody?: 'buffered'; fetch(request: Request): Promise<Response> }
 interface Services {
   connection: { browserPeer?: { principal: { kind: string } }; authenticatedUrl(url: string): string; fetch: { register(route: Route): () => Promise<void> } }
@@ -20,7 +24,7 @@ interface Services {
 export interface ComputerHost { entry: ComputerPermissionCoordinator; service: ComputerServiceFacade; manager?: ComputerEnvironmentManager; dispose(): Promise<void> }
 
 /** App approvals are owned by the Host profile, never by model tool arguments. */
-export async function installComputerHost(ctx: Context, enabled: () => boolean, options: { driver?: DeviceDriver; environments?: Pick<ComputerEnvironmentOptions, 'createRouter' | 'maxEnvironments' | 'idleMs' | 'now'> } = {}): Promise<ComputerHost> {
+export async function installComputerHost(ctx: Context, enabled: () => boolean, options: { driver?: DeviceDriver; browserExtensionDirectory?: URL; environments?: Pick<ComputerEnvironmentOptions, 'createRouter' | 'maxEnvironments' | 'idleMs' | 'now'> } = {}): Promise<ComputerHost> {
   const services = ctx as unknown as Services
   const profile = services.get?.('profileContext') as { dir?: string } | undefined
   const directory = profile?.dir ? join(profile.dir, 'qiuya-computer') : undefined
@@ -46,7 +50,15 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
   // contract used by native tests and soak tools. Production uses per-chat
   // routers and services; unscoped legacy owner calls get their own default.
   const legacyService = driver ? new ComputerSessionService(driver, { ...permissions, enabled: () => enabled() && !switching }) : undefined
-  const manager = legacyService ? undefined : new ComputerEnvironmentManager({ ...options.environments, ...permissions, enabled, directory })
+  const browserGroups = !legacyService && directory ? new BrowserTaskGroups() : undefined
+  if (browserGroups && directory) {
+    const destination = join(directory, 'browser-extension')
+    try {
+      await mkdir(destination, { recursive: true, mode: 0o700 })
+      for (const file of BROWSER_GROUP_ASSETS) { await mkdir(dirname(join(destination, file)), { recursive: true }); await copyFile(new URL(`../browser-extension/${file}`, import.meta.url), join(destination, file)) }
+    } catch { /* A missing optional companion does not revoke desktop control. */ }
+  }
+  const manager = legacyService ? undefined : new ComputerEnvironmentManager({ ...options.environments, ...permissions, enabled, directory, browserGroups })
   const service: ComputerServiceFacade = legacyService ?? manager!
   // Public Agent identity is object identity, not a model supplied session id.
   const publicService = (name: string): unknown => { try { return services.get?.(name) } catch { return undefined } }
@@ -128,7 +140,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
         let value: unknown
         if (input.op === 'status') {
           const changing = manager ? manager.isSwitching(sessionId) : switching
-          value = { enabled: enabled(), switching: changing, sessions: service.list(), pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments(), ...(chatSessionId ? { tasks: manager.listTasks(chatSessionId) } : {}) } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? sessionId === undefined ? manager.authorizationStatus(undefined, request.signal) : manager.statusIfPresentFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
+          value = { enabled: enabled(), switching: changing, browserGrouping: { optional: true, connected: browserGroups?.status().connected === true, downloadHref: services.connection.authenticatedUrl(`http://127.0.0.1:${services.webServer.port}${BROWSER_GROUP_DOWNLOAD_PATH}`) }, sessions: service.list(), pendingRequests: await entry.pendingWithPreflight(sessionId, request.signal), allowedApps: service.allowedApps(), ...(manager ? { environments: manager.environments(), ...(chatSessionId ? { tasks: manager.listTasks(chatSessionId) } : {}) } : {}), ...(cleanupError ? { cleanupError } : {}), native: changing ? { available: false, message: '正在切换操作环境' } : enabled() ? await (manager ? sessionId === undefined ? manager.authorizationStatus(undefined, request.signal) : manager.statusIfPresentFor(sessionId, request.signal) : legacyService!.status(request.signal)).catch(computerError) : null }
         } else {
           if (!['pause', 'stop', 'cancelRequest'].includes(input.op) && !(input.op === 'allow' && input.allowed === false)) assertEnabled(sessionId)
           if (input.op === 'createTask') {
@@ -224,10 +236,18 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
     // empty body so the authenticated HTML route reaches this handler.
     path: COMPUTER_PREVIEW_PATH, methods: ['GET'], requestBody: 'buffered',
     fetch: async () => owner() ? new Response(computerPreviewPage, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } }) : new Response('Forbidden', { status: 403 }),
+  }), services.connection.fetch.register({
+    path: BROWSER_GROUP_DOWNLOAD_PATH, methods: ['GET'], requestBody: 'buffered',
+    fetch: async () => {
+      if (!owner()) return new Response('Forbidden', { status: 403 })
+      const files = await Promise.all(BROWSER_GROUP_ASSETS.map(async file => [file, new Uint8Array(await readFile(new URL(file, options.browserExtensionDirectory ?? new URL('../browser-extension/', import.meta.url))))] as const))
+      const bytes = zipSync(Object.fromEntries(files), { level: 6 })
+      return new Response(new Uint8Array(bytes).buffer, { headers: { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="qiuya-task-groups.zip"', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } })
+    },
   })]
   return { entry, service, ...(manager ? { manager } : {}), async dispose() {
     if (disposed) { if (manager) await manager.dispose(); return }
-    disposed = true; clearInterval(poll); entry.dispose(); removePermissionWatch(); cancelFiles()
+    disposed = true; clearInterval(poll); entry.dispose(); removePermissionWatch(); cancelFiles(); browserGroups?.dispose()
     let failure: unknown
     try { await shutdown } catch (error) { failure = error }
     try { await (manager ?? legacyService)!.dispose() } catch (error) { failure ??= error }

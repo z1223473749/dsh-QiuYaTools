@@ -25,6 +25,7 @@ internal sealed class ComputerDriver : IDisposable
     private readonly DesktopLeaseGuard? desktopLease;
     private readonly AiCursorOverlay aiCursor;
     private readonly VirtualInput virtualInput = new();
+    private long virtualVisualEpoch;
     private volatile bool physicalInputActive;
     private readonly HashSet<ushort> journalUnicodeSuperset = new();
     private long epoch;
@@ -51,7 +52,7 @@ internal sealed class ComputerDriver : IDisposable
     internal ComputerDriver(Func<Native.INPUT[], uint>? inputWriter = null)
     {
         writeInputs = inputWriter ?? WriteNativeInputs; desktopLease = inputWriter == null ? new DesktopLeaseGuard() : null;
-        aiCursor = new AiCursorOverlay(requested => !Volatile.Read(ref disposed) && Volatile.Read(ref epoch) == requested, inputWriter == null && Environment.UserInteractive);
+        aiCursor = new AiCursorOverlay(requested => !Volatile.Read(ref disposed) && (Volatile.Read(ref epoch) == requested || Volatile.Read(ref virtualVisualEpoch) == requested), inputWriter == null && Environment.UserInteractive);
         if (inputWriter == null) {
             try { foregroundHandoff = new ForegroundHandoff(); }
             catch (Exception error) when (error is NativeFailure or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException) { foregroundHandoff = null; }
@@ -93,7 +94,7 @@ internal sealed class ComputerDriver : IDisposable
         try { if (previous > 0) Program.Emit(new { @event = "humanInput", epoch = previous }); }
         finally { if (cleaned) Volatile.Write(ref physicalCleanupPending, 0); }
     }
-    internal object Status() => new { available = Environment.UserInteractive && ProcessPermissions.SessionActive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = !ProcessPermissions.SessionActive ? "The target desktop session is locked or inactive. Restore its interactive session before control." : Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = true, virtualInput = true, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
+    internal object Status() => new { available = Environment.UserInteractive && ProcessPermissions.SessionActive, platform = "win32", architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(), protocolVersion = 1, foregroundPhysicalSequence = foregroundHandoff != null ? ForegroundHandoffCore.Decimal(physicalInput.Sequence) : null, leaseActor, aiCursor = aiCursor.Snapshot(), aiOperation = aiCursor.OperationSnapshot(), inputTiming = InputTrace.Enabled ? InputTrace.Snapshot() : null, windowDiscovery = new { unavailable = Volatile.Read(ref undiscoverableWindows) }, message = !ProcessPermissions.SessionActive ? "The target desktop session is locked or inactive. Restore its interactive session before control." : Volatile.Read(ref undiscoverableWindows) > 0 ? "Some window identities could not be read. Check target permissions or administrator access." : null, permissions = new { screen = Environment.UserInteractive, accessibility = Environment.UserInteractive, administrator = ProcessPermissions.Elevated }, capabilities = new { capture = true, accessibility = true, input = true, preview = true, applications = true, systemSettings = false, launchApplication = true, aiOperationIndicator = true, backgroundInput = true, virtualInput = true, virtualStateLifetime = true, secureDesktop = false, inputCompatibility = true, humanInputDetection = physicalInput.Available, foregroundHandoff = !ElevatedComputer.Worker && foregroundHandoff != null && physicalInput.Available } };
     internal void RequireIdleForPermissionChange()
     {
         lock (inputLock) { if (!ForegroundClean()) throw new NativeFailure("control-pause-required", "Stop control before changing administrator access"); }
@@ -338,6 +339,7 @@ internal sealed class ComputerDriver : IDisposable
             var generation = Volatile.Read(ref physicalGeneration);
             try {
                 aiCursor.Revoke(epoch);
+                if (actor == "human") { virtualInput.Hide(); virtualVisualEpoch = 0; }
                 ClearHeld(); desktopLease?.Release(); if (actor == "human") desktopLease?.Acquire(); Interlocked.Exchange(ref epoch, requested);
                 if (Volatile.Read(ref physicalCleanupPending) != 0 || Volatile.Read(ref physicalGeneration) != generation) {
                     Interlocked.Exchange(ref epoch, 0); ClearHeld(); desktopLease?.Release();
@@ -362,13 +364,23 @@ internal sealed class ComputerDriver : IDisposable
         lock (inputLock) {
             InputTrace.Mark("release-lock-acquired", requested);
             var matched = epoch == requested;
-            if (epoch == requested) { epoch = 0; aiCursor.Revoke(requested); ClearHeld(); desktopLease?.Release(); }
+            if (epoch == requested) {
+                var preserve = request.TryGetProperty("preserveVirtualState", out var keep) && keep.ValueKind == JsonValueKind.True && leaseActor == "ai" && !physicalInputActive;
+                epoch = 0;
+                if (!preserve) { virtualVisualEpoch = 0; aiCursor.Revoke(requested); virtualInput.Hide(); }
+                ClearHeld(); desktopLease?.Release();
+            }
             if (inputCleanupFailed) throw new NativeFailure("input-cleanup-failed", "Input cleanup is uncertain; retire this companion before reconnecting");
             RefreshForeground(true);
             if (matched && foregroundHandoff != null) foregroundRelease = foregroundHandoff.Core.CleanRelease(requested, ForegroundClean());
         }
         InputTrace.Mark("release-return", requested);
         return new { epoch = requested, released = true, foregroundRelease };
+    }
+    internal object EndVirtualInput(JsonElement request)
+    {
+        lock (inputLock) { if (lastEpoch <= Epoch(request)) { virtualVisualEpoch = 0; virtualInput.Hide(); aiCursor.Hide(lastEpoch); } }
+        return new { cleared = true };
     }
     private void Check(long requested)
     {
@@ -419,6 +431,8 @@ internal sealed class ComputerDriver : IDisposable
         if (!observations.TryGetValue(targetId, out var observed)) throw new NativeFailure("observation-required", "Observe the target before input");
         if (observed.Rect != target.Rect || observed.Dpi != Native.GetDpiForWindow(target.Handle)) throw new NativeFailure("geometry-changed", "Target moved; observe again before input");
         if (!physicalInputActive) {
+            virtualVisualEpoch = requested;
+            virtualInput.OnPoint = point => { lock (inputLock) { Check(requested); aiCursor.Move(requested, targetId, target.Handle, target.Rect, point, virtualInput: true); } };
             void CheckVirtual() {
                 Check(requested);
                 var current = Target(targetId);

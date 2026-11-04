@@ -92,12 +92,16 @@ import ScreenCaptureKit
     func receive(_ command: [String: Any]) {
         guard !closing, let requestId = requestIdentifier(command["requestId"]), let op = command["op"] as? String else { return }
         guard transport.ownerIsCurrent() else { shutdown(); return }
+        if op == "endVirtualInput" {
+            guard let epoch = integer(command["epoch"]) else { Wire.failure(requestId, ComputerError("INVALID_EPOCH", "A safe epoch is required.")); return }
+            input.endVirtualInput(epoch); Wire.success(requestId); return
+        }
         // Revocations run before asynchronous work, rather than queueing behind a
         // capture or drag. Every individual injected event checks this state.
         if op == "lease" || op == "release" {
             guard let epoch = integer(command["epoch"]) else { Wire.failure(requestId, ComputerError("INVALID_EPOCH", "A nonnegative safe integer epoch is required.")); return }
             do {
-                if op == "lease" { try input.lease(epoch, actor: NativeLeaseActor.parse(command["actor"])) } else { try input.release(epoch) }
+                if op == "lease" { try input.lease(epoch, actor: NativeLeaseActor.parse(command["actor"])) } else { try input.release(epoch, preserveVirtualState: command["preserveVirtualState"] as? Bool == true) }
                 Wire.success(requestId, ["epoch": epoch, "active": input.fence.active == epoch])
             } catch { Wire.failure(requestId, error) }
             return
@@ -108,7 +112,7 @@ import ScreenCaptureKit
                 "permissions": ["screenRecording": CGPreflightScreenCaptureAccess(), "accessibility": AXIsProcessTrusted(),
                                 "postEvents": CGPreflightPostEventAccess(), "inputMonitoring": CGPreflightListenEventAccess()],
                 "permissionOwner": permissionGuide.permissionOwner as Any? ?? NSNull(),
-                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator", "input-compatibility", "virtual-input"],
+                "capabilities": ["window-targets", "window-capture", "accessibility-text", "mouse", "keyboard", "floating-preview", "epoch-fencing", "ai-cursor", "applications", "system-settings", "launch-application", "ai-operation-indicator", "input-compatibility", "virtual-input", "virtual-state-lifetime"],
                 "leaseEpoch": input.fence.active as Any? ?? NSNull(), "inputState": input.inputState,
                 "leaseActor": input.fence.active == nil ? NSNull() : input.leaseActor.rawValue as Any,
                 "aiCursor": input.aiCursorState, "aiOperation": input.aiOperationState,

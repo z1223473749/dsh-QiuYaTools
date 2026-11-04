@@ -6,8 +6,8 @@ using System.Runtime.InteropServices;
 namespace QiuYaTools.Windows;
 
 internal sealed record AiCursorFrame(long Epoch, long LastEpoch, long Generation, bool IsAi, string? TargetId,
-    IntPtr Target, uint TargetPid, Rectangle Bounds, Point Position, bool Pending, bool Rendered);
-internal sealed record AiCursorSnapshot(int X, int Y, bool Visible, string Actor, string? TargetId);
+    IntPtr Target, uint TargetPid, Rectangle Bounds, Point Position, bool Pending, bool Rendered, bool Virtual = false);
+internal sealed record AiCursorSnapshot(int X, int Y, bool Visible, string Actor, string? TargetId, string Phase);
 
 /** Immutable CAS state: neither the input hook nor a stale renderer waits for a UI lock. */
 internal sealed class AiCursorState
@@ -24,13 +24,13 @@ internal sealed class AiCursorState
             if (ReferenceEquals(Interlocked.CompareExchange(ref frame, next, old), old)) return true;
         }
     }
-    internal bool Move(long epoch, string targetId, IntPtr target, uint pid, Rectangle bounds, Point point)
+    internal bool Move(long epoch, string targetId, IntPtr target, uint pid, Rectangle bounds, Point point, bool virtualInput = false)
     {
         if (epoch <= 0 || target == IntPtr.Zero || pid == 0 || string.IsNullOrEmpty(targetId) || !bounds.Contains(point)) return false;
         for (;;) {
             var old = Read(); if (old.Epoch != epoch || !old.IsAi) return false;
             var next = old with { Generation = Interlocked.Increment(ref generation), TargetId = targetId, Target = target,
-                TargetPid = pid, Bounds = bounds, Position = point, Pending = true, Rendered = false };
+                TargetPid = pid, Bounds = bounds, Position = point, Pending = true, Rendered = false, Virtual = virtualInput };
             if (ReferenceEquals(Interlocked.CompareExchange(ref frame, next, old), old)) return true;
         }
     }
@@ -58,7 +58,7 @@ internal sealed class AiCursorState
     {
         var value = Read();
         return new(value.Position.X - value.Bounds.X, value.Position.Y - value.Bounds.Y,
-            value.Epoch > 0 && value.IsAi && value.Pending && value.Rendered && (targetId == null || targetId == value.TargetId), "ai", value.TargetId);
+            value.Epoch > 0 && value.IsAi && value.Pending && value.Rendered && (targetId == null || targetId == value.TargetId), "ai", value.TargetId, value.Virtual ? "virtual" : "physical");
     }
 }
 
@@ -119,11 +119,11 @@ internal sealed class AiCursorOverlay : IDisposable
             !Native.GetWindowRect(value.Target, out var rectangle) || Rectangle.FromLTRB(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom) != value.Bounds) return false;
         Native.GetWindowThreadProcessId(value.Target, out var pid); return pid == value.TargetPid;
     }
-    internal void Move(long epoch, string targetId, IntPtr target, Rectangle bounds, Point point)
+    internal void Move(long epoch, string targetId, IntPtr target, Rectangle bounds, Point point, bool virtualInput = false)
     {
         if (Volatile.Read(ref disposed) != 0 || !leaseIsCurrent(epoch)) return;
         Native.GetWindowThreadProcessId(target, out var pid);
-        if (state.Move(epoch, targetId, target, pid, bounds, point)) Wake();
+        if (state.Move(epoch, targetId, target, pid, bounds, point, virtualInput)) Wake();
     }
     internal AiCursorSnapshot Snapshot(string? targetId = null)
     {
@@ -134,8 +134,9 @@ internal sealed class AiCursorOverlay : IDisposable
     private bool Eligible(AiCursorFrame value)
     {
         if (Volatile.Read(ref disposed) != 0 || value.Epoch <= 0 || !value.IsAi || !value.Pending || !leaseIsCurrent(value.Epoch) ||
-            !Native.IsWindow(value.Target) || !Native.IsWindowVisible(value.Target) || Native.IsIconic(value.Target) || Native.GetForegroundWindow() != value.Target ||
+            !Native.IsWindow(value.Target) || !Native.IsWindowVisible(value.Target) || Native.IsIconic(value.Target) || (!value.Virtual && Native.GetForegroundWindow() != value.Target) ||
             !Native.GetWindowRect(value.Target, out var rectangle) || Rectangle.FromLTRB(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom) != value.Bounds) return false;
+        if (value.Virtual && GetAncestor(WindowFromPoint(new NativePoint(value.Position.X, value.Position.Y)), 2) != value.Target) return false;
         if (value.Rendered && (Volatile.Read(ref window) == IntPtr.Zero || !Native.IsWindowVisible(Volatile.Read(ref window)))) return false;
         Native.GetWindowThreadProcessId(value.Target, out var pid);
         return pid == value.TargetPid && value.Bounds.Contains(value.Position);
@@ -285,9 +286,14 @@ internal sealed class AiCursorOverlay : IDisposable
                 nativeBitmap = bitmap.GetHbitmap(Color.FromArgb(0)); old = SelectObject(memory, nativeBitmap);
                 var destination = new NativePoint(location.X, location.Y); var size = new NativeSize(width, height); var source = new NativePoint(0, 0);
                 var blend = new Blend { Operation = 0, Flags = 0, Alpha = 255, Format = 1 };
+                // A virtual pointer belongs just above its background target,
+                // below unrelated windows. SWP_NOACTIVATE preserves user focus.
+                var previous = value.Virtual ? Native.GetWindow(value.Target, 3) : new IntPtr(-1);
+                var flags = 0x0010u | 0x0040u | 0x0200u;
+                if (previous == Handle) { previous = IntPtr.Zero; flags |= 0x0004; }
                 if (!UpdateLayeredWindow(Handle, screen, ref destination, ref size, memory, ref source, 0, ref blend, 2) ||
-                    !Native.SetWindowPos(Handle, new IntPtr(-1), location.X, location.Y, width, height, 0x0010 | 0x0040 | 0x0200)) throw new InvalidOperationException("AI pointer surface unavailable");
-                const long required = 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080 | 0x00000008;
+                    !Native.SetWindowPos(Handle, previous, location.X, location.Y, width, height, flags)) throw new InvalidOperationException("AI pointer surface unavailable");
+                var required = 0x00080000L | 0x00000020 | 0x08000000 | 0x00000080 | (value.Virtual ? 0 : 0x00000008);
                 if (!Native.IsWindowVisible(Handle) || IsWindowEnabled(Handle) || (GetWindowLongPtr(Handle, -20).ToInt64() & required) != required)
                     throw new InvalidOperationException("AI pointer did not confirm transparent non-activating presentation");
             } finally { if (old != IntPtr.Zero) SelectObject(memory, old); if (nativeBitmap != IntPtr.Zero) DeleteObject(nativeBitmap); if (memory != IntPtr.Zero) DeleteDC(memory); if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen); }
@@ -356,6 +362,8 @@ internal sealed class AiCursorOverlay : IDisposable
     [StructLayout(LayoutKind.Sequential)] private struct NativeSize(int width, int height) { internal int Width = width, Height = height; }
     [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct Blend { internal byte Operation, Flags, Alpha, Format; }
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool PostMessage(IntPtr handle, int message, UIntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr handle, uint flags);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ShowWindow(IntPtr handle, int command);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowEnabled(IntPtr handle);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr handle, int index);

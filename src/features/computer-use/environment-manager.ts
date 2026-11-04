@@ -8,14 +8,16 @@ import { NativeCompanionDriver } from './native.ts'
 import { RemoteComputerDriver } from './remote.ts'
 import { ComputerError, computerError, requireIdentity } from './contract.ts'
 import type { ComputerActionRequest, ComputerSessionSnapshot, ComputerSystemPermission, NativeTarget } from './contract.ts'
+import type { BrowserTaskGroups } from './browser-groups.ts'
 import type { ComputerTaskIdentity } from './task-types.ts'
 
-export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget' | 'setInputMode'>
+export type ComputerServiceFacade = Pick<ComputerSessionService, 'get' | 'setOperationLabel' | 'list' | 'subscribe' | 'allowedApps' | 'setAppAllowed' | 'start' | 'pause' | 'takeover' | 'resume' | 'stop' | 'observe' | 'preview' | 'act' | 'humanAct' | 'permittedTargets' | 'selectTarget' | 'setInputMode'>
 export interface ComputerConnectionOptions {
   mode: 'local' | 'remote' | 'browser'; endpoint?: string; token?: string; allowPrivateNetwork?: boolean
   browser?: 'chrome' | 'edge'; allowedOrigins?: string[]; initialUrl?: string; cdpEndpoint?: string
 }
 export interface ComputerEnvironmentOptions extends Pick<ComputerSessionOptions, 'enabled' | 'readAllowedApps' | 'writeAllowedApps' | 'now'> {
+  browserGroups?: BrowserTaskGroups
   directory?: string
   createRouter?: (sessionId: string | undefined, scheduler: ComputerInputScheduler) => ComputerDriverRouter
   maxEnvironments?: number
@@ -161,7 +163,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
     if (!entry) {
       if (sessionId !== undefined && !this.tasks.has(sessionId) && new Set([...this.entries.keys(), ...this.tasks.keys()]).size >= (this.options.maxEnvironments ?? 128)) throw new ComputerError('SESSION_LIMIT', '电脑环境数量已达上限，请停止闲置环境并等待释放')
       const driver = this.options.createRouter?.(sessionId, this.scheduler) ?? new ComputerDriverRouter({
-        local: new ScheduledComputerDriver(new NativeCompanionDriver(), 'local-desktop', this.scheduler),
+        local: new ScheduledComputerDriver(new NativeCompanionDriver({ browserGroups: this.options.browserGroups }), 'local-desktop', this.scheduler),
         remoteFactory: value => new ScheduledRemoteComputerDriver(new RemoteComputerDriver(value), this.scheduler),
       })
       const created = { environmentId: randomUUID(), sessionId, driver, lastUsed: this.now(), switching: false, retiring: false, closeAttempted: false, previewDetached: false, previewIntent: 0, files: new Set<AbortController>(), unsubscribe: () => {} } as Environment
@@ -270,6 +272,7 @@ export class ComputerEnvironmentManager implements ComputerServiceFacade {
   }
   targetsFor(sessionId?: string, signal?: AbortSignal) { this.assertEnabled(); const entry = this.entry(sessionId); if (entry.switching) throw new ComputerError('CONTROL_CHANGED', '此聊天正在切换操作环境'); entry.lastUsed = this.now(); return entry.service.targets(signal) }
   targets(signal?: AbortSignal) { return this.targetsFor(undefined, signal) }
+  setOperationLabel(sessionId: string, label: string) { this.forSession(sessionId).service.setOperationLabel(sessionId, label) }
   start(sessionId: string, targetId: string, options: { allowOnce?: boolean; signal?: AbortSignal } = {}) { this.assertEnabled(); return this.forSession(sessionId, true).service.start(sessionId, targetId, options) }
   /** Owner-approved transition. External pause/stop/revoke/connect invalidates
    * every awaited boundary, while this internal target switch keeps its token. */

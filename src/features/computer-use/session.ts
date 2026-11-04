@@ -3,7 +3,7 @@ import { ComputerError, checkActionBounds, computerError, parseComputerAction, r
 import type { ComputerActionRequest, ComputerActionResult, ComputerObservation, ComputerSessionSnapshot, ComputerState, DeviceDriver, NativeTarget } from './contract.ts'
 
 const inputFingerprint = (action: object): string => JSON.stringify(Object.fromEntries(Object.entries(action).sort(([a], [b]) => a.localeCompare(b))))
-interface SessionRecord { physicalAction?: string; snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewFrames: Map<string, { metadata: NonNullable<ComputerSessionSnapshot['lastObservation']>; capturedAt: number }>; transition?: Promise<ComputerSessionSnapshot> }
+interface SessionRecord { operationLabel?: string; physicalAction?: string; snapshot: ComputerSessionSnapshot; controllers: Set<AbortController>; pending: Set<Promise<unknown>>; actions: Map<string, { fingerprint: string; promise: Promise<ComputerActionResult>; settled: boolean }>; allowOnce: boolean; previewFrames: Map<string, { metadata: NonNullable<ComputerSessionSnapshot['lastObservation']>; capturedAt: number }>; transition?: Promise<ComputerSessionSnapshot> }
 export interface ComputerSessionOptions {
   enabled?: () => boolean
   readAllowedApps?: () => readonly string[]
@@ -61,6 +61,7 @@ export class ComputerSessionService {
     return record
   }
   get(sessionId: string): ComputerSessionSnapshot | undefined { const value = this.sessions.get(sessionId)?.snapshot; return value ? structuredClone(value) : undefined }
+  setOperationLabel(sessionId: string, label: string): void { this.record(sessionId).operationLabel = Array.from(label.replace(/[\x00-\x1f\x7f]/gu, ' ').trim()).slice(0, 120).join('') }
   list(): ComputerSessionSnapshot[] { return [...this.sessions.keys()].map(id => this.get(id)!) }
   status(signal?: AbortSignal) { this.assertLive(); return this.driver.status(signal) }
   targets(signal?: AbortSignal) { this.assertLive(); return this.driver.targets(signal) }
@@ -290,7 +291,7 @@ export class ComputerSessionService {
           this.fence(record, epoch, human); operationSignal.throwIfAborted()
           if (!current || current.pid !== target.pid || current.appId !== target.appId || !sameGeometry(current, observation.geometry)) throw new ComputerError('STALE_OBSERVATION', '目标窗口或缩放已变化，请重新观察')
           record.snapshot.lastAction = { actionId: request.actionId, action: { ...action }, actor: human ? 'human' : 'ai', phase: 'executing', at: this.clock() }; this.notify()
-          return this.driver.act(epoch, target.id, action, operationSignal, { physicalInputApproved: human || physicalInputApproved })
+          return this.driver.act(epoch, target.id, action, operationSignal, { physicalInputApproved: human || physicalInputApproved, operationId: sessionId, operationLabel: record.operationLabel ?? record.snapshot.taskLabel ?? '电脑任务' })
         })
         this.fence(record, epoch, human)
         if (['navigate', 'openTab', 'closeTab', 'goBack', 'goForward', 'reload'].includes(action.kind)) {

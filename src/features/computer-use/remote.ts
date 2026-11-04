@@ -196,14 +196,15 @@ export class RemoteComputerDriver implements DeviceDriver {
     for (const previous of this.ownedEpochs) if (previous < epoch) this.ownedEpochs.delete(previous)
     this.activeEpoch = epoch; this.startHeartbeat(); return result
   }
-  async release(epoch: number, signal?: AbortSignal): Promise<unknown> {
+  async release(epoch: number, signal?: AbortSignal, options?: { preserveVirtualState?: boolean }): Promise<unknown> {
     epochNumber(epoch)
     if (this.activeEpoch === epoch) { if (this.timer) clearInterval(this.timer); this.timer = undefined }
-    const result = await this.rpc('release', { epoch }, signal)
+    const result = await this.rpc('release', { epoch, ...(options?.preserveVirtualState ? { preserveVirtualState: true } : {}) }, signal)
     this.ownedEpochs.delete(epoch)
     if (this.activeEpoch === epoch) this.activeEpoch = undefined
     return result
   }
+  async endOperation(_operationId: string, throughEpoch = this.issuedEpoch) { if (throughEpoch > 0) await this.rpc('release', { epoch: throughEpoch, clearVirtualState: true }) }
   async act(epoch: number, targetId: string, action: ComputerAction, signal?: AbortSignal, authority?: import('./contract.ts').ComputerInputAuthority) {
     try { return await this.rpc('act', { epoch: epochNumber(epoch), targetId, action: parseComputerAction(action), physicalInputApproved: authority?.physicalInputApproved === true }, signal) }
     catch (error) {
@@ -266,7 +267,7 @@ export interface ComputerAgentOptions {
   exchangeDirectory?: string
 }
 export interface ComputerAgentServer { server: Server; endpoint: string; revoke(newToken?: string): Promise<void>; close(): Promise<void> }
-interface ActiveLease { clientId: string; epoch: number; nativeEpoch: number; lastSeen: number; controller?: AbortController; acquisition?: Promise<unknown> }
+interface ActiveLease { preserveVirtualState?: boolean; clientId: string; epoch: number; nativeEpoch: number; lastSeen: number; controller?: AbortController; acquisition?: Promise<unknown> }
 function authorized(header: string | undefined, token: string | undefined): boolean {
   if (!token || !header?.startsWith('Bearer ')) return false
   const actual = Buffer.from(header.slice(7)), expected = Buffer.from(token)
@@ -287,6 +288,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
   let token: string | undefined = pairToken(options.token), active: ActiveLease | undefined, nextNativeEpoch = 0, closing = false
   let pairingGeneration = 0, permissionChanging = false
   const clients = new Map<string, number>(), pending = new Set<AbortController>()
+  const virtualOwners = new Map<string, { epoch: number; nativeEpoch: number }>()
   const pendingReleases = new Map<number, ActiveLease>(), releasing = new Map<number, Promise<void>>()
   let leaseTail: Promise<unknown> = Promise.resolve()
   const interruptions = new Map<string, { epoch: number; code: string }>()
@@ -298,8 +300,8 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
     lease.controller?.abort(new ComputerError('CONTROL_CHANGED', '远端租约已撤销'))
     const acquisition = lease.acquisition
     const cleanup = (async () => {
-      await driver.release(lease.nativeEpoch)
-      if (acquisition) { await Promise.allSettled([acquisition]); await driver.release(lease.nativeEpoch) }
+      await driver.release(lease.nativeEpoch, undefined, lease.preserveVirtualState ? { preserveVirtualState: true } : undefined)
+      if (acquisition) { await Promise.allSettled([acquisition]); await driver.release(lease.nativeEpoch, undefined, lease.preserveVirtualState ? { preserveVirtualState: true } : undefined) }
       pendingReleases.delete(lease.nativeEpoch)
     })()
     releasing.set(lease.nativeEpoch, cleanup)
@@ -307,6 +309,9 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
     return cleanup
   }
   const drainReleases = async (): Promise<void> => { for (const lease of pendingReleases.values()) await releaseLease(lease) }
+  const clearVirtualOwners = async (): Promise<void> => {
+    for (const [clientId, visual] of virtualOwners) { await driver.endOperation?.('remote:' + clientId, visual.nativeEpoch); virtualOwners.delete(clientId) }
+  }
   const revokeLease = async (): Promise<void> => {
     const lease = active; active = undefined
     if (lease) pendingReleases.set(lease.nativeEpoch, lease)
@@ -420,8 +425,16 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
           leaseTail = acquiring.catch(() => {})
           result = await acquiring
         } else if (op === 'release') {
+          const owned = active?.clientId === clientId && active.epoch === epoch ? active : [...pendingReleases.values()].find(lease => lease.clientId === clientId && lease.epoch === epoch)
+          if (owned && payload.preserveVirtualState === true) owned.preserveVirtualState = true
           if (active?.clientId === clientId && active.epoch === epoch) await revokeLease()
-          else for (const lease of pendingReleases.values()) if (lease.clientId === clientId && lease.epoch === epoch) await releaseLease(lease)
+          else if (owned) await releaseLease(owned)
+          if (owned?.preserveVirtualState) virtualOwners.set(clientId, { epoch, nativeEpoch: owned.nativeEpoch })
+          const visual = virtualOwners.get(clientId)
+          if (payload.preserveVirtualState !== true && visual?.epoch === epoch) {
+            await driver.endOperation?.('remote:' + clientId, visual.nativeEpoch)
+            virtualOwners.delete(clientId)
+          }
           result = { released: true }
         } else {
           const lease = leaseFor(clientId, epoch)
@@ -455,7 +468,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
     async revoke(newToken) {
       token = newToken === undefined ? undefined : pairToken(newToken); pairingGeneration++; clients.clear(); interruptions.clear()
       for (const controller of pending) controller.abort(new ComputerError('PAIR_UNAUTHORIZED', '配对已撤销'))
-      const results = await Promise.allSettled([exchange?.reset(), revokeLease()])
+      const results = await Promise.allSettled([exchange?.reset(), revokeLease().then(clearVirtualOwners)])
       const failure = results.find((item): item is PromiseRejectedResult => item.status === 'rejected'); if (failure) throw failure.reason
     },
     async close() {
@@ -465,7 +478,7 @@ export async function createComputerAgentServer(driver: DeviceDriver, options: C
       let failure: unknown
       const fileCleanup = exchange?.close()
       void fileCleanup?.catch(() => {})
-      try { await revokeLease() }
+      try { await revokeLease(); await clearVirtualOwners() }
       catch (error) {
         failure = error
         // An independent process retirement may be the only remaining way to

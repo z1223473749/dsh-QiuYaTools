@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "QiuYaTools 任务标签组",
+  "version": "0.1.1",
+  "description": "为 QiuYaTools 当前操作的浏览器标签显示任务分组；仅连接本机 Harness。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyZi57Fxboa8untVKPp19njF1NDFh6BL9iwfu5uxzCVEN6QKWkWvRCK3kn8YxMx6buuBsr5Ulj92i0zPe0/NZ4ByTGav0Fme7QDVC5vigu+/QjKhfOVKvZoGQvWdcbYsF2V2sCVYu3S2nxWWCou1a/DJpTmzBzTM2P8C3sJbimWQb240dfpGvyL6vo02b/dMP7k8U5R9Qt6To9Yd6xMhyhpUsE3pwtEdid1ytRj7wriXei1ZvIMLofiAc4Y0zldyfVGffQBTsDgytF+c66CZK8s555gZ45zfpmFJbiUPHHrTBSuHUzMg7e6Km4l+tGfwPYEWK96qrM9bfGObhkcpdYwIDAQAB",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "host_permissions": [
+    "http://127.0.0.1:47931/*"
+  ],
+  "action": {
+    "default_title": "QiuYaTools · 可选任务标签组",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

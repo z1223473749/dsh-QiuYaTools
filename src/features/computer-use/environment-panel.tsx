@@ -4,6 +4,7 @@ import type { ExchangeFile, ExchangeRequest, ExchangeResult } from './exchange.t
 
 export type ComputerEnvironmentCall = (op: string, extra?: object, signal?: AbortSignal) => Promise<unknown>
 export interface ComputerEnvironmentStatus {
+  browserGrouping?: { optional: true; connected: boolean; downloadHref: string }
   tasks?: { chatSessionId: string; taskId: string; taskLabel?: string }[]
   native?: ComputerNativeView | null
   environments?: { environmentId?: string; sessionId?: string; mode: 'local' | 'remote' | 'browser'; switching?: boolean; retiring?: boolean }[]
@@ -159,6 +160,11 @@ export function ComputerEnvironmentPanel({ sessionId, enabled, disabled = false,
   return <div className="qyt-computer-environment-panel" data-qyt-environment-session={sessionId}>
     <p className="qyt-computer-caption">切换环境会停止当前聊天的电脑任务。</p>
     <p className="qyt-computer-environment-current qyt-computer-caption">当前环境：{environmentNames[connected?.mode ?? 'local']}{connected?.switching ? ' · 正在切换' : connected?.retiring ? ' · 正在清理' : ''}</p>
+    {mode === 'local' && status.browserGrouping && <div className="qyt-computer-caption" data-qyt-browser-grouping="optional">
+      <strong>浏览器标签分组（可选）</strong>
+      <p>{status.browserGrouping.connected ? '配套扩展已连接，浏览器任务可显示标签组。' : '未连接配套扩展，浏览器操作仍可正常使用，仅不显示任务标签组。'}</p>
+      {!status.browserGrouping.connected && <a className="qyt-button" href={status.browserGrouping.downloadHref} download="qiuya-task-groups.zip">下载配套扩展</a>}
+    </div>}
     <form onSubmit={event => { event.preventDefault(); void connect() }}>
       <fieldset className="qyt-computer-environment-fields" disabled={unavailable}>
         <legend className="qyt-computer-caption">为当前会话选择环境</legend>

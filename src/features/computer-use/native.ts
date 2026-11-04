@@ -9,9 +9,10 @@ import { applicationIconDataUrl } from './application-icon.ts'
 import { foregroundContext, foregroundGrant, foregroundRelease, foregroundTicket } from './foreground-handoff.ts'
 import { waitForComputerRetirement } from './native-retirement.ts'
 import { bundledNativePath, resolveNativeExecutable } from '../../native/runtime.ts'
+import type { BrowserTaskGroups } from './browser-groups.ts'
 import type { ComputerAction, ComputerObservation, ComputerStatus, ComputerSystemPermission, DeviceDriver, ForegroundActionTicket, ForegroundHandoffDriver, ForegroundWorkerIdentity, NativeApplication, NativeComputerEvent, NativeTarget } from './contract.ts'
 
-export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[] }
+export interface NativeCompanionOptions { executable?: string; args?: string[]; timeoutMs?: number; maxMessageBytes?: number; releaseInputArgs?: string[]; browserGroups?: BrowserTaskGroups }
 export function computerCompanionPath(platform: NodeJS.Platform = process.platform, architecture: string = process.arch, base = new URL('./', import.meta.url)): string {
   return bundledNativePath('computer', platform, architecture, base)
 }
@@ -48,6 +49,13 @@ export class NativeCompanionDriver implements DeviceDriver {
   private foregroundSequence?: string
   private updateForegroundSequence(value: string): void { if (this.foregroundSequence === undefined || BigInt(value) > BigInt(this.foregroundSequence)) this.foregroundSequence = value }
   get foregroundHandoff() { return this.foreground }
+  private highestLeaseEpoch = 0
+  async endOperation(operationId: string, throughEpoch = this.highestLeaseEpoch) {
+    this.options.browserGroups?.end(operationId)
+    if (!this.child || throughEpoch <= 0) return
+    const status = await this.compatible()
+    if (Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-state-lifetime') : status.capabilities?.virtualStateLifetime === true) await this.rpc('endVirtualInput', { epoch: throughEpoch })
+  }
   private protocol?: Promise<ComputerStatus>
   private retiring: Promise<void> = Promise.resolve()
   private held: NativeHeldInputs = { keys: [], mouseButtons: [] }
@@ -366,11 +374,12 @@ export class NativeCompanionDriver implements DeviceDriver {
   async lease(epoch: number, signal?: AbortSignal, options?: { actor: 'ai' | 'human' }) {
     const status = await this.compatible()
     if (!(Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-input') : status.capabilities?.virtualInput === true)) throw new ComputerError('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新目标执行器以支持虚拟输入和真实鼠标单独授权。')
+    this.highestLeaseEpoch = Math.max(this.highestLeaseEpoch, epoch)
     return this.checked('lease', { epoch, ...(options ? { actor: options.actor } : {}) }, signal)
   }
-  async release(epoch: number, signal?: AbortSignal) {
+  async release(epoch: number, signal?: AbortSignal, options?: { preserveVirtualState?: boolean }) {
     const foreground = this.foreground, child = this.child
-    const result = await this.rpc<unknown>('release', { epoch }, signal, Boolean(foreground), child, Boolean(foreground))
+    const result = await this.rpc<unknown>('release', { epoch, ...(options?.preserveVirtualState ? { preserveVirtualState: true } : {}) }, signal, Boolean(foreground), child, Boolean(foreground))
     if (!foreground || !result || typeof result !== 'object' || !('foregroundRelease' in result) || !result.foregroundRelease) return result
     const raw = result.foregroundRelease
     let tokenId: string | undefined
@@ -387,7 +396,15 @@ export class NativeCompanionDriver implements DeviceDriver {
     const status = await this.compatible()
     if (!(Array.isArray(status.capabilities) ? status.capabilities.includes('virtual-input') : status.capabilities?.virtualInput === true)) throw new ComputerError('VIRTUAL_INPUT_UPGRADE_REQUIRED', '请更新目标执行器以支持虚拟输入隔离。')
     if ((action.kind === 'moveRelative' || action.holdMs !== undefined || action.inputMode !== undefined) && !(Array.isArray(status.capabilities) ? status.capabilities.includes('input-compatibility') : status.capabilities?.inputCompatibility === true)) throw new ComputerError('INPUT_MODE_UNSUPPORTED', '请更新目标电脑的原生执行器后使用此输入方式')
-    return this.checked('act', { epoch, targetId, action, ...(privateOptions ?? {}) }, signal)
+    const { operationId, operationLabel, ...authority } = privateOptions ?? {}
+    const result = await this.checked('act', { epoch, targetId, action, ...authority }, signal)
+    if (operationId && result && typeof result === 'object' && 'browserTab' in result && this.options.browserGroups) {
+      // The page action has already completed. Grouping failure must never
+      // turn it into a failed action that an Agent might replay.
+      const browserGroup = await this.options.browserGroups.group(result.browserTab, operationId, operationLabel ?? '电脑任务', signal).catch(() => ({ status: 'unconfirmed' as const }))
+      return { ...result, ...(browserGroup ? { browserGroup } : {}) }
+    }
+    return result
   }
   openPreview(url: string, title: string, sessionId: string, signal?: AbortSignal) { return this.checked('openPreview', { url, title, sessionId }, signal) }
   closePreview(signal?: AbortSignal, options?: { preserveSession?: boolean }) { return this.checked('closePreview', options?.preserveSession ? { preserveSession: true } : {}, signal) }

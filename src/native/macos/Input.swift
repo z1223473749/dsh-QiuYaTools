@@ -106,9 +106,10 @@ enum CompletedKeyboardInputPolicy {
     private var keyboardReadinessBudget: KeyboardReadinessRetryBudget?
     private var desktopLease: DesktopLeaseGuard?
     private(set) var leaseActor = NativeLeaseActor.ai
+    private var virtualVisualEpoch: Int?
     private lazy var aiPointer: AICursorOverlay = {
         let overlay = AICursorOverlay()
-        overlay.isLeaseCurrent = { [weak self] epoch in self?.fence.active == epoch && self?.leaseActor == .ai }
+        overlay.isLeaseCurrent = { [weak self] epoch in (self?.fence.active == epoch || self?.virtualVisualEpoch == epoch) && self?.leaseActor == .ai }
         overlay.physicalLeaseOwner = { [weak self] epoch in
             guard let self, self.fence.active == epoch, self.leaseActor == .ai else { return nil }
             return self.desktopLease?.ownerId
@@ -248,6 +249,7 @@ enum CompletedKeyboardInputPolicy {
     func lease(_ epoch: Int, actor: NativeLeaseActor = .ai) throws {
         guard epoch > fence.highest else { throw ComputerError("STALE_EPOCH", "The control lease is stale.") }
         guard aiPointer.hide() else { throw ComputerError("CURSOR_CLEANUP_FAILED", "The previous cursor owner has not been restored. Control remains blocked.") }
+        if actor == .human { virtualInput.hide(); virtualVisualEpoch = nil }
         if actor == .human {
             if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
             try desktopLease!.acquire()
@@ -255,18 +257,29 @@ enum CompletedKeyboardInputPolicy {
         do { try fence.lease(epoch) } catch { try? desktopLease?.release(); throw error }
         leaseActor = actor; aiPointer.beginLease(epoch); operationBadge.beginLease(epoch)
     }
-    func release(_ epoch: Int) throws {
+    func release(_ epoch: Int, preserveVirtualState: Bool = false) throws {
         let wasActive = fence.active.map { $0 <= epoch } ?? false
         fence.release(epoch)
         if wasActive || (fence.active == nil && desktopLease?.ownerId != nil) {
+            if preserveVirtualState && leaseActor == .ai && desktopLease?.ownerId == nil && !physicalInputActive {
+                operationBadge.hide(); return
+            }
+            virtualVisualEpoch = nil
+            virtualInput.hide()
             operationBadge.hide()
             try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
         }
+    }
+    func endVirtualInput(_ throughEpoch: Int) {
+        guard fence.highest <= throughEpoch else { return }
+        virtualVisualEpoch = nil; virtualInput.hide(); _ = aiPointer.hide()
     }
     func shutdownCleanup() throws {
         // A failed action may already have revoked its epoch while still
         // retaining the physical lock. Shutdown must clean that owner too.
         fence.release(max(0, fence.highest))
+        virtualVisualEpoch = nil
+        virtualInput.hide()
         operationBadge.hide()
         try completeOwnedInputCleanup(restoreCursor: { aiPointer.hide() }, releaseHeld: { try releaseHeldInput() }, releaseDesktop: { try desktopLease?.release() })
     }
@@ -275,9 +288,14 @@ enum CompletedKeyboardInputPolicy {
         try fence.check(epoch)
         guard inputSessionAvailable() else { throw ComputerError("SESSION_UNAVAILABLE", "The target desktop session is locked or inactive.") }
         if !physicalInputApproved && leaseActor == .ai {
-            return try virtualInput.act(target: target, geometry: geometry, action: action, checkpoint: { try self.fence.check(epoch) })
+            virtualVisualEpoch = epoch
+            virtualInput.onPoint = { [weak self] point, target in self?.aiPointer.virtualPoint(point, epoch: epoch, target: target) }
+            var result = try virtualInput.act(target: target, geometry: geometry, action: action, checkpoint: { try self.fence.check(epoch) })
+            if action["kind"] as? String != "move", let tab = virtualInput.browserTabIdentity(target: target) { result["browserTab"] = tab }
+            return result
         }
         virtualInput.hide()
+        virtualVisualEpoch = nil
         if desktopLease == nil { desktopLease = try DesktopLeaseGuard() }
         try desktopLease!.acquire()
         physicalInputActive = true
@@ -299,7 +317,7 @@ enum CompletedKeyboardInputPolicy {
         }
     }
 
-    @discardableResult func hideAICursor() -> Bool { aiPointer.hide() }
+    @discardableResult func hideAICursor() -> Bool { virtualInput.hide(); return aiPointer.hide() }
     func humanInputDetected() {
         guard physicalInputActive || leaseActor == .human else { return }
         humanInputGeneration &+= 1

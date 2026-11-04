@@ -269,3 +269,18 @@ test('paired transport preserves explicit one-action physical authority and defa
   await remote.act(1, 'window-1', { kind: 'click', x: 1, y: 1 }, undefined, { physicalInputApproved: true })
   assert.deepEqual(authority, [{ physicalInputApproved: false }, { physicalInputApproved: true }])
 })
+
+test('paired virtual releases retain anchors and logical cleanup is fenced to that exact client/native epoch', async t => {
+  const f = await fixture(t), releases = [], ended = [], original = f.driver.release
+  f.driver.release = async (epoch, signal, options) => { releases.push({ epoch, options }); return original(epoch, signal) }
+  f.driver.endOperation = async (id, through) => ended.push([id, through])
+  const a = f.remote('virtual-client-a'), b = f.remote('virtual-client-b')
+  await a.lease(1); await a.act(1, f.target.id, { kind: 'move', x: 1, y: 1 }); await a.release(1, undefined, { preserveVirtualState: true })
+  assert.deepEqual(releases[0].options, { preserveVirtualState: true })
+  await b.lease(1); await b.act(1, f.target.id, { kind: 'move', x: 2, y: 2 }); await b.release(1, undefined, { preserveVirtualState: true })
+  await a.endOperation('task', 1)
+  assert.deepEqual(ended, [['remote:virtual-client-a', 1]])
+  await a.endOperation('task', 1); assert.equal(ended.length, 1)
+  await f.agent.revoke()
+  assert.deepEqual(ended, [['remote:virtual-client-a', 1], ['remote:virtual-client-b', 2]])
+})

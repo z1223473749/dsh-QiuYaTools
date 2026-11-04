@@ -109,3 +109,18 @@ test('disposing a queued application launch removes it before activation without
   await b.driver.dispose(); await rejected; assert.equal(launched, 0)
   gate.resolve({}); await action; await a.driver.dispose()
 })
+
+test('virtual action releases preserve state until logical stop and cleanup carries the exact native epoch', async () => {
+  const f = fixture('virtual-lifetime', new ComputerInputScheduler()), releases = [], ended = [], release = f.inner.release
+  f.inner.release = async (epoch, signal, options) => { releases.push({ epoch, options }); return release(epoch, signal) }
+  f.inner.endOperation = async (id, through) => ended.push([id, through])
+  await f.driver.lease(100)
+  for (let i = 0; i < 2; i++) await f.driver.act(100, f.target.id, { kind: 'move', x: i, y: i }, undefined, { operationId: 'task', operationLabel: '目的' })
+  assert.deepEqual(releases.map(r => r.options), [{ preserveVirtualState: true }, { preserveVirtualState: true }])
+  await f.driver.release(100); assert.deepEqual(ended, [['task', 2]])
+  await f.driver.lease(101)
+  await f.driver.act(101, f.target.id, { kind: 'move', x: 2, y: 2 }, undefined, { operationId: 'task' })
+  await f.driver.release(100); assert.deepEqual(ended, [['task', 2]])
+  await f.driver.release(101); assert.deepEqual(ended, [['task', 2], ['task', 3]])
+  await f.driver.dispose()
+})

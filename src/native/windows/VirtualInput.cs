@@ -14,6 +14,7 @@ internal sealed class VirtualInput
     private Point? point;
     private IntPtr textAnchor;
     private int caret;
+    internal Action<Point>? OnPoint;
     private static NativeFailure Unsupported(string reason = "No supported background control") => new("VIRTUAL_INPUT_UNSUPPORTED", reason + ". Request owner permission for physical input.");
     internal void Hide() { point = null; targetId = null; ClearAnchor(); }
     internal void ClearAnchor() { textAnchor = IntPtr.Zero; caret = 0; }
@@ -89,8 +90,10 @@ internal sealed class VirtualInput
                 if (x < 0 || y < 0 || x >= rect.Width || y >= rect.Height) throw new NativeFailure("invalid-coordinate", "Pointer is outside the observed window");
                 if (targetId != id) ClearAnchor();
                 targetId = id; point = new Point(rect.X + (int)x, rect.Y + (int)y);
+                OnPoint?.Invoke(point.Value);
             }
             if (kind == "move") return new { performed = true, delivery = "virtual", kind };
+            if (targetId == id && point is Point currentPoint) OnPoint?.Invoke(currentPoint);
             var root = AutomationElement.FromHandle(handle);
             if (kind == "type") {
                 if (targetId != id || textAnchor == IntPtr.Zero) throw Unsupported();
