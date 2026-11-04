@@ -8,11 +8,14 @@ import ApplicationServices
     private var targetId: String?
     private var textAnchor: AXUIElement?
     private var anchorWindow: AXUIElement?
+    private var anchorRange: CFRange?
+    private var anchorValue: String?
     var onPoint: ((CGPoint, NativeTarget) -> Void)?
     private var deadline: TimeInterval = 0
-    private func unsupported() -> ComputerError { ComputerError("VIRTUAL_INPUT_UNSUPPORTED", "The selected control does not support this background action. Request owner permission for physical input.") }
+    private func unsupported() -> ComputerError { ComputerError("VIRTUAL_INPUT_UNSUPPORTED", "The selected control does not support this background action.") }
+    private func unresolved() -> ComputerError { ComputerError("VIRTUAL_TARGET_UNRESOLVED", "No unique background control was resolved. Observe again and click the intended control's center; do not request physical input.") }
     private func read(_ element: AXUIElement, _ name: String) throws -> CFTypeRef? {
-        guard ProcessInfo.processInfo.systemUptime < deadline else { throw unsupported() }
+        guard ProcessInfo.processInfo.systemUptime < deadline else { throw unresolved() }
         AXUIElementSetMessagingTimeout(element, 0.02)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
@@ -27,9 +30,9 @@ import ApplicationServices
     }
     private func window(_ target: NativeTarget) throws -> AXUIElement {
         let app = AXUIElementCreateApplication(target.pid)
-        guard let windows = try read(app, kAXWindowsAttribute) as? [AXUIElement], windows.count <= 128 else { throw unsupported() }
+        guard let windows = try read(app, kAXWindowsAttribute) as? [AXUIElement], windows.count <= 128 else { throw unresolved() }
         let matches = try windows.filter { try rect($0) == target.frame }
-        guard matches.count == 1 else { throw unsupported() }
+        guard matches.count == 1 else { throw unresolved() }
         // Geometry is only used when the selected process has exactly one CG
         // window at that frame, so same-position siblings cannot be confused.
         let cg = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
@@ -38,7 +41,7 @@ import ApplicationServices
                   let bounds = row[kCGWindowBounds as String] as? [String: Any], let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
             return frame == target.frame
         }
-        guard siblings.count == 1, (siblings[0][kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId else { throw unsupported() }
+        guard siblings.count == 1, (siblings[0][kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowId else { throw unresolved() }
         return matches[0]
     }
     private func path(_ root: AXUIElement, at point: CGPoint, action: String) throws -> [AXUIElement] {
@@ -48,10 +51,10 @@ import ApplicationServices
         var budget = 512
         func visit(_ element: AXUIElement, ancestors: [AXUIElement]) throws -> [[AXUIElement]] {
             budget -= 1
-            guard budget >= 0, ancestors.count < 24, !ancestors.contains(where: { CFEqual($0, element) }) else { throw unsupported() }
+            guard budget >= 0, ancestors.count < 24, !ancestors.contains(where: { CFEqual($0, element) }) else { throw unresolved() }
             let chain = ancestors + [element]
             let children = try read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-            guard children.count <= 256 else { throw unsupported() }
+            guard children.count <= 256 else { throw unresolved() }
             var candidates: [[AXUIElement]] = []
             for child in children where try rect(child)?.contains(point) == true {
                 for candidate in try visit(child, ancestors: chain) {
@@ -65,7 +68,23 @@ import ApplicationServices
             return actions.contains(action) || editable ? [chain] : []
         }
         let candidates = try visit(root, ancestors: [])
-        guard candidates.count == 1 else { throw unsupported() }
+        if candidates.isEmpty {
+            // Chromium can initially expose its web control roles without
+            // their actions. Ask the app for its full accessibility surface,
+            // then let the caller observe its asynchronous renderer update.
+            // Native controls that already expose actions need no handshake.
+            var pid: pid_t = 0
+            if AXUIElementGetPid(root, &pid) == .success {
+                let app = AXUIElementCreateApplication(pid)
+                if let enhanced = try read(app, "AXEnhancedUserInterface") as? NSNumber, !enhanced.boolValue {
+                    _ = AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+                }
+            }
+        }
+        // Rectangles can overlap even though both controls support AXPress
+        // (Chromium's adjacent tabs do this). That is a targeting problem,
+        // never evidence that the action requires the real system mouse.
+        guard candidates.count == 1 else { throw unresolved() }
         return candidates[0]
     }
     private func settable(_ element: AXUIElement, _ attribute: String) -> Bool {
@@ -94,7 +113,7 @@ import ApplicationServices
                 "y": (point.y - target.frame.minY) * Double(geometry.pixelHeight) / target.frame.height, "visible": true, "actor": "ai", "phase": "virtual"]
     }
     func hide() { point = nil; targetId = nil; clearAnchor() }
-    func clearAnchor() { textAnchor = nil; anchorWindow = nil }
+    func clearAnchor() { textAnchor = nil; anchorWindow = nil; anchorRange = nil; anchorValue = nil }
     func browserTabIdentity(target: NativeTarget) -> [String: Any]? {
         // Metadata for the browser's native grouping API. Input itself stays
         // generic: no application-specific click path or real mouse fallback.
@@ -120,7 +139,7 @@ import ApplicationServices
         guard let root = try? window(target), let titles = try? selected(root), titles.count == 1 else { return nil }
         return ["appId": target.appId, "title": titles[0], "window": ["left": target.frame.minX, "top": target.frame.minY, "width": target.frame.width, "height": target.frame.height]]
     }
-    func act(target: NativeTarget, geometry: FrameGeometry, action: [String: Any], checkpoint: () throws -> Void) throws -> [String: Any] {
+    func act(target: NativeTarget, geometry: FrameGeometry, action: [String: Any], checkpoint: () throws -> Void) async throws -> [String: Any] {
         try checkpoint()
         guard AXIsProcessTrusted() else { throw ComputerError("ACCESSIBILITY_REQUIRED", "Accessibility permission is required.") }
         guard target.frame == geometry.frame else { throw ComputerError("GEOMETRY_CHANGED", "Observe the target again.") }
@@ -140,21 +159,34 @@ import ApplicationServices
         if kind == "type" {
             guard targetId == target.id, let element = textAnchor, let oldWindow = anchorWindow, CFEqual(root, oldWindow),
                   let owner = try read(element, kAXWindowAttribute), CFEqual(owner, root),
-                  let text = action["text"] as? String else { throw unsupported() }
+                  let text = action["text"] as? String,
+                  let value = try read(element, kAXValueAttribute) as? String,
+                  value == anchorValue, let range = anchorRange,
+                  range.location >= 0, range.length >= 0, range.location + range.length <= (value as NSString).length else { throw unresolved() }
             // Replace the control's existing selection without changing global
-            // keyboard focus. No fallback to keystrokes or clipboard paste.
-            if settable(element, kAXSelectedTextAttribute) {
-                try checkpoint(); try mutate(element) { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) }
-            } else {
-                guard settable(element, kAXValueAttribute), let value = try read(element, kAXValueAttribute) as? String else { throw unsupported() }
-                var range = CFRange(location: 0, length: 0)
-                if !value.isEmpty {
-                    guard let raw = try read(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID(), AXValueGetValue(raw as! AXValue, .cfRange, &range),
-                          range.location >= 0, range.length >= 0, range.location + range.length <= (value as NSString).length else { throw unsupported() }
-                }
-                let next = (value as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: text)
+            // keyboard focus. Prefer the element-scoped value setter: a web
+            // renderer may acknowledge AXSelectedText but apply it only to a
+            // globally focused selection, leaving this background field empty.
+            let next = (value as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: text)
+            if settable(element, kAXValueAttribute) {
                 try checkpoint(); try mutate(element) { AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, next as CFString) }
+            } else {
+                guard settable(element, kAXSelectedTextAttribute) else { throw unsupported() }
+                try checkpoint(); try mutate(element) { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) }
             }
+            // Renderer writes are asynchronous. Poll readback only, never send
+            // the write again or replay it using the system keyboard.
+            do {
+                while true {
+                    try checkpoint()
+                    if try read(element, kAXValueAttribute) as? String == next { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            } catch {
+                clearAnchor()
+                throw ComputerError("VIRTUAL_INPUT_UNCONFIRMED", "The background text write could not be verified. Inspect the field; do not replay the input.")
+            }
+            anchorValue = next; anchorRange = CFRange(location: range.location + (text as NSString).length, length: 0)
         } else if kind == "click" {
             clearAnchor()
             guard action["button"] == nil || action["button"] as? String == "left", let point else { throw unsupported() }
@@ -165,21 +197,23 @@ import ApplicationServices
                     // A background click must locate its own caret. Keeping an
                     // unrelated old caret would insert text at the wrong place.
                     guard let value = try read(element, kAXValueAttribute) as? String else { throw unsupported() }
+                    var range = CFRange(location: 0, length: 0)
                     if !value.isEmpty {
-                        guard settable(element, kAXSelectedTextRangeAttribute) else { throw unsupported() }
                         var position = point, rawRange: CFTypeRef?
                         guard let parameter = AXValueCreate(.cgPoint, &position),
                               AXUIElementCopyParameterizedAttributeValue(element, kAXRangeForPositionParameterizedAttribute as CFString, parameter, &rawRange) == .success,
                               let rawRange, CFGetTypeID(rawRange) == AXValueGetTypeID() else { throw unsupported() }
-                        var range = CFRange(location: 0, length: 0)
                         guard AXValueGetValue(rawRange as! AXValue, .cfRange, &range), range.location >= 0, range.location <= (value as NSString).length else { throw unsupported() }
                         range.length = 0
+                    }
+                    if !settable(element, kAXValueAttribute) {
+                        guard settable(element, kAXSelectedTextRangeAttribute) else { throw unsupported() }
                         guard let caret = AXValueCreate(.cfRange, &range) else { throw unsupported() }
                         try checkpoint()
                         guard try rect(root) == target.frame, try rect(element)?.contains(point) == true else { throw unsupported() }
                         try mutate(element) { AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, caret) }
                     }
-                    textAnchor = element; anchorWindow = root; dispatched = true; break
+                    textAnchor = element; anchorWindow = root; anchorRange = range; anchorValue = value; dispatched = true; break
                 }
                 var names: CFArray?
                 if AXUIElementCopyActionNames(element, &names) == .success, (names as? [String] ?? []).contains(kAXPressAction) {

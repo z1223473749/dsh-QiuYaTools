@@ -131,9 +131,9 @@ final class FrameReceiver: NSObject, SCStreamOutput, SCStreamDelegate {
 /// All AXUIElements are created, used and released inside one detached read.
 /// The observe admission gate remains held while awaiting this task, including
 /// cancellation: a timed-out AX call is never abandoned to start another read.
-func accessibilityText(_ target: NativeTarget) async -> String {
+func accessibilityText(_ target: NativeTarget, geometry: FrameGeometry? = nil) async -> String {
     let pid = target.pid, frame = target.frame
-    return await accessibilityTextOffMain(pid: pid, frame: frame) { .native() }
+    return await accessibilityTextOffMain(pid: pid, frame: frame, geometry: geometry) { .native() }
 }
 
 /// A small typed read seam keeps deadline/privacy tests independent of real
@@ -174,16 +174,16 @@ extension AccessibilityReadBackend where Element == AXUIElement {
     }
 }
 
-func accessibilityTextOffMain<Element>(pid: pid_t, frame: CGRect, budget: TimeInterval = 0.8,
+func accessibilityTextOffMain<Element>(pid: pid_t, frame: CGRect, geometry: FrameGeometry? = nil, budget: TimeInterval = 0.8,
     now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     backend: @escaping () -> AccessibilityReadBackend<Element>) async -> String {
     let worker = Task.detached(priority: .userInitiated) {
-        autoreleasepool { readAccessibilityText(pid: pid, frame: frame, budget: budget, now: now, backend: backend()) }
+        autoreleasepool { readAccessibilityText(pid: pid, frame: frame, geometry: geometry, budget: budget, now: now, backend: backend()) }
     }
     return await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
 }
 
-private func readAccessibilityText<Element>(pid: pid_t, frame: CGRect, budget: TimeInterval,
+private func readAccessibilityText<Element>(pid: pid_t, frame: CGRect, geometry: FrameGeometry?, budget: TimeInterval,
     now: () -> TimeInterval, backend: AccessibilityReadBackend<Element>) -> String {
     let deadline = now() + max(0, budget)
     func permitted() -> Bool { !Task.isCancelled && now() < deadline }
@@ -213,7 +213,7 @@ private func readAccessibilityText<Element>(pid: pid_t, frame: CGRect, budget: T
     guard let root = chosen else { return "The selected window has no matching accessibility tree." }
     var lines: [String] = []; var visited = Set<CFHashCode>()
     func walk(_ element: Element, _ depth: Int) {
-        guard depth < 9, lines.count < 160, permitted(), visited.insert(backend.identity(element)).inserted else { return }
+        guard depth < 16, lines.count < 160, permitted(), visited.insert(backend.identity(element)).inserted else { return }
         var values: [String] = []
         let secure: Bool
         if case .text(let role)? = read(element, kAXSubroleAttribute) { secure = role == "AXSecureTextField" } else { secure = false }
@@ -221,6 +221,23 @@ private func readAccessibilityText<Element>(pid: pid_t, frame: CGRect, budget: T
             if case .text(let text)? = read(element, name), !text.isEmpty {
                 let safe = text.replacingOccurrences(of: "\n", with: " ")
                 if !values.contains(safe) { values.append(String(safe.prefix(300))) }
+            }
+        }
+        // Centers use the returned screenshot's pixels, including downscaling
+        // and monitors with negative origins. They are hints, never authority;
+        // VirtualInput still resolves and checks the actual control on click.
+        if let geometry, geometry.frame == frame, geometry.pixelWidth > 0, geometry.pixelHeight > 0,
+           let role = values.first,
+           ["AXButton", "AXRadioButton", "AXCheckBox", "AXPopUpButton", "AXTextField", "AXTextArea", "AXComboBox", "AXLink"].contains(role),
+           case .point(let p)? = read(element, kAXPositionAttribute),
+           case .size(let s)? = read(element, kAXSizeAttribute),
+           p.x.isFinite, p.y.isFinite, s.width.isFinite, s.height.isFinite, s.width > 0, s.height > 0,
+           frame.width > 0, frame.height > 0 {
+            let visible = CGRect(origin: p, size: s).intersection(frame)
+            if !visible.isNull, visible.width > 0, visible.height > 0 {
+                let x = (visible.midX - frame.minX) * Double(geometry.pixelWidth) / frame.width
+                let y = (visible.midY - frame.minY) * Double(geometry.pixelHeight) / frame.height
+                values.append("center=(\(Int(x)),\(Int(y)))")
             }
         }
         if !values.isEmpty { lines.append(String(repeating: "  ", count: depth) + values.joined(separator: " | ")) }

@@ -21,7 +21,7 @@ test('macOS detached AX reads leave MainActor release/restore responsive and pre
     const { stdout } = await execute(binary, [], { timeout: 15_000 })
     const report = JSON.parse(stdout)
     assert.equal(report.passed, true)
-    assert.equal(report.checks.length, 6)
+    assert.equal(report.checks.length, 7)
     assert.equal(report.gui, false)
     assert.equal(report.nativeInput, false)
     assert.equal(report.realAX, false)

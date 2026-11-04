@@ -290,7 +290,7 @@ enum CompletedKeyboardInputPolicy {
         if !physicalInputApproved && leaseActor == .ai {
             virtualVisualEpoch = epoch
             virtualInput.onPoint = { [weak self] point, target in self?.aiPointer.virtualPoint(point, epoch: epoch, target: target) }
-            var result = try virtualInput.act(target: target, geometry: geometry, action: action, checkpoint: { try self.fence.check(epoch) })
+            var result = try await virtualInput.act(target: target, geometry: geometry, action: action, checkpoint: { try self.fence.check(epoch) })
             if action["kind"] as? String != "move", let tab = virtualInput.browserTabIdentity(target: target) { result["browserTab"] = tab }
             return result
         }

@@ -51,8 +51,14 @@ import ApplicationServices
         for _ in 0..<5 { try await act("click", "button") }
         var ambiguousRejected = false
         do { try await act("click", "ambiguous") }
-        catch let error as ComputerError { ambiguousRejected = error.code == "VIRTUAL_INPUT_UNSUPPORTED" }
-        try await act("click", "field"); try await act("type", text: "virtual-input-verified")
+        catch let error as ComputerError { ambiguousRejected = error.code == "VIRTUAL_TARGET_UNRESOLVED" }
+        try await act("click", "field")
+        try await act("type", text: "virtual-input-")
+        try await act("type", text: "verified")
+        try await act("click", "ignoredField")
+        var ignoredWriteUnconfirmed = false
+        do { try await act("type", text: "must-not-report-success") }
+        catch let error as ComputerError { ignoredWriteUnconfirmed = error.code == "VIRTUAL_INPUT_UNCONFIRMED" }
         try await act("move", "button")
         var unsupported = false
         do { try await act("drag") }
@@ -72,6 +78,7 @@ import ApplicationServices
         let report: [String: Any] = ["realAccessibilityActions": true, "perActionNativeLeases": nativeEpoch, "virtualStateClearedOnTaskEnd": virtualStateCleared, "buttonClicks": final["clicks"] ?? -1,
             "overlappingStructuralGroup": final["overlappingStructuralGroup"] as? Bool == true,
             "overlappingActionableControlsRejected": ambiguousRejected,
+            "ignoredTextWriteUnconfirmed": ignoredWriteUnconfirmed, "ignoredTextWriteAttempts": final["ignoredWrites"] ?? -1,
             "textVerified": final["text"] as? String == "virtual-input-verified", "unsupportedDragRejected": unsupported,
             "systemCursorUnchanged": beforeCursor == afterCursor,
             "externalInputEvents": externalInputEvents, "ownedInjectedEvents": ownedInjectedEvents,
@@ -89,6 +96,7 @@ import ApplicationServices
         print(String(data: data, encoding: .utf8)!)
         let desktopStable = report["systemCursorUnchanged"] as? Bool == true && report["foregroundApplicationUnchanged"] as? Bool == true && report["keyboardFocusUnchanged"] as? Bool != false
         guard report["buttonClicks"] as? Int == 5, report["textVerified"] as? Bool == true, unsupported, ambiguousRejected, virtualStateCleared,
+              ignoredWriteUnconfirmed, final["ignoredWrites"] as? Int == 1, final["ignoredText"] as? String == "",
               ownedInjectedEvents == 0, desktopStable || externalInputEvents > 0, report["fixtureRemainedBackground"] as? Bool == true,
               report["fixtureFieldEditorUnchanged"] as? Bool == true else { throw ComputerError("VIRTUAL_INPUT_ACCEPTANCE_FAILED", "Review the background acceptance report.") }
     }

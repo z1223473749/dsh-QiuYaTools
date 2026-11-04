@@ -13,6 +13,13 @@ import ApplicationServices
     }
 }
 
+/// An advertised setter that accepts an AX call without applying the value.
+/// This reproduces a renderer acknowledging input while its field stays empty.
+@MainActor final class IgnoringAccessibilityTextField: NSTextField {
+    var ignoredWrites = 0
+    override func setAccessibilityValue(_ value: Any?) { ignoredWrites += 1 }
+}
+
 @main struct VirtualInputAcceptanceFixture {
     @MainActor static func main() {
         let app = NSApplication.shared
@@ -26,6 +33,7 @@ import ApplicationServices
         let path: String
         var window: NSWindow!
         let field = NSTextField(string: "")
+        let ignoredField = IgnoringAccessibilityTextField(string: "")
         var button: NSButton!
         var ambiguousButton: NSButton!
         var clicks = 0
@@ -40,9 +48,12 @@ import ApplicationServices
             window.contentView = content
             field.frame = NSRect(x: 30, y: 45, width: 280, height: 28)
             field.placeholderString = "Virtual text target"
+            ignoredField.frame = NSRect(x: 30, y: 10, width: 280, height: 28)
+            ignoredField.placeholderString = "Ignored background write"
             button = NSButton(title: "Virtual button", target: self, action: #selector(clicked))
             button.frame = NSRect(x: 30, y: 115, width: 170, height: 34)
             window.contentView?.addSubview(field)
+            window.contentView?.addSubview(ignoredField)
             window.contentView?.addSubview(button)
             for title in ["Ambiguous A", "Ambiguous B"] {
                 let duplicate = NSButton(title: title, target: self, action: #selector(clicked))
@@ -65,7 +76,8 @@ import ApplicationServices
                 return ["x": p.x, "y": (NSScreen.screens.first?.frame.height ?? 0) - p.y]
             }
             let state: [String: Any] = ["pid": Int(getpid()), "windowId": window.windowNumber, "bounds": bounds,
-                "button": point(button), "field": point(field), "ambiguous": point(ambiguousButton), "clicks": clicks, "text": field.stringValue,
+                "button": point(button), "field": point(field), "ignoredField": point(ignoredField), "ignoredWrites": ignoredField.ignoredWrites, "ignoredText": ignoredField.stringValue,
+                "ambiguous": point(ambiguousButton), "clicks": clicks, "text": field.stringValue,
                 "overlappingStructuralGroup": true, "keyWindow": window.isKeyWindow, "fieldEditorActive": field.currentEditor() != nil]
             if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) { try? data.write(to: URL(fileURLWithPath: path), options: .atomic) }
         }

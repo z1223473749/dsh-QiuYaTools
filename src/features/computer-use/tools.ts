@@ -53,7 +53,8 @@ const entryErrors: Record<string, string> = {
 }
 const toolErrors: Record<string, string> = {
   PHYSICAL_INPUT_DENIED: '用户拒绝了本次真实鼠标操作，不得占用系统鼠标或自动重新申请。',
-  VIRTUAL_INPUT_UNSUPPORTED: '当前动作不支持虚拟输入，未执行真实鼠标操作。可调用 qiuya_computer_request_physical_input 申请这一次动作；用户批准后重新观察并执行同一动作。',
+  VIRTUAL_INPUT_UNSUPPORTED: '当前控件未提供此动作的虚拟输入能力，未执行真实鼠标操作。请说明受限步骤；用户要求虚拟操作时，不得自行申请真实鼠标。只有用户明确选择使用真实鼠标后，才可申请本次动作的单独授权。',
+  VIRTUAL_TARGET_UNRESOLVED: '本次虚拟操作尚未定位到唯一控件，未执行点击。可能点在相邻控件的重叠边缘或空白区域，也可能应用正在准备完整的辅助功能。请重新 observe，根据控件的 center 坐标或截图选择目标中部继续虚拟操作；不得据此申请真实鼠标。',
   VIRTUAL_INPUT_REQUIRED: '必须先尝试虚拟输入，仅明确不支持的动作可以申请真实鼠标。',
   VIRTUAL_INPUT_UPGRADE_REQUIRED: '目标执行器版本不支持虚拟输入隔离，请用户更新执行器。',
   VIRTUAL_INPUT_UNCONFIRMED: '虚拟操作结果未确认，请先检查实际画面，不要重复操作或申请真实鼠标重放。',
@@ -179,7 +180,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
         async execute(args, exec) { return entryRun(exec, () => { const input = parameters(args, ['taskId', 'query', 'kind']), binding = bindSession(exec, input); return options.entry!.discover(operationExecution(exec, binding.id), { query: input.query, kind: input.kind } as { query?: string; kind?: 'all' | 'application' | 'browser' }).then(result => { binding.assertCurrent(); return taskResult(result, binding.taskId) }) }) },
       }),
       register({
-        name: 'qiuya_computer_request_physical_input', description: 'Only after VIRTUAL_INPUT_UNSUPPORTED: request owner permission for the exact failed action to use the real system mouse/focus once. Always-allowed applications do not bypass this decision. After approval observe again, then execute the same action. Never retry unconfirmed input.',
+        name: 'qiuya_computer_request_physical_input', description: 'Only when the user explicitly chooses real system input AND the exact action failed with VIRTUAL_INPUT_UNSUPPORTED: request owner permission for that action once. Do not call when the user requires virtual operation, or for VIRTUAL_TARGET_UNRESOLVED; observe again and resolve the target instead. Always-allowed applications do not bypass this decision. After approval observe again, then execute the same action. Never retry unconfirmed input.',
         parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { taskId: taskParameter, reason: { type: 'string', maxLength: 600 } } }, output,
         async execute(args, exec) { return entryRun(exec, async () => { const input = parameters(args, ['taskId', 'reason']), binding = bindSession(exec, input); const result = await options.entry!.requestPhysicalInput(operationExecution(exec, binding.id), input.reason as string); binding.assertCurrent(); return taskResult({ approved: true, scope: 'physicalInput', targetId: result.target?.id, failedActionId: result.lastAction?.actionId, next: 'Observe again, then execute the exact failed action with a new actionId. This permission is consumed once.' }, binding.taskId) }) },
       }),
@@ -208,7 +209,7 @@ export function installComputerTools(ctx: Context, service: ComputerServiceFacad
       },
     }),
     register({
-      name: 'qiuya_computer_observe', description: 'Capture the authorized target application and read its accessibility text. The returned frameId is single-use: every successful act, including click/type/key/move, consumes it. Observe again before the next act, even when the window looks unchanged. Do not repeat a completed action to refresh its frame. Coordinates refer to original screenshot pixels.', parameters: noParameters,
+      name: 'qiuya_computer_observe', description: 'Capture the authorized target application and read its accessibility text. Where available, center=(x,y) identifies the control center in screenshot pixels; prefer it over overlapping control edges. This applies to browser page controls as well as application chrome. The returned frameId is single-use: every successful act, including click/type/key/move, consumes it. Observe again before the next act, even when the window looks unchanged. Do not repeat a completed action to refresh its frame. Coordinates refer to original screenshot pixels.', parameters: noParameters,
       output: {
         schema: { type: 'object', additionalProperties: true, required: ['targetId', 'frameId', 'width', 'height', 'elements', 'image'], properties: { targetId: { type: 'string' }, frameId: { type: 'string', description: 'Single-use observation frame for the next act. Every successful act consumes it; observe again before another act.' }, width: { type: 'integer' }, height: { type: 'integer' }, elements: { type: 'string' }, image: { type: 'object', additionalProperties: true } } },
         render(_args, value) {

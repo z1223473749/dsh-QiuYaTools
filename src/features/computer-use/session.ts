@@ -323,7 +323,7 @@ export class ComputerSessionService {
         delete record.snapshot.lastObservation
         record.previewFrames.clear()
         if (record.snapshot.lastAction?.actionId === request.actionId) { record.snapshot.lastAction = { ...record.snapshot.lastAction, phase: 'failed', at: this.clock() }; this.notify() }
-        if (!human && !physicalInputApproved && error instanceof ComputerError && error.code === 'VIRTUAL_INPUT_UNSUPPORTED' && record.snapshot.epoch === epoch) {
+        if (!human && !physicalInputApproved && error instanceof ComputerError && ['VIRTUAL_INPUT_UNSUPPORTED', 'VIRTUAL_TARGET_UNRESOLVED'].includes(error.code) && record.snapshot.epoch === epoch) {
           this.change(record, 'ready', error)
           throw error
         }

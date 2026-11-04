@@ -116,6 +116,21 @@ private final class ReadProbe: @unchecked Sendable {
             precondition(probe.calls.isEmpty && probe.timeouts.isEmpty)
             passed.append("exhausted-budget-starts-no-attribute-call")
         }
+        do {
+            let probe = ReadProbe()
+            let geometry = FrameGeometry(frame: frame, pixelWidth: 320, pixelHeight: 240)
+            let result = await accessibilityTextOffMain(pid: 1, frame: frame, geometry: geometry) { backend(probe) { element, name in
+                if element == 0 && name == kAXChildrenAttribute { return .elements([1, 2]) }
+                if element > 0 && name == kAXRoleAttribute { return .text("AXRadioButton") }
+                if element == 1 && name == kAXPositionAttribute { return .point(CGPoint(x: 110, y: -880)) }
+                if element == 1 && name == kAXSizeAttribute { return .size(CGSize(width: 200, height: 40)) }
+                if element == 2 && name == kAXPositionAttribute { return .point(CGPoint(x: 2000, y: 2000)) }
+                return base(element, name)
+            } }
+            precondition(result.contains("own fixture 1 | center=(100,20)"), "Control center must map negative monitor coordinates into downscaled screenshot pixels")
+            precondition(!result.contains("own fixture 2 | center="), "Off-window controls must not advertise a click coordinate")
+            passed.append("control-centers-use-screenshot-scale-and-clip-to-selected-window")
+        }
         let report: [String: Any] = ["passed": true, "checks": passed, "gui": false, "nativeInput": false, "realAX": false]
         print(String(data: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), encoding: .utf8)!)
     }

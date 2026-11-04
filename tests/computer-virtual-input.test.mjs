@@ -51,6 +51,19 @@ test('persisted application grant never grants physical input; unsupported virtu
   assert.equal(f.coordinator.pending().length, 0)
 })
 
+test('overlapping virtual targets permit fresh virtual observation but cannot request real input', async t => {
+  const f = fixture(); t.after(() => f.close()); await f.start()
+  f.setError(new ComputerError('VIRTUAL_TARGET_UNRESOLVED', 'adjacent control rectangles overlap'))
+  await assert.rejects(f.act('overlap'), { code: 'VIRTUAL_TARGET_UNRESOLVED' })
+  assert.equal(f.service.get('chat').state, 'ready')
+  assert.equal(f.service.get('chat').lastObservation, undefined)
+  await assert.rejects(f.coordinator.requestPhysicalInput(f.exec(), 'overlap is not unsupported'), { code: 'VIRTUAL_INPUT_REQUIRED' })
+  assert.equal(f.coordinator.pending().length, 0)
+  const next = await f.service.observe('chat')
+  assert.ok(next.frameId)
+  assert.equal(f.calls.some(c => c.physical), false)
+})
+
 test('real mouse approval is explicit, single action, canonical, and requires a fresh post-approval observation', async t => {
   const f = fixture(); t.after(() => f.close()); await f.start(); await f.fail()
   const before = await f.service.observe('chat')

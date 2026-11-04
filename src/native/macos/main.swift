@@ -180,7 +180,7 @@ import ScreenCaptureKit
                     let cursor = CGEvent(source: nil)?.location ?? CGPoint(x: -1, y: -1)
                     let localX = (cursor.x - target.frame.minX) * Double(frame.width) / target.frame.width
                     let localY = (cursor.y - target.frame.minY) * Double(frame.height) / target.frame.height
-                    let elements = command["preview"] as? Bool == true || command["includeElements"] as? Bool == false ? "" : await accessibilityText(target)
+                    let elements = command["preview"] as? Bool == true || command["includeElements"] as? Bool == false ? "" : await accessibilityText(target, geometry: geometry)
                     guard !closing else { return }
                     Wire.success(requestId, ["targetId": id, "frameId": "\(generation):\(frame.sequence)", "imageBase64": frame.jpeg.base64EncodedString(),
                         "mediaType": "image/jpeg", "width": frame.width, "height": frame.height,
