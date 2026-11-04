@@ -50,7 +50,7 @@ body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav {
   --dsw-specific-sidebar-nav-item-active: var(--qyt-q-selected);
   --dsw-specific-sidebar-nav-item-active-accent: var(--qyt-q-sidebar-active-accent);
   background-color: var(--qyt-q-sidebar);
-  background-image: var(--qyt-q-sidebar-gradient), var(--qyt-theme-art);
+  background-image: var(--qyt-q-sidebar-gradient), var(--qyt-theme-sidebar-art, var(--qyt-theme-art));
   background-position: center, var(--qyt-q-sidebar-art-position, right center);
   background-size: 100% 100%, cover;
   background-repeat: no-repeat;
@@ -83,7 +83,7 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="hero"] {
 body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) {
   background-image: none;
 }
-body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], video[data-qyt-video-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -101,8 +101,42 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is([dat
   background-size: 100% 100%;
   background-repeat: no-repeat;
 }
-body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) > :is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
+body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) > :is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], video[data-qyt-video-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
   visibility: visible;
+}
+/* The video preset also decorates the native main outlet outside a chat.
+   Sidebars and content share one video that survives page navigation. */
+body[data-qyt-q-theme] [data-qyt-video-host] {
+  isolation: isolate;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-video-position="relative"] {
+  position: relative;
+}
+body[data-qyt-q-theme] [data-qyt-video-host] > :is(video[data-qyt-video-scene], [data-qyt-theme-wash]) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  visibility: hidden;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] > :is(video[data-qyt-video-scene][data-ready="true"], [data-qyt-theme-wash]) {
+  visibility: visible;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-video-surface="page"] > [data-qyt-theme-wash] {
+  background-image: linear-gradient(var(--qyt-q-paper), var(--qyt-q-paper));
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live],
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] :is([data-plugin-panel], [data-testid="task-manager-page"]) {
+  background-color: transparent;
+  background-image: none;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-slot="main.conversation"] > [data-phase] {
+  background-color: transparent;
+  background-image: var(--qyt-q-canvas-wash);
 }
 /* A quiet paper column follows the native content width. Art stays visible in
    the side margins; even the smallest viewport keeps opaque text surfaces. */
@@ -148,7 +182,7 @@ body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] >
    dock. Only this decoration fades: the input, menus and statistics stay
    crisp, with scrolled text fully covered by the time it reaches the seat. */
 body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]::before {
-  content: "";
+  content: var(--qyt-q-composer-mirror-content, "");
   position: absolute;
   inset: -36px 0 0;
   z-index: -1;
@@ -265,6 +299,31 @@ body[data-qyt-q-theme] [data-dockkit-empty] {
 body[data-qyt-q-theme] [data-slot="root"] > :has(> [data-rightbar-col]) > :has(> [data-slot="main"]) {
   background: transparent;
 }
+/* The live video spans the frame once. Columns and dock surfaces tint that
+   exact image instead of painting individual stills or restarting a video. */
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] {
+  background-color: transparent;
+  background-image: none;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-rightbar-col],
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] :is([data-plugin-panel], [data-testid="task-manager-page"]) {
+  background-color: transparent;
+  background-image: linear-gradient(var(--qyt-q-paper), var(--qyt-q-paper));
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] :is([data-dockkit-content], [data-dockkit-empty]) {
+  background-color: transparent;
+  background-image: none;
+}
+body[data-qyt-q-theme] [data-qyt-video-host]:has(> [data-rightbar-col]) > [data-qyt-theme-wash] {
+  background-image: none;
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-slot="sidebar"] > :first-child {
+  background-color: transparent;
+  background-image: var(--qyt-q-sidebar-gradient);
+}
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] > :has(> [data-slot="sidebar"]) {
+  background: transparent;
+}
 body[data-qyt-q-theme] [data-dockkit-strip],
 body[data-qyt-q-theme] [data-dockkit-float-grip],
 body[data-qyt-q-theme] [data-textpreview-state] > :has(> [data-textpreview-path]),
@@ -350,14 +409,14 @@ body[data-qyt-q-theme] [data-slot="conversation.session.header"] [data-conversat
   body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase]:is([data-qyt-ocean-live], [data-qyt-theme-live]) {
     background-image: var(--qyt-q-canvas-image);
   }
-  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], video[data-qyt-video-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
     display: none;
   }
 }
 
 @media (forced-colors: active) {
   body[data-qyt-q-theme] :is([data-qyt-ocean-dock], [data-qyt-theme-dock]) { display: none; }
-  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
+  body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase] > :is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], video[data-qyt-video-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash]) {
     display: none;
   }
   body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat] [data-slot="conversation.input.dock"] > [data-testid="todo-panel"],

@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_PREFERENCES, getQThemeId, getThemeMotion, type Preferences, type QThemeId } from '../shared.ts'
+import type { SceneDisposer } from './video-scene.ts'
 import css from './q-theme.css'
 import { getQTheme, type ThemeDefinition } from './theme-catalog.ts'
 
@@ -13,7 +14,7 @@ interface ThemeMount {
   revision?: string
   themeId: QThemeId
   sceneKey?: string
-  disposeScene?: () => void
+  disposeScene?: SceneDisposer
 }
 const mounts = new WeakMap<Document, ThemeMount>()
 
@@ -104,5 +105,5 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>, targ
 }
 
 export function createQThemeStyles(theme: ThemeDefinition): string {
-  return theme.palette.replaceAll('__QYT_THEME_SCENE__', theme.art) + '\n' + css
+  return theme.palette.replaceAll('__QYT_THEME_SCENE__', theme.art).replaceAll('__QYT_THEME_SIDEBAR__', theme.sidebarArt ?? theme.art) + '\n' + css
 }

@@ -36,7 +36,7 @@ const expected = {
   qThemeEnabled: true,
   qThemeId: 'moonfrost',
   qCustomThemes: [],
-  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' } },
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -74,6 +74,7 @@ for (const input of [
   { qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } },
   { qThemeId: 'begonia', qThemeSettings: { begonia: { motion: 'static' } } },
   { qThemeSettings: { moonfrost: { motion: 'static' } } },
+  { qThemeId: 'fox', qThemeSettings: { fox: { motion: 'static', muted: false } } },
   { qThemeId: 'buliangren', qThemeSettings: { buliangren: { motion: 'static' } } },
 ]) {
   const result = await standard.validate(input)
@@ -127,6 +128,7 @@ const invalid = [
   { qThemeSettings: { begonia: { motion: 'off' } } },
   { qThemeSettings: { moonfrost: { motion: 'off' } } },
   { qThemeSettings: { buliangren: { motion: 'off' } } },
+  { qThemeSettings: { fox: { muted: 'false' } } },
 ]
 for (const input of invalid) {
   const result = await standard.validate(input)
@@ -158,7 +160,7 @@ host.apply({
 assert.deepEqual(injections, [
   ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
   ['connection', 'webServer'], ['connection'], ['settings'], ['connection', 'webServer'],
-  ['connection', 'llm', 'attachments', 'profileContext'],
+  ['connection', 'profileContext'], ['connection', 'llm', 'attachments', 'profileContext'],
   ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
 ])
 assert.equal(settingsOwner, owner)
@@ -208,7 +210,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 31, applied: true,
+    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 32, applied: true,
   })
 })
 
@@ -240,7 +242,7 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.equal(fiber.config.qThemeId.get(), 'moonfrost')
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' } })
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true } })
   assert.equal(Object.keys(fiber.config).length, 17)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)

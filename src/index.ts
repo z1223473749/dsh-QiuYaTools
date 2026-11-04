@@ -4,6 +4,7 @@ import z from '@deepseek-ai/schemastery'
 import { installSessionWindowsHost } from './features/session-windows/host.ts'
 import { installPluginUpdatesHost } from './updates/host.ts'
 import { installSmartThemeHost } from './features/smart-theme/host.ts'
+import { installThemeVideoHost } from './features/theme-video/host.ts'
 import { MOTION_KINDS } from './smart-motion.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
@@ -58,6 +59,7 @@ export const Config = z.object({
   qThemeId: z.union([...Q_THEME_IDS.map(id => z.const(id)), z.string().pattern(CUSTOM_THEME_ID)]).default(DEFAULT_Q_THEME_ID).description('当前 Q 主题').volatile(),
   qThemeSettings: z.object(Object.fromEntries(Q_THEME_IDS.map(id => [id, z.object({
     motion: z.union([z.const('dynamic'), z.const('static')]).default('dynamic'),
+    ...(id === 'fox' ? { muted: z.boolean().default(true) } : {}),
   }).default(DEFAULT_Q_THEME_SETTINGS[id])]))).default(DEFAULT_Q_THEME_SETTINGS).description('各 Q 主题的独立设置').volatile(),
   qCustomThemes: z.array(z.object({
     id: z.string().pattern(CUSTOM_THEME_ID), name: z.string().min(1).max(40),
@@ -157,6 +159,9 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.inject(['connection', 'webServer'], child => {
     child.effect(() => installSessionWindowsHost(child, () => config.enabled.get() && config.sessionWindowsEnabled.get()))
+  })
+  ctx.inject(['connection', 'profileContext'], child => {
+    child.effect(() => installThemeVideoHost(child))
   })
   ctx.inject(['connection', 'llm', 'attachments', 'profileContext'], child => {
     child.effect(() => installSmartThemeHost(child, { isAssetReferenced: assetId => config.qCustomThemes.get().some(theme => theme.smartMotion?.assetId === assetId) }))

@@ -9,6 +9,10 @@ import { installBegoniaScene } from './begonia-scene.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
 import { installMoonfrostScene } from './moonfrost-scene.ts'
 import { installBuliangrenScene } from './buliangren-scene.ts'
+import { loadThemeVideo } from './theme-video-api.ts'
+import { installVideoScene, type SceneDisposer } from './video-scene.ts'
+import { FOX_SCENE_DATA_URL, FOX_SIDEBAR_DATA_URL } from './brand-assets.ts'
+import foxPalette from './themes/fox.css'
 import sunsetPalette from './themes/sunset.css'
 import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
@@ -23,10 +27,11 @@ export interface ThemeDefinition {
   readonly revision?: string
   readonly name: LocaleKey
   readonly description: LocaleKey
-  readonly hint: LocaleKey
+  readonly hint?: LocaleKey
   readonly motionLabel: LocaleKey
   readonly label: string
   readonly art: string
+  readonly sidebarArt?: string
   readonly accent: string
   readonly accentDark: string
   readonly soft: string
@@ -34,10 +39,17 @@ export interface ThemeDefinition {
   readonly bannerPosition?: string
   readonly previewPosition?: string
   readonly palette: string
-  readonly installScene?: (doc: Document, ctx?: Context) => () => void
+  readonly installScene?: (doc: Document, ctx?: Context) => SceneDisposer
 }
 
 const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
+  fox: {
+    id: 'fox', name: 'qThemeFox', description: 'qThemeFoxDescription',
+    motionLabel: 'qThemeFoxMotion', label: 'Q Fox · 桃华白狐',
+    art: FOX_SCENE_DATA_URL, sidebarArt: FOX_SIDEBAR_DATA_URL, accent: '#985c7a', accentDark: '#efbdd8', soft: '#e5bbd0',
+    bannerPosition: 'center', previewPosition: 'center', palette: foxPalette,
+    installScene: (doc, ctx) => installVideoScene(doc, { source: signal => loadThemeVideo(ctx!, 'fox', signal), poster: FOX_SCENE_DATA_URL }),
+  },
   ocean: {
     id: 'ocean', name: 'qThemePreview', description: 'qThemePreviewDescription',
     hint: 'qThemePreviewHint', motionLabel: 'qThemeOceanMotion', label: 'Q Ocean · 鲸与海',

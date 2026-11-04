@@ -1,6 +1,6 @@
 # Q 主题接入
 
-五款预设共用设置、主题单选、配置保存、Host 表面适配和安装生命周期。主题只提供自己的配色、静态插画和可选动效适配器。
+六款预设共用设置、主题单选、配置保存、Host 表面适配和安装生命周期。主题只提供自己的配色、静态插画和可选动效适配器。
 
 ## 框架边界
 
@@ -124,3 +124,14 @@ node scripts/test-smart-themes.mjs
 ```
 
 `tests/fixtures/smart-theme/moonfrost-plan.json` 是使用项目自带插画实际调用 DeepSeek Flash 得到的分析记录（保护区域标注已规范为轮廓）。回归测试使用该记录，不再次产生 API 用量；验证横向工作台、动态对象、涂抹修正、GPU 像素变化、素材保存重载、静态／减少动态效果和窄窗口布局。截图、实际 GPU 输出录制的视频及兼容 GIF 位于 `artifacts/smart-theme/`。
+
+## 桃华白狐 · 视频主题
+
+`fox` 使用用户提供的 `1105.mov` 转码为 1600×898 的 H.264/AAC MP4，保留原声音轨并循环播放。桃粉／梅紫配色复用公共阅读纸面、主题卡片、浅深色和静态模式；主界面封面 `assets/q-fox-scene.jpg` 来自视频 2 秒处。侧栏使用用户选定的候选 05（5.1 秒），独立素材为 `assets/q-fox-sidebar.jpg`，以 44% 水平位置竖向裁切；静态模式显示这张粉色静帧；动态模式的侧栏直接透出全局视频，浅色遮罩为 52%、深色为 60%。
+
+- 视频独立托管在 GitHub Release，安装包只包含两张小型静态图片、固定下载地址、字节数与 SHA-256；构建不读取或内嵌 MP4。`src/theme-video.ts` 管理资源描述，后续更新必须使用新的附件名及校验值。
+- `src/features/theme-video/host.ts` 首次收到 owner 请求才下载视频，并缓存到当前 profile 的 `qiuya-theme-videos/<sha256>.mp4`。相同下载请求合并；响应流限制大小、校验完整长度与摘要，通过后原子落盘。后续启动离线读取缓存；缓存损坏时重新下载。客户端不能传 URL 或文件路径。
+- 视频与设置页预览始终静音，不显示音频开关或视频说明提示；旧配置中保存的 `muted: false` 不再影响播放。
+- `video-scene.ts` 优先在包含左侧栏、主内容与右侧栏的原生 frame 挂载一个视频。所有面板只叠加阅读遮罩，透出同一解码帧与同一画面坐标，避免时间差、分栏裁切错位与重复解码；会话、插件页、自动化任务等主内容页切页保留播放进度。小预览使用带同样侧栏与主内容插槽的独立 frame，整个预览共用一层视频，保持与实际界面相同的构图和同步关系。视频不接管点击。输入区外侧移除静态背景镜像，直接透出同一视频。页面隐藏或离屏时暂停；静态、减少动态效果、高对比度、主题关闭或卸载时释放播放器与 Blob URL。下载中、失败或解码错误保留封面；重新切换动静态可重试。主界面与预览分别管理资源，Host 下载缓存共用。
+
+验证：`node --test tests/theme-video.test.mjs tests/q-theme.test.mjs tests/settings-features.test.mjs tests/host-package.test.mjs`、`node scripts/test-video-theme.mjs`、`node scripts/preview-ocean-settings.mjs`。实际视频解码、循环、固定静音、隐藏暂停、无障碍回退、根节点替换与卸载验证记录在 `artifacts/video-theme/`，设置页浅深色与窄窗口截图在 `artifacts/ocean-scene/fox-settings-*.png`。浏览器检查只使用独立测试 profile。

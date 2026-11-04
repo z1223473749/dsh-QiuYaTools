@@ -621,6 +621,23 @@ test('computer control is the first dedicated toolbox tab while long-text remain
 })
 
 
+test('video settings omit audio controls and hints while preserving motion controls', async () => {
+  const f = mount({ ...defaults, qThemeId: 'fox', qThemeSettings: { fox: { motion: 'dynamic', muted: false } } })
+  try {
+    f.select('qThemeTab')
+    assert.equal(f.switch('qThemeVideoMuted'), null)
+    assert.equal(f.container.querySelector('.qyt-theme-caption'), null)
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="dynamic"]').checked, true)
+    await act(async () => Simulate.change(f.container.querySelector('.qyt-theme-motion input[value="static"]')))
+    assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeSettings', 'fox', 'motion'], value: 'static' }])
+    await f.chooseTheme('ocean')
+    assert.ok(f.container.querySelector('.qyt-theme-caption'))
+    await f.chooseTheme('fox')
+    assert.equal(f.container.querySelector('.qyt-theme-caption'), null)
+    assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
+  } finally { f.dispose() }
+})
+
 test('theme cards persist only the selected id and restore each theme own motion', async () => {
   const initial = { ...defaults, enabled: false, qThemeSettings: { ocean: { motion: 'static', extra: true }, begonia: { motion: 'dynamic' }, futureTheme: { motion: 'static' } } }
   const f = mount(initial)
@@ -628,7 +645,7 @@ test('theme cards persist only the selected id and restore each theme own motion
     f.select('qThemeTab')
     assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
     assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'false')
-    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 5)
+    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 6)
     assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
     await f.chooseTheme('begonia')
     assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeId'], value: 'begonia' }]])

@@ -170,7 +170,7 @@ export function instrumentMacCursorSources({ cursor, input }) {
             if !diagnosticSuppressionAccepted { recordDiagnostic("refresh-suppression-not-activated", rejected: true) }
             maintainRestoration(suppression.clear || suppression.phase == "hidden")
             guard suppression.phase != "blocked" else { recordDiagnostic("refresh-suppression-blocked", rejected: true); hide(diagnosticReason: "refresh-suppression-blocked"); return }`, 'suppression diagnostic')
-  cursor = once(cursor, '        panel?.orderFrontRegardless()\n    }', '        panel?.orderFrontRegardless()\n        recordDiagnostic("refresh-panel-ordered")\n    }', 'panel ordered')
+  cursor = once(cursor, '        else { panel?.orderFrontRegardless() }\n    }', '        else { panel?.orderFrontRegardless() }\n        recordDiagnostic("refresh-panel-ordered")\n    }', 'panel ordered')
   cursor = once(cursor, '        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }', '        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { diagnosticFacts(["windowListAvailable": false]); return false }', 'full window list')
   cursor = once(cursor, '        var firstCovering: CGWindowID?\n        for item in windows {', '        var firstCovering: CGWindowID?\n        var diagnosticFirstCoverClass = "none"\n        var diagnosticSystemCursorSkipped = false\n        for item in windows {', 'cover classification')
   cursor = once(cursor, '                ownerPID: (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value) { continue }',
@@ -189,7 +189,8 @@ export function instrumentMacCursorSources({ cursor, input }) {
     ['restoreCursor: { aiPointer.hide() }', 'restoreCursor: { aiPointer.hide(diagnosticReason: "physical-release") }', 'physical release'],
     ['restoreCursor: { aiPointer.hide() }', 'restoreCursor: { aiPointer.hide(diagnosticReason: "shutdown-cleanup") }', 'shutdown cleanup'],
     ['fence.active == epoch ? aiPointer.hide() : aiPointer.restorationComplete', 'fence.active == epoch ? aiPointer.hide(diagnosticReason: "action-error") : aiPointer.restorationComplete', 'action error'],
-    ['func hideAICursor() -> Bool { aiPointer.hide() }', 'func hideAICursor() -> Bool { aiPointer.hide(diagnosticReason: "explicit-hide") }', 'explicit hide'],
+    ['func hideAICursor() -> Bool { virtualInput.hide(); return aiPointer.hide() }', 'func hideAICursor() -> Bool { virtualInput.hide(); return aiPointer.hide(diagnosticReason: "explicit-hide") }', 'explicit hide'],
+    ['virtualVisualEpoch = nil; virtualInput.hide(); _ = aiPointer.hide()', 'virtualVisualEpoch = nil; virtualInput.hide(); _ = aiPointer.hide(diagnosticReason: "explicit-hide")', 'virtual visual cleanup'],
     ['else { operationBadge.hide(); aiPointer.hide() }', 'else { operationBadge.hide(); aiPointer.hide(diagnosticReason: "human-without-active-lease") }', 'human without lease'],
     ['aiPointer.hide(); throw ComputerError("FOCUS_CHANGED"', 'aiPointer.hide(diagnosticReason: "focus-identity-missing"); throw ComputerError("FOCUS_CHANGED"', 'focus identity'],
     ['catch { aiPointer.hide(); throw error }', 'catch { aiPointer.hide(diagnosticReason: "focus-check-failed"); throw error }', 'focus checks'],

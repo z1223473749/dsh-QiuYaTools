@@ -237,8 +237,9 @@ test('host hides its generated form using the owner fiber and releases the overr
     ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
     ['connection', 'webServer'],
     ['connection'], ['settings'], ['connection', 'webServer'],
+    ['connection', 'profileContext'],
     ['connection', 'llm', 'attachments', 'profileContext'],
-  ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
+    ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
   ], 'optional Git, update, session and suggestion services must not block registration')
   assert.deepEqual(overrides.get(fiber), { auto: false })
   for (const dispose of effects.reverse()) dispose()

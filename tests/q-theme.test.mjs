@@ -31,8 +31,8 @@ const [source, motionMockSource] = (await Promise.all([
 const [commonCss, oceanPalette, begoniaPalette] = await Promise.all(['src/client/q-theme.css', 'src/client/themes/ocean.css', 'src/client/themes/begonia.css'].map(path => readFile(new URL(path, root), 'utf8')))
 const css = oceanPalette + '\n' + commonCss
 const body = 'body[data-qyt-q-theme]'
-const sceneLayers = ':is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
-const readyLayers = ':is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
+const sceneLayers = ':is(canvas[data-qyt-ocean-scene], canvas[data-qyt-theme-scene], video[data-qyt-video-scene], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
+const readyLayers = ':is(canvas[data-qyt-ocean-scene][data-ready="true"], canvas[data-qyt-theme-scene][data-ready="true"], video[data-qyt-video-scene][data-ready="true"], [data-qyt-ocean-wash], [data-qyt-theme-wash])'
 const liveMarker = ':is([data-qyt-ocean-live], [data-qyt-theme-live])'
 const dockLayer = ':is([data-qyt-ocean-dock], [data-qyt-theme-dock])'
 const washLayer = ':is([data-qyt-ocean-wash], [data-qyt-theme-wash])'
@@ -314,7 +314,7 @@ function contrast(a, b) {
 const readingInk = ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']
 
 function forEachThemeAppearance(t, check) {
-  for (const themeId of ['ocean', 'begonia', 'moonfrost', 'buliangren']) {
+  for (const themeId of ['ocean', 'begonia', 'moonfrost', 'buliangren', 'fox']) {
     for (const dark of [false, true]) {
       const f = fixture(t, { dark, sharedForm: formFixture({
         qThemeEnabled: true, qThemeId: themeId,
@@ -335,7 +335,7 @@ test('Preset themes keep small text readable on base, raised, sidebar and select
     }
     assert.ok(contrast(f.token('--qyt-q-tab-ink'), f.token('--qyt-q-tab-fill')) >= 4.5, `${label} native tab label`)
   })
-  for (const fill of ['#116d83', '#bc353c', '#b32c3a', '#456493', '#82602e', '#a63e3a']) {
+  for (const fill of ['#116d83', '#bc353c', '#b32c3a', '#456493', '#82602e', '#a63e3a', '#985c7a']) {
     assert.ok(contrast(fill, '#ffffff') >= 4.5, `${fill} send button keeps its fixed white icon readable`)
   }
 })
@@ -359,13 +359,13 @@ function allRules(rules) {
 
 test('preset themes embed their own illustration and withdraw it without external image requests', t => {
   const illustrations = []
-  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren']) {
+  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren', 'fox']) {
     const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
     const cleanup = f.install()
     const installed = f.styles()[0].textContent
     assert.ok(!installed.includes('__QYT_THEME_SCENE__'), 'the actual packaged image replaces the build placeholder')
     const urls = [...installed.matchAll(/url\("([^"]+)"\)/gu)].map(match => match[1])
-    assert.equal(urls.length, 1)
+    assert.equal(urls.length, qThemeId === 'fox' ? 2 : 1)
     assert.ok(urls.every(url => /^data:image\/(?:webp|jpeg);base64,/u.test(url)), 'no remote image request or unresolvable asset path')
     illustrations.push(urls[0])
     cleanup()
@@ -457,7 +457,7 @@ test('stylesheet is a reversible token/semantic-surface layer without destructiv
         const dock = '[data-slot="conversation.input.dock"] > [data-testid="todo-panel"]'
         const todo = `${seat} ${dock}`
         const mirror = `${body} [data-composer-seat] > ${dockLayer} > ${dockFrames}`
-        assert.ok([phase, illustration, `${seat}::before`, `${seat} > ${dockLayer}`, mirror, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
+        assert.ok([`${body} [data-qyt-video-host][data-qyt-video-position="relative"]`, `${body} [data-qyt-video-host]`, `${body} [data-qyt-video-host] > :is(video[data-qyt-video-scene], [data-qyt-theme-wash])`, phase, illustration, `${seat}::before`, `${seat} > ${dockLayer}`, mirror, `${seat}:has(${dock} > div > button[aria-expanded="true"])`, todo, `${todo} > div > ul`].includes(rule.selectorText), 'positioning is confined to the illustration stacking context, its decorative layers and the native task dock')
       }
     }
   } finally { dom.window.close() }

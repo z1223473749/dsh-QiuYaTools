@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { createThemeVideoFixture } from './theme-video-fixture.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = resolve(root, 'artifacts/ocean-scene')
@@ -68,7 +69,9 @@ await writeFile(htmlPath, html)
 if (process.argv.includes('--generate-only')) {
   console.log(JSON.stringify({ html: htmlPath }))
 } else {
-  const server = createServer((request, response) => {
+  const videoHost = await createThemeVideoFixture(resolve(root, 'artifacts/video-theme/profile'))
+  const server = createServer(async (request, response) => {
+    if (await videoHost.handle(request, response)) return
     if (request.url === '/favicon.ico') { response.writeHead(204); response.end(); return }
     response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(html)
   })
@@ -147,7 +150,7 @@ if (process.argv.includes('--generate-only')) {
       await shell.evaluate((element, height) => { element.style.height = height }, height)
       await page.setViewportSize(viewport)
     }
-    assert.equal(await choices.getByRole('radio').count(), 5, 'Each registered theme owns one clickable selection card')
+    assert.equal(await choices.getByRole('radio').count(), 6, 'Each registered theme owns one clickable selection card')
     assert.equal(await choices.getByRole('radio').first().getAttribute('data-theme'), 'moonfrost', 'Moonfrost is the first theme');
     const checkSelection = async (selected, color) => {
       await page.waitForFunction(({ selected, color }) => { const card = document.querySelector(`.qyt-theme-choice[data-theme="${selected}"]`); return card && getComputedStyle(card).borderTopColor === color }, { selected, color })
@@ -311,15 +314,44 @@ if (process.argv.includes('--generate-only')) {
     both = await page.evaluate(() => window.__oceanSettingsFixture.getSnapshot().value)
     assert.equal(both.qThemeSettings.moonfrost.motion, 'static')
     assert.equal(both.qThemeSettings.buliangren.motion, 'static')
+    // Audio controls and hint text are intentionally absent; previews stay muted.
+    await page.setViewportSize({ width: 1080, height: 920 })
+    await choices.locator('[data-theme="fox"]').click()
+    await page.locator('.qyt-theme-card[data-theme="fox"]').waitFor()
+    assert.equal(await page.getByRole('switch', { name: '视频静音', exact: true }).count(), 0)
+    assert.equal(await page.locator('.qyt-theme-caption').count(), 0)
+    await previewFrame.locator('video[data-ready="true"]').waitFor({ state: 'visible' })
+    assert.equal(await previewFrame.locator('video').evaluate(video => video.muted), true)
+    assert.equal(await previewFrame.locator('video').count(), 1)
+    const videoPreview = await previewFrame.locator('video').evaluate(video => {
+      const rect=video.getBoundingClientRect(),sidebar=document.querySelector('[data-slot="sidebar"] > :first-child')
+      return {fullWidth:Math.abs(rect.width-innerWidth)<1,fullHeight:Math.abs(rect.height-innerHeight)<1,sharesSidebar:video.parentElement.contains(sidebar),staticSidebar:getComputedStyle(sidebar).backgroundImage.includes('data:image/')}
+    })
+    assert.deepEqual(videoPreview,{fullWidth:true,fullHeight:true,sharesSidebar:true,staticSidebar:false})
+
+    const foxMotion = page.getByRole('radiogroup', { name: '桃华白狐背景效果', exact: true })
+    await foxMotion.getByRole('radio', { name: '静态', exact: true }).click()
+    await page.waitForFunction(() => !document.querySelector('iframe[data-qyt-theme-preview]').contentDocument.querySelector('video'))
+    await foxMotion.getByRole('radio', { name: '动态', exact: true }).click()
+    await previewFrame.locator('video[data-ready="true"]').waitFor({ state: 'visible' })
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'fox-settings-dark.png') })
+    await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'fox-settings-light.png') })
+    await page.setViewportSize({ width: 420, height: 900 })
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'fox-settings-narrow.png') })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    await page.evaluate(() => { window.__detachedVideo = document.querySelector('iframe[data-qyt-theme-preview]').contentDocument.querySelector('video') })
     await page.evaluate(() => { window.__detachedThemePreview = document.querySelector('iframe[data-qyt-theme-preview]').contentDocument })
     await page.getByRole('tab', { name: '附件增强', exact: true }).click()
     assert.equal(await page.locator('iframe[data-qyt-theme-preview]').count(), 0)
-    assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
+    assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, video, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
+    assert.equal(await page.evaluate(() => window.__detachedVideo.paused && !window.__detachedVideo.hasAttribute('src')), true)
     assert.deepEqual(errors, [])
-    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png'] }
+    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png', 'fox-settings-light.png', 'fox-settings-dark.png', 'fox-settings-narrow.png'] }
     await writeFile(join(output, 'settings-preview-result.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
   } finally {
+    videoHost.stop()
     await browser?.close(); await new Promise(resolve => server.close(resolve))
   }
 }

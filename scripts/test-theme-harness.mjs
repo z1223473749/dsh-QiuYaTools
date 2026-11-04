@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, realpath, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, writeFile, rm, cp } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { chromium } from 'playwright'
@@ -14,8 +14,8 @@ import { registerHarnessWorkspace, captureHarnessWorkspaceDom, selectedHarnessWo
 const cli = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 const candidate = resolve(process.argv[2] ?? 'artifacts/candidates/dsh-qiuya-tools-darwin-universal.tgz')
 const themeId = process.argv[3] ?? 'moonfrost'
-assert.ok(['moonfrost', 'buliangren'].includes(themeId))
-const output = resolve(themeId === 'moonfrost' ? 'artifacts/theme-harness' : 'artifacts/theme-harness-buliangren')
+assert.ok(['moonfrost', 'buliangren', 'fox'].includes(themeId))
+const output = resolve(themeId === 'moonfrost' ? 'artifacts/theme-harness' : `artifacts/theme-harness-${themeId}`)
 await mkdir(output, { recursive: true })
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-theme-'))
 const env = { ...process.env, DSH_HOME: join(temporary, 'home'), DSH_TELEMETRY_DISABLED: '1', QIUYA_HARNESS_E2E: '1' }
@@ -30,13 +30,16 @@ const backdrop = async locator => locator.evaluate(element => {
 })
 try {
   await command(cli, ['--profile', 'web', '--dump-config'], { env, maxBuffer: 2 ** 20 })
+  // Reuse the verified public-video fixture cache for layout checks. Download
+  // integrity and first-use loading have their own Host/browser coverage.
+  if(themeId==='fox') await cp(resolve('artifacts/video-theme/profile/qiuya-theme-videos'),join(env.DSH_HOME,'profiles/web/qiuya-theme-videos'),{recursive:true}).catch(()=>{})
   await command(cli, ['plugin', '--profile', 'web', 'add', candidate], { env, maxBuffer: 2 ** 20 })
   const provider = join(temporary, 'provider'); await mkdir(provider)
   const model = await build({ entryPoints: ['tests/fixtures/harness-e2e-provider.mjs'], bundle: true, write: false, platform: 'node', format: 'esm' })
   await writeFile(join(provider, 'index.mjs'), model.outputFiles[0].contents)
   const overlay = join(temporary, 'theme.yml')
   await writeFile(overlay, JSON.stringify([
-    { id: 'qiuya-tools', config: { qThemeEnabled: true, qThemeId: themeId, qThemeSettings: { [themeId]: { motion: themeId === 'buliangren' ? 'dynamic' : 'static' } }, computerUseEnabled: false, promptSuggestionsEnabled: false, autoCheckUpdates: false } },
+    { id: 'qiuya-tools', config: { qThemeEnabled: true, qThemeId: themeId, qThemeSettings: { [themeId]: { motion: themeId !== 'moonfrost' ? 'dynamic' : 'static' } }, computerUseEnabled: false, promptSuggestionsEnabled: false, autoCheckUpdates: false } },
     { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
     { id: 'agent-default-model', config: { provider: 'qiuya-e2e', model: 'fixture' } },
     { insert: [{ id: 'qiuya-harness-e2e-provider', name: join(provider, 'index.mjs') }] },
@@ -63,11 +66,32 @@ try {
   assert.equal(await page.locator('body').getAttribute('data-qyt-q-theme'), themeId)
   await page.getByRole('button', { name: '插件', exact: true }).click()
   const plugins = page.locator('[data-plugin-panel]')
-  await page.locator('[data-plugin-panel][aria-busy="false"]').waitFor(); assert.equal((await backdrop(plugins)).art, true)
+  await page.locator('[data-plugin-panel][aria-busy="false"]').waitFor()
+  if (themeId === 'fox') {
+    await page.locator('video[data-qyt-video-scene][data-ready="true"]').waitFor({ timeout: 30000 })
+    await page.waitForFunction(() => { const video=document.querySelector('video[data-qyt-video-scene]'); return video && !video.paused && video.currentTime>.1 })
+    assert.equal(await page.locator('video[data-qyt-video-scene]').evaluate(v=>v.muted),true)
+    assert.equal((await backdrop(plugins)).art,false)
+    await page.evaluate(()=>{window.__themeMainVideo=document.querySelector('video[data-qyt-video-scene]')})
+    await page.emulateMedia({reducedMotion:'reduce'})
+    await page.locator('video[data-qyt-video-scene]').waitFor({state:'detached'})
+    await snapshot('plugins-static-light')
+    await page.emulateMedia({reducedMotion:'no-preference'})
+    await page.locator('video[data-qyt-video-scene][data-ready="true"]').waitFor()
+    await page.evaluate(()=>{window.__themeMainVideo=document.querySelector('video[data-qyt-video-scene]')})
+    assert.equal(await page.locator('[data-slot="sidebar"] > :first-child').evaluate(node=>getComputedStyle(node).backgroundImage.includes('data:image/')),false)
+    checks.push('actual-plugin-and-sidebar-share-video')
+  } else assert.equal((await backdrop(plugins)).art,true)
+  if(themeId==='fox') await writeFile(join(output,'video-layout.json'),JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('[data-slot="sidebar"],video[data-qyt-video-scene],[data-rightbar-col]')].map(node=>({tag:node.tagName,rect:node.getBoundingClientRect().toJSON(),attrs:[...node.attributes].filter(a=>!['poster','src'].includes(a.name)).map(a=>[a.name,a.value]),ancestors:[...function*(n){for(let p=n.parentElement;p&&p!==document.body;p=p.parentElement){const s=getComputedStyle(p);yield {tag:p.tagName,attrs:[...p.attributes].map(a=>[a.name,a.value]),background:s.backgroundColor,image:s.backgroundImage.startsWith('url(')?'image':s.backgroundImage.slice(0,120),rect:p.getBoundingClientRect().toJSON()}}}(node)]}))),null,2))
   await snapshot('plugins-light'); checks.push('actual-plugin-page')
   await page.getByRole('button', { name: '自动化任务', exact: true }).click()
   const schedules = page.locator('[data-testid="task-manager-page"]')
-  await schedules.waitFor(); assert.equal((await backdrop(schedules)).art, true)
+  await schedules.waitFor(); assert.equal((await backdrop(schedules)).art, themeId !== 'fox')
+  if(themeId==='fox') {
+    assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
+    assert.equal(await page.locator('video[data-qyt-video-scene]').evaluate(v=>!v.paused&&v.muted),true)
+    checks.push('actual-automation-video-keeps-decoder')
+  }
   await snapshot('schedules-light'); checks.push('actual-automation-page')
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
   const workspacePath = join(temporary, 'theme-workspace'); await mkdir(workspacePath)
@@ -120,7 +144,16 @@ try {
   const input = page.locator(`[data-conversation-session="${sessionId}"] [data-composer-input][contenteditable="true"]:visible`)
   await input.fill('E2E:Theme')
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  // The native Host may finish replacing a provisional blank session after
+  // submission. Reopen this fixture's titled row before checking its response.
+  if(themeId==='fox') await page.locator('[data-slot="sidebar"]').getByText('E2E:Theme',{exact:true}).click()
   await page.getByText('已完成本地测试回复：E2E:Theme', { exact: true }).waitFor()
+  if(themeId==='fox') {
+    const seat=page.locator('[data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]')
+    assert.equal(await seat.evaluate(node=>getComputedStyle(node,'::before').content),'none')
+    assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
+    checks.push('actual-composer-reveals-video-without-static-image')
+  }
   await snapshot('conversation-light'); checks.push('actual-local-fixture-conversation')
   if (themeId === 'buliangren') {
     const art = page.locator('canvas[data-qyt-buliangren-art][data-ready="true"]')
@@ -143,20 +176,31 @@ try {
   }
   await page.locator('[data-conversation-tabs]').getByRole('tab', { name: '对话', exact: true }).click()
   await page.getByRole('button', { name: '打开右侧边栏', exact: true }).click()
+  if(themeId==='fox') {
+    await page.waitForFunction(()=>{const v=document.querySelector('video[data-qyt-video-scene]'),right=document.querySelector('[data-rightbar-col]');return v?.parentElement?.contains(right)&&right.getBoundingClientRect().width>100})
+    assert.equal(await page.locator('video[data-qyt-video-scene]').count(),1)
+    assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
+    assert.equal(await page.locator('[data-rightbar-col]').evaluate(node=>getComputedStyle(node).backgroundImage.includes('data:image/')),false)
+    await snapshot('right-start-video-light')
+    const before=await page.locator('video[data-qyt-video-scene]').evaluate(v=>v.currentTime)
+    await page.waitForFunction(before=>document.querySelector('video[data-qyt-video-scene]').currentTime>before+.25,before)
+    checks.push('actual-sidebar-main-and-right-dock-share-one-frame')
+  }
   await page.getByText('工作区文件', { exact: true }).first().click()
   await page.locator('[data-files-entry="file"]').filter({ hasText: 'preview.bin' }).click()
   const unsupported = page.locator('[data-textpreview-state="unsupported"]')
   await unsupported.waitFor()
-  assert.equal((await backdrop(unsupported.locator('xpath=ancestor::*[@data-dockkit-content][1]'))).art, true)
+  assert.equal((await backdrop(unsupported.locator('xpath=ancestor::*[@data-dockkit-content][1]'))).art, themeId !== 'fox')
   await snapshot('file-unsupported-light'); checks.push('actual-unsupported-file-pane')
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
   await snapshot('file-unsupported-dark')
-  assert.equal(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--qyt-q-paper').trim()), themeId === 'buliangren' ? 'rgba(20, 24, 28, .70)' : 'rgba(21, 29, 45, .78)')
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--qyt-q-paper').trim()), themeId === 'buliangren' ? 'rgba(20, 24, 28, .70)' : themeId === 'fox' ? 'rgba(41, 29, 42, .72)' : 'rgba(21, 29, 45, .78)')
   checks.push('actual-dark-surfaces')
 } catch (error) {
   failure = error.message
   if (page) {
     await snapshot('failure').catch(() => {})
+    await writeFile(join(output,'failure-layout.json'),JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('[data-slot="main"],[data-plugin-panel],[data-testid="task-manager-page"],video[data-qyt-video-scene],[data-slot="root"]')].map(node=>({tag:node.tagName,attrs:[...node.attributes].map(a=>[a.name,a.name==='src'?'media':a.value]),rect:node.getBoundingClientRect().toJSON(),ancestors:[...function*(n){for(let p=n.parentElement;p&&p!==document.body;p=p.parentElement)yield {tag:p.tagName,attrs:[...p.attributes].map(a=>[a.name,a.value])}}(node)]}))),null,2))
     await writeFile(join(output, 'failure-dom.txt'), await page.locator('body').innerText().catch(() => 'unavailable'))
   }
 } finally {

@@ -276,7 +276,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                   <div className="qyt-theme-preview" role="img" aria-label={t(theme.description)}>
                     <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)}/>
                   </div>
-                  <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>
+                  {theme.hint && <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>}
                 </div>
                 <aside className="qyt-card qyt-theme-picker" aria-labelledby={`${id}-theme-picker-title`}>
                   <h4 id={`${id}-theme-picker-title`}>{t('qThemePickerTitle')}</h4>

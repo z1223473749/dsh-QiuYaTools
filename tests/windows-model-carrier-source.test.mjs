@@ -20,7 +20,8 @@ test('public preparation actually builds/imports the complete same runtime closu
  // a historic bundle digest that changes with every legitimate native fix.
  const currentGuest=await build({entryPoints:[join(repository,'scripts/live-vision-windows-guest.mjs')],absWorkingDir:repository,bundle:true,write:false,platform:'node',format:'esm',target:'node22',logLevel:'silent'})
  const expectedGuest=Buffer.from(currentGuest.outputFiles[0].contents),r=await prepareWindowsPreheatedModelCarrier({repository,output})
- assert.equal(r.carrierSHA256,'0d802eb18abb1ab91cb31a0cd7609113be0d2a2c4eb3ff4cb0f0bbb0a58cc679')
+ const currentCarrier=await build({stdin:{contents:generated,resolveDir:join(repository,'scripts'),sourcefile:join(repository,'scripts/live-vision-windows-carrier.mjs'),loader:'js'},absWorkingDir:repository,bundle:true,write:false,platform:'node',format:'esm',target:'node22',logLevel:'silent'})
+ assert.equal(r.carrierSHA256,hash(currentCarrier.outputFiles[0].contents),'Prepared carrier must equal the independently built current diagnostic closure')
  const preparedGuest=await readFile(join(output,'bundle','windows-guest.mjs')),manifest=JSON.parse(await readFile(join(output,'bundle','windows-carrier-manifest.json'),'utf8'))
  assert.deepEqual(preparedGuest,expectedGuest,'Prepared guest must equal the complete independently built current source closure')
  assert.equal(r.guestSHA256,hash(expectedGuest));assert.equal(hash(preparedGuest),r.guestSHA256);assert.equal(manifest.guestSha256,r.guestSHA256)
