@@ -1,0 +1,39 @@
+/* Garo uses the silver-blue surfaces with icier accents and a lighter video wash. */
+body[data-qyt-q-theme="garo"] {
+  --qyt-theme-sidebar-art: url("__QYT_THEME_SIDEBAR__");
+  --qyt-q-composer-mirror-content: none;
+  --qyt-q-sea: #226584;
+  --qyt-q-accent: #226584;
+  --qyt-q-sea-hover: #184f6b;
+  --qyt-q-accent-hover: #184f6b;
+  --qyt-q-sidebar-active-accent: #b4d7e8;
+  --qyt-q-sidebar-art-position: center;
+  --qyt-q-sidebar-wash: rgba(233, 238, 248, .56);
+  --qyt-q-art-wash: rgba(237, 242, 252, .14);
+  --qyt-q-hero-wash: rgba(237, 242, 252, .06);
+}
+
+body[data-qyt-q-theme="garo"][data-ds-dark-theme] {
+  --qyt-q-sea: #96d5ec;
+  --qyt-q-accent: #96d5ec;
+  --qyt-q-sea-hover: #c5edfb;
+  --qyt-q-accent-hover: #c5edfb;
+  --qyt-q-sidebar-wash: rgba(25, 37, 59, .62);
+  --qyt-q-art-wash: rgba(21, 29, 45, .24);
+  --qyt-q-hero-wash: rgba(21, 29, 45, .12);
+  --dsw-alias-button-primary-fill: #96d5ec;
+  --dsw-alias-button-primary-hover: #c5edfb;
+  --dsw-alias-button-info-fill: #226584;
+  --dsw-alias-button-info-hover: #184f6b;
+}
+
+/* Keep the portrait centered in the narrow settings rail. */
+body[data-qyt-q-theme="garo"] [data-shortcut-modal="settings"] > nav {
+  --qyt-q-sidebar-art-position: 28% center;
+  --qyt-q-sidebar-wash: rgba(233, 238, 248, .73);
+  --qyt-q-sidebar-gradient: linear-gradient(var(--qyt-q-sidebar-wash), var(--qyt-q-sidebar-wash));
+}
+
+body[data-qyt-q-theme="garo"][data-ds-dark-theme] [data-shortcut-modal="settings"] > nav {
+  --qyt-q-sidebar-wash: rgba(25, 37, 59, .77);
+}

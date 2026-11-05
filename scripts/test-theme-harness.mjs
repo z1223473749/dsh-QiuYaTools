@@ -14,7 +14,8 @@ import { registerHarnessWorkspace, captureHarnessWorkspaceDom, selectedHarnessWo
 const cli = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 const candidate = resolve(process.argv[2] ?? 'artifacts/candidates/dsh-qiuya-tools-darwin-universal.tgz')
 const themeId = process.argv[3] ?? 'moonfrost'
-assert.ok(['moonfrost', 'buliangren', 'fox'].includes(themeId))
+assert.ok(['moonfrost', 'buliangren', 'fox', 'garo'].includes(themeId))
+const videoTheme = themeId === 'fox' || themeId === 'garo'
 const output = resolve(themeId === 'moonfrost' ? 'artifacts/theme-harness' : `artifacts/theme-harness-${themeId}`)
 await mkdir(output, { recursive: true })
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-theme-'))
@@ -67,7 +68,7 @@ try {
   await page.getByRole('button', { name: '插件', exact: true }).click()
   const plugins = page.locator('[data-plugin-panel]')
   await page.locator('[data-plugin-panel][aria-busy="false"]').waitFor()
-  if (themeId === 'fox') {
+  if (videoTheme) {
     await page.locator('video[data-qyt-video-scene][data-ready="true"]').waitFor({ timeout: 30000 })
     await page.waitForFunction(() => { const video=document.querySelector('video[data-qyt-video-scene]'); return video && !video.paused && video.currentTime>.1 })
     assert.equal(await page.locator('video[data-qyt-video-scene]').evaluate(v=>v.muted),true)
@@ -82,12 +83,12 @@ try {
     assert.equal(await page.locator('[data-slot="sidebar"] > :first-child').evaluate(node=>getComputedStyle(node).backgroundImage.includes('data:image/')),false)
     checks.push('actual-plugin-and-sidebar-share-video')
   } else assert.equal((await backdrop(plugins)).art,true)
-  if(themeId==='fox') await writeFile(join(output,'video-layout.json'),JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('[data-slot="sidebar"],video[data-qyt-video-scene],[data-rightbar-col]')].map(node=>({tag:node.tagName,rect:node.getBoundingClientRect().toJSON(),attrs:[...node.attributes].filter(a=>!['poster','src'].includes(a.name)).map(a=>[a.name,a.value]),ancestors:[...function*(n){for(let p=n.parentElement;p&&p!==document.body;p=p.parentElement){const s=getComputedStyle(p);yield {tag:p.tagName,attrs:[...p.attributes].map(a=>[a.name,a.value]),background:s.backgroundColor,image:s.backgroundImage.startsWith('url(')?'image':s.backgroundImage.slice(0,120),rect:p.getBoundingClientRect().toJSON()}}}(node)]}))),null,2))
+  if (videoTheme) await writeFile(join(output,'video-layout.json'),JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('[data-slot="sidebar"],video[data-qyt-video-scene],[data-rightbar-col]')].map(node=>({tag:node.tagName,rect:node.getBoundingClientRect().toJSON(),attrs:[...node.attributes].filter(a=>!['poster','src'].includes(a.name)).map(a=>[a.name,a.value]),ancestors:[...function*(n){for(let p=n.parentElement;p&&p!==document.body;p=p.parentElement){const s=getComputedStyle(p);yield {tag:p.tagName,attrs:[...p.attributes].map(a=>[a.name,a.value]),background:s.backgroundColor,image:s.backgroundImage.startsWith('url(')?'image':s.backgroundImage.slice(0,120),rect:p.getBoundingClientRect().toJSON()}}}(node)]}))),null,2))
   await snapshot('plugins-light'); checks.push('actual-plugin-page')
   await page.getByRole('button', { name: '自动化任务', exact: true }).click()
   const schedules = page.locator('[data-testid="task-manager-page"]')
-  await schedules.waitFor(); assert.equal((await backdrop(schedules)).art, themeId !== 'fox')
-  if(themeId==='fox') {
+  await schedules.waitFor(); assert.equal((await backdrop(schedules)).art, !videoTheme)
+  if (videoTheme) {
     assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
     assert.equal(await page.locator('video[data-qyt-video-scene]').evaluate(v=>!v.paused&&v.muted),true)
     checks.push('actual-automation-video-keeps-decoder')
@@ -146,9 +147,9 @@ try {
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
   // The native Host may finish replacing a provisional blank session after
   // submission. Reopen this fixture's titled row before checking its response.
-  if(themeId==='fox') await page.locator('[data-slot="sidebar"]').getByText('E2E:Theme',{exact:true}).click()
+  if (videoTheme) await page.locator('[data-slot="sidebar"]').getByText('E2E:Theme',{exact:true}).click()
   await page.getByText('已完成本地测试回复：E2E:Theme', { exact: true }).waitFor()
-  if(themeId==='fox') {
+  if (videoTheme) {
     const seat=page.locator('[data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]')
     assert.equal(await seat.evaluate(node=>getComputedStyle(node,'::before').content),'none')
     assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
@@ -176,7 +177,7 @@ try {
   }
   await page.locator('[data-conversation-tabs]').getByRole('tab', { name: '对话', exact: true }).click()
   await page.getByRole('button', { name: '打开右侧边栏', exact: true }).click()
-  if(themeId==='fox') {
+  if (videoTheme) {
     await page.waitForFunction(()=>{const v=document.querySelector('video[data-qyt-video-scene]'),right=document.querySelector('[data-rightbar-col]');return v?.parentElement?.contains(right)&&right.getBoundingClientRect().width>100})
     assert.equal(await page.locator('video[data-qyt-video-scene]').count(),1)
     assert.equal(await page.evaluate(()=>document.querySelector('video[data-qyt-video-scene]')===window.__themeMainVideo),true)
@@ -190,7 +191,7 @@ try {
   await page.locator('[data-files-entry="file"]').filter({ hasText: 'preview.bin' }).click()
   const unsupported = page.locator('[data-textpreview-state="unsupported"]')
   await unsupported.waitFor()
-  assert.equal((await backdrop(unsupported.locator('xpath=ancestor::*[@data-dockkit-content][1]'))).art, themeId !== 'fox')
+  assert.equal((await backdrop(unsupported.locator('xpath=ancestor::*[@data-dockkit-content][1]'))).art, !videoTheme)
   await snapshot('file-unsupported-light'); checks.push('actual-unsupported-file-pane')
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
   await snapshot('file-unsupported-dark')

@@ -150,8 +150,9 @@ if (process.argv.includes('--generate-only')) {
       await shell.evaluate((element, height) => { element.style.height = height }, height)
       await page.setViewportSize(viewport)
     }
-    assert.equal(await choices.getByRole('radio').count(), 6, 'Each registered theme owns one clickable selection card')
+    assert.equal(await choices.getByRole('radio').count(), 7, 'Each registered theme owns one clickable selection card')
     assert.equal(await choices.getByRole('radio').first().getAttribute('data-theme'), 'moonfrost', 'Moonfrost is the first theme');
+    assert.equal(await choices.getByRole('radio').nth(1).getAttribute('data-theme'), 'garo', 'Garo is the second theme')
     const checkSelection = async (selected, color) => {
       await page.waitForFunction(({ selected, color }) => { const card = document.querySelector(`.qyt-theme-choice[data-theme="${selected}"]`); return card && getComputedStyle(card).borderTopColor === color }, { selected, color })
       await choices.evaluate(element => Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished)))
@@ -346,8 +347,22 @@ if (process.argv.includes('--generate-only')) {
     assert.equal(await page.locator('iframe[data-qyt-theme-preview]').count(), 0)
     assert.equal(await page.evaluate(() => window.__detachedThemePreview.querySelectorAll('canvas, video, style[data-qyt-q-theme]').length), 0, 'Leaving the theme settings disposes the preview document scene and its palette')
     assert.equal(await page.evaluate(() => window.__detachedVideo.paused && !window.__detachedVideo.hasAttribute('src')), true)
+
+    await page.setViewportSize({ width: 1080, height: 920 })
+    await page.getByRole('tab', { name: 'Q 主题', exact: true }).click()
+    await choices.locator('[data-theme="garo"]').click()
+    const garoMotion = page.getByRole('radiogroup', { name: '月下冰弦背景效果', exact: true })
+    const garoVideo = previewFrame.locator('body[data-qyt-q-theme="garo"] video[data-ready="true"]')
+    await garoVideo.waitFor({ state: 'visible', timeout: 120_000 })
+    assert.equal(await garoVideo.evaluate(video => video.muted && video.loop && video.videoWidth === 1920 && video.videoHeight === 1080), true)
+    assert.equal(await page.locator('.qyt-theme-caption').count(), 0)
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'garo-settings-light.png') })
+    await garoMotion.getByRole('radio', { name: '静态', exact: true }).click()
+    await garoVideo.waitFor({ state: 'detached' })
+    assert.equal(await previewFrame.locator('[data-slot="sidebar"] > :first-child').evaluate(node => getComputedStyle(node).backgroundImage.includes('data:image/')), true)
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'garo-settings-static.png') })
     assert.deepEqual(errors, [])
-    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png', 'fox-settings-light.png', 'fox-settings-dark.png', 'fox-settings-narrow.png'] }
+    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, choicePlacement, componentLayouts, narrowLayout, nestedMutation: oceanMutation, oceanSelection, begoniaSelection, darkSelection, darkOceanSelection, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-choices-narrow.png', 'ocean-selection-right.png', 'begonia-selection-right.png', 'ocean-theme-component-560.png', 'ocean-theme-component-520.png', 'ocean-theme-component-461.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png', 'fox-settings-light.png', 'fox-settings-dark.png', 'fox-settings-narrow.png', 'garo-settings-light.png', 'garo-settings-static.png'] }
     await writeFile(join(output, 'settings-preview-result.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
   } finally {

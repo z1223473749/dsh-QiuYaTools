@@ -36,7 +36,7 @@ const expected = {
   qThemeEnabled: true,
   qThemeId: 'moonfrost',
   qCustomThemes: [],
-  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true } },
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' } },
   computerUseEnabled: true,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
@@ -242,7 +242,7 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.equal(fiber.config.qThemeId.get(), 'moonfrost')
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true } })
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' } })
   assert.equal(Object.keys(fiber.config).length, 17)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)

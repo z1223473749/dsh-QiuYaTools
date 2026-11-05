@@ -324,6 +324,10 @@ body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-slot="si
 body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] > :has(> [data-slot="sidebar"]) {
   background: transparent;
 }
+/* Native macOS and desktop frames paint the main column outside the slots. */
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] > :is([class*="_centerCol"], .dshDesktopConversationSurface) {
+  background-color: transparent;
+}
 body[data-qyt-q-theme] [data-dockkit-strip],
 body[data-qyt-q-theme] [data-dockkit-float-grip],
 body[data-qyt-q-theme] [data-textpreview-state] > :has(> [data-textpreview-path]),

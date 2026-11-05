@@ -11,8 +11,9 @@ import { installMoonfrostScene } from './moonfrost-scene.ts'
 import { installBuliangrenScene } from './buliangren-scene.ts'
 import { loadThemeVideo } from './theme-video-api.ts'
 import { installVideoScene, type SceneDisposer } from './video-scene.ts'
-import { FOX_SCENE_DATA_URL, FOX_SIDEBAR_DATA_URL } from './brand-assets.ts'
+import { FOX_SCENE_DATA_URL, FOX_SIDEBAR_DATA_URL, GARO_SCENE_DATA_URL, GARO_SIDEBAR_DATA_URL } from './brand-assets.ts'
 import foxPalette from './themes/fox.css'
+import garoPalette from './themes/garo.css'
 import sunsetPalette from './themes/sunset.css'
 import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
@@ -43,6 +44,14 @@ export interface ThemeDefinition {
 }
 
 const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
+  garo: {
+    id: 'garo', name: 'qThemeGaro', description: 'qThemeGaroDescription',
+    motionLabel: 'qThemeGaroMotion', label: 'Q Garo · 伽罗 · 月下冰弦',
+    art: GARO_SCENE_DATA_URL, sidebarArt: GARO_SIDEBAR_DATA_URL, accent: '#226584', accentDark: '#96d5ec', soft: '#b4d7e8',
+    bannerPosition: 'center', previewPosition: 'center',
+    palette: moonfrostPalette.replaceAll('data-qyt-q-theme="moonfrost"', 'data-qyt-q-theme="garo"') + garoPalette,
+    installScene: (doc, ctx) => installVideoScene(doc, { source: signal => loadThemeVideo(ctx!, 'garo', signal), poster: GARO_SCENE_DATA_URL }),
+  },
   fox: {
     id: 'fox', name: 'qThemeFox', description: 'qThemeFoxDescription',
     motionLabel: 'qThemeFoxMotion', label: 'Q Fox · 桃华白狐',

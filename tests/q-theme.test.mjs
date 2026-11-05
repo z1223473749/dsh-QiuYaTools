@@ -314,7 +314,7 @@ function contrast(a, b) {
 const readingInk = ['--qyt-q-ink', '--qyt-q-secondary', '--qyt-q-muted']
 
 function forEachThemeAppearance(t, check) {
-  for (const themeId of ['ocean', 'begonia', 'moonfrost', 'buliangren', 'fox']) {
+  for (const themeId of ['ocean', 'begonia', 'moonfrost', 'buliangren', 'fox', 'garo']) {
     for (const dark of [false, true]) {
       const f = fixture(t, { dark, sharedForm: formFixture({
         qThemeEnabled: true, qThemeId: themeId,
@@ -359,13 +359,13 @@ function allRules(rules) {
 
 test('preset themes embed their own illustration and withdraw it without external image requests', t => {
   const illustrations = []
-  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren', 'fox']) {
+  for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren', 'fox', 'garo']) {
     const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
     const cleanup = f.install()
     const installed = f.styles()[0].textContent
     assert.ok(!installed.includes('__QYT_THEME_SCENE__'), 'the actual packaged image replaces the build placeholder')
     const urls = [...installed.matchAll(/url\("([^"]+)"\)/gu)].map(match => match[1])
-    assert.equal(urls.length, qThemeId === 'fox' ? 2 : 1)
+    assert.equal(urls.length, ['fox', 'garo'].includes(qThemeId) ? 2 : 1)
     assert.ok(urls.every(url => /^data:image\/(?:webp|jpeg);base64,/u.test(url)), 'no remote image request or unresolvable asset path')
     illustrations.push(urls[0])
     cleanup()
