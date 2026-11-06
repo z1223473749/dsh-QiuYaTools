@@ -80,8 +80,14 @@ test('portable transformer preserves reviewed native business body with current 
  // Only the public settings tab was renamed; preserve the historical body guard.
  const attachmentTab="getByRole('tab', { name: '附件增强', exact: true })";
  assert.equal(body.split(attachmentTab).length,3);body=body.replaceAll(attachmentTab,"getByRole('tab', { name: '长文本', exact: true })");
- // Reviewed additions are the gated attachment cases, current attachment-rail
- // assertions and explicit theme selection; native case order/deadlines remain.
+ // The gallery now keeps its modal open after a selection. Normalize only
+ // that settings interaction when comparing with the historical body.
+ const gallerySelection = `    await page.getByRole('button', { name: '主题广场', exact: true }).click()
+    await page.getByRole('dialog', { name: '主题广场', exact: true }).getByRole('button', { name: '鲸与海', exact: true }).click()`;
+ const galleryClose = "    await page.getByRole('dialog', { name: '主题广场', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()\n";
+ assert.equal(body.split(gallerySelection).length,2);body=body.replace(gallerySelection,"    await page.getByRole('radio', { name: '鲸与海', exact: true }).click()");
+ assert.equal(body.split(galleryClose).length,2);body=body.replace(galleryClose,'');
+ // Native case order and deadlines remain guarded by the historical digest.
  assert.notEqual(hash(Buffer.from(s)),hash(Buffer.from(body)));assert.equal(hash(Buffer.from(body)),'9e91477a2942118bf16d22a4817357bf85772b07612a71177a3067be143b91a0');assert(s.includes('timeoutMs = 30000'));assert(s.includes('within3000ms'));assert(!s.includes("host.kill('SIGKILL')"));assert(s.includes('readFinalOwnUploadedFile'));
 });
 test('all12business rows/order/normal exit and expectedcurrentcandidate required',()=>{const sha='a'.repeat(64),r=passed(sha);assert(assessMacFullHarnessReport(r,sha).passed);for(const change of[x=>x.tests.pop(),x=>x.tests.reverse(),x=>x.tests[2].status='failed',x=>x.fullAcceptanceEvidence.forcedHostTermination=true,x=>x.fullAcceptanceEvidence.hostExitCode=1,x=>x.ownedCleanup.passed=false,x=>x.frontendErrors=['error'],x=>x.candidateSHA256='b'.repeat(64)]){const x=structuredClone(r);change(x);assert.equal(assessMacFullHarnessReport(x,sha).passed,false)}assert.throws(()=>assessMacFullHarnessReport(r));});
