@@ -384,7 +384,7 @@ test('the approved illustrated sidebar keeps its own art opacity and selected-ro
   const sidebar = rules.find(rule => rule.selectorText?.includes(`${body} [data-slot="sidebar"] > :first-child`))
   assert.ok(sidebar)
   assert.ok(sidebar.selectorText.includes('[data-shortcut-modal="settings"] > nav'))
-  assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, cover')
+  assert.equal(sidebar.style.getPropertyValue('background-size'), '100% 100%, var(--qyt-sidebar-cover-size, cover)')
   assert.ok(sidebar.style.getPropertyValue('background-image').includes('var(--qyt-theme-art)'))
   const selected = rules.find(rule => rule.selectorText?.includes('[data-row-key^="session:"][aria-selected="true"]'))
   assert.equal(selected.style.getPropertyValue('box-shadow'), 'inset 3px 0 var(--qyt-q-accent)')

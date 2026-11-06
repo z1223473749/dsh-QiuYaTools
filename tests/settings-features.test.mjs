@@ -16,6 +16,9 @@ Object.assign(globalThis, {
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 })
+// JSDOM does not implement native dialog methods. Browser tests cover modal focus and dismissal.
+dom.window.HTMLDialogElement.prototype.showModal ??= function () { this.open = true }
+dom.window.HTMLDialogElement.prototype.close ??= function () { this.open = false }
 const { createRoot } = require('react-dom/client')
 const { Simulate } = require('react-dom/test-utils')
 const { act } = React
@@ -123,8 +126,11 @@ function mount(value = {}, policy = {}, compatibility = { harnessVersion: '0.2.1
     support(next) { act(() => { supportSnapshot = next; for (const listener of supportListeners) listener() }) },
     failWith(error) { failure = error },
     accept(value) { accepted = value },
-    theme(id) { return container.querySelector(`.qyt-theme-choice[data-theme="${id}"]`) },
-    async chooseTheme(id) { await act(async () => { Simulate.click(this.theme(id)) }) },
+    openGallery() {
+      if (!container.querySelector('.qyt-theme-gallery')) act(() => Simulate.click(container.querySelector('.qyt-theme-gallery-launch')))
+    },
+    theme(id) { return container.querySelector(`.qyt-theme-gallery-card[data-theme="${id}"]`) },
+    async chooseTheme(id) { this.openGallery(); await act(async () => { Simulate.click(this.theme(id)) }) },
     switch(label) { return container.querySelector(`:is([role="switch"], [role="checkbox"])[aria-label="${label}"]`) },
     tab(label) { return [...container.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === label) },
     select(label) { act(() => Simulate.click(this.tab(label))) },
@@ -466,8 +472,7 @@ test('Q Theme defaults on and persists independently from the enhancement tools 
       assert.equal(f.switch('qTheme').getAttribute('aria-checked'), 'true')
       const preview = f.container.querySelector('[role="img"][aria-label="qThemeMoonfrostDescription"]')
       assert.ok(preview)
-      assert.equal(f.container.querySelector('.qyt-theme-choice').dataset.theme, 'moonfrost')
-      assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
+      assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'moonfrost')
       assert.equal(preview.querySelectorAll('input, button, a').length, 0, 'the color preview is decorative, without pretend settings')
       await f.toggle('qTheme')
       assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeEnabled'], value: false }]])
@@ -643,17 +648,15 @@ test('theme cards persist only the selected id and restore each theme own motion
   const f = mount(initial)
   try {
     f.select('qThemeTab')
-    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
-    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'false')
-    assert.equal(f.container.querySelectorAll('.qyt-theme-choice-circle').length, 7)
+    f.openGallery()
+    assert.equal(f.theme('ocean').getAttribute('aria-pressed'), 'true')
+    assert.equal(f.theme('begonia').getAttribute('aria-pressed'), 'false')
     assert.equal(f.container.querySelector('.qyt-theme-motion input[value="static"]').checked, true)
     await f.chooseTheme('begonia')
     assert.deepEqual(f.mutations, [[{ op: 'set', path: ['qThemeId'], value: 'begonia' }]])
-    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'true')
-    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'false')
+    assert.equal(f.theme('begonia').getAttribute('aria-pressed'), 'true')
     assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'begonia')
     assert.equal(f.container.querySelector('.qyt-theme-motion input[value="dynamic"]').checked, true)
-    assert.notEqual(f.theme('ocean').style.getPropertyValue('--qyt-theme-solid'), f.theme('begonia').style.getPropertyValue('--qyt-theme-solid'))
     await act(async () => Simulate.change(f.container.querySelector('.qyt-theme-motion input[value="static"]')))
     assert.deepEqual(f.mutations.at(-1), [{ op: 'set', path: ['qThemeSettings', 'begonia', 'motion'], value: 'static' }])
     assert.deepEqual(f.snapshot().value.qThemeSettings.ocean, initial.qThemeSettings.ocean)
@@ -670,27 +673,23 @@ test('theme cards persist only the selected id and restore each theme own motion
   } finally { f.dispose() }
 })
 
-test('theme card selection uses accepted snapshots and supports keyboard navigation', async () => {
+test('theme gallery stays open after a rejected save and applies a successful retry', async () => {
   const f = mount(defaults)
   try {
     f.select('qThemeTab')
     f.accept(false)
     await f.chooseTheme('begonia')
-    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    assert.equal(f.theme('ocean').getAttribute('aria-pressed'), 'true')
     assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'ocean')
     assert.match(f.container.querySelector('[role="alert"]').textContent, /saveError/)
     f.failWith(Error('offline'))
     await f.chooseTheme('begonia')
-    assert.equal(f.theme('ocean').getAttribute('aria-checked'), 'true')
+    assert.equal(f.theme('ocean').getAttribute('aria-pressed'), 'true')
     f.failWith(null)
     f.accept(true)
-    await act(async () => Simulate.keyDown(f.theme('ocean'), { key: 'ArrowRight' }))
-    assert.equal(f.theme('begonia').getAttribute('aria-checked'), 'true')
-    assert.equal(document.activeElement, f.theme('begonia'))
-    assert.equal(f.theme('begonia').tabIndex, 0)
-    assert.equal(f.theme('ocean').tabIndex, -1)
-    await act(async () => Simulate.keyDown(f.theme('begonia'), { key: 'Home' }))
-    assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
+    await f.chooseTheme('begonia')
+    assert.equal(f.theme('begonia').getAttribute('aria-pressed'), 'true')
+    assert.equal(f.container.querySelector('.qyt-theme-card').dataset.theme, 'begonia')
   } finally { f.dispose() }
 })
 
@@ -699,8 +698,9 @@ test('theme selection respects read-only and unavailable settings and falls back
     const f = mount({ ...defaults, qThemeId: 'future-theme' }, policy)
     try {
       f.select('qThemeTab')
-      assert.equal(f.theme('moonfrost').getAttribute('aria-checked'), 'true')
-      for (const card of f.container.querySelectorAll('.qyt-theme-choice')) assert.equal(card.disabled, true)
+      f.openGallery()
+      assert.equal(f.theme('moonfrost').getAttribute('aria-pressed'), 'true')
+      for (const card of f.container.querySelectorAll('.qyt-theme-gallery-card, .qyt-theme-gallery-create')) assert.equal(card.disabled, true)
       await f.chooseTheme('begonia')
       assert.equal(f.mutations.length, 0)
     } finally { f.dispose() }

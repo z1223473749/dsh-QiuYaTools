@@ -48,3 +48,12 @@ test('all motion/atmosphere choices persist, old themes remain valid, and effect
   }
   assert.equal(api.isCustomTheme(sample), true, 'preexisting themes need no color migration')
 })
+
+test('video covers can be saved after the first minute, with bounded sidebar zoom and a safe cover color', () => {
+  const video = { assetId: '83ab205a-4810-4c36-910c-0ca5a7f7e5ae', sound: false, sidebar: 'cover', x: 74, y: 62, frame: 65.25 }
+  assert.equal(api.isCustomTheme({ ...sample, video }), true)
+  assert.equal(api.isCustomTheme({ ...sample, video: { ...video, zoom: 1.65, coverAccent: '#905eb3' } }), true)
+  for (const change of [{ frame: -1 }, { frame: Infinity }, { zoom: .9 }, { zoom: 2.1 }, { coverAccent: '#abc;}' }]) {
+    assert.equal(api.isCustomTheme({ ...sample, video: { ...video, ...change } }), false)
+  }
+})

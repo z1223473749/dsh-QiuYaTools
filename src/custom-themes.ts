@@ -1,4 +1,5 @@
 import { isSmartMotion, type SmartMotion } from './smart-motion.ts'
+import { LOCAL_VIDEO_ID } from './theme-video.ts'
 /** Small self-contained images persist with the active Host profile. No blob
  * URL, browser-local cache or remote image service is needed on reload. */
 export const MAX_CUSTOM_THEMES = 8
@@ -26,6 +27,17 @@ export interface CustomTheme {
   /** Omitted in older themes; each effect then uses its own soft palette. */
   atmosphereColor?: string
   smartMotion?: SmartMotion
+  video?: {
+    assetId: string
+    sound: boolean
+    sidebar: 'video' | 'cover'
+    x: number
+    y: number
+    zoom?: number
+    frame: number
+    /** Original cover color, stored when a manual theme color is selected. */
+    coverAccent?: string
+  }
   intensity: number
   speed: number
   x: number
@@ -46,6 +58,12 @@ export function isCustomTheme(value: unknown): value is CustomTheme {
     && THEME_ATMOSPHERES.includes(v.atmosphere)
     && (v.atmosphereColor === undefined || (typeof v.atmosphereColor === 'string' && /^#[a-f0-9]{6}$/i.test(v.atmosphereColor)))
     && (v.smartMotion === undefined || isSmartMotion(v.smartMotion))
+    && (v.video === undefined || (v.video !== null && typeof v.video === 'object' && !v.smartMotion
+      && typeof v.video.assetId === 'string' && LOCAL_VIDEO_ID.test(v.video.assetId)
+      && typeof v.video.sound === 'boolean' && (v.video.sidebar === 'video' || v.video.sidebar === 'cover')
+      && range(v.video.x, 0, 100) && range(v.video.y, 0, 100) && Number.isFinite(v.video.frame) && v.video.frame >= 0
+      && (v.video.zoom === undefined || range(v.video.zoom, 1, 2))
+      && (v.video.coverAccent === undefined || (typeof v.video.coverAccent === 'string' && /^#[a-f0-9]{6}$/i.test(v.video.coverAccent)))))
     && range(v.intensity, 0, 1) && range(v.speed, .1, 5) && range(v.x, 0, 100) && range(v.y, 0, 100)
     && range(v.zoom, 1, 2) && range(v.mask, .5, 1)
 }

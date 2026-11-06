@@ -52,7 +52,7 @@ body[data-qyt-q-theme] [data-shortcut-modal="settings"] > nav {
   background-color: var(--qyt-q-sidebar);
   background-image: var(--qyt-q-sidebar-gradient), var(--qyt-theme-sidebar-art, var(--qyt-theme-art));
   background-position: center, var(--qyt-q-sidebar-art-position, right center);
-  background-size: 100% 100%, cover;
+  background-size: 100% 100%, var(--qyt-sidebar-cover-size, cover);
   background-repeat: no-repeat;
 }
 body[data-qyt-q-theme] [data-slot="sidebar.workspaces"] [data-row-key^="session:"][aria-selected="true"] {
@@ -317,7 +317,7 @@ body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] :is([data-dock
 body[data-qyt-q-theme] [data-qyt-video-host]:has(> [data-rightbar-col]) > [data-qyt-theme-wash] {
   background-image: none;
 }
-body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-slot="sidebar"] > :first-child {
+body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live]:not([data-qyt-video-sidebar-cover]) [data-slot="sidebar"] > :first-child {
   background-color: transparent;
   background-image: var(--qyt-q-sidebar-gradient);
 }

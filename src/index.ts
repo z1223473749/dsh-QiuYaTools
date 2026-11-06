@@ -5,6 +5,7 @@ import { installSessionWindowsHost } from './features/session-windows/host.ts'
 import { installPluginUpdatesHost } from './updates/host.ts'
 import { installSmartThemeHost } from './features/smart-theme/host.ts'
 import { installThemeVideoHost } from './features/theme-video/host.ts'
+import { LOCAL_VIDEO_ID } from './theme-video.ts'
 import { MOTION_KINDS } from './smart-motion.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
@@ -70,6 +71,14 @@ export const Config = z.object({
     movement: z.union(THEME_MOVEMENTS.map(value => z.const(value))),
     atmosphere: z.union(THEME_ATMOSPHERES.map(value => z.const(value))),
     atmosphereColor: z.string().pattern(/^#[a-f0-9]{6}$/i),
+    video: z.union([z.never(), z.object({
+      assetId: z.string().pattern(LOCAL_VIDEO_ID), sound: z.boolean(),
+      sidebar: z.union([z.const('video'), z.const('cover')]),
+      x: z.number().min(0).max(100), y: z.number().min(0).max(100),
+      zoom: z.union([z.never(), z.number().min(1).max(2)]),
+      frame: z.number().min(0),
+      coverAccent: z.union([z.never(), z.string().pattern(/^#[a-f0-9]{6}$/i)]),
+    })]),
     smartMotion: z.union([z.never(), z.object({
       version: z.const(1), assetId: z.string().pattern(/^[a-f0-9]{64}$/), sourceHash: z.string().pattern(/^[a-f0-9]{64}$/),
       regions: z.array(z.object({
@@ -161,7 +170,7 @@ export function apply(ctx: Context, config: Config): void {
     child.effect(() => installSessionWindowsHost(child, () => config.enabled.get() && config.sessionWindowsEnabled.get()))
   })
   ctx.inject(['connection', 'profileContext'], child => {
-    child.effect(() => installThemeVideoHost(child))
+    child.effect(() => installThemeVideoHost(child, id => config.qCustomThemes.get().some(theme => theme.video?.assetId === id)))
   })
   ctx.inject(['connection', 'llm', 'attachments', 'profileContext'], child => {
     child.effect(() => installSmartThemeHost(child, { isAssetReferenced: assetId => config.qCustomThemes.get().some(theme => theme.smartMotion?.assetId === assetId) }))

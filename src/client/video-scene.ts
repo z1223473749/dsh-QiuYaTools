@@ -1,8 +1,15 @@
+import { THEME_SOUND_EVENT } from '../theme-video.ts'
+
 export type SceneDisposer = () => void
 
 /** One silent video behind the native frame keeps sidebar, main content and
  * dock panels on the same decoded frame and continuous image coordinates. */
-export function installVideoScene(doc: Document, options: { source(signal: AbortSignal): Promise<{ url: string; dispose(): void }>; poster: string }): SceneDisposer {
+export function installVideoScene(doc: Document, options: {
+  source(signal: AbortSignal): Promise<{ url: string; dispose(): void }>
+  poster: string
+  sidebarCover?: boolean
+  sound?: boolean
+}): SceneDisposer {
   const win = doc.defaultView
   if (!win?.matchMedia || !win.MutationObserver) return () => {}
   const reduced = win.matchMedia('(prefers-reduced-motion: reduce)')
@@ -10,6 +17,7 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
   let disposed = false, failed = false, intersecting = true
   let host: HTMLElement | null = null, video: HTMLVideoElement | null = null, wash: HTMLElement | null = null
   let pending = false
+  let soundBlocked = false
   let loading: AbortController | null = null, resource: { url: string; dispose(): void } | null = null
 
   function rendered(element: HTMLElement): boolean {
@@ -27,6 +35,7 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
     host?.removeAttribute('data-qyt-video-host')
     host?.removeAttribute('data-qyt-video-surface')
     host?.removeAttribute('data-qyt-video-position')
+    host?.removeAttribute('data-qyt-video-sidebar-cover')
     if (video) {
       video.removeEventListener('loadeddata', ready)
       video.removeEventListener('error', error)
@@ -40,13 +49,27 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
     if (video && video.readyState >= 2) { video.dataset.ready = 'true'; host?.setAttribute('data-qyt-theme-live', '') }
   }
   function error(): void { failed = true; release() }
-  function play(): void {
-    if (!video?.hasAttribute('src') || pending || !canPlay() || !video.paused) return
+  const wantsSound = () => options.sound && win.top === win && !doc.body.hasAttribute('data-qyt-session-window')
+    && doc.hasFocus() && !doc.querySelector('.qyt-video-editor[open]')
+  function play(gesture = false): void {
+    if (!video?.hasAttribute('src') || !canPlay()) return
+    const audible = wantsSound() && (gesture || !soundBlocked)
+    if (!audible) video.muted = true
+    if (pending || (!video.paused && video.muted === !audible)) return
     const current = video
+    current.muted = !audible
     pending = true
-    void current.play().catch(() => { /* retain poster if playback is unavailable */ }).finally(() => {
+    void current.play().then(() => {
+      if (video === current && audible) soundBlocked = false
+    }).catch(async () => {
+      if (video !== current || !audible) return
+      soundBlocked = true
+      current.muted = true
+      if (canPlay()) await current.play().catch(() => {})
+    }).finally(() => {
       if (video !== current) return
       pending = false
+      if (!wantsSound()) current.muted = true
       if (!canPlay()) current.pause()
     })
   }
@@ -75,6 +98,7 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
       // only static fallback containers need a local positioning context.
       if (win!.getComputedStyle(next).position === 'static') next.dataset.qytVideoPosition = 'relative'
       host.dataset.qytVideoHost = ''
+      if (options.sidebarCover) host.dataset.qytVideoSidebarCover = ''
       video = doc.createElement('video')
       video.dataset.qytVideoScene = ''; video.setAttribute('aria-hidden', 'true'); video.setAttribute('inert', '')
       video.tabIndex = -1; video.loop = true; video.playsInline = true; video.preload = 'metadata'
@@ -100,16 +124,21 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
     if (!canPlay()) video?.pause()
     else play()
   }
-  function gesture(): void { if (canPlay()) play() }
+  function gesture(): void { play() }
+  function soundGesture(): void { play(true) }
   const mutations = new win.MutationObserver(records => {
-    if (!host?.isConnected || records.some(record => record.type === 'attributes'
+    if (options.sound || !host?.isConnected || records.some(record => record.type === 'attributes'
       ? record.target === host || (record.target as Element).contains(host)
       : [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1 && ((node as Element).matches('[data-slot="main"], [data-slot="main.conversation"], [data-phase], [data-plugin-panel], [data-testid="task-manager-page"]') || (node as Element).querySelector('[data-slot="main"], [data-phase], [data-plugin-panel], [data-testid="task-manager-page"]'))))) sync()
   })
-  mutations.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style', 'data-phase'] })
+  mutations.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style', 'data-phase', 'open'] })
   reduced.addEventListener('change', sync); forced.addEventListener('change', sync)
   doc.addEventListener('visibilitychange', sync); doc.addEventListener('scroll', sync, { passive: true, capture: true })
   doc.addEventListener('pointerdown', gesture, true); doc.addEventListener('keydown', gesture, true)
+  if (options.sound) {
+    doc.addEventListener(THEME_SOUND_EVENT, soundGesture)
+    win.addEventListener('focus', sync); win.addEventListener('blur', sync)
+  }
   win.addEventListener('resize', sync)
   sync()
   return () => {
@@ -117,6 +146,8 @@ export function installVideoScene(doc: Document, options: { source(signal: Abort
     disposed = true; mutations.disconnect(); reduced.removeEventListener('change', sync); forced.removeEventListener('change', sync)
     doc.removeEventListener('visibilitychange', sync); doc.removeEventListener('scroll', sync, true)
     doc.removeEventListener('pointerdown', gesture, true); doc.removeEventListener('keydown', gesture, true)
+    doc.removeEventListener(THEME_SOUND_EVENT, soundGesture)
+    win.removeEventListener('focus', sync); win.removeEventListener('blur', sync)
     win.removeEventListener('resize', sync); release()
   }
 }

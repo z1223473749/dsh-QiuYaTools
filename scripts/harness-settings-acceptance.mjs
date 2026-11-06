@@ -86,13 +86,13 @@ export function inspectSettingsTab(section, expected) {
     require([...form.querySelectorAll('button')].some(node => text(node) === '保存阈值'), 'the explicit threshold save action is missing')
   }
   if (expected.kind === 'theme') {
-    const choices = [...panel.querySelectorAll('.qyt-theme-choice[role="radio"][aria-checked="true"]')]
-    require(choices.length === 1, 'the selected theme is missing or duplicated')
-    const choice = choices[0], card = panel.querySelector('.qyt-theme-card')
-    require(card && card.dataset.theme === choice.dataset.theme && text(card.querySelector('h4')) === choice.getAttribute('aria-label'), 'the theme preview title does not match the selected theme')
+    const card = panel.querySelector('.qyt-theme-card')
+    const gallery = panel.querySelector('.qyt-theme-gallery-launch')
+    require(card?.dataset.theme === section.dataset.theme && text(card?.querySelector('h4')), 'the active theme preview is missing')
+    require(gallery?.getAttribute('aria-haspopup') === 'dialog' && text(gallery) === '主题广场', 'the theme gallery entry is missing')
     const preview = card.querySelector('[role="img"]'), frame = preview?.querySelector('iframe[data-qyt-theme-preview]')
     require(preview?.getAttribute('aria-label')?.trim() && frame?.title === preview.getAttribute('aria-label'), 'the accessible theme preview is missing')
-    evidence.theme = choice.dataset.theme
+    evidence.theme = card.dataset.theme
   }
   if (expected.kind === 'about') {
     require(panel.querySelector('img[alt="白发少年坐在鲸鱼上"]'), 'the project artwork is missing')

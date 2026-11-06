@@ -25,7 +25,9 @@ import buliangrenPalette from './themes/buliangren.css'
 export interface ThemeDefinition {
   readonly id: QThemeId
   readonly displayName?: string
+  readonly video?: boolean
   readonly revision?: string
+  readonly sceneRevision?: string
   readonly name: LocaleKey
   readonly description: LocaleKey
   readonly hint?: LocaleKey
@@ -33,6 +35,7 @@ export interface ThemeDefinition {
   readonly label: string
   readonly art: string
   readonly sidebarArt?: string
+  readonly sidebarZoom?: { factor: number; aspect: number }
   readonly accent: string
   readonly accentDark: string
   readonly soft: string
@@ -45,7 +48,7 @@ export interface ThemeDefinition {
 
 const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
   garo: {
-    id: 'garo', name: 'qThemeGaro', description: 'qThemeGaroDescription',
+    id: 'garo', video: true, name: 'qThemeGaro', description: 'qThemeGaroDescription',
     motionLabel: 'qThemeGaroMotion', label: 'Q Garo · 伽罗 · 月下冰弦',
     art: GARO_SCENE_DATA_URL, sidebarArt: GARO_SIDEBAR_DATA_URL, accent: '#226584', accentDark: '#96d5ec', soft: '#b4d7e8',
     bannerPosition: 'center', previewPosition: 'center',
@@ -53,7 +56,7 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
     installScene: (doc, ctx) => installVideoScene(doc, { source: signal => loadThemeVideo(ctx!, 'garo', signal), poster: GARO_SCENE_DATA_URL }),
   },
   fox: {
-    id: 'fox', name: 'qThemeFox', description: 'qThemeFoxDescription',
+    id: 'fox', video: true, name: 'qThemeFox', description: 'qThemeFoxDescription',
     motionLabel: 'qThemeFoxMotion', label: 'Q Fox · 桃华白狐',
     art: FOX_SCENE_DATA_URL, sidebarArt: FOX_SIDEBAR_DATA_URL, accent: '#985c7a', accentDark: '#efbdd8', soft: '#e5bbd0',
     bannerPosition: 'center', previewPosition: 'center', palette: foxPalette,
@@ -99,7 +102,7 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
 export const Q_THEMES: readonly ThemeDefinition[] = Q_THEME_IDS.map(id => definitions[id])
 
 export function getQThemes(preferences?: Partial<Preferences>): readonly ThemeDefinition[] {
-  return [...Q_THEMES, ...getCustomThemes(preferences).map(createCustomTheme)]
+  return [...Q_THEMES, ...getCustomThemes(preferences).map(theme => createCustomTheme(theme))]
 }
 
 export function getQTheme(id: QThemeId, preferences?: Partial<Preferences>): ThemeDefinition {
