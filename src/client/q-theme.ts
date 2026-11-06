@@ -3,6 +3,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_PREFERENCES, getQThemeId, getThemeMotion, type Preferences, type QThemeId } from '../shared.ts'
 import type { SceneDisposer } from './video-scene.ts'
 import css from './q-theme.css'
+import { ensureThemeArt, resolveThemeArt, subscribeThemeArt } from './theme-art-api.ts'
 import { getQTheme, type ThemeDefinition } from './theme-catalog.ts'
 
 const ATTRIBUTE = 'data-qyt-q-theme'
@@ -71,7 +72,7 @@ function stopScene(mount: ThemeMount): void {
  * preference, inline token layers and code highlighting. The caller owns this
  * disposer through ctx.effect; accepted ConfigForm updates reach every client.
  */
-export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>, target?: Document, resolveTheme = getQTheme): () => void {
+export function installQTheme(ctx: Context, form: ConfigForm<Preferences>, target?: Document, resolveTheme = getQTheme): () => void {
   const doc = target ?? (typeof document === 'undefined' ? undefined : document)
   if (!doc?.body || !doc.head) return () => {}
   const owner = Symbol('qiuya-theme')
@@ -99,7 +100,10 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>, targ
     if (disposed) return
     const snapshot = form.getSnapshot()
     if (snapshot.status !== 'ready' || (snapshot.value?.qThemeEnabled ?? DEFAULT_PREFERENCES.qThemeEnabled) !== true) { remove(); return }
-    const theme = resolveTheme(getQThemeId(snapshot.value), snapshot.value)
+    const baseTheme = resolveTheme(getQThemeId(snapshot.value), snapshot.value)
+    const motion = getThemeMotion(snapshot.value, baseTheme.id)
+    ensureThemeArt(ctx, baseTheme.id, motion)
+    const theme = resolveThemeArt(baseTheme)
     let mount = mounts.get(doc)
     if (!mount) {
       const style = doc.createElement('style')
@@ -123,24 +127,26 @@ export function installQTheme(_ctx: Context, form: ConfigForm<Preferences>, targ
       mount.style.textContent = createQThemeStyles(theme)
       mount.body.setAttribute(ATTRIBUTE, theme.id)
     }
-    const sceneKey = `${theme.id}:${theme.sceneRevision ?? theme.revision ?? ''}:${getThemeMotion(snapshot.value, theme.id)}`
+    const sceneKey = `${theme.id}:${theme.sceneRevision ?? theme.revision ?? ''}:${motion}`
     if (sceneKey !== mount.sceneKey) {
       stopScene(mount)
       mount.sceneKey = sceneKey
-      if (getThemeMotion(snapshot.value, theme.id) === 'dynamic') {
+      if (motion === 'dynamic') {
         // Art and reading surfaces are already installed. Unsupported motion
         // must never prevent selecting a theme or using its static fallback.
-        try { mount.disposeScene = theme.installScene?.(doc, _ctx) } catch { /* retain static art */ }
+        try { mount.disposeScene = theme.installScene?.(doc, ctx) } catch { /* retain static art */ }
       }
     }
   }
 
   const unsubscribe = form.subscribe(sync)
+  const unsubscribeArt = subscribeThemeArt(sync)
   sync()
   return () => {
     if (disposed) return
     disposed = true
     unsubscribe()
+    unsubscribeArt()
     remove()
   }
 }

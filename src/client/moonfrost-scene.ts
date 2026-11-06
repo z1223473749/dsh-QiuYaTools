@@ -1,4 +1,3 @@
-import { MOONFROST_SCENE_DATA_URL, MOONFROST_CLEAN_PLATE_DATA_URL } from './brand-assets.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
 import { createLayeredSceneArt } from './layered-scene-art.ts'
 
@@ -65,15 +64,15 @@ void main(){
 }`
 
 /** Reuse the registered-art renderer and the shared landscape lifecycle. */
-export function createMoonfrostArt(doc: Document) {
+export function createMoonfrostArt(doc: Document, art: string, plate: string) {
   return createLayeredSceneArt(doc, {
     width: 1672, height: 941, marker: 'data-qyt-moonfrost-cloth',
-    art: MOONFROST_SCENE_DATA_URL, plate: MOONFROST_CLEAN_PLATE_DATA_URL,
+    art, plate,
     fragmentShader: MOONFROST_FRAGMENT_SHADER,
     regions: [{ color: '#f00', paths: MOONFROST_CLOTH_PATHS }, { color: '#0f0', paths: [MOONFROST_HAIR_PATH] }],
   })
 }
 
-export function installMoonfrostScene(doc: Document): () => void {
-  return installLandscapeScene(doc, { movement: 'none', atmosphere: 'snow', intensity: .8, speed: 1.05, position: 'right bottom', createArt: createMoonfrostArt })
+export function installMoonfrostScene(doc: Document, art: string, plate: string): () => void {
+  return installLandscapeScene(doc, { movement: 'none', atmosphere: 'snow', intensity: .8, speed: 1.05, position: 'right bottom', createArt: target => createMoonfrostArt(target, art, plate) })
 }

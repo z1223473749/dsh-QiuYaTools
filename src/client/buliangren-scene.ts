@@ -1,4 +1,3 @@
-import { BULIANGREN_SCENE_DATA_URL, BULIANGREN_CLEAN_PLATE_DATA_URL } from './brand-assets.ts'
 import { createLayeredSceneArt } from './layered-scene-art.ts'
 import { installLandscapeScene } from './landscape-scene.ts'
 
@@ -115,10 +114,10 @@ void main(){
   gl_FragColor=vec4(base,1.);
 }`
 
-export function createBuliangrenArt(doc: Document) {
+export function createBuliangrenArt(doc: Document, art: string, plate: string) {
   return createLayeredSceneArt(doc, {
     width: 1672, height: 941, marker: 'data-qyt-buliangren-art',
-    art: BULIANGREN_SCENE_DATA_URL, plate: BULIANGREN_CLEAN_PLATE_DATA_URL,
+    art, plate,
     fragmentShader: BULIANGREN_FRAGMENT_SHADER,
     regions: [
       { color: '#00f', paths: BULIANGREN_AIR_PATHS, blur: 28 },
@@ -128,10 +127,10 @@ export function createBuliangrenArt(doc: Document) {
   })
 }
 
-export function installBuliangrenScene(doc: Document): () => void {
+export function installBuliangrenScene(doc: Document, art: string, plate: string): () => void {
   return installLandscapeScene(doc, {
     movement: 'none', atmosphere: 'petals', atmosphereColor: '#cb4937',
     particleStyle: { shape: 'maple', count: 36, speed: 2.8 }, intensity: .78, speed: 1.05,
-    position: 'right bottom', createArt: createBuliangrenArt,
+    position: 'right bottom', createArt: target => createBuliangrenArt(target, art, plate),
   })
 }

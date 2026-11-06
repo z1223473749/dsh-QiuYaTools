@@ -1,4 +1,3 @@
-import { OCEAN_SCENE_DATA_URL, OCEAN_CLEAN_PLATE_DATA_URL } from './brand-assets.ts'
 import { createOceanMesh, OCEAN_FRAGMENT_SHADER, OCEAN_VERTEX_SHADER, type OceanMesh } from './ocean-scene-art.ts'
 
 const HOST = '[data-slot="main.conversation"] > [data-phase]'
@@ -140,7 +139,7 @@ function createPainter(canvas: HTMLCanvasElement, image: HTMLImageElement, clean
   }
 }
 
-export function installOceanScene(doc: Document): () => void {
+export function installOceanScene(doc: Document, art: string, plate: string): () => void {
   const win = doc.defaultView
   // Also keeps server rendering, plugin smoke documents and older WebViews
   // entirely static without trying to create a GPU context.
@@ -302,8 +301,8 @@ export function installOceanScene(doc: Document): () => void {
     if (!imageLoaded || !plateLoaded) {
       if (!loading) {
         loading = true
-        image.src = OCEAN_SCENE_DATA_URL
-        cleanPlateImage.src = OCEAN_CLEAN_PLATE_DATA_URL
+        image.src = art
+        cleanPlateImage.src = plate
       }
       return
     }

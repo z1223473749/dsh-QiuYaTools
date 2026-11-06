@@ -165,7 +165,7 @@ function fixture(t, { reduced = false, forced = false, context = true, raf = tru
     performance: win.performance, requestAnimationFrame: win.requestAnimationFrame,
     cancelAnimationFrame: win.cancelAnimationFrame,
   })
-  const stop = module.exports.installOceanScene(doc)
+  const stop = module.exports.installOceanScene(doc, 'data:image/webp;base64,c2NlbmU=', 'data:image/jpeg;base64,cGxhdGU=')
   const cleanup = () => { if (destroyed) return; destroyed = true; stop(); stop() }
   t.after(() => { cleanup(); win.close() })
   return {
@@ -227,14 +227,14 @@ test('unavailable WebGL keeps the static fallback and has no animation loop', as
   assert.equal(f.frames.size, 0)
 })
 
-test('both embedded images must load before background, matte foreground and waterline are submitted in order', async t => {
+test('both images must load before background, matte foreground and waterline are submitted in order', async t => {
   for (const first of [0, 1]) {
     const f = fixture(t)
     await f.tick()
     assert.equal(f.images.length, 2)
     const original = f.images.find(image => image.src.startsWith('data:image/webp;base64,'))
     const plate = f.images.find(image => image.src.startsWith('data:image/jpeg;base64,'))
-    assert.ok(original && plate, 'both illustration assets are embedded in the client')
+    assert.ok(original && plate, 'the scene decodes the supplied original and plate')
     f.images[first].load()
     await f.tick()
     f.frame()

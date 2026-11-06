@@ -5,12 +5,15 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { build } from 'esbuild'
+import { themeArtFixture } from './theme-art-fixture.mjs'
 import { chromium } from 'playwright'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = join(root, 'artifacts/q-themes')
 await mkdir(output, { recursive: true })
 const fixture = `
+const artRpc = ${await themeArtFixture()};
+const ctx = { get: name => name === 'connection' ? { rpc: { call: artRpc } } : undefined };
 import {installQTheme} from './src/client/q-theme.ts';
 const previewTheme=new URLSearchParams(location.search).get('theme');
 if(new URLSearchParams(location.search).has('dark'))document.body.setAttribute('data-ds-dark-theme','');
@@ -23,7 +26,7 @@ function rebuild(phase='hero'){
 }
 rebuild();
 if(previewTheme==='buliangren')document.querySelector('article h1').textContent='不良人 · 玄冥夜行';
-const cleanup=installQTheme({},form);
+const cleanup=installQTheme(ctx,form);
 window.__themes={rebuild,cleanup,update(next){preferences={...preferences,...next};for(const listener of [...listeners])listener()},motion(id,motion){preferences={...preferences,qThemeSettings:{...preferences.qThemeSettings,[id]:{motion}}};for(const listener of [...listeners])listener()}};
 `
 const built = await build({ stdin: { contents: fixture, resolveDir: root, loader: 'ts' }, bundle: true, write: false, platform: 'browser', format: 'iife', loader: { '.css': 'text' } })

@@ -10,9 +10,11 @@ const output = resolve('artifacts/buliangren-scene')
 await mkdir(output, { recursive: true })
 const bundle = await build({ stdin: { contents: `
 import { createBuliangrenArt } from './src/client/buliangren-scene.ts';
-const art=createBuliangrenArt(document);if(!art)throw Error('GPU unavailable');document.body.append(art.element);window.__art=art;
+import scene from './assets/q-buliangren-scene.jpg';
+import plate from './assets/q-buliangren-clean-plate.jpg';
+const art=createBuliangrenArt(document,scene,plate);if(!art)throw Error('GPU unavailable');document.body.append(art.element);window.__art=art;
 window.__capture=time=>{art.draw(time);const canvas=art.element,gl=canvas.getContext('webgl'),pixels=new Uint8Array(canvas.width*canvas.height*4);gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return {pixels,width:canvas.width,height:canvas.height}};
-`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'browser', format: 'iife' })
+`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'browser', format: 'iife', loader: { '.jpg': 'dataurl' } })
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>${bundle.outputFiles[0].text.replaceAll('</script', '<\\/script')}</script></body></html>`
 const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(html) })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))

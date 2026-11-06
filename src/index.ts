@@ -1,3 +1,4 @@
+import { installThemeArtHost } from './features/theme-art-host.ts'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
@@ -170,6 +171,7 @@ export function apply(ctx: Context, config: Config): void {
     child.effect(() => installSessionWindowsHost(child, () => config.enabled.get() && config.sessionWindowsEnabled.get()))
   })
   ctx.inject(['connection', 'profileContext'], child => {
+    child.effect(() => installThemeArtHost(child))
     child.effect(() => installThemeVideoHost(child, id => config.qCustomThemes.get().some(theme => theme.video?.assetId === id)))
   })
   ctx.inject(['connection', 'llm', 'attachments', 'profileContext'], child => {

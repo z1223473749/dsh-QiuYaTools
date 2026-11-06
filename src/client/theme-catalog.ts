@@ -43,6 +43,7 @@ export interface ThemeDefinition {
   readonly bannerPosition?: string
   readonly previewPosition?: string
   readonly palette: string
+  readonly installLayeredScene?: (doc: Document, art: string, plate: string) => SceneDisposer
   readonly installScene?: (doc: Document, ctx?: Context) => SceneDisposer
 }
 
@@ -66,7 +67,7 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
     id: 'ocean', name: 'qThemePreview', description: 'qThemePreviewDescription',
     hint: 'qThemePreviewHint', motionLabel: 'qThemeOceanMotion', label: 'Q Ocean · 鲸与海',
     art: OCEAN_SCENE_DATA_URL, accent: '#116d83', accentDark: '#8ec6d2', soft: '#90bfb3',
-    palette: oceanPalette, installScene: installOceanScene,
+    palette: oceanPalette, installLayeredScene: installOceanScene,
   },
   begonia: {
     id: 'begonia', name: 'qThemeBegonia', description: 'qThemeBegoniaDescription',
@@ -88,14 +89,14 @@ const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
     art: MOONFROST_SCENE_DATA_URL, accent: '#456493', accentDark: '#b4c9ee', soft: '#b7c8e4',
     bannerPosition: 'right top', previewPosition: 'right top',
     palette: moonfrostPalette,
-    installScene: installMoonfrostScene,
+    installLayeredScene: installMoonfrostScene,
   },
   buliangren: {
     id: 'buliangren', name: 'qThemeBuliangren', description: 'qThemeBuliangrenDescription',
     hint: 'qThemeBuliangrenHint', motionLabel: 'qThemeBuliangrenMotion', label: 'Q Buliangren · 不良人 · 玄冥夜行',
     art: BULIANGREN_SCENE_DATA_URL, accent: '#82602e', accentDark: '#d1b078', soft: '#b67863',
     bannerPosition: 'right top', previewPosition: 'right top',
-    palette: buliangrenPalette, installScene: installBuliangrenScene,
+    palette: buliangrenPalette, installLayeredScene: installBuliangrenScene,
   },
 }
 

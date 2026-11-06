@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
+import { themeArtFixture } from './theme-art-fixture.mjs'
 import { chromium } from 'playwright'
 import { installOceanPerformanceProbe } from './ocean-performance.mjs'
 import { inspectSceneMotion, inspectWakeMotion, recordOceanUi } from './ocean-perception.mjs'
@@ -28,6 +29,8 @@ await mkdir(output, { recursive: true })
 await promisify(execFile)(process.execPath, [join(root, 'scripts/preview-ocean-settings.mjs'), '--generate-only'], { cwd: root })
 
 const fixture = `
+const artRpc = ${await themeArtFixture()};
+const ctx = { get: name => name === 'connection' ? { rpc: { call: artRpc } } : undefined };
 import {installQTheme} from ${JSON.stringify(join(root, 'src/client/q-theme.ts'))};
 const performanceProbe=(${installOceanPerformanceProbe.toString()})();
 const uniformNames=new WeakMap(), currentLayers=new WeakMap(), captureRestorers=[];
@@ -65,7 +68,7 @@ function persist(){localStorage.setItem(settingsKey,JSON.stringify(preferences))
 function setTheme(value){preferences={...preferences,qThemeEnabled:value};persist()}
 function setMotion(value){preferences={...preferences,qThemeSettings:{...preferences.qThemeSettings,ocean:{...preferences.qThemeSettings?.ocean,motion:value?'dynamic':'static'}}};persist()}
 function setDark(value){document.body.toggleAttribute('data-ds-dark-theme',value)}
-rebuild(new URLSearchParams(location.search).get('view')==='conversation'?'active':'hero');cleanup=installQTheme({},form);
+rebuild(new URLSearchParams(location.search).get('view')==='conversation'?'active':'hero');cleanup=installQTheme(ctx,form);
 function syncStoredSettings(event){if(event.key===settingsKey){preferences=storedSettings();notify()}}
 window.addEventListener('storage',syncStoredSettings);
 document.getElementById('open-theme-settings').addEventListener('click',()=>location.assign('/settings'));

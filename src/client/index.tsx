@@ -35,6 +35,7 @@ import { ComputerIcon } from '../features/computer-use/presentation.tsx'
 import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
 import { getQThemes, getQTheme, type ThemeDefinition } from './theme-catalog.ts'
+import { ensureThemeArt, resolveThemeArt, subscribeThemeArt, themeArtFailed, themeArtVersion } from './theme-art-api.ts'
 import { ThemePreview } from './theme-preview.tsx'
 import { ThemeGallery, ThemeGalleryIcon, ThemeEditIcon, type ThemeEditorKind } from './theme-gallery.tsx'
 import { MONO_ICON_DATA_URL, OCEAN_SCENE_DATA_URL } from './brand-assets.ts'
@@ -131,7 +132,8 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const preferences = { ...DEFAULT_PREFERENCES, ...snapshot.value }
   const themeId = getQThemeId(preferences)
   const themes = useMemo(() => getQThemes(snapshot.value), [snapshot.value])
-  const theme = themes.find(theme => theme.id === themeId) ?? getQTheme(themeId, preferences)
+  useSyncExternalStore(subscribeThemeArt, themeArtVersion, themeArtVersion)
+  const theme = resolveThemeArt(themes.find(theme => theme.id === themeId) ?? getQTheme(themeId, preferences))
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false)
   const [themeEditor, setThemeEditor] = useState<{ kind: ThemeEditorKind; original?: CustomTheme } | null>(null)
   const ThemeEditor = themeEditor?.kind === 'video' ? VideoThemeEditor : CustomThemeEditor
@@ -302,6 +304,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                   {customTheme && <button type="button" className="qyt-theme-preview-edit" aria-label={t('qThemeEdit')} title={t('qThemeEdit')}
                     disabled={disabled} onClick={() => editCustomTheme(customTheme.id)}><ThemeEditIcon/></button>}
                 </div>
+                {themeArtFailed(themeId, themeMotion) && <button type="button" className="qyt-btn" onClick={() => ensureThemeArt(ctx, themeId, themeMotion, true)}>{t('qThemeArtRetry')}</button>}
                 {theme.hint && <div className="qyt-theme-caption"><p className="qyt-muted">{t(theme.hint)}</p><span className="qyt-theme-swatches" aria-hidden="true"><i/><i/><i/></span></div>}
               </div>
               {customTheme?.video?.sound && preferences.qThemeEnabled && themeMotion === 'dynamic' &&

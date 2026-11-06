@@ -16,6 +16,13 @@ const [source, motionMockSource] = (await Promise.all([
   build({ ...buildOptions, plugins: [{
     name: 'observe-theme-motion-lifecycle',
     setup(build) {
+      build.onLoad({ filter: /[/\\]theme-art-api\.ts$/ }, () => ({
+        contents: `export function ensureThemeArt() {}
+export function subscribeThemeArt() { return () => {} }
+export function resolveThemeArt(theme) {
+  return theme.installLayeredScene ? { ...theme, installScene: doc => theme.installLayeredScene(doc, theme.art, 'fixture-plate') } : theme
+}`, loader: 'js',
+      }))
       build.onLoad({ filter: /[/\\]ocean-scene\.ts$/ }, () => ({
         contents: 'export function installOceanScene(doc) { return globalThis.__scene.install(doc) }', loader: 'js',
       }))
@@ -357,7 +364,7 @@ function allRules(rules) {
   return [...rules].flatMap(rule => rule.cssRules ? allRules(rule.cssRules) : [rule])
 }
 
-test('preset themes embed their own illustration and withdraw it without external image requests', t => {
+test('preset themes embed a fallback cover and withdraw it without external image requests', t => {
   const illustrations = []
   for (const qThemeId of ['ocean', 'begonia', 'sunset', 'moonfrost', 'buliangren', 'fox', 'garo']) {
     const f = fixture(t, { sharedForm: formFixture({ qThemeEnabled: true, qThemeId }) })
