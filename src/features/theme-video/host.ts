@@ -1,12 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { mkdir, open, readFile, readdir, stat, writeFile, rename, rm, type FileHandle } from 'node:fs/promises'
+import { mkdir, open, readdir, stat, rename, rm, type FileHandle } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { LOCAL_THEME_VIDEO_METHOD, LOCAL_THEME_VIDEO_UPLOAD, LOCAL_VIDEO_ID, readMp4Tracks, THEME_VIDEOS, THEME_VIDEO_CHANNEL, THEME_VIDEO_METHOD } from '../../theme-video.ts'
+import { createVerifiedThemeCache } from '../theme-cache.ts'
 import { validSuggestionId } from '../prompt-suggestions/contract.ts'
 
 interface Services {
@@ -16,55 +17,9 @@ interface Services {
     fetch: { register(route: { path: string; methods: readonly ('GET' | 'HEAD' | 'POST')[]; requestBody: 'buffered' | 'streaming'; fetch(request: Request): Promise<Response> }): () => Promise<void> }
   }
 }
-const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
-/** One fixed artifact, bounded and verified before it becomes a cache entry.
- * Nothing is fetched until requested; concurrent preview/window requests share
- * a download. Cancellation of a view leaves the shared cache fill intact. */
 export function createThemeVideoCache(directory: string, options: { fetch?: typeof fetch; signal?: AbortSignal } = {}) {
-  const pending = new Map<string, Promise<Buffer>>()
-  return {
-    async get(id: unknown): Promise<Buffer> {
-      if (typeof id !== 'string' || !Object.hasOwn(THEME_VIDEOS, id)) throw new Error('invalid-request')
-      const artifact = THEME_VIDEOS[id as keyof typeof THEME_VIDEOS]
-      let job = pending.get(id)
-      if (!job) {
-        job = (async () => {
-          const path = join(directory, artifact.sha256 + '.mp4')
-          try {
-            if ((await stat(path)).size === artifact.bytes) {
-              const bytes = await readFile(path)
-              if (sha256(bytes) === artifact.sha256) return bytes
-            }
-          } catch { /* absent or corrupt cache downloads again */ }
-          const response = await (options.fetch ?? fetch)(artifact.url, { signal: AbortSignal.any([...(options.signal ? [options.signal] : []), AbortSignal.timeout(120_000)]) })
-          const declared = response.headers.get('content-length')
-          if (!response.ok || declared && Number(declared) > artifact.bytes || !response.body) throw new Error('video-unavailable')
-          const reader = response.body.getReader(), chunks: Uint8Array[] = []
-          let size = 0
-          try {
-            while (true) {
-              const { value, done } = await reader.read()
-              if (done) break
-              size += value.byteLength
-              if (size > artifact.bytes) throw new Error('video-unavailable')
-              chunks.push(value)
-            }
-          } finally { await reader.cancel().catch(() => {}) }
-          const bytes = Buffer.concat(chunks)
-          if (bytes.length !== artifact.bytes || sha256(bytes) !== artifact.sha256) throw new Error('video-unavailable')
-          await mkdir(directory, { recursive: true, mode: 0o700 })
-          const temporary = path + '.' + randomUUID() + '.tmp'
-          try { await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' }); await rename(temporary, path) }
-          finally { await rm(temporary, { force: true }) }
-          return bytes
-        })()
-        pending.set(id, job)
-        void job.finally(() => { if (pending.get(id) === job) pending.delete(id) }).catch(() => {})
-      }
-      return job
-    },
-  }
+  return createVerifiedThemeCache(directory, THEME_VIDEOS, '.mp4', { ...options, unavailable: 'video-unavailable' })
 }
 
 async function fileTracks(file: FileHandle, size: number, signal: AbortSignal) {
