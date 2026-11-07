@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, open, readlink, realpath } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, open, readlink, realpath, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { GitError, type GitBinding, type GitBranch, type GitCommit, type GitDiff, type GitFile, type GitFileStatus, type GitHunk, type GitReceipt, type GitRequest, type GitScope, type GitSessionContext, type GitSnapshot } from './contract.ts'
 import { runGit } from './runner.ts'
@@ -42,7 +43,7 @@ function porcelain(buffer: Buffer): Map<string, Flags> {
   for (let i = 0; i < fields.length && fields[i]; i++) {
     const line = fields[i]!, x = line[0]!, y = line[1]!, path = line.slice(3)
     const oldPath = x === 'R' || x === 'C' || y === 'R' || y === 'C' ? fields[++i] : undefined
-    if (x === '?' && y === '?') result.set(path, { staged: false, unstaged: true, conflicted: false })
+    if (x === '?' && y === '?') result.set(path, { ...(result.get(path) ?? { staged: false, conflicted: false }), unstaged: true })
     else result.set(path, { staged: x !== ' ' && x !== '?', unstaged: y !== ' ' && y !== '?', conflicted: x === 'U' || y === 'U' || x + y === 'AA' || x + y === 'DD', ...(oldPath ? { oldPath } : {}) })
   }
   return result
@@ -55,6 +56,13 @@ function rawKinds(buffer: Buffer): Map<string, 'file' | 'symlink' | 'submodule'>
     result.set(path, header[0] === ':160000' || header[1] === '160000' ? 'submodule' : header[0] === ':120000' || header[1] === '120000' ? 'symlink' : 'file')
   }
   return result
+}
+function diffFiles(names: Buffer, numbers: Buffer, raw: Buffer, flags: Map<string, Flags>, scope: GitScope): GitFile[] {
+  const kinds = rawKinds(raw), stats = splitNumstat(numbers)
+  return splitChanges(names).map(change => {
+    const number = stats.get(change.path) ?? { added: 0, deleted: 0 }, flag = flags.get(change.path)
+    return { ...change, status: flag?.conflicted && scope !== 'branch' ? 'conflicted' : change.status, ...number, staged: scope !== 'branch' && !!flag?.staged, unstaged: scope !== 'branch' && !!flag?.unstaged, binary: number.added === null || number.deleted === null, kind: kinds.get(change.path) ?? 'file' }
+  })
 }
 export function parseGitHunks(patch: string): GitHunk[] {
   const hunks: GitHunk[] = []; let hunk: GitHunk | undefined
@@ -218,6 +226,14 @@ export class GitService {
     const result = await this.run(context, repo.root, ['cat-file', '-p', object], { maxBytes: EMPTY_LIMIT + 4096 })
     return { text: result.stdout.includes(0) ? null : result.stdout.toString('utf8'), tooLarge: false }
   }
+  private async withHeadIndex<T>(context: GitSessionContext, repo: Repository, compare: (options: { indexFile: string }) => Promise<T>): Promise<T> {
+    const directory = await mkdtemp(join(tmpdir(), 'qyt-git-index-')), options = { indexFile: join(directory, 'index') }
+    try {
+      // A recreated file is absent from the real index. Seed a private index so Git can compare it with HEAD.
+      await this.run(context, repo.root, ['-c', 'core.splitIndex=false', 'read-tree', repo.head!], options)
+      return await compare(options)
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  }
   private async snapshot(context: GitSessionContext, repo: Repository, request: GitRequest): Promise<GitSnapshot> {
     const binding = await this.binding(context, repo), scope = request.scope ?? 'working'
     const [status, remotesList, branchList] = await Promise.all([
@@ -231,13 +247,22 @@ export class GitService {
       this.run(context, repo.root, [...DIFF, '--numstat', '-z', ...args, '--']),
       this.run(context, repo.root, [...DIFF, '--raw', '--abbrev=64', '-z', ...args, '--']),
     ])
-    const kinds = rawKinds(raw.stdout), changes = splitChanges(names.stdout), stats = splitNumstat(numbers.stdout), files: GitFile[] = changes.map(change => {
-      const number = stats.get(change.path) ?? { added: 0, deleted: 0 }, flag = flags.get(change.path)
-      return { ...change, status: flag?.conflicted && scope !== 'branch' ? 'conflicted' : change.status, ...number, staged: scope !== 'branch' && !!flag?.staged, unstaged: scope !== 'branch' && !!flag?.unstaged, binary: number.added === null || number.deleted === null, kind: kinds.get(change.path) ?? 'file' }
-    })
+    let files = diffFiles(names.stdout, numbers.stdout, raw.stdout, flags, scope)
     if (scope === 'working' || scope === 'unstaged') {
-      const untracked = await this.run(context, repo.root, ['ls-files', '--others', '--exclude-standard', '-z'])
-      for (const path of utf8(untracked.stdout).split('\0').filter(Boolean)) {
+      const listing = await this.run(context, repo.root, ['ls-files', '--others', '--exclude-standard', '-z'])
+      const untracked = new Set(utf8(listing.stdout).split('\0').filter(Boolean))
+      const recreated = scope === 'working' ? files.filter(file => file.status === 'deleted' && untracked.has(file.path)).map(file => file.path) : []
+      if (recreated.length) {
+        files = files.filter(file => file.status !== 'deleted' || !untracked.has(file.path))
+        for (const path of recreated) untracked.delete(path)
+        const compared = await this.withHeadIndex(context, repo, async options => {
+          const read = (format: string[]) => this.run(context, repo.root, [...DIFF, ...format, '-z', ...args, '--', ...recreated], options)
+          const names = await read(['--name-status']), numbers = await read(['--numstat']), raw = await read(['--raw', '--abbrev=64'])
+          return diffFiles(names.stdout, numbers.stdout, raw.stdout, flags, scope)
+        })
+        for (const file of compared) files.push(file)
+      }
+      for (const path of untracked) {
         const read = await this.safeRead(context, repo, path, true), text = read.text
         files.push({ path, status: 'untracked', added: read.binary ? null : read.lineCount ?? (text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0), deleted: read.binary ? null : 0, staged: false, unstaged: true, binary: read.binary, kind: read.kind })
       }
@@ -297,7 +322,13 @@ export class GitService {
     let patch = ''
     if (!file.binary && !tooLarge) {
       if (file.status === 'untracked') { const lines = (next.text ?? '').split('\n'); if (lines.at(-1) === '') lines.pop(); patch = `--- /dev/null\n+++ b/${file.path}\n` + (lines.length ? `@@ -0,0 +1,${lines.length} @@\n` + lines.map(line => '+' + line).join('\n') : '') }
-      else patch = (await this.run(context, repo.root, [...DIFF, '--no-color', '--unified=3', ...args, '--', ...(file.oldPath ? [file.oldPath] : []), file.path], { maxBytes: 4 * EMPTY_LIMIT })).stdout.toString('utf8')
+      else {
+        const patchArgs = [...DIFF, '--no-color', '--unified=3', ...args, '--', ...(file.oldPath ? [file.oldPath] : []), file.path]
+        const readPatch = async (options: { indexFile?: string } = {}) => (await this.run(context, repo.root, patchArgs, { ...options, maxBytes: 4 * EMPTY_LIMIT })).stdout.toString('utf8')
+        const recreated = scope === 'working' && file.staged && file.unstaged
+          && (await this.run(context, repo.root, ['ls-files', '--others', '--exclude-standard', '-z', '--', file.path])).stdout.length > 0
+        patch = recreated ? await this.withHeadIndex(context, repo, readPatch) : await readPatch()
+      }
     }
     const after = await this.snapshot(context, await this.repository(context), request)
     if (after.revision !== snapshot.revision) throw new GitError('STALE_STATE', '文件读取期间发生变化，请刷新后重试。')

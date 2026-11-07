@@ -2,14 +2,14 @@ import { spawn } from 'node:child_process'
 import { GitError } from './contract.ts'
 
 export interface GitRunResult { code: number; stdout: Buffer; stderr: Buffer }
-export interface GitRunOptions { signal?: AbortSignal; input?: string | Buffer; timeoutMs?: number; maxBytes?: number; allowFailure?: boolean; mutation?: boolean }
+export interface GitRunOptions { signal?: AbortSignal; input?: string | Buffer; timeoutMs?: number; maxBytes?: number; allowFailure?: boolean; mutation?: boolean; indexFile?: string }
 /** Git is always invoked directly. Neither filenames nor refs are shell programs. */
 export function runGit(cwd: string, args: readonly string[], options: GitRunOptions = {}): Promise<GitRunResult> {
   options.signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', '-c', 'color.ui=false', '-c', 'core.pager=cat', ...args], {
       cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', LC_ALL: 'C', ...(!options.mutation ? { GIT_OPTIONAL_LOCKS: '0' } : {}) },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', LC_ALL: 'C', ...(!options.mutation ? { GIT_OPTIONAL_LOCKS: '0' } : {}), ...(options.indexFile ? { GIT_INDEX_FILE: options.indexFile } : {}) },
     })
     const stdout: Buffer[] = [], stderr: Buffer[] = []; let bytes = 0, failure: Error | undefined, settled = false, killTimer: ReturnType<typeof setTimeout> | undefined
     const stop = (error: Error) => { failure ??= error; child.kill('SIGTERM'); killTimer ??= setTimeout(() => child.kill('SIGKILL'), 2000) }

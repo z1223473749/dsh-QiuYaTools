@@ -36,6 +36,31 @@ test('working status counts HEAD to worktree net changes once, including untrack
     const unstaged = await f.call('status', { scope: 'unstaged' }); assert.equal(unstaged.added, 3); assert.equal(unstaged.deleted, 1)
   } finally { await f.close() }
 })
+test('a staged deletion with a recreated file has one net working diff', async () => {
+  const path = 'file with spaces.txt', original = 'one\ntwo\nthree\n'
+  const f = await fixture({ [path]: original })
+  try {
+    await f.git('rm', '--cached', '--', path)
+    const index = await readFile(join(f.repo, '.git', 'index'))
+    assert.equal((await f.call('status')).fileCount, 0)
+
+    await writeFile(join(f.repo, path), 'one\nTWO\nthree\n')
+    const working = await f.call('status')
+    assert.equal(working.fileCount, 1)
+    assert.deepEqual(working.files[0], { path, status: 'modified', added: 1, deleted: 1, staged: true, unstaged: true, binary: false, kind: 'file' })
+    const diff = await f.call('diff', { path, expectedRevision: working.revision })
+    assert.equal(diff.oldText, original)
+    assert.equal(diff.newText, 'one\nTWO\nthree\n')
+    assert.deepEqual(diff.hunks[0].lines, [' one', '-two', '+TWO', ' three'])
+
+    const staged = await f.call('status', { scope: 'staged' })
+    assert.equal(staged.files[0].status, 'deleted')
+    assert.equal(staged.files[0].staged, true)
+    const unstaged = await f.call('status', { scope: 'unstaged' })
+    assert.equal(unstaged.files[0].status, 'untracked')
+    assert.deepEqual(await readFile(join(f.repo, '.git', 'index')), index)
+  } finally { await f.close() }
+})
 test('diff returns hunk line numbers and per-scope content, with literal special filenames', async () => {
   const f = await fixture({ '中文 file\t.txt': 'before\n' })
   try {
