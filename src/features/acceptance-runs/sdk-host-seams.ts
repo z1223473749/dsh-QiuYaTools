@@ -7,10 +7,8 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment/types'
 import type { RunExec } from './service.ts'
-export interface RootAgentRegistry {
-  get(id: SessionId): { readonly id: string } | undefined
-  roots(): ReadonlyArray<{ readonly id: string }>
-}
+import type { HostAgentRegistry } from '../../host-agents.ts'
+export type RootAgentRegistry = HostAgentRegistry
 export interface RunAttachmentStore { readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> }
 export interface RunProfile { readonly dir: string }
 export interface RunSessionQuery {

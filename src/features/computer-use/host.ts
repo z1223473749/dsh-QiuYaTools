@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { isLiveRootAgent, type HostAgentRegistry } from '../../host-agents.ts'
 import { mkdir, readFile, writeFile, rename, copyFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -92,7 +93,7 @@ export async function installComputerHost(ctx: Context, enabled: () => boolean, 
   }
   const entry = new ComputerPermissionCoordinator({ backend, enabled,
     lookupAgent: id => (publicService('agents') as { get?(id: string): unknown } | undefined)?.get?.(id),
-    isRootAgent: agent => (publicService('agents') as { roots?(): unknown[] } | undefined)?.roots?.().includes(agent) === true,
+    isRootAgent: agent => isLiveRootAgent(publicService('agents') as HostAgentRegistry | undefined, agent),
     canRequest: agent => {
       const approval = publicService('approval') as { overrideOf?(session: unknown): string | undefined; config?: { policy?: string } } | undefined
       return ((agent.session ? approval?.overrideOf?.(agent.session) : undefined) ?? approval?.config?.policy) !== 'never'

@@ -16,11 +16,11 @@ const endpoint = '/api/qiuya-tools.computer.control'
 const target = { id: 'isolated-window', appId: 'synthetic.app', title: 'Isolated test application', pid: 42, x: 0, y: 0, width: 160, height: 100, scale: 1 }
 const geometry = { x: target.x, y: target.y, width: target.width, height: target.height, scale: target.scale }
 
-async function fixture() {
+async function fixture({ modern = false } = {}) {
   const routes = new Map(), devices = new Map(), effects = [], factories = [], agents = new Map()
   const chats = new Map(['chat-a', 'chat-b'].map(id => [id, { id }]))
   function rootAgent(id) {
-    if (!agents.has(id)) agents.set(id, { id, session: { id } })
+    if (!agents.has(id)) agents.set(id, { id, session: { id, header: { id } } })
     return agents.get(id)
   }
   for (const id of chats.keys()) rootAgent(id)
@@ -49,7 +49,7 @@ async function fixture() {
   const ctx = {
     get(name) {
       if (name === 'sessions') return { get: id => chats.get(id) }
-      if (name === 'agents') return { get: id => agents.get(id), roots: () => [...agents.values()] }
+      if (name === 'agents') return { get: id => agents.get(id), ...modern ? { list: () => [...agents.values()] } : { roots: () => [...agents.values()] } }
       if (name === 'approval') return { config: { policy: 'ask' } }
     },
     webServer: { port: 19457 },
@@ -95,6 +95,16 @@ async function fixture() {
   }
 }
 
+test('0.2.2 flat registry retains computer discovery and excludes delegated callers before device access', async t => {
+  const f = await fixture({ modern: true }); t.after(() => f.dispose())
+  const agent = f.rootAgent('chat-a'), exec = { callId: crypto.randomUUID(), agent, signal: new AbortController().signal }
+  const discovery = await f.host.entry.discover(exec)
+  assert.equal(discovery.applications.length, 1)
+  const before = f.effects.length
+  const child = f.rootAgent('child'); child.session.header.origin = 'subagent'
+  await assert.rejects(f.host.entry.discover({ ...exec, agent: child }), { code: 'DELEGATED_CALLER' })
+  assert.equal(f.effects.length, before)
+})
 test('Host creates and lists current-chat task identities without creating a native router', async t => {
   const f = await fixture(); t.after(() => f.dispose())
   const before = await f.ok('status')

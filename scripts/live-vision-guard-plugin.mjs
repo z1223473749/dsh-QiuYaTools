@@ -1,4 +1,5 @@
 import {projectVisionToolFailureContext} from './live-vision-tool-failure-diagnostic.mjs'
+import { isLiveRootAgent } from '../src/host-agents.ts'
 /** Temporary test plugin. Install only through the owner's official HMR gate. */
 import { spawn } from 'node:child_process'
 import { chmod, cp, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
@@ -195,7 +196,7 @@ export function apply(ctx, config) {
             return withVisionFailureEvidence(async () => {
             record.policy.assertActive()
             if (record.testOnlyNaturalEntry) {
-              if (ctx.agents.get(sessionId) !== exec.agent || !ctx.agents.roots().includes(exec.agent)) fail('VISION_CALLER_CHANGED')
+              if (!isLiveRootAgent(ctx.agents, exec.agent)) fail('VISION_CALLER_CHANGED')
               if (name === 'qiuya_computer_request_control') record.policy.requestEntry(args)
               if (['qiuya_computer_observe', 'qiuya_computer_act', 'qiuya_computer_pause'].includes(name)) await selected(record, exec)
             } else await selected(record, exec)
@@ -239,7 +240,7 @@ export function apply(ctx, config) {
         return { commit() { record.phase = 'tool-publication'; const tools = agentCtx.tools.schemas(agent); if (tools.length !== record.toolNames.length || tools.some(tool => !record.toolNames.includes(tool.name))) fail('VISION_TOOL_PUBLICATION_BOUNDARY') } }
       } })
       record.phase = 'prepare-complete'
-      if (record.testOnlyNaturalEntry && (ctx.agents.get(sessionId) !== record.handle.agent || !ctx.agents.roots().includes(record.handle.agent))) fail('VISION_CALLER_CHANGED')
+      if (record.testOnlyNaturalEntry && !isLiveRootAgent(ctx.agents, record.handle.agent)) fail('VISION_CALLER_CHANGED')
       if (record.testOnlyNaturalEntry) readNaturalApproval(record)
       return { sessionId, task, targetId: record.target.id, authorizedAppId: record.authorizedAppId, testOnlyNaturalEntry: record.testOnlyNaturalEntry, endpoint: record.pairEndpoint, token: record.pairToken, prompt: record.naturalPrompt ?? prompts[task] + '\n' + visionActionUsage(task), model: record.policy.selection }
     } catch (error) {
@@ -257,7 +258,7 @@ export function apply(ctx, config) {
       readNaturalApproval(record)
       await checkNative(record)
       const state = await originals.get('qiuya_computer_status').execute({}, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
-      if (state?.state !== 'idle' || ctx.agents.get(record.sessionId) !== record.handle.agent || !ctx.agents.roots().includes(record.handle.agent)) fail('VISION_NATURAL_NOT_IDLE')
+      if (state?.state !== 'idle' || !isLiveRootAgent(ctx.agents, record.handle.agent)) fail('VISION_NATURAL_NOT_IDLE')
     } else await selected(record, { agent: record.handle.agent, callId: 'test-owner-identity', signal: AbortSignal.timeout(10000) })
     record.policy.arm()
     record.timer = setTimeout(() => {

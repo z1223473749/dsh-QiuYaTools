@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { SessionId } from '@deepseek-ai/dsh-session/types';
 import { randomUUID } from 'node:crypto';
 import { hostServiceIdentity } from '../../host-service-identity.ts';
+import { isLiveRootAgent, type HostAgentRegistry } from '../../host-agents.ts';
 import type { RunExec, RunReadScope } from '../acceptance-runs/service.ts';
 import type { RunProfile, RunSessionQuery } from '../acceptance-runs/sdk-host-seams.ts';
 import type { ModelTargetRegistry } from '../workbench/model-target.ts';
@@ -20,10 +21,7 @@ export interface WorkflowAgent extends WorkflowDrainAgent {
         keepInbox?: boolean;
     }): void;
 }
-export interface WorkflowAgents {
-    get(id: SessionId): WorkflowAgent | undefined;
-    roots(): readonly WorkflowAgent[];
-}
+export type WorkflowAgents = HostAgentRegistry<WorkflowAgent>;
 interface Connection {
     browserPeer?: {
         principal: {
@@ -53,7 +51,7 @@ export async function installAcceptanceWorkflows(ctx: Context, options: Workflow
         live();
         exec.signal.throwIfAborted();
         const agent = exec.agent && agents.get(SessionId(exec.agent.id));
-        if (!agent || agent !== exec.agent || !agents.roots().includes(agent))
+        if (!agent || agent !== exec.agent || !isLiveRootAgent(agents, agent))
             throw new RunError('CALLER_NOT_LIVE');
         let instanceId = instances.get(agent);
         if (!instanceId) {
@@ -62,7 +60,7 @@ export async function installAcceptanceWorkflows(ctx: Context, options: Workflow
         }
         return { agent, instanceId, chatSessionId: agent.id, assertCurrent() {
                 live();
-                if (agents.get(SessionId(agent.id)) !== agent || !agents.roots().includes(agent))
+                if (!isLiveRootAgent(agents, agent))
                     throw new RunError('CALLER_NOT_LIVE');
             } };
     };

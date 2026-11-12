@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { listHostAgents, type HostAgentRegistry } from '../../host-agents.ts'
 import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -20,7 +22,7 @@ interface Services {
   profileContext?: { dir: string }
   sessionQuery: { observeSession(id: string, options: { signal: AbortSignal; projectionMode: 'none' }): Promise<Observation> }
   sessions?: { get(id: string): LiveSession | undefined }
-  agents?: { get(id: string): LiveAgent | undefined; roots(): readonly LiveAgent[]; list?(): readonly LiveAgent[] }
+  agents?: HostAgentRegistry<LiveAgent>
   credentials?: {
     readRecord(key: string): Promise<CredentialRecord | undefined>
     describeRecord(key: string): Promise<{ configured: boolean; writable: boolean }>
@@ -57,7 +59,7 @@ export function installGitHost(ctx: Context, readEnabled: () => boolean, options
   let disposed = false
   const enabled = () => !disposed && readEnabled()
   const assertEnabled = () => { lifetime.signal.throwIfAborted(); if (!enabled()) throw new GitError('DISABLED', 'Git 功能已关闭。') }
-  const running = (id: string) => services.agents?.get(id)?.status === 'running'
+  const running = (id: string) => services.agents?.get(SessionId(id))?.status === 'running'
   const observation = async (id: string, signal: AbortSignal) => {
     const read = await services.sessionQuery.observeSession(id, { signal, projectionMode: 'none' })
     try {
@@ -80,7 +82,7 @@ export function installGitHost(ctx: Context, readEnabled: () => boolean, options
         this.assertCurrent()
         const refreshed = await observation(id, signal)
         if (refreshed.cwd !== initial.cwd || running(id)) throw new GitError('SESSION_BUSY', '请等待当前任务停止后再操作 Git。')
-        for (const agent of services.agents?.list?.() ?? services.agents?.roots() ?? []) {
+        for (const agent of listHostAgents(services.agents)) {
           if (agent.id === id || agent.status !== 'running' || !agent.session.header.cwd) continue
           let other: string
           try {
@@ -171,7 +173,7 @@ export function installGitHost(ctx: Context, readEnabled: () => boolean, options
     if (!enabled() || payload.agent.session.header.origin === 'subagent' || !payload.agent.session.header.cwd) return next()
     try {
       const agent = payload.agent, expected = hostServiceIdentity(agent), signal = AbortSignal.any([payload.signal, lifetime.signal])
-      const assertCurrent = () => { assertEnabled(); signal.throwIfAborted(); if (hostServiceIdentity(services.agents?.get(agent.id)) !== expected) throw new GitError('SESSION_CHANGED', '会话已变化。') }
+      const assertCurrent = () => { assertEnabled(); signal.throwIfAborted(); if (hostServiceIdentity(services.agents?.get(SessionId(agent.id))) !== expected) throw new GitError('SESSION_CHANGED', '会话已变化。') }
       const context = await scope(agent.id, signal, assertCurrent)
       await service.checkBinding(context); await service.lock(context)
       return next()

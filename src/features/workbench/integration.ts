@@ -5,6 +5,7 @@ import type { DiagnosticAssociation } from '../browser-diagnostics/contract.ts'
 import type { ComputerToolRunContext } from '../computer-use/tools.ts'
 import type { HostWorkbenchContext } from './browser-registry.ts'
 import { hostServiceIdentity } from '../../host-service-identity.ts'
+import { isLiveRootAgent } from '../../host-agents.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
@@ -32,7 +33,7 @@ export async function installWorkbench(ctx: Context, desktopManager: ComputerEnv
   const directory = join(profile.dir, 'qiuya-workbench'), permissionPath = join(directory, 'origins.json'), lifetime = new AbortController()
   let allowed: string[] = [], disposed = false, permissions: BrowserPermissionCoordinator
   try { const stored: unknown = JSON.parse(await readFile(permissionPath, 'utf8')); if (!Array.isArray(stored) || stored.length > 128) throw Error('Invalid store'); allowed = stored.map(siteOrigin) } catch { /* Missing or invalid data grants nothing. */ }
-  const isCurrentAgent = (agent: { id: string }) => !disposed && !lifetime.signal.aborted && options.enabled() && agents.get(SessionId(agent.id)) === agent && agents.roots().includes(agent)
+  const isCurrentAgent = (agent: { id: string }) => !disposed && !lifetime.signal.aborted && options.enabled() && isLiveRootAgent(agents, agent)
   const browsers = new BrowserWorkbenchRegistry({ directory, enabled: () => !disposed && options.enabled(), isAllowed: (...args) => permissions.isAllowed(...args), isCallerCurrent: exec => !!exec.agent && !exec.signal.aborted && isCurrentAgent(exec.agent) })
   permissions = new BrowserPermissionCoordinator({ backend: browsers, enabled: () => !disposed && options.enabled(), lookupAgent: id => agents.get(SessionId(id)), isRootAgent: agent => isCurrentAgent(agent), canRequest: agent => { let approval: ApprovalPolicy | undefined; try { approval = ctx.get('approval') as ApprovalPolicy | undefined } catch {}; return ((agent.session ? approval?.overrideOf?.(agent.session) : undefined) ?? approval?.config?.policy) !== 'never' }, readAllowedOrigins: () => allowed, async writeAllowedOrigins(origins) { await mkdir(directory, { recursive: true, mode: 0o700 }); const temporary = join(directory, '.origins-' + randomUUID() + '.json'); await writeFile(temporary, JSON.stringify(origins), { flag: 'wx', mode: 0o600 }); await rename(temporary, permissionPath); allowed = [...origins] } })
   const registry = new WorkbenchRegistry(browsers, new DesktopWorkbenchRegistry(desktopManager)), modelTarget = new ModelTargetRegistry(desktopManager, browsers, isCurrentAgent)

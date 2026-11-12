@@ -18,13 +18,13 @@ vm.runInNewContext(compiled.outputFiles[0].text, { module: compiledModule, expor
 const { installComputerToolRouting } = compiledModule.exports
 
 /** Shell bodies are inert SDK fixtures. No test reads a real app, screen, or profile. */
-async function fixture(t) {
+async function fixture(t, { modern = false } = {}) {
   const ctx = new Context(), plugins = [], calls = []
-  const agent = { id: 'routing-chat' }, other = { id: 'other-chat' }, child = { id: 'routing-child' }
+  const agent = { id: 'routing-chat', session: { header: { id: 'routing-chat' } } }, other = { id: 'other-chat', session: { header: { id: 'other-chat' } } }, child = { id: 'routing-child', session: { header: { id: 'routing-child', origin: 'subagent' } } }
   const state = { enabled: true, rows: [], current: agent, roots: [agent, other], reads: 0 }
   const agents = {
     get(id) { return id === agent.id ? state.current : id === other.id ? other : id === child.id ? child : undefined },
-    roots() { return [...state.roots] },
+    ...modern ? { list() { return [...state.roots, child] } } : { roots() { return [...state.roots] } },
   }
   const environments = {
     environments() { state.reads++; return state.rows.map(row => ({ ...row })) },
@@ -62,6 +62,21 @@ async function fixture(t) {
 const routingSection = assembly => assembly.sections.find(section => section.name === 'qiuya-tools:computer-routing')?.text ?? ''
 const environmentText = assembly => assembly.contexts.find(context => context.name === 'qiuya-tools:computer-environment')?.text ?? ''
 const feedback = result => result.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+
+test('Harness 0.2.2 flat registry assembles prompts and guards live main chats while excluding subagents', async t => {
+  const f = await fixture(t, { modern: true })
+  assert.match(routingSection(await f.assemble()), /qiuya_computer_discover/u)
+  assert.match(environmentText(await f.assemble()), /local|这台电脑/u)
+  assert.equal((await f.call('bsk_tabs')).isError, true)
+  assert.equal((await f.call('bash', { command: 'git status --short' })).isError, false)
+  assert.equal(routingSection(await f.assemble(f.child)), '')
+  assert.equal((await f.call('bsk_tabs', {}, f.child)).isError, false)
+  assert.equal(routingSection(await f.assemble({ ...f.agent })), '')
+  f.agent.session.header.parentSession = 'fork-source'
+  assert.match(routingSection(await f.assemble()), /qiuya_computer_discover/u)
+  f.state.roots = [f.other]
+  assert.equal(routingSection(await f.assemble()), '')
+})
 
 test('actual SystemPrompt publishes local-first tool guidance and a literal default environment without OS imports', async t => {
   const f = await fixture(t), assembly = await f.assemble()

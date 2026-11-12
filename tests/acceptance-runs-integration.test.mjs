@@ -46,6 +46,18 @@ async function fixture(t, { start = true } = {}) {
   const act = async frameId => { const result = await definitions.get('qiuya_computer_act').execute({ frameId, actionId: 'action-' + randomUUID(), action: { kind: 'move', x: 10, y: 20 } }, exec); if (result.acceptance) record = (await bridge.service.get(exec, result.acceptance.runId)).record; return result }
   return { bridge, manager, agents, attachments, definitions, current, calls, files, exec, controller, scope, profile, apply, mutation, begin, attempt, observe, act, get record() { return record } }
 }
+test('flat 0.2.2 registry supports real acceptance bridge and rejects delegated or replaced callers', async t => {
+  const f = await fixture(t)
+  f.agents.list = f.agents.roots; delete f.agents.roots
+  f.exec.agent.session = { header: { id: f.exec.agent.id } }
+  await f.begin(); await f.attempt(); await f.observe()
+  assert.equal(f.record.evidence.length, 1)
+  f.exec.agent.session.header.origin = 'subagent'
+  await assert.rejects(f.bridge.service.begin(f.exec, input()), { code: 'CALLER_NOT_LIVE' })
+  delete f.exec.agent.session.header.origin
+  f.current.agent = { ...f.exec.agent }
+  await assert.rejects(f.bridge.service.begin(f.exec, input()), { code: 'CALLER_NOT_LIVE' })
+})
 test('existing runtime generation getter performs zero activity and never revives retired snapshots', async t => {
   const f = await fixture(t, { start: false }), before = f.calls.length
   assert.equal(f.manager.runEnvironment('missing'), undefined); assert.equal(f.calls.length, before)

@@ -14,6 +14,7 @@ import { AcceptanceRunStore } from './storage.ts'
 import { installAcceptanceRunHost } from './host.ts'
 import { installAcceptanceRunTools } from './tools.ts'
 import { hostServiceIdentity } from '../../host-service-identity.ts'
+import { isLiveRootAgent } from '../../host-agents.ts'
 
 export interface ComputerRunDependencies {
   agents: RootAgentRegistry
@@ -54,7 +55,7 @@ export function createComputerRunBridge(deps: ComputerRunDependencies) {
   const binding = (handle: object, id: string): AgentBinding => {
     live()
     const actual = deps.agents.get(SessionId(id))
-    if (!actual || actual !== handle || !deps.agents.roots().includes(actual)) throw new RunError('CALLER_NOT_LIVE')
+    if (!actual || actual !== handle || !isLiveRootAgent(deps.agents, actual)) throw new RunError('CALLER_NOT_LIVE')
     const environment = deps.manager.runEnvironment(id)
     if (!environment) throw new RunError('OWNER_CHANGED')
     let instanceId = instances.get(handle)

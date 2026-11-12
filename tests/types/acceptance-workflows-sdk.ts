@@ -10,7 +10,7 @@ import type {ModelTargetRegistry} from '../../src/features/workbench/model-targe
 import type {WorkflowTarget} from '../../src/features/acceptance-workflows/service.ts'
 declare const agents:AgentRegistry
 const face:WorkflowAgents=agents
-const actual=agents.roots()[0]
+const actual=agents.list()[0]
 actual?.cancel({kind:'user'},{keepInbox:true})
 declare const tools:ToolRuntime
 const toolFace:RunToolsService=tools

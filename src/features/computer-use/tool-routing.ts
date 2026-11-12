@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { isLiveRootAgent } from '../../host-agents.ts'
 import type { ComputerEnvironmentManager } from './environment-manager.ts'
 import type { RootAgentRegistry } from '../acceptance-runs/sdk-host-seams.ts'
 
@@ -93,7 +93,7 @@ export function installComputerToolRouting(ctx: Context, environments: Pick<Comp
   const services = ctx as Context & ComputerRoutingServices
   const agents = ctx.get('agents') as RootAgentRegistry | undefined
   let disposed = false
-  const current = (agent: RoutingAgent | undefined) => !disposed && enabled() && !!agent && agents?.get(SessionId(agent.id)) === agent && agents.roots().includes(agent)
+  const current = (agent: RoutingAgent | undefined) => !disposed && enabled() && isLiveRootAgent(agents, agent)
   const environment = (agent: RoutingAgent) => environments.environments().find(row => row.sessionId === agent.id)
   const promptAgent = (context: PromptContext) => current(context.agent) && (context.scope === undefined || context.scope === context.agent) ? context.agent : undefined
   const disposers: Array<() => void> = []
