@@ -377,7 +377,7 @@ test('automatic install passes the small independently versioned wrapper to Harn
   const packageBytes = tarball([
     ['package/package.json', JSON.stringify({ ...rootPackage, version: '1.1.0', qiuyaNative: { ...rootPackage.qiuyaNative, version: rootPackage.version } })],
     ['package/cordis.patch.yml', '[]\n'], ['package/lib/index.js', 'export function apply() {}'],
-    ['package/lib/client.js', '/* UI update */'], ['package/lib/computer-agent.js', 'export {}'],
+    ['package/lib/client.js', '/* UI update */'],
   ])
   const f = await fixture(t, { small: true, packageBytes })
   const result = await f.call(installEndpoint, { version: '1.1.0' })

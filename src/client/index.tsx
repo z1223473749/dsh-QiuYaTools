@@ -4,11 +4,7 @@ import { discardLocalThemeVideo } from './theme-video-api.ts'
 import { THEME_SOUND_EVENT } from '../theme-video.ts'
 import { discardMotionAssets } from './smart-theme-api.ts'
 import { getCustomThemes, MAX_CUSTOM_THEMES, type CustomTheme } from '../custom-themes.ts'
-import { installBrowserDiagnosticClient } from '../features/browser-diagnostics/client.tsx'
 import React, { useEffect, useId, useRef, useState, useMemo, useSyncExternalStore } from 'react'
-import { installAcceptanceWorkflowClient } from '../features/acceptance-workflows/client.tsx'
-import { installAcceptanceTemplateClient } from '../features/acceptance-templates/client.tsx'
-import { installAcceptanceRunClient } from '../features/acceptance-runs/client.tsx'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -21,19 +17,13 @@ import {
   type FeatureField, type Preferences, type QThemeId, type ThemeMotion,
 } from '../shared.ts'
 import { installFeatures } from './features.ts'
-import { installAccountMenuEntry, consumeComputerSettingsNavigation, subscribeComputerSettingsNavigation, consumeUpdatesSettingsNavigation, subscribeUpdatesSettingsNavigation, openUpdatesSettings } from './account-menu.ts'
+import { installAccountMenuEntry, consumeUpdatesSettingsNavigation, subscribeUpdatesSettingsNavigation, openUpdatesSettings } from './account-menu.ts'
 import { installSettingsNavIcon } from './settings-nav-icon.ts'
 import { AboutPanel } from './about.tsx'
 import { UpdatePanel } from './updates.tsx'
 import { getUpdateNotice, installAutomaticUpdateChecks, disposeUpdateNotice } from './update-notice.ts'
-import { ComputerPanel } from '../features/computer-use/panel.tsx'
-import { installChatComputerEnvironment } from '../features/computer-use/chat-environment.tsx'
-import { installWorkbenchClient } from '../features/workbench/client.tsx'
-import { createWorkbenchAPI, type WorkbenchConnection } from '../features/workbench/client-api.ts'
-import { SitePermissions } from '../features/workbench/Views.tsx'
-import { ComputerIcon } from '../features/computer-use/presentation.tsx'
-import { computerVisualStyles } from '../features/computer-use/visual-style.ts'
 import { installQTheme } from './q-theme.ts'
+import { installBluefishSession } from './bluefish-session.tsx'
 import { getQThemes, getQTheme, type ThemeDefinition } from './theme-catalog.ts'
 import { ensureThemeArt, resolveThemeArt, subscribeThemeArt, themeArtFailed, themeArtVersion } from './theme-art-api.ts'
 import { ThemePreview } from './theme-preview.tsx'
@@ -61,7 +51,7 @@ type SettingsProps = PropsRuntime<'settings.section'> & PropsLocale<typeof NS> &
 type ThresholdDraft = { characters: string; lines: string }
 type FormOperations = Parameters<ConfigForm<Preferences>['mutate']>[0]
 
-type SettingsTab = FeatureField | 'qTheme' | 'about' | 'updates' | 'computer'
+type SettingsTab = FeatureField | 'qTheme' | 'about' | 'updates'
 const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey; hint: LocaleKey; steps: readonly LocaleKey[] }[] = [
   { field: 'pastedTextEnabled', tab: 'pastedTextTab', label: 'pastedText', hint: 'pastedTextHint', steps: [] },
   { field: 'sessionWindowsEnabled', tab: 'sessionWindowsTab', label: 'sessionWindows', hint: 'sessionWindowsHint', steps: ['sessionWindowsMenu', 'sessionWindowsDrag'] },
@@ -73,7 +63,6 @@ const FEATURES: readonly { field: FeatureField; tab: LocaleKey; label: LocaleKey
   { field: 'gitEnabled', tab: 'gitTab', label: 'git', hint: 'gitHint', steps: ['gitBranch', 'gitChanges', 'gitPullRequests'] },
 ]
 const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
-  { id: 'computer', label: 'computerTab' },
   ...FEATURES.filter(feature => feature.field !== 'conversationCommentsEnabled').map(feature => ({ id: feature.field, label: feature.tab })),
   { id: 'qTheme', label: 'qThemeTab' },
   { id: 'about', label: 'aboutTab' },
@@ -81,7 +70,6 @@ const TABS: readonly { id: SettingsTab; label: LocaleKey }[] = [
 ]
 
 function SettingsIcon({ name }: { name: SettingsTab }) {
-  if (name === 'computer') return <ComputerIcon/>
   if (name === 'gitEnabled') return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v2a6 6 0 0 1-6 6H6"/></svg>
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     {name === 'pastedTextEnabled' ? <><path d="m8 12 6-6a3.5 3.5 0 0 1 5 5l-8 8a5 5 0 0 1-7-7l8-8M8 12l-2 2a2 2 0 0 0 3 3l8-8" /></>
@@ -111,7 +99,6 @@ function themeStyle(theme: ThemeDefinition): React.CSSProperties {
 export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const updates = getUpdateNotice(ctx)
   const updateState = useSyncExternalStore(updates.subscribe, updates.getSnapshot, updates.getSnapshot)
-  const workbenchAPI = useMemo(() => createWorkbenchAPI(() => ctx.get('connection') as WorkbenchConnection | undefined), [ctx])
   const snapshot = useSyncExternalStore(
     listener => form.subscribe(listener),
     () => form.getSnapshot(),
@@ -122,7 +109,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [thresholdDraft, setThresholdDraft] = useState<ThresholdDraft | null>(null)
   const [thresholdError, setThresholdError] = useState<'invalidCharacters' | 'invalidLines' | null>(null)
-  const [activeTab, setActiveTab] = useState<SettingsTab>(() => consumeUpdatesSettingsNavigation(ctx) ? 'updates' : consumeComputerSettingsNavigation(ctx) ? 'computer' : 'pastedTextEnabled')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => consumeUpdatesSettingsNavigation(ctx) ? 'updates' : 'pastedTextEnabled')
   const [aboutVisited, setAboutVisited] = useState(false)
   const [updatesVisited, setUpdatesVisited] = useState(() => activeTab === 'updates')
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
@@ -158,7 +145,6 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
     setActiveTab(tab)
     tabs.current[TABS.findIndex(item => item.id === tab)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
-  useEffect(() => subscribeComputerSettingsNavigation(ctx, () => { if (consumeComputerSettingsNavigation(ctx)) activateTab('computer') }), [ctx])
   useEffect(() => subscribeUpdatesSettingsNavigation(ctx, () => { if (consumeUpdatesSettingsNavigation(ctx)) activateTab('updates') }), [ctx])
 
   function navigateTabs(event: React.KeyboardEvent<HTMLButtonElement>, index: number): void {
@@ -278,8 +264,7 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
       </div>
 
       {TABS.map(tab => <div className="qyt-tab-panel" key={tab.id} role="tabpanel" id={`${id}-panel-${tab.id}`} aria-labelledby={`${id}-tab-${tab.id}`} hidden={activeTab !== tab.id} tabIndex={0}>
-        {tab.id === 'computer' ? activeTab === 'computer' && <><ComputerPanel ctx={ctx} enabled={preferences.enabled !== false && preferences.computerUseEnabled === true} disabled={disabled} onEnabled={value => { void persist([...(value ? [{ op: 'set' as const, path: ['enabled'], value: true }] : []), { op: 'set', path: ['computerUseEnabled'], value }]) }}/><SitePermissions api={workbenchAPI}/></>
-          : tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
+        {tab.id === 'about' ? aboutVisited && <AboutPanel version={pkg.version} ctx={ctx} />
           : tab.id === 'updates' ? updatesVisited && <UpdatePanel version={pkg.version} ctx={ctx} automatic={{ enabled: preferences.autoCheckUpdates !== false, disabled, label: t('autoCheckUpdates'), hint: t('autoCheckUpdatesHint'), onChange: value => { void persist([{ op: 'set', path: ['autoCheckUpdates'], value }]) } }} />
             : tab.id === 'qTheme' ? activeTab === 'qTheme' && <div className="qyt-feature-panel qyt-theme-panel">
               <div className="qyt-card qyt-feature-summary qyt-theme-summary">
@@ -298,8 +283,10 @@ export function QiuYaToolsSettings({ form, t, ctx }: SettingsProps) {
                   {(['dynamic', 'static'] as const).map(motion => <label key={motion}><input type="radio" name={`${id}-${themeId}-motion`} value={motion} checked={themeMotion === motion} disabled={disabled} onChange={() => { void setThemeMotion(motion) }}/><span>{t(motion === 'dynamic' ? 'qThemeMotionDynamic' : 'qThemeMotionStatic')}</span></label>)}
                 </div></div><span className="qyt-theme-name" title={theme.label}>{theme.label}</span></div>
                 <div className="qyt-theme-preview">
-                  <div role="img" aria-label={t(theme.description)}>
-                    <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)}/>
+                  <div role={theme.linked ? undefined : 'img'} aria-label={theme.linked ? undefined : t(theme.description)}>
+                    <ThemePreview ctx={ctx} form={form} theme={theme} title={t(theme.description)} linkedControls={theme.linked ? {
+                      dynamic: themeMotion === 'dynamic', start: t('qThemeBluefishDemoStart'), stop: t('qThemeBluefishDemoStop'), feed: t('qThemeBluefishFeed'), play: t('qThemeBluefishPlay'), bubbles: t('qThemeBluefishBubbles'),
+                    } : undefined}/>
                   </div>
                   {customTheme && <button type="button" className="qyt-theme-preview-edit" aria-label={t('qThemeEdit')} title={t('qThemeEdit')}
                     disabled={disabled} onClick={() => editCustomTheme(customTheme.id)}><ThemeEditIcon/></button>}
@@ -393,19 +380,17 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-qiuya-tools'
-    style.textContent = computerVisualStyles + css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
+    style.textContent = css.replaceAll('__QYT_OCEAN_SCENE__', OCEAN_SCENE_DATA_URL)
     document.head.append(style)
     return () => { style.remove() }
   })
-  ctx.inject(['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'], child => { child.effect(() => installAcceptanceRunClient(child)); child.effect(() => installAcceptanceWorkflowClient(child)); child.effect(() => installAcceptanceTemplateClient(child)); child.effect(() => installBrowserDiagnosticClient(child, { feature: { subscribe: listener => form.subscribe(listener), getSnapshot() { const snapshot = form.getSnapshot(); return snapshot.status === 'ready' && snapshot.value?.enabled !== false && snapshot.value?.computerUseEnabled === true } } })) })
   const t = ctx.locale.bind(NS)
   const form = ctx.configForms.get<Preferences>(SETTINGS_ID)
   const updateNotice = getUpdateNotice(ctx)
   ctx.effect(() => () => disposeUpdateNotice(ctx, updateNotice))
   ctx.inject(['connection'], child => { child.effect(() => installAutomaticUpdateChecks(ctx, form, { disposeStore: false })) })
   ctx.effect(() => installQTheme(ctx, form))
-  ctx.effect(() => installChatComputerEnvironment(ctx, form))
-  ctx.inject(['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'], child => { child.effect(() => installWorkbenchClient(child, form)) })
+  ctx.inject(['sessions'], child => { child.effect(() => installBluefishSession(child, form)) })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: SETTINGS_ID,

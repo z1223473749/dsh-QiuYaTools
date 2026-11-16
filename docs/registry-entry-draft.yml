@@ -2,6 +2,6 @@ url: https://github.com/z1223473749/dsh-QiuYaTools
 name: z1223473749/dsh-QiuYaTools
 category: ui
 description:
-  en: "AI animated themes, computer control, standalone windows, attachment previews, Git management, session pop-outs and annotations, cross-app file drag-and-drop, and AI prompt suggestions."
-  zh: "AI 智能动效主题、电脑操控、独立窗口、附件预览、Git 管理、会话分窗与批注、跨应用文件拖拽、AI 提示词。"
+  zh-CN: 附件增强、会话与 Git 管理、计划和会话文字批注、提示词建议及 Q 主题。
+  en-US: Attachment previews, session and Git management, text comments, prompt suggestions and Q themes.
 tarball: https://github.com/z1223473749/dsh-QiuYaTools/releases/latest/download/dsh-qiuya-tools.tgz

@@ -39,9 +39,6 @@ const compiled = await build({
       builder.onLoad({ filter: /.*/, namespace: 'theme-stub' }, () => ({ contents: 'export function installQTheme() { return () => {} }' }))
       builder.onResolve({ filter: /^\.\/session-window-support\.ts$/ }, () => ({ path: 'support', namespace: 'support-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'support-stub' }, () => ({ contents: 'export function getSessionWindowSupport(ctx) { return ctx.sessionWindowSupport }' }))
-      builder.onResolve({ filter: /computer-use\/panel\.tsx$/ }, () => ({ path: 'computer', namespace: 'computer-stub' }))
-      builder.onResolve({ filter: /^react$/, namespace: 'computer-stub' }, () => ({ path: 'react', external: true }))
-      builder.onLoad({ filter: /.*/, namespace: 'computer-stub' }, () => ({ contents: `import React from 'react'; export function ComputerPanel({ enabled, onEnabled, disabled }) { return React.createElement('section', { 'data-computer-panel': true }, React.createElement('button', { role: 'switch', 'aria-label': '启用电脑操控', 'aria-checked': enabled, disabled, onClick: () => onEnabled(!enabled) }, '电脑操控')) }` }))
       builder.onResolve({ filter: /^\.\/about\.tsx$/ }, () => ({ path: 'about', namespace: 'about-stub' }))
       builder.onResolve({ filter: /^react$/, namespace: 'about-stub' }, () => ({ path: 'react', external: true }))
       builder.onLoad({ filter: /.*/, namespace: 'about-stub' }, () => ({ contents: `import React from 'react'; export function AboutPanel({ version, ctx }) { return React.createElement('article', { 'data-about-version': version, 'data-about-context': ctx ? 'present' : 'missing' }, 'about-panel') }` }))
@@ -391,14 +388,14 @@ test('read-only or unavailable settings cannot write, and failures retain thresh
   } finally { f.dispose() }
 })
 
-test('eleven icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
+test('ten icon tabs expose labelled panels and support roving focus and scrolling with arrows, Home and End', () => {
   const f = mount()
   try {
     const tablist = f.container.querySelector('[role="tablist"]')
     assert.equal(tablist.getAttribute('aria-label'), 'features')
     const tabs = [...tablist.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs.length, 11)
-    assert.deepEqual(tabs.map(tab => tab.textContent), ['computerTab', 'pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'gitTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
+    assert.equal(tabs.length, 10)
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['pastedTextTab', 'sessionWindowsTab', 'bulkArchiveTab', 'planCommentsTab', 'sidebarToolsTab', 'promptSuggestionsTab', 'gitTab', 'qThemeTab', 'aboutTab', 'updatesTab'])
     const scrolled = []
     tabs.forEach((tab, index) => { tab.scrollIntoView = options => scrolled.push({ index, options: structuredClone(options) }) })
     assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
@@ -419,16 +416,16 @@ test('eleven icon tabs expose labelled panels and support roving focus and scrol
       assert.deepEqual(scrolled.at(-1), { index: expected, options: { block: 'nearest', inline: 'nearest' } })
     }
     tabs[0].focus()
-    key('ArrowLeft', 10)
-    assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
     key('ArrowLeft', 9)
-    assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
+    assert.equal(f.container.querySelector('[data-updates-context]').dataset.updatesContext, 'present')
     key('ArrowLeft', 8)
+    assert.equal(f.container.querySelector('[data-about-context]').dataset.aboutContext, 'present')
+    key('ArrowLeft', 7)
+    key('ArrowRight', 8)
     key('ArrowRight', 9)
-    key('ArrowRight', 10)
     key('ArrowRight', 0)
     key('ArrowRight', 1)
-    key('End', 10)
+    key('End', 9)
     key('Home', 0)
     assert.equal(f.mutations.length, 0)
   } finally { f.dispose() }
@@ -609,21 +606,6 @@ test('scroll containment applies only to our native outlet and keeps header, mas
 test.after(() => dom.window.close())
 
 
-test('computer control is the first dedicated toolbox tab while long-text remains the default selection', async () => {
-  const f = mount({ enabled: false })
-  try {
-    const tabs = [...f.container.querySelectorAll('[role="tab"]')]
-    assert.equal(tabs[0].textContent, 'computerTab')
-    assert.ok(tabs[0].querySelector('svg rect'), 'computer uses its monitor glyph')
-    assert.equal(f.tab('pastedTextTab').getAttribute('aria-selected'), 'true')
-    f.select('computerTab')
-    assert.equal(f.switch('启用电脑操控').getAttribute('aria-checked'), 'false')
-    await f.toggle('启用电脑操控')
-    assert.equal(f.snapshot().value.enabled, true)
-    assert.equal(f.snapshot().value.computerUseEnabled, true)
-    assert.deepEqual(f.mutations[0], [{ op: 'set', path: ['enabled'], value: true }, { op: 'set', path: ['computerUseEnabled'], value: true }])
-  } finally { f.dispose() }
-})
 
 
 test('video settings omit audio controls and hints while preserving motion controls', async () => {

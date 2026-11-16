@@ -14,12 +14,14 @@ import { registerHarnessWorkspace, captureHarnessWorkspaceDom, selectedHarnessWo
 const cli = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 const candidate = resolve(process.argv[2] ?? 'artifacts/candidates/dsh-qiuya-tools-darwin-universal.tgz')
 const themeId = process.argv[3] ?? 'moonfrost'
-assert.ok(['moonfrost', 'buliangren', 'fox', 'garo'].includes(themeId))
+assert.ok(['moonfrost', 'buliangren', 'fox', 'garo', 'bluefish'].includes(themeId))
 const videoTheme = themeId === 'fox' || themeId === 'garo'
+const linkedTheme = themeId === 'bluefish'
 const output = resolve(themeId === 'moonfrost' ? 'artifacts/theme-harness' : `artifacts/theme-harness-${themeId}`)
 await mkdir(output, { recursive: true })
 const temporary = await mkdtemp(join(tmpdir(), 'qiuya-harness-theme-'))
 const env = { ...process.env, DSH_HOME: join(temporary, 'home'), DSH_TELEMETRY_DISABLED: '1', QIUYA_HARNESS_E2E: '1' }
+if (linkedTheme) env.QIUYA_E2E_LINKED_THEME = '1'
 for (const key of Object.keys(env)) if (/API_KEY|TOKEN|SECRET|PASSWORD/u.test(key)) delete env[key]
 const command = promisify(execFile)
 let host, browser, page, log = '', failure
@@ -40,7 +42,7 @@ try {
   await writeFile(join(provider, 'index.mjs'), model.outputFiles[0].contents)
   const overlay = join(temporary, 'theme.yml')
   await writeFile(overlay, JSON.stringify([
-    { id: 'qiuya-tools', config: { qThemeEnabled: true, qThemeId: themeId, qThemeSettings: { [themeId]: { motion: themeId !== 'moonfrost' ? 'dynamic' : 'static' } }, computerUseEnabled: false, promptSuggestionsEnabled: false, autoCheckUpdates: false } },
+    { id: 'qiuya-tools', config: { qThemeEnabled: true, qThemeId: themeId, qThemeSettings: { [themeId]: { motion: themeId !== 'moonfrost' ? 'dynamic' : 'static' } }, promptSuggestionsEnabled: false, autoCheckUpdates: false } },
     { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
     { id: 'agent-default-model', config: { provider: 'qiuya-e2e', model: 'fixture' } },
     { insert: [{ id: 'qiuya-harness-e2e-provider', name: join(provider, 'index.mjs') }] },
@@ -138,17 +140,58 @@ try {
     await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
     checks.push('actual-hero-title-and-workspace-gold')
   }
+  const mascot = page.locator('.qyt-bluefish-mascot:visible')
+  if (linkedTheme) {
+    await mascot.locator('.qyt-bluefish-character[data-renderer="mesh"] > canvas').waitFor()
+    checks.push('actual-bluefish-full-resolution-mesh')
+    await snapshot('bluefish-hero')
+    const { x, y, width, height } = await mascot.boundingBox()
+    await page.mouse.move(x + width * .46, y + height * .42)
+    await page.locator('.qyt-bluefish-mascot[data-pose="look"]:visible').waitFor()
+    await page.mouse.click(x + width * .48, y + height * .62)
+    await page.locator('.qyt-bluefish-mascot[data-mode="feed"][data-pose="chew"]:visible').waitFor()
+    await snapshot('bluefish-feed')
+    checks.push('actual-bluefish-mouse-follow-and-feed')
+  }
   // Workspace selection can replace its initial provisional blank session.
   // Read the currently selected session again after the hero checks settle.
   sessionId = selectedHarnessWorkspaceSession(await page.evaluate(captureHarnessWorkspaceDom), registered)
   assert.ok(sessionId, 'Current own workspace session remains selected')
   const input = page.locator(`[data-conversation-session="${sessionId}"] [data-composer-input][contenteditable="true"]:visible`)
+  if (linkedTheme) await page.evaluate(() => {
+    window.__bluefishPoses = []
+    new MutationObserver(records => {
+      for (const { target } of records) {
+        if (!target.matches('.qyt-bluefish-mascot') || target.dataset.mode !== 'working') continue
+        const pose = target.dataset.pose
+        if (window.__bluefishPoses.at(-1) !== pose) window.__bluefishPoses.push(pose)
+      }
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-pose'] })
+  })
   await input.fill('E2E:Theme')
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  if (linkedTheme) {
+    await page.waitForFunction(() => window.__bluefishPoses.filter(pose => pose === 'chew').length >= 2)
+    await page.locator('.qyt-bluefish-mascot[data-mode="working"][data-pose="chew"]:visible').waitFor()
+    await snapshot('bluefish-working')
+    checks.push('actual-bluefish-working-repeats-chewing')
+  }
   // The native Host may finish replacing a provisional blank session after
   // submission. Reopen this fixture's titled row before checking its response.
   if (videoTheme) await page.locator('[data-slot="sidebar"]').getByText('E2E:Theme',{exact:true}).click()
   await page.getByText('已完成本地测试回复：E2E:Theme', { exact: true }).waitFor()
+  if (linkedTheme) {
+    const activity = page.locator(`[data-qyt-bluefish-session="${sessionId}"]`)
+    await activity.and(page.locator('[data-qyt-bluefish-outcome="completed"]')).waitFor({ state: 'attached' })
+    await page.locator('.qyt-bluefish-mascot[data-mode="idle"]:visible').waitFor()
+    await input.fill('E2E:slow')
+    await page.getByRole('button', { name: '发送消息', exact: true }).click()
+    await page.locator('.qyt-bluefish-mascot[data-mode="working"]:visible').waitFor()
+    await page.getByRole('button', { name: '停止生成', exact: true }).click()
+    await activity.and(page.locator('[data-qyt-bluefish-outcome="aborted"]')).waitFor({ state: 'attached' })
+    await page.locator('.qyt-bluefish-mascot[data-mode="idle"]:visible').waitFor()
+    checks.push('actual-bluefish-completion-and-stop')
+  }
   if (videoTheme) {
     const seat=page.locator('[data-slot="main.conversation"] > [data-phase="active"] > [data-conversation-content] > [data-conversation-scroll] > [data-composer-seat]')
     assert.equal(await seat.evaluate(node=>getComputedStyle(node,'::before').content),'none')
@@ -195,11 +238,34 @@ try {
   await snapshot('file-unsupported-light'); checks.push('actual-unsupported-file-pane')
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
   await snapshot('file-unsupported-dark')
-  assert.equal(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--qyt-q-paper').trim()), themeId === 'buliangren' ? 'rgba(20, 24, 28, .70)' : themeId === 'fox' ? 'rgba(41, 29, 42, .72)' : 'rgba(21, 29, 45, .78)')
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--qyt-q-paper').trim()), themeId === 'buliangren' ? 'rgba(20, 24, 28, .70)' : themeId === 'fox' ? 'rgba(41, 29, 42, .72)' : linkedTheme ? 'rgba(22, 30, 49, .88)' : 'rgba(21, 29, 45, .78)')
   checks.push('actual-dark-surfaces')
+  if (linkedTheme) {
+    await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+    await input.fill('E2E:Theme')
+    await page.getByRole('button', { name: '发送消息', exact: true }).click()
+    await page.locator('.qyt-bluefish-mascot[data-mode="working"]:visible').waitFor()
+    await page.getByRole('button', { name: '新建会话', exact: true }).first().click()
+    await page.locator('[data-phase="hero"] > .qyt-bluefish-mascot[data-mode="idle"]:visible').waitFor()
+    checks.push('actual-bluefish-switch-to-idle-conversation')
+    await page.getByRole('button', { name: '账号菜单', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'QiuYaTools', exact: true }).click()
+    await page.getByRole('tab', { name: 'Q 主题', exact: true }).click()
+    await page.getByRole('button', { name: '演示工作状态', exact: true }).click()
+    const preview = page.frameLocator('iframe[data-qyt-theme-preview]')
+    await preview.locator('.qyt-bluefish-mascot[data-mode="working"][data-pose="chew"]').waitFor()
+    await snapshot('bluefish-settings')
+    await page.getByRole('button', { name: '结束演示', exact: true }).click()
+    await page.getByRole('button', { name: '主题广场', exact: true }).click()
+    const gallery = page.getByRole('dialog', { name: '主题广场' })
+    await gallery.getByRole('region', { name: '联动主题' }).locator('[data-theme="bluefish"][aria-pressed="true"]').waitFor()
+    await snapshot('bluefish-gallery')
+    checks.push('actual-bluefish-settings-demo-and-gallery')
+  }
 } catch (error) {
   failure = error.message
   if (page) {
+    if (linkedTheme) await writeFile(join(output, 'bluefish-poses.json'), JSON.stringify(await page.evaluate(() => window.__bluefishPoses ?? [])))
     await snapshot('failure').catch(() => {})
     await writeFile(join(output,'failure-layout.json'),JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('[data-slot="main"],[data-plugin-panel],[data-testid="task-manager-page"],video[data-qyt-video-scene],[data-slot="root"]')].map(node=>({tag:node.tagName,attrs:[...node.attributes].map(a=>[a.name,a.name==='src'?'media':a.value]),rect:node.getBoundingClientRect().toJSON(),ancestors:[...function*(n){for(let p=n.parentElement;p&&p!==document.body;p=p.parentElement)yield {tag:p.tagName,attrs:[...p.attributes].map(a=>[a.name,a.value])}}(node)]}))),null,2))
     await writeFile(join(output, 'failure-dom.txt'), await page.locator('body').innerText().catch(() => 'unavailable'))

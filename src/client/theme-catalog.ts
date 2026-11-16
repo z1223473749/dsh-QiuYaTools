@@ -12,6 +12,8 @@ import { installBuliangrenScene } from './buliangren-scene.ts'
 import { loadThemeVideo } from './theme-video-api.ts'
 import { installVideoScene, type SceneDisposer } from './video-scene.ts'
 import { FOX_SCENE_DATA_URL, FOX_SIDEBAR_DATA_URL, GARO_SCENE_DATA_URL, GARO_SIDEBAR_DATA_URL } from './brand-assets.ts'
+import { BLUEFISH_SCENE_DATA_URL, BLUEFISH_COVER_DATA_URL, BLUEFISH_PORTRAIT_DATA_URL } from './brand-assets.ts'
+import { installBluefishScene } from './bluefish-scene.ts'
 import foxPalette from './themes/fox.css'
 import garoPalette from './themes/garo.css'
 import sunsetPalette from './themes/sunset.css'
@@ -19,6 +21,7 @@ import oceanPalette from './themes/ocean.css'
 import begoniaPalette from './themes/begonia.css'
 import moonfrostPalette from './themes/moonfrost.css'
 import buliangrenPalette from './themes/buliangren.css'
+import bluefishPalette from './themes/bluefish.css'
 
 /** A theme supplies art, colors and an optional motion adapter. The settings,
  * reading surfaces and installation lifecycle belong to the common framework. */
@@ -26,6 +29,7 @@ export interface ThemeDefinition {
   readonly id: QThemeId
   readonly displayName?: string
   readonly video?: boolean
+  readonly linked?: boolean
   readonly revision?: string
   readonly sceneRevision?: string
   readonly name: LocaleKey
@@ -34,6 +38,7 @@ export interface ThemeDefinition {
   readonly motionLabel: LocaleKey
   readonly label: string
   readonly art: string
+  readonly galleryArt?: string
   readonly sidebarArt?: string
   readonly sidebarZoom?: { factor: number; aspect: number }
   readonly accent: string
@@ -48,6 +53,16 @@ export interface ThemeDefinition {
 }
 
 const definitions: Readonly<Record<QPresetThemeId, ThemeDefinition>> = {
+  bluefish: {
+    id: 'bluefish', linked: true, name: 'qThemeBluefish', description: 'qThemeBluefishDescription',
+    hint: 'qThemeBluefishHint', motionLabel: 'qThemeBluefishMotion', label: 'Q Bluefish · 蓝色大肥鱼',
+    art: BLUEFISH_SCENE_DATA_URL, galleryArt: BLUEFISH_COVER_DATA_URL, sidebarArt: BLUEFISH_COVER_DATA_URL,
+    accent: '#3e5db8', accentDark: '#b5c8ff', soft: '#d4dffc',
+    bannerPosition: 'center 58%', previewPosition: 'right bottom',
+    palette: moonfrostPalette.replaceAll('data-qyt-q-theme="moonfrost"', 'data-qyt-q-theme="bluefish"') +
+      bluefishPalette.replaceAll('__QYT_BLUEFISH_PORTRAIT__', BLUEFISH_PORTRAIT_DATA_URL),
+    installScene: installBluefishScene,
+  },
   garo: {
     id: 'garo', video: true, name: 'qThemeGaro', description: 'qThemeGaroDescription',
     motionLabel: 'qThemeGaroMotion', label: 'Q Garo · 伽罗 · 月下冰弦',

@@ -10,7 +10,7 @@ export const nativeNames = ['dsh-qiuya-tools-native-darwin-universal', 'dsh-qiuy
 export const rootPackage = {
   name: 'dsh-qiuya-tools', version, type: 'module', license: 'MIT', repository,
   main: './lib/index.js', exports: { '.': './lib/index.js', './package.json': './package.json' },
-  dsh: { bundle: { patch: './cordis.patch.yml' } }, qiuyaNative: { protocolVersion: 1, computerUse: true },
+  dsh: { bundle: { patch: './cordis.patch.yml' } }, qiuyaNative: { protocolVersion: 1, sessionWindows: true },
   optionalDependencies: Object.fromEntries(nativeNames.map(name => [name, version])),
 }
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -48,7 +48,7 @@ export function tarball(entries) {
 export function nativeEntries(name, { metadata: changes, manifest: changeManifest, extra = [] } = {}) {
   const mac = name.endsWith('darwin-universal'), architecture = name.endsWith('arm64') ? 'arm64' : 'x64'
   const manifestPath = mac ? 'lib/macos-manifest.json' : 'lib/native/windows-manifest.json'
-  const executableNames = mac ? ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'] : [`win32-${architecture}/qiuya-windows.exe`]
+  const executableNames = mac ? ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'] : [`win32-${architecture}/qiuya-windows.exe`]
   const binary = mac ? universalBinary() : windowsBinary(architecture)
   const metadata = { name, version, type: 'module', license: 'MIT', repository, main: `./${manifestPath}`, exports: { './package.json': './package.json' }, os: [mac ? 'darwin' : 'win32'], cpu: mac ? ['arm64', 'x64'] : [architecture], ...changes }
   const manifest = { version, protocolVersion: 1, artifacts: executableNames.map(file => ({ file, bytes: binary.length, sha256: digest(binary), ...mac ? {} : { platform: 'win32', architecture, protocolVersion: 1, selfContained: true } })) }
@@ -73,9 +73,8 @@ export async function nativeSource(t) {
   const windows = { version, protocolVersion: 1, artifacts: ['arm64', 'x64'].map(architecture => { const bytes = windowsBinary(architecture); return { file: `win32-${architecture}/qiuya-windows.exe`, platform: 'win32', architecture, protocolVersion: 1, selfContained: true, bytes: bytes.length, sha256: digest(bytes) } }) }
   await put('lib/native/windows-manifest.json', JSON.stringify(windows))
   await put('package.json', JSON.stringify({ ...rootPackage, scripts: { prepare: 'node should-never-run.mjs', prepack: 'node should-never-run.mjs', postpack: 'node should-never-run.mjs', test: 'node consumer-test.mjs' }, devDependencies: { 'not-installed-build-tool': '1.0.0' } }))
-  for (const file of ['README.md', 'cordis.patch.yml', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md', 'docs/native-updates.md', 'scripts/computer-agent.mjs', 'lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'assets/icon-color.webp', 'locale/zh.json', 'browser-extension/manifest.json', 'browser-extension/background.js', 'browser-extension/groups.js']) await put(file, file.endsWith('.json') ? '{}' : file.endsWith('.yml') ? '[]\n' : 'fixture data\n')
+  for (const file of ['README.md', 'cordis.patch.yml', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md', 'docs/native-updates.md', 'lib/index.js', 'lib/client.js', 'assets/icon-color.webp', 'locale/zh.json']) await put(file, file.endsWith('.json') ? '{}' : file.endsWith('.yml') ? '[]\n' : 'fixture data\n')
   await put('lib/SessionWindow.swift', 'must never ship in native package')
   await put('lib/QiuYaTools Sessions.app/Contents/Info.plist', '<plist/>')
-  await put('lib/QiuYaTools Computer.app/Contents/Info.plist', '<plist/>')
   return { root, put }
 }

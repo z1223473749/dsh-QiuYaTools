@@ -28,8 +28,6 @@ export async function packageCandidate(platform, architecture, output = join(roo
     }
     await writeFile(join(stage, 'package.json'), JSON.stringify(metadata, null, 2) + '\n')
     for (const file of ['cordis.patch.yml', 'README.md', 'LICENSE', 'NOTICE']) await cp(join(sourceRoot, file), join(stage, file))
-    await mkdir(join(stage, 'scripts'))
-    await cp(join(sourceRoot, 'scripts', 'computer-agent.mjs'), join(stage, 'scripts', 'computer-agent.mjs'))
     await mkdir(join(stage, 'docs'))
     await cp(join(sourceRoot, 'docs/computer-use-guide.md'), join(stage, 'docs/computer-use-guide.md'))
     await cp(join(sourceRoot, 'docs/git-guide.md'), join(stage, 'docs/git-guide.md'))
@@ -39,7 +37,6 @@ export async function packageCandidate(platform, architecture, output = join(roo
     // downloaded on demand. Only the public package icon needs a file here.
     await mkdir(join(stage, 'assets'))
     await cp(join(sourceRoot, 'assets/icon-color.webp'), join(stage, 'assets/icon-color.webp'))
-    await cp(join(sourceRoot, 'browser-extension'), join(stage, 'browser-extension'), { recursive: true })
     await cp(join(sourceRoot, 'locale'), join(stage, 'locale'), { recursive: true })
     await cp(join(sourceRoot, 'lib'), join(stage, 'lib'), { recursive: true, filter: source => {
       const path = source.slice(join(sourceRoot, 'lib').length).replaceAll('\\', '/')
@@ -65,9 +62,9 @@ export async function packageCandidate(platform, architecture, output = join(roo
       if (manifest.version !== (pkg.qiuyaNative?.version ?? pkg.version)) throw new Error('Mac native manifest version does not match the native version; rebuild the native helpers')
       manifest.version = pkg.version
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
-      const binary = join(stage, 'lib', 'QiuYaTools Computer.app', 'Contents', 'MacOS', 'qiuya-computer')
+      const binary = join(stage, 'lib', 'QiuYaTools Sessions.app', 'Contents', 'MacOS', 'qiuya-session-window')
       const { stdout } = await run('/usr/bin/lipo', ['-archs', binary])
-      for (const arch of architecture === 'universal' ? ['arm64', 'x86_64'] : [architecture === 'x64' ? 'x86_64' : architecture]) if (!stdout.includes(arch)) throw new Error(`Missing Mac computer helper architecture ${arch}`)
+      for (const arch of architecture === 'universal' ? ['arm64', 'x86_64'] : [architecture === 'x64' ? 'x86_64' : architecture]) if (!stdout.includes(arch)) throw new Error(`Missing Mac session helper architecture ${arch}`)
     }
     await mkdir(output, { recursive: true })
     const npmArgs = ['pack', '--ignore-scripts', '--json', '--pack-destination', temp, `--cache=${join(temp, 'npm-cache')}`]

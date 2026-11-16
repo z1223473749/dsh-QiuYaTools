@@ -141,7 +141,7 @@ body[data-qyt-q-theme] [data-qyt-video-host][data-qyt-theme-live] [data-slot="ma
 /* A quiet paper column follows the native content width. Art stays visible in
    the side margins; even the smallest viewport keeps opaque text surfaces. */
 body[data-qyt-q-theme] [data-slot="main.conversation"] > [data-phase="active"] [data-conversation-scroll] {
-  background-image: linear-gradient(90deg, transparent, var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)), var(--qyt-q-paper) min(calc(100% - 12px), calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 20px)), transparent);
+  background-image: var(--qyt-q-reading-wash, linear-gradient(90deg, transparent, var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)), var(--qyt-q-paper) min(calc(100% - 12px), calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 20px)), transparent));
   background-size: 100% 100%;
   background-position: center top;
   background-repeat: no-repeat;

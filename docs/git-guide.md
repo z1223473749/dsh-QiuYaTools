@@ -1,6 +1,6 @@
 # 会话 Git 功能
 
-在 **QiuYaTools → Git** 开启或关闭 Git 功能，默认开启。新会话会显示分支入口；当前目录不是 Git 仓库时显示“未检测到 Git 仓库”，目录或 Git 不可用时显示对应原因。Git 使用 Harness Host 上的目录与系统 Git；聊天的电脑操控环境是独立设置。
+在 **QiuYaTools → Git** 开启或关闭 Git 功能，默认开启。新会话会显示分支入口；当前目录不是 Git 仓库时显示“未检测到 Git 仓库”，目录或 Git 不可用时显示对应原因。Git 使用 Harness Host 上的目录与系统 Git。
 
 ## 分支与工作目录
 

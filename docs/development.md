@@ -64,7 +64,7 @@ Node.js `^22.19.0 || >=24`，npm；macOS 原生窗口构建还需要 Command Lin
 
 Windows 原生源码构建固定使用 .NET SDK `8.0.426` 和锁定的 WebView2 SDK `1.0.3912.50`，运行包自包含 .NET。使用 `QIUYA_DOTNET=/path/to/dotnet node scripts/build-windows-native.mjs arm64 x64` 构建。`package-candidates.mjs` 按平台分包，保留压缩 64 MiB/解压 256 MiB 的现有校验上限，并逐个核验原生组件 SHA256、协议及架构。
 
-电脑操控的授权、原生预检、配对和真实 E2E 入口见[使用指南](computer-use-guide.md)。桌面测试只在显式运行对应脚本时启动；普通 `npm run check` 不申请系统权限、不操控桌面。
+官方 Harness 已提供相同的电脑操控功能，因此插件已移除电脑操控、工作台及其自动验收链路。原生组件仅用于会话独立窗口，详见[功能移除说明](computer-use-guide.md)。
 
 ```sh
 npm ci

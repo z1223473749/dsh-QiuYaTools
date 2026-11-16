@@ -1,0 +1,130 @@
+body[data-qyt-q-theme="bluefish"] {
+  --qyt-q-sea: #3e5db8;
+  --qyt-q-accent: #3e5db8;
+  --qyt-q-accent-hover: #344fa0;
+  --qyt-q-sea-hover: #344fa0;
+  --qyt-q-selected: #dce5fc;
+  --qyt-q-ink: #1f2a48;
+  --qyt-q-paper: rgba(247, 249, 255, .86);
+  --qyt-q-art-wash: rgba(237, 242, 255, .12);
+  --qyt-q-hero-wash: rgba(237, 242, 255, .04);
+  --qyt-q-sidebar-art-position: left bottom;
+  --qyt-q-sidebar-wash: rgba(231, 238, 253, .76);
+  --qyt-q-composer-fill: rgba(245, 248, 255, .95);
+  --qyt-bluefish-character-filter: none;
+}
+
+body[data-qyt-q-theme="bluefish"][data-ds-dark-theme] {
+  --qyt-q-sea: #b5c8ff;
+  --qyt-q-accent: #b5c8ff;
+  --qyt-q-accent-hover: #d4dfff;
+  --qyt-q-sea-hover: #d4dfff;
+  --qyt-q-paper: rgba(22, 30, 49, .88);
+  --qyt-q-art-wash: rgba(15, 24, 47, .59);
+  --qyt-q-hero-wash: rgba(15, 24, 47, .49);
+  --qyt-q-sidebar-wash: rgba(25, 37, 63, .83);
+  --qyt-bluefish-character-filter: brightness(.78) saturate(.86);
+  --dsw-alias-button-primary-fill: #b5c8ff;
+  --dsw-alias-button-primary-hover: #d4dfff;
+  --dsw-alias-button-info-fill: #3e5db8;
+  --dsw-alias-button-info-hover: #344fa0;
+}
+
+body[data-qyt-q-theme="bluefish"] [data-shortcut-modal="settings"] > nav {
+  --qyt-theme-sidebar-art: url("__QYT_THEME_SIDEBAR__");
+  --qyt-sidebar-cover-size: auto min(45%, 320px);
+  --qyt-q-sidebar-art-position: 55% bottom;
+  --qyt-q-sidebar-gradient: linear-gradient(to bottom, var(--qyt-q-sidebar) 58%, var(--qyt-q-sidebar-wash) 73%, transparent 100%);
+}
+
+body[data-qyt-q-theme="bluefish"][data-ds-dark-theme] [data-shortcut-modal="settings"] > nav {
+  --qyt-q-sidebar-gradient: linear-gradient(to bottom, var(--qyt-q-sidebar) 58%, var(--qyt-q-sidebar-wash) 73%, rgba(21, 30, 55, .48) 100%);
+}
+
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase] {
+  --qyt-bluefish-width: min(48%, 40dvh, 455px);
+  --qyt-bluefish-bottom: -1%;
+  --qyt-bluefish-alpha: 1;
+}
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase="active"] {
+  --qyt-bluefish-width: min(32%, 34dvh, 300px, max(138px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 + 10px)));
+  --qyt-bluefish-bottom: min(15%, 130px);
+  --qyt-bluefish-alpha: .94;
+  --qyt-q-reading-wash: linear-gradient(90deg,
+    transparent,
+    var(--qyt-q-paper) max(12px, calc((100% - var(--dsh-chat-content-width, 720px)) / 2 - 20px)),
+    var(--qyt-q-paper) min(100%, calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 12px)),
+    transparent min(100%, calc((100% + var(--dsh-chat-content-width, 720px)) / 2 + 70px)));
+}
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase="active"]:has(> .qyt-bluefish-mascot)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--qyt-q-reading-wash);
+  pointer-events: none;
+}
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase="active"]:has(> .qyt-bluefish-mascot) [data-conversation-scroll] {
+  background-image: none;
+}
+body[data-qyt-q-theme="bluefish"][data-qyt-bluefish-preview] [data-slot="main.conversation"] > [data-phase] {
+  --qyt-bluefish-width: min(53%, 72dvh, 228px);
+  --qyt-bluefish-bottom: 24px;
+}
+
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase]:not(:has(> .qyt-bluefish-mascot))::after,
+.qyt-bluefish-mascot {
+  position: absolute;
+  inset: auto 1% var(--qyt-bluefish-bottom) auto;
+  width: var(--qyt-bluefish-width);
+  aspect-ratio: 1;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  filter: var(--qyt-bluefish-character-filter);
+  opacity: var(--qyt-bluefish-alpha);
+}
+body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase]:not(:has(> .qyt-bluefish-mascot))::after {
+  content: "";
+  background: url("__QYT_BLUEFISH_PORTRAIT__") center / contain no-repeat;
+}
+
+.qyt-bluefish-character { position: absolute; inset: 0; background: center / contain no-repeat; }
+.qyt-bluefish-character > canvas { position: relative; display: block; width: 100%; height: 100%; }
+.qyt-bluefish-ground { position: absolute; width: 53%; height: 5%; top: 88.5%; translate: -50%; border-radius: 50%; background: radial-gradient(ellipse, #304e7c, transparent 71%); }
+
+.qyt-bluefish-water { position: absolute; inset: 0; z-index: -3; overflow: hidden; pointer-events: none; }
+.qyt-bluefish-water > canvas { position: absolute; inset: auto 0 0; width: 100%; visibility: hidden; }
+.qyt-bluefish-water > canvas[data-ready="true"] { visibility: visible; }
+body[data-ds-dark-theme] .qyt-bluefish-water > canvas { filter: brightness(.49) saturate(.83); }
+.qyt-bluefish-emitted-bubble, .qyt-bluefish-sleep, .qyt-bluefish-little-fish, .qyt-bluefish-caught-fish { position: absolute; opacity: 0; pointer-events: none; }
+.qyt-bluefish-emitted-bubble {
+  z-index: -1; border: 1px solid #f4feffdd; border-radius: 50%;
+  background: radial-gradient(circle at 28% 25%, #fff 3%, transparent 13%), radial-gradient(circle at 60% 66%, #e8fcff14 30%, #b4e3feaa 75%, #fff9);
+  box-shadow: inset 0 0 5px #f0fbff9e, 0 0 12px #7ea9eb4a;
+}
+.qyt-bluefish-sleep { inset: 5% 14% auto auto; color: #4d67ad; font: italic 750 clamp(10px, 1.5vw, 20px)/1 system-ui; text-shadow: 0 1px 3px #f7fcff; }
+.qyt-bluefish-mascot:is([data-action-stage="doze"], [data-action-stage="sleep"]) .qyt-bluefish-sleep { animation: qyt-bluefish-dream 2.5s ease-out infinite; }
+.qyt-bluefish-mascot[data-action-stage="sleep"] .qyt-bluefish-sleep { inset-block-start: 26%; }
+.qyt-bluefish-little-fish { inset: auto 11% 8% auto; width: clamp(25px, 5%, 64px); z-index: -1; }
+.qyt-bluefish-butterfly { position: absolute; z-index: -1; inset: 0 auto auto 0; width: clamp(23px, 4.4%, 46px); opacity: 0; pointer-events: none; transform-origin: center; }
+.qyt-bluefish-caught-fish { inset: 50% auto auto 27%; width: 22%; }
+.qyt-bluefish-mascot[data-mode="fish"] .qyt-bluefish-caught-fish { animation: qyt-bluefish-catch 1.65s 2.48s ease-out both; }
+.qyt-bluefish-speech {
+  position: absolute; z-index: 2; inset: auto clamp(75px, 25%, 320px) calc(var(--qyt-bluefish-bottom) + min(43%, 230px)) auto;
+  max-width: min(230px, 56%); padding: 9px 13px; border: 1px solid var(--qyt-q-line); border-radius: 13px 13px 4px 13px;
+  color: var(--qyt-q-ink); background: var(--qyt-q-surface); box-shadow: 0 5px 18px var(--qyt-q-shadow-float);
+  font: 550 12px/1.5 system-ui; pointer-events: none; animation: qyt-bluefish-speech 320ms ease-out both;
+}
+
+@keyframes qyt-bluefish-catch {
+  0% { opacity: 0; transform: translate(-36%, 47%) rotate(-18deg) scale(.6); }
+  25%, 71% { opacity: 1; transform: translateY(-20%) rotate(22deg); }
+  100% { opacity: 0; transform: translate(-30%, 42%) rotate(-7deg) scale(.8); }
+}
+@keyframes qyt-bluefish-dream { 15%, 62% { opacity: .9; } 100% { opacity: 0; translate: 9px -14px; } }
+@keyframes qyt-bluefish-speech { from { opacity: 0; translate: 0 6px; } }
+@media (forced-colors: active) {
+  body[data-qyt-q-theme="bluefish"] [data-slot="main.conversation"] > [data-phase]::after,
+  .qyt-bluefish-mascot { display: none; }
+}

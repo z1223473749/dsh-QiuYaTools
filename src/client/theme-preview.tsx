@@ -7,6 +7,7 @@ import { DEFAULT_PREFERENCES, getThemeMotion, type Preferences, type QPresetThem
 import { MONO_ICON_DATA_URL } from './brand-assets.ts'
 import { installQTheme } from './q-theme.ts'
 import { getQTheme, type ThemeDefinition } from './theme-catalog.ts'
+import { BLUEFISH_BUBBLES_EVENT, BLUEFISH_FEED_EVENT, BLUEFISH_PLAY_EVENT } from './bluefish-scene.ts'
 
 // This is only the miniature host's layout. Art, palettes, motion, reduced
 // motion and all scene disposal stay in the same framework as the real app.
@@ -37,12 +38,13 @@ const SETTINGS_FRAME_HTML = FRAME_HTML.replace('</style>', `
   </article>
 </div></body>`)
 
-export function ThemePreview({ ctx, form, theme, draftVideo, title, appearance, settingsLabels, onMotionStatus }: {
+export function ThemePreview({ ctx, form, theme, draftVideo, title, appearance, settingsLabels, onMotionStatus, linkedControls }: {
   ctx: Context
   title: string
   appearance?: 'light' | 'dark'
   settingsLabels?: { settings: string; general: string; models: string; theme: string; attachments: string; enabled: string }
   onMotionStatus?(status: 'loading' | 'playing' | 'failed' | 'reduced' | 'static'): void
+  linkedControls?: { dynamic: boolean; start: string; stop: string; feed: string; play: string; bubbles: string }
 } & ({ form: ConfigForm<Preferences>; theme: ThemeDefinition; draftVideo?: never } | {
   form?: never; theme?: never; draftVideo: { theme: CustomTheme; url: string }
 })) {
@@ -51,6 +53,18 @@ export function ThemePreview({ ctx, form, theme, draftVideo, title, appearance, 
   const liveDraft = useRef(draftVideo)
   const notifyDraft = useRef<() => void>()
   const themeId = theme?.id ?? draftVideo!.theme.id
+  const linked = theme?.linked === true
+  const linkedDynamic = linkedControls?.dynamic === true
+  const [demo, setDemo] = useState(false)
+
+  useEffect(() => {
+    if (!linkedDynamic) setDemo(false)
+    if (!frameDocument?.body) return
+    const enabled = linkedDynamic && demo
+    frameDocument.body.toggleAttribute('data-qyt-bluefish-demo', enabled)
+    if (enabled) frameDocument.body.dataset.qytBluefishDemoStarted = String(Date.now())
+    else delete frameDocument.body.dataset.qytBluefishDemoStarted
+  }, [frameDocument, linkedDynamic, demo])
 
   useEffect(() => {
     liveDraft.current = draftVideo
@@ -72,6 +86,7 @@ export function ThemePreview({ ctx, form, theme, draftVideo, title, appearance, 
     const view = parent.defaultView
     if (!view) return
     let disposed = false
+    doc.body.toggleAttribute('data-qyt-bluefish-preview', linked)
     const listeners = new Set<() => void>()
     const bounds = element.getBoundingClientRect()
     let inView = bounds.width > 0 && bounds.height > 0 && bounds.right > 0 && bounds.bottom > 0 && bounds.left < view.innerWidth && bounds.top < view.innerHeight
@@ -151,9 +166,22 @@ export function ThemePreview({ ctx, form, theme, draftVideo, title, appearance, 
       intersection?.disconnect()
       parent.removeEventListener('visibilitychange', notify)
       crop.remove()
+      doc.body.removeAttribute('data-qyt-bluefish-preview')
       doc.body.style.removeProperty('--qyt-preview-art-position')
     }
-  }, [ctx, form, frameDocument, themeId, theme?.revision, theme?.previewPosition, appearance, onMotionStatus])
+  }, [ctx, form, frameDocument, themeId, theme?.revision, theme?.previewPosition, appearance, onMotionStatus, linked])
 
-  return <iframe ref={frame} className="qyt-theme-preview-frame" data-qyt-theme-preview="" title={title} aria-hidden="true" tabIndex={-1} srcDoc={settingsLabels ? SETTINGS_FRAME_HTML : FRAME_HTML} onLoad={() => { setFrameDocument(frame.current?.contentDocument ?? null) }}/>
+  return <>
+    <iframe ref={frame} className="qyt-theme-preview-frame" data-qyt-theme-preview="" data-qyt-linked-preview={linkedDynamic || undefined} title={title} aria-hidden={linked ? undefined : true} tabIndex={-1} srcDoc={settingsLabels ? SETTINGS_FRAME_HTML : FRAME_HTML} onLoad={() => { setFrameDocument(frame.current?.contentDocument ?? null) }}/>
+    {linkedControls && linkedDynamic && <div className="qyt-theme-linked-controls">
+      {([[BLUEFISH_PLAY_EVENT, linkedControls.play], [BLUEFISH_BUBBLES_EVENT, linkedControls.bubbles], [BLUEFISH_FEED_EVENT, linkedControls.feed]] as const).map(([event, label]) =>
+        <button key={event} type="button" className="qyt-button" disabled={!frameDocument} onClick={() => {
+        const view = frameDocument?.defaultView
+        if (view) frameDocument.dispatchEvent(new view.Event(event))
+      }}>{label}</button>)}
+      <button type="button" className="qyt-button" disabled={!frameDocument} aria-pressed={demo} onClick={() => setDemo(value => !value)}>
+        {demo ? linkedControls.stop : linkedControls.start}
+      </button>
+    </div>}
+  </>
 }

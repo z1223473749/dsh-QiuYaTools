@@ -1,7 +1,7 @@
 {
   "name": "dsh-qiuya-tools",
-  "version": "0.7.8",
-  "description": "为 DeepSeek Harness 提供 Git 分支、改动对比与 PR 管理，会话和计划批注、附件增强、独立窗口、批量归档、提示词建议与 Q 主题，并支持 Mac/Windows 电脑操控和实时预览。",
+  "version": "0.7.9",
+  "description": "为 DeepSeek Harness 提供 Git 分支、改动对比与 PR 管理，会话和计划批注、附件增强、独立窗口、批量归档、提示词建议与 Q 主题。",
   "icon": "./assets/icon-color.webp",
   "type": "module",
   "license": "MIT",
@@ -23,12 +23,10 @@
     "lib/",
     "assets/icon-color.webp",
     "locale/",
-    "browser-extension/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
     "NOTICE",
-    "scripts/computer-agent.mjs",
     "docs/computer-use-guide.md",
     "docs/git-guide.md",
     "docs/native-updates.md",
@@ -63,38 +61,14 @@
     "check": "npm run typecheck && npm test",
     "prepack": "npm run check",
     "build:native:windows": "node scripts/build-windows-native.mjs",
-    "test:computer:unit": "node --test tests/computer-session.test.mjs",
-    "test:computer:host": "node --test tests/computer-tools.test.mjs tests/computer-host.test.mjs tests/computer-host-dispose.test.mjs tests/computer-native.test.mjs",
-    "test:computer:remote": "node --test tests/computer-remote.test.mjs tests/computer-remote-lifecycle.test.mjs",
-    "test:computer:web": "node scripts/test-computer-preview.mjs",
-    "test:computer:permissions": "node scripts/test-computer-permissions.mjs",
-    "test:computer:macos": "node scripts/e2e-macos-computer.mjs --evidence-dir artifacts/computer-use/macos-native",
-    "test:computer:lease:macos": "node scripts/test-macos-computer-lease.mjs --action-crash",
-    "test:computer:windows": "node scripts/test-windows-native-pd.mjs",
     "package:candidate": "node scripts/package-candidates.mjs",
-    "test:computer:soak": "node scripts/soak-computer.mjs",
-    "test:compat": "node scripts/e2e-harness.mjs",
-    "test:compat:agents": "node scripts/test-harness-agents.mjs",
     "test:compat:install": "node scripts/test-harness-install.mjs",
-    "test:computer:preflight": "node scripts/computer-preflight.mjs",
-    "test:computer:browser": "node scripts/test-computer-browser.mjs",
-    "typecheck:acceptance:host": "tsc -p tsconfig.h1-integration.json",
-    "test:acceptance": "node --test tests/acceptance-runs*.test.mjs",
-    "typecheck:workbench:host": "tsc -p tsconfig.workbench-host.json",
-    "test:workbench": "node --test tests/workbench*.test.mjs",
-    "typecheck:workflows:host": "tsc -p tsconfig.workflows-host.json",
-    "test:workflows": "node --test tests/acceptance-workflows*.test.mjs",
-    "test:browser-diagnostics": "node --test tests/browser-diagnostics*.test.mjs",
-    "typecheck:browser-diagnostics:host": "tsc -p tsconfig.diagnostics-host.json",
-    "typecheck:templates:host": "tsc -p tsconfig.templates-host.json",
-    "typecheck:templates:client-core": "tsc -p tsconfig.templates-client-core.json",
-    "test:templates": "node --test tests/acceptance-templates*.test.mjs",
     "test:updates:browser": "node scripts/test-update-progress.mjs"
   },
   "optionalDependencies": {
-    "dsh-qiuya-tools-native-darwin-universal": "0.7.3",
-    "dsh-qiuya-tools-native-win32-arm64": "0.7.3",
-    "dsh-qiuya-tools-native-win32-x64": "0.7.3"
+    "dsh-qiuya-tools-native-darwin-universal": "0.7.4",
+    "dsh-qiuya-tools-native-win32-arm64": "0.7.4",
+    "dsh-qiuya-tools-native-win32-x64": "0.7.4"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5"
@@ -127,6 +101,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
+    "@types/three": "0.187.0",
     "esbuild": "^0.25.0",
     "fflate": "^0.8.2",
     "immer": "10.1.1",
@@ -136,6 +111,7 @@
     "playwright": "1.61.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "three": "0.187.0",
     "typescript": "^6.0.3",
     "ws": "8.22.0",
     "zustand": "4.4.7"
@@ -150,8 +126,8 @@
   },
   "author": "QiuYa",
   "qiuyaNative": {
-    "version": "0.7.3",
+    "version": "0.7.4",
     "protocolVersion": 1,
-    "computerUse": true
+    "sessionWindows": true
   }
 }

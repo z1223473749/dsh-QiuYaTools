@@ -1,33 +1,7 @@
-# QiuYa 增强工具箱
+# 插件提交说明
 
-AI 智能动效主题、电脑操控、独立窗口、附件预览、Git 管理、会话分窗与批注、跨应用文件拖拽、AI 提示词。
+QiuYaTools 为 DeepSeek Harness 提供附件增强、会话独立窗口、批量归档、计划与会话文字批注、提示词建议、Git 管理及 Q 主题。
 
-在 Harness 的「插件 → 添加插件」中输入 `https://github.com/z1223473749/dsh-QiuYaTools` 安装。
+官方 Harness 已提供相同的电脑操控功能，插件已移除对应功能及相关代码。详情见[功能移除说明](computer-use-guide.md)。
 
-[源码与使用说明](https://github.com/z1223473749/dsh-QiuYaTools) · [下载完整安装包](https://github.com/z1223473749/dsh-QiuYaTools/releases/latest)
-
-## 界面预览
-
-**主题主页**
-
-![主题主页](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-home.png)
-
-**Q 主题设置**
-
-![Q 主题设置](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-themes.png)
-
-**电脑操控**
-
-![电脑操控](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-computer-use.png)
-
-**附件增强**
-
-![附件增强](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-attachments.png)
-
-**计划与会话批注**
-
-![计划与会话批注](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-annotations.png)
-
-**自定义主题**
-
-![自定义主题](https://raw.githubusercontent.com/z1223473749/dsh-QiuYaTools/main/docs/images/marketplace-custom-theme.png)
+安装与当前功能见 [README](../README.md)，构建与发布流程见[开发说明](development.md)。

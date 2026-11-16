@@ -5,7 +5,6 @@ import { createHash } from 'node:crypto'
 import { join, relative, resolve, sep, win32 } from 'node:path'
 
 export const SETTINGS_ACCEPTANCE_PAGES = [
-  { id: 'computer', label: '电脑操控', heading: '电脑操控', toggle: '启用电脑操控', regions: ['系统权限', '始终允许的应用', '电脑任务概览'] },
   { id: 'pastedTextEnabled', label: '附件增强', heading: '附件增强', toggle: '附件增强', kind: 'thresholds' },
   { id: 'sessionWindowsEnabled', label: '独立窗口', heading: '会话独立窗口', toggle: '会话独立窗口', steps: ['新窗口打开', '拖出列表'], kind: 'windows' },
   { id: 'bulkArchiveEnabled', label: '批量归档', heading: '会话多选与批量归档', toggle: '会话多选与批量归档', steps: ['Shift', '右键已选会话', '右键工作区'] },
@@ -45,13 +44,6 @@ export function inspectSettingsTab(section, expected) {
     evidence.checked = toggle.getAttribute('aria-checked') === 'true'
   }
   for (const label of expected.regions ?? []) require(panel.querySelector(`section[aria-label="${label}"]`), `region ${label} is missing`)
-  if (expected.id === 'computer') {
-    require(!panel.querySelector('.qyt-computer-advanced,input[type="password"]'), 'per-chat environment configuration must stay in the conversation composer')
-    require(text(panel.querySelector('.qyt-computer-settings-hint')).includes('聊天输入框'), 'the chat environment entry guidance is missing')
-    require([...panel.querySelectorAll('button')].some(node => text(node) === '重新检查'), 'permission recheck is missing')
-    require([...panel.querySelectorAll('button')].some(node => text(node) === '添加应用'), 'application authorization entry is missing')
-    evidence.environmentEntry = 'conversation.input.left'
-  }
   if (expected.steps) {
     const steps = [...featurePanel.querySelectorAll('ol > li')].map(text)
     require(steps.length === expected.steps.length && expected.steps.every((fragment, index) => steps[index].includes(fragment)), 'page-specific usage steps are missing or belong to another page')

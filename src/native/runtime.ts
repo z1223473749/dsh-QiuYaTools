@@ -4,10 +4,13 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pkg from '../../package.json' with { type: 'json' }
-import { ComputerError } from '../features/computer-use/contract.ts'
 import { helperArchitectures, windowsExecutableArchitecture } from '../updates/archive.ts'
 
-export type NativeComponent = 'computer' | 'session-window'
+class NativeRuntimeError extends Error {
+  constructor(readonly code: string, message: string) { super(message); this.name = 'NativeRuntimeError' }
+}
+
+export type NativeComponent = 'session-window'
 export interface NativeRuntimeOptions {
   platform?: NodeJS.Platform
   architecture?: string
@@ -19,17 +22,17 @@ export interface NativeRuntimeOptions {
 }
 
 export function nativePackageName(platform: NodeJS.Platform, architecture: string): string {
-  if (!['arm64', 'x64'].includes(architecture)) throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统架构暂无原生组件。')
+  if (!['arm64', 'x64'].includes(architecture)) throw new NativeRuntimeError('PLATFORM_UNSUPPORTED', '此系统架构暂无原生组件。')
   if (platform === 'darwin') return 'dsh-qiuya-tools-native-darwin-universal'
   if (platform === 'win32') return `dsh-qiuya-tools-native-win32-${architecture}`
-  throw new ComputerError('PLATFORM_UNSUPPORTED', '此系统暂无原生组件。')
+  throw new NativeRuntimeError('PLATFORM_UNSUPPORTED', '此系统暂无原生组件。')
 }
 
 /** Existing complete platform archives keep their original on-disk layout. */
 export function bundledNativePath(component: NativeComponent, platform: NodeJS.Platform, architecture: string, base: URL): string {
   nativePackageName(platform, architecture)
   if (platform === 'win32') return fileURLToPath(new URL(`./native/win32-${architecture}/qiuya-windows.exe`, base))
-  const file = component === 'computer' ? 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer' : 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'
+  const file = 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'
   return fileURLToPath(new URL(file, base))
 }
 
@@ -37,7 +40,7 @@ const verified = new Map<string, string>()
 function verify(root: string, component: NativeComponent, platform: NodeJS.Platform, architecture: string, version: string): string {
   const library = join(root, 'lib')
   const relative = platform === 'win32' ? `win32-${architecture}/qiuya-windows.exe`
-    : component === 'computer' ? 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer' : 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'
+    : 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'
   const manifestPath = platform === 'win32' ? join(library, 'native/windows-manifest.json') : join(library, 'macos-manifest.json')
   const executable = platform === 'win32' ? join(library, 'native', relative) : join(library, relative)
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
@@ -81,6 +84,6 @@ export function resolveNativeExecutable(component: NativeComponent, options: Nat
     return verify(dirname(dependency), component, platform, architecture, nativeVersion)
   } catch {
     const label = platform === 'win32' ? `Windows ${architecture}` : 'macOS'
-    throw new ComputerError('NATIVE_INSTALLATION_INCOMPLETE', `${label} 原生组件未完整安装或与插件版本不匹配。请在 Harness 插件管理中重新安装 QiuYaTools，并确认安装未跳过可选依赖；也可安装同版本的对应系统 .tgz 完整包。无需单独启动执行器或安装开发工具。`)
+    throw new NativeRuntimeError('NATIVE_INSTALLATION_INCOMPLETE', `${label} 原生组件未完整安装或与插件版本不匹配。请在 Harness 插件管理中重新安装 QiuYaTools，并确认安装未跳过可选依赖；也可安装同版本的对应系统 .tgz 完整包。无需单独启动执行器或安装开发工具。`)
   }
 }

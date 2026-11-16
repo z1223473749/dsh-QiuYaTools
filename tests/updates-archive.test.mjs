@@ -106,27 +106,23 @@ test('validates package identity, bundle patch and native arm64/universal helper
   assert.deepEqual(validateUpdateArchive(bytes, { ...options, architecture: 'x64' }).architectures, ['arm64', 'x64'])
 })
 
-test('computer-capable Mac packages bind both helpers to protocol, architecture and payload hashes', () => {
-  const session = universal(), computer = universal()
-  const computerFile = 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'
+test('session-window Mac packages bind the helper to protocol, architecture and payload hashes', () => {
+  const session = universal()
   const native = { protocolVersion: 1, version: options.version, artifacts: [
     { file: helperPath.slice('package/lib/'.length), bytes: session.length, sha256: createHash('sha256').update(session).digest('hex') },
-    { file: computerFile, bytes: computer.length, sha256: createHash('sha256').update(computer).digest('hex') },
   ] }
-  const candidate = (payload = native, binary = computer, agent = 'export {}') => archive(fixture({ manifest: { qiuyaNative: { protocolVersion: 1, computerUse: true } }, helper: session, extra: [
-    entry('package/lib/macos-manifest.json', JSON.stringify(payload)), entry(`package/lib/${computerFile}`, binary, { mode: 0o755 }),
-    ...(agent === null ? [] : [entry('package/lib/computer-agent.js', agent)]),
+  const candidate = (payload = native, binary = session) => archive(fixture({ manifest: { qiuyaNative: { protocolVersion: 1, sessionWindows: true } }, helper: binary, extra: [
+    entry('package/lib/macos-manifest.json', JSON.stringify(payload)),
   ] }))
   validateUpdateArchive(candidate(), options)
   validateUpdateArchive(candidate(), { ...options, architecture: 'x64' })
   assert.throws(() => validateUpdateArchive(candidate({ ...native, protocolVersion: 99 }), options), /protocol/)
   assert.throws(() => validateUpdateArchive(candidate({ ...native, version: '9.9.9' }), options), /identity/)
   assert.throws(() => validateUpdateArchive(candidate(native, thin()), options), /integrity/)
-  assert.throws(() => validateUpdateArchive(candidate({ ...native, artifacts: native.artifacts.slice(0, 1) }), options), /identity/)
-  for (const agent of [null, '']) assert.throws(() => validateUpdateArchive(candidate(native, computer, agent), options), /missing or empty computer agent entry/)
+  assert.throws(() => validateUpdateArchive(candidate({ ...native, artifacts: [] }), options), /identity/)
 })
 
-test('all releases require exact nonempty public Host and client files, while legacy needs no computer agent', () => {
+test('all releases require exact nonempty public Host and client files', () => {
   const legacy = fixture(), path = chunk => chunk.subarray(0, 100).toString('utf8').split('\0')[0]
   const metadata = validateUpdateArchive(archive(legacy), options)
   assert.equal(metadata.files.includes('package/lib/computer-agent.js'), false)

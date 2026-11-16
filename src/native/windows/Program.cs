@@ -13,23 +13,10 @@ internal static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
-        if (args.Contains("--self-test-applications")) { Emit(ApplicationMetadataSelfTest.Run()); return; }
-        if (args.Contains("--self-test-preview-storage")) { Emit(AiCursorSelfTest.PreviewStorage()); return; }
-        if (args.Contains("--self-test-ai-cursor")) { Emit(AiCursorSelfTest.Run()); return; }
-        ElevatedComputer.ConnectWorker(args);
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        if (args.Contains("--capture-worker-test")) { CaptureSelfTest.Worker(args); return; }
-        if (args.Contains("--capture-parent-test")) { CaptureSelfTest.Parent(); return; }
-        if (args.Contains("--capture-worker")) { CaptureBroker.RunWorker(); return; }
-        if (args.Contains("--self-test-capture")) { Program.Emit(CaptureSelfTest.Run()); return; }
-        if (args.Contains("--self-test-preview")) { Program.Emit(PreviewSelfTest.Run()); return; }
-        if (args.Contains("--input-guardian")) { DesktopLeaseGuard.RunGuardian(); return; }
-        if (args.Contains("--self-test-input")) { Program.Emit(ComputerDriver.TestReleaseFailures()); return; }
-        if (args.Contains("--release-input")) { EmergencyRelease.Run(args.Contains("--release-input-test-ready")); return; }
-        if (args.Contains("--fixture")) { Application.Run(new FixtureForm(args)); return; }
-        using var context = new NativeContext(args.Contains("--computer") || ElevatedComputer.Worker);
+        using var context = new NativeContext();
         Application.Run(context);
     }
     internal static void Emit(object value)
@@ -55,17 +42,12 @@ internal sealed class NativeContext : ApplicationContext
 {
     private readonly Control dispatcher = new();
     private readonly WindowManager windows = new();
-    private readonly ComputerDriver? computer;
-    private readonly NativeApplicationCatalog applications = new();
     private readonly System.Windows.Forms.Timer parentWatch = new() { Interval = 1500 };
     private readonly int parentPid;
     private bool exiting;
-    private bool elevating;
-    private ElevatedComputer? elevated;
-    internal NativeContext(bool computerMode)
+    internal NativeContext()
     {
         dispatcher.CreateControl();
-        if (computerMode) computer = new ComputerDriver();
         int.TryParse(Environment.GetEnvironmentVariable("QIUYA_TOOLS_PARENT_PID"), out parentPid);
         parentWatch.Tick += (_, _) => {
             if (parentPid <= 0) return;
@@ -84,7 +66,6 @@ internal sealed class NativeContext : ApplicationContext
                 try {
                     using var document = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 32 });
                     var request = document.RootElement.Clone();
-                    if (InputTrace.Enabled && request.TryGetProperty("op", out var tracedOp) && tracedOp.ValueKind == JsonValueKind.String && tracedOp.GetString() == "release") InputTrace.Mark("stdin-release-read", request.TryGetProperty("epoch", out var tracedEpoch) && tracedEpoch.ValueKind == JsonValueKind.Number && tracedEpoch.TryGetInt64(out var value) ? value : 0);
                     dispatcher.BeginInvoke((Action)(() => _ = Dispatch(request)));
                 } catch (JsonException) { /* malformed, uncorrelated transport data */ }
             }
@@ -100,41 +81,7 @@ internal sealed class NativeContext : ApplicationContext
         else return;
         try {
             var op = Program.Text(request, "op", 64);
-            if (op == "release") InputTrace.Mark("dispatch-release", request.TryGetProperty("epoch", out var tracedEpoch) && tracedEpoch.ValueKind == JsonValueKind.Number && tracedEpoch.TryGetInt64(out var value) ? value : 0);
-            if (ElevatedComputer.Worker && op == "shutdownControl") { Shutdown(); return; }
-            if (ElevatedComputer.Worker && !ElevatedComputer.Allows(op)) throw new NativeFailure("unknown-operation", "Operation is unavailable in administrator control");
-            if (elevating && op is not ("status" or "release")) throw new NativeFailure("elevation-pending", "Wait for the administrator access decision");
-            object? result;
-            if (computer != null && op == "openSystemSettings" && Program.Text(request, "kind", 64) == "administrator") {
-                computer.RequireIdleForPermissionChange();
-                if (elevated == null && !ProcessPermissions.Elevated) {
-                    elevating = true;
-                    try { elevated = await ElevatedComputer.Start(); if (exiting) { await elevated.Close(); throw new NativeFailure("elevation-cancelled", "The control owner closed during administrator access"); } }
-                    finally { elevating = false; }
-                }
-                result = new { opened = true, supported = true, kind = "administrator" };
-            }
-            else if (elevated != null && ElevatedComputer.Allows(op)) result = await elevated.Call(op, request);
-            else if (computer == null) result = await windows.Session(op, request, requestId);
-            else result = op switch {
-                "status" => computer.Status(),
-                "applications" => await Task.Run(applications.Applications),
-                "openSystemSettings" => NativeApplicationCatalog.OpenSystemSettings(Program.Text(request, "kind", 64)),
-                "launchApplication" => await Task.Run(() => applications.Launch(Program.Text(request, "appId", 1024))),
-                "targets" => await Task.Run(computer.Targets),
-                "observe" => await Task.Run(() => computer.Observe(Program.Text(request, "targetId", 256), request.TryGetProperty("preview", out var preview) && preview.ValueKind == JsonValueKind.True)),
-                "foregroundContext" => computer.ForegroundContext(),
-                "foregroundPrepare" => computer.ForegroundPrepare(request),
-                "foregroundGrant" => computer.ForegroundGrant(request),
-                "foregroundCancel" => computer.ForegroundCancel(request),
-                "lease" => computer.Lease(request),
-                "release" => computer.Release(request),
-                "endVirtualInput" => computer.EndVirtualInput(request),
-                "act" => await computer.Act(request),
-                "openPreview" => await windows.OpenPreview(request),
-                "closePreview" => await windows.ClosePreview(request),
-                _ => throw new NativeFailure("unknown-operation", "Unknown native operation")
-            };
+            var result = await windows.Session(op, request, requestId);
             // Session open waits for the verified in-page handshake and emits its own reply.
             if (!ReferenceEquals(result, WindowManager.Deferred)) Program.Emit(new { requestId, ok = true, result });
         } catch (Exception error) {
@@ -147,20 +94,7 @@ internal sealed class NativeContext : ApplicationContext
     {
         if (exiting) return;
         exiting = true; parentWatch.Stop();
-        // A Windows computer owner must confirm input release within the Host's
-        // original 1500ms hard limit. Browser process groups then drain under a
-        // separate bound; they never keep an unconfirmed input owner alive.
         try {
-            var inputReleased = false;
-            try { if (elevated != null) await elevated.Close(); computer?.ReleaseInputForShutdown(); inputReleased = true; }
-            catch (Exception) { Environment.ExitCode = 1; }
-            if (computer != null) {
-                try {
-                    if (inputReleased) Program.Emit(new { @event = "inputReleased", passed = true });
-                    else Program.Emit(new { @event = "inputCleanupFailed" });
-                } catch (Exception) { Environment.ExitCode = 1; }
-            }
-            try { computer?.Dispose(); } catch (Exception) { Environment.ExitCode = 1; }
             var browserReleased = false;
             try {
                 await windows.ShutdownAsync(WindowManager.BrowserShutdownMilliseconds);

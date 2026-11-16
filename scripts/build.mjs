@@ -1,7 +1,6 @@
 import { build } from 'esbuild'
 import { readFile, mkdir, writeFile, cp } from 'node:fs/promises'
 import { buildSessionWindowHelper } from '../src/features/session-windows/build-helper.mjs'
-import { buildMacOSComputer } from './build-macos-computer.mjs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
@@ -25,7 +24,6 @@ await build({
   // Windows runtime under the installer's existing 64 MiB archive limit.
   minifyWhitespace: true,
 })
-await build({ entryPoints: ['src/features/computer-use/remote.ts'], outfile: 'lib/computer-agent.js', bundle: true, platform: 'node', target: 'node22', format: 'esm', minifyWhitespace: true })
 const client = await build({
   entryPoints: ['src/client/index.tsx'], bundle: true, write: false,
   outfile: 'lib/client.js',
@@ -51,10 +49,9 @@ for (const dependency of ['fflate', 'pdfjs-dist']) {
   await writeFile(`lib/third-party/${dependency}-LICENSE.txt`, await readFile(resolve(dirname(require.resolve(dependency)), '../LICENSE')))
 }
 await buildSessionWindowHelper(new URL('../lib/', import.meta.url))
-await buildMacOSComputer()
 if (process.platform === 'darwin') {
   const artifacts = []
-  for (const file of ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer']) {
+  for (const file of ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window']) {
     const binary = await readFile(new URL(`../lib/${file}`, import.meta.url))
     artifacts.push({ file, bytes: binary.length, sha256: createHash('sha256').update(binary).digest('hex') })
   }

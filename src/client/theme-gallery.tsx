@@ -7,6 +7,10 @@ export function ThemeGalleryIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4-4 3 3 4-5 5 6"/></svg>
 }
 
+function LinkedThemeIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="6" r="3"/><circle cx="5" cy="17" r="3"/><circle cx="19" cy="17" r="3"/><path d="m10.4 8.5-3.8 6m7-6 3.8 6"/></svg>
+}
+
 export function ThemeEditIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12L4 20z"/></svg>
 }
@@ -128,12 +132,15 @@ export function ThemeGallery({ themes, themeId, disabled, saving, atCustomLimit,
       </button>
     </header>
     <div className="qyt-theme-gallery-body">
-      {([true, false] as const).map(video => {
-        const entries = themes.filter(option => Boolean(option.video) === video)
-        return <section key={String(video)} className="qyt-theme-gallery-section" data-kind={video ? 'video' : 'image'} aria-labelledby={`${id}-${video}`}>
+      {(['linked', 'video', 'image'] as const).map(kind => {
+        const linked = kind === 'linked'
+        const video = kind === 'video'
+        const entries = themes.filter(option => (option.linked ? 'linked' : option.video ? 'video' : 'image') === kind)
+        if (linked && entries.length === 0) return null
+        return <section key={kind} className="qyt-theme-gallery-section" data-kind={kind} aria-labelledby={`${id}-${kind}`}>
           <div className="qyt-theme-gallery-section-heading">
-            <span className="qyt-theme-gallery-section-icon">{video ? <ThemeEditorIcon kind="video"/> : <ThemeGalleryIcon/>}</span>
-            <h4 id={`${id}-${video}`}>{t(video ? 'qThemeGalleryVideos' : 'qThemePickerTitle')}</h4>
+            <span className="qyt-theme-gallery-section-icon">{linked ? <LinkedThemeIcon/> : video ? <ThemeEditorIcon kind="video"/> : <ThemeGalleryIcon/>}</span>
+            <h4 id={`${id}-${kind}`}>{t(linked ? 'qThemeGalleryLinked' : video ? 'qThemeGalleryVideos' : 'qThemePickerTitle')}</h4>
             <span className="qyt-theme-gallery-count" aria-hidden="true">{entries.length}</span>
           </div>
           <div className="qyt-theme-gallery-grid">
@@ -141,18 +148,26 @@ export function ThemeGallery({ themes, themeId, disabled, saving, atCustomLimit,
               const selected = option.id === themeId
               const custom = option.id.startsWith('custom:')
               const name = option.displayName ?? t(option.name)
+              const check = selected && <span className="qyt-theme-gallery-selected" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 8 3 3 5-6"/></svg></span>
               return <div className="qyt-theme-gallery-tile" data-custom={custom || undefined} key={option.id}>
                 <button type="button" className="qyt-theme-gallery-card" data-theme={option.id} disabled={disabled && !saving} aria-disabled={saving || undefined} aria-pressed={selected}
+                  style={linked ? { '--qyt-linked-accent': option.accent, '--qyt-linked-accent-dark': option.accentDark, '--qyt-theme-solid': option.accent, '--qyt-linked-soft': option.soft } as React.CSSProperties : undefined}
                   onClick={async () => {
                     if (disabled) return
                     setFailed(false)
                     if (!await onSelect(option.id)) setFailed(true)
                   }}>
-                  <span className="qyt-theme-gallery-art" aria-hidden="true" style={{ backgroundImage: `url("${option.art}")`, backgroundPosition: option.previewPosition }}>
+                  <span className="qyt-theme-gallery-art" aria-hidden="true" style={{ backgroundImage: `url("${option.galleryArt ?? option.art}")`, backgroundPosition: linked ? 'center 63%' : option.previewPosition }}>
                     {video && <span className="qyt-theme-gallery-play"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg></span>}
-                    {selected && <span className="qyt-theme-gallery-selected"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 8 3 3 5-6"/></svg></span>}
+                    {!linked && check}
                   </span>
-                  <span className="qyt-theme-gallery-label" title={name}>{name}</span>
+                  <span className="qyt-theme-gallery-label" title={name}>{name}
+                    {linked && <span className="qyt-theme-gallery-linked-tags">
+                      <span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" aria-hidden="true"><path d="m3 2 9 6-4 .7-1.7 3.7L3 2Z"/></svg>{t('qThemePointerInteraction')}</span>
+                      <span><LinkedThemeIcon/>{t('qThemeConversationLink')}</span>
+                    </span>}
+                  </span>
+                  {linked && check}
                 </button>
                 {custom && <div className="qyt-theme-gallery-actions">
                   <button type="button" title={t('qThemeGalleryEdit')} aria-label={`${t('qThemeGalleryEdit')} · ${name}`} disabled={disabled} onClick={() => onEdit(option.id)}>

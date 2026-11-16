@@ -127,17 +127,15 @@ test('built client follows the Harness loader and settings contribution lifecycl
   assert.ok(requestedModules.includes('@deepseek-ai/cordis'), 'Cordis identity symbols come from the same Host runtime as its service trackers')
 
   const mounted = mountClient(plugin, { status: 'ready', writable: true, value: { enabled: true } })
-  assert.deepEqual(mounted.injectedSlots, ['conversation.input.left', 'settings.section'])
+  assert.deepEqual(mounted.injectedSlots, ['settings.section'])
   assert.deepEqual(mounted.injectedServices, [
-    ['uiConversation', 'sidebarRight', 'sidebarRightTabs', 'resources'],
     ['connection'],
-    ['sidebarRight', 'sidebarRightTabs', 'resources', 'sessions'],
+    ['sessions'],
     ['inputTriggers', 'sessions', 'uiSession'],
     ['connection'],
   ], 'background updates and chat contributions wait for their real public connection and sidebar services')
   assert.deepEqual(mounted.requestedConfigIds, ['qiuya-tools'])
-  assert.equal(mounted.sections.size, 2)
-  assert.equal(mounted.sections.get('qiuya-tools-computer-environment')?.options.name, 'conversation.input.left', 'the environment selector uses the additive public composer slot')
+  assert.equal(mounted.sections.size, 1)
   assert.equal(mounted.sections.has('qiuya-tools-computer-inline'), false, 'an SSR client without chat services must not register the obsolete header preview')
   const { options } = mounted.sections.get('qiuya-tools')
   assert.equal(options.name, 'settings.section')
@@ -235,7 +233,6 @@ test('host hides its generated form using the owner fiber and releases the overr
   })
   assert.deepEqual(injections, [
     ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
-    ['connection', 'webServer'],
     ['connection'], ['settings'], ['connection', 'webServer'],
     ['connection', 'profileContext'],
     ['connection', 'llm', 'attachments', 'profileContext'],

@@ -151,8 +151,8 @@ if (process.argv.includes('--generate-only')) {
       await closeGallery()
     }
     await openGallery()
-    assert.equal(await choices.count(), 7, 'Each theme has one card in the gallery')
-    assert.deepEqual(await gallery.getByRole('heading', { level: 4 }).allTextContents(), ['视频主题', '主题'])
+    assert.equal(await choices.count(), 8, 'Each theme has one card in the gallery')
+    assert.deepEqual(await gallery.getByRole('heading', { level: 4 }).allTextContents(), ['联动主题', '视频主题', '主题'])
     assert.deepEqual(await gallery.getByRole('region', { name: '视频主题', exact: true }).getByRole('button').allTextContents(), ['伽罗 · 月下冰弦', '桃华白狐'])
     assert.equal(await gallery.getByRole('button', { name: '＋ 新建主题', exact: true }).isEnabled(), true)
     await gallery.screenshot({ path: join(output, 'theme-gallery.png') })
@@ -335,8 +335,212 @@ if (process.argv.includes('--generate-only')) {
     await garoVideo.waitFor({ state: 'detached' })
     assert.equal(await previewFrame.locator('[data-slot="sidebar"] > :first-child').evaluate(node => getComputedStyle(node).backgroundImage.includes('data:image/')), true)
     await page.locator('.qyt-settings').screenshot({ path: join(output, 'garo-settings-static.png') })
+    await chooseTheme('bluefish', true)
+    const linked = gallery.getByRole('region', { name: '联动主题' })
+    await linked.getByRole('button', { name: /蓝色大肥鱼.*鼠标互动.*会话联动/ }).and(linked.locator('[aria-pressed="true"]')).waitFor()
+    await gallery.screenshot({ path: join(output, 'bluefish-gallery.png') })
+    await closeGallery()
+    const mascot = previewFrame.locator('.qyt-bluefish-mascot')
+    await mascot.waitFor()
+    const character = mascot.locator('.qyt-bluefish-character')
+    await character.waitFor()
+    await mascot.locator('.qyt-bluefish-character[data-renderer="mesh"] > canvas').waitFor()
+    assert.equal(await character.locator('canvas').count(), 1)
+    const water = previewFrame.locator('.qyt-bluefish-water > canvas[data-ready="true"]')
+    await water.waitFor()
+    assert.equal(await previewFrame.locator('.qyt-bluefish-emitted-bubble').count(), 0)
+    const waterBefore = await water.evaluate(canvas => canvas.toDataURL())
+    await page.waitForTimeout(170)
+    assert.notEqual(await water.evaluate(canvas => canvas.toDataURL()), waterBefore)
+    const frameBounds = await page.locator('iframe[data-qyt-theme-preview]').boundingBox()
+    await page.mouse.move(frameBounds.x + 10, frameBounds.y + 15)
+    await page.waitForTimeout(250)
+    const leftGaze = Number((await character.getAttribute('data-gaze')).split(',')[0])
+    await page.mouse.move(frameBounds.x + frameBounds.width - 10, frameBounds.y + frameBounds.height - 10)
+    await page.waitForTimeout(250)
+    const rightGaze = Number((await character.getAttribute('data-gaze')).split(',')[0])
+    assert.ok(leftGaze < -.003 && rightGaze > .003, 'The iris offsets track the pointer in both directions')
+    const bounds = await mascot.boundingBox()
+    const x = bounds.x + bounds.width * .46, y = bounds.y + bounds.height * .42
+    await page.mouse.move(x, y)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-pose="look"]').waitFor()
+    await page.mouse.click(bounds.x + bounds.width * .48, bounds.y + bounds.height * .62)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="feed"][data-pose="chew"]').waitFor()
+    await page.getByRole('button', { name: '逗她玩', exact: true }).click()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    const recordAt = process.argv.indexOf('--record-bluefish')
+    const recording = recordAt > 0 ? await page.context().newCDPSession(page) : undefined
+    const captured = []
+    if (recording) {
+      recording.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
+        captured.push({ data, time: metadata.timestamp })
+        recording.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
+      })
+      await recording.send('Page.startScreencast', { format: 'jpeg', quality: 85, everyNthFrame: 4 })
+    }
+    await page.getByRole('button', { name: '逗她玩', exact: true }).click()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="play"][data-affect="happy"]').waitFor()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-travel-phase="rise"][data-choreography="play"]').waitFor()
+    assert.ok(Math.abs((await mascot.boundingBox()).x - bounds.x) < 1, 'The pet gets up before moving')
+    const chaseFrames = mascot.evaluate(async pet => {
+      const butterfly = pet.parentElement.querySelector('.qyt-bluefish-butterfly')
+      const character = pet.querySelector('.qyt-bluefish-character')
+      const frames = []
+      while (pet.dataset.mode === 'play' && frames.length < 500) {
+        await new Promise(requestAnimationFrame)
+        const box = pet.getBoundingClientRect()
+        const target = butterfly.getBoundingClientRect()
+        const [handX, handY] = character.dataset.hand.split(',').map(Number)
+        const [footX = NaN] = (character.dataset.support ?? '').split(',').filter(Boolean).map(Number)
+        frames.push({
+          phase: pet.dataset.travelPhase, stage: pet.dataset.actionStage, x: box.left,
+          targetX: target.x + target.width / 2, targetY: target.y + target.height / 2,
+          opacity: Number(butterfly.style.opacity), foot: box.left + footX * box.width,
+          fingertipGap: Math.hypot(box.left + handX * box.width - target.x - target.width / 2,
+            box.top + handY * box.height - target.y - target.height / 2),
+          progress: character.dataset.artProgress,
+          gaze: character.dataset.gaze,
+        })
+      }
+      const walk = frames.filter(frame => frame.stage === 'step' && Number.isFinite(frame.foot))
+      const reach = frames.filter(frame => frame.stage === 'reach' && frame.opacity > .9)
+      const land = frames.filter(frame => frame.stage === 'land' && frame.opacity > .7)
+      return {
+        stages: [...new Set(frames.map(frame => frame.stage).filter(Boolean))],
+        phases: [...new Set(frames.map(frame => frame.phase).filter(Boolean))],
+        steps: new Set(walk.map(frame => frame.progress)).size,
+        plantedDriftPx: Math.max(...walk.map(frame => frame.foot)) - Math.min(...walk.map(frame => frame.foot)),
+        moved: Math.min(...walk.map(frame => frame.x)) < frames[0].x - 10,
+        closestReachPx: Math.min(...reach.map(frame => frame.fingertipGap)),
+        escapeRisePx: reach[0]?.targetY - land.at(-1)?.targetY,
+        looksUp: land.some(frame => Number(frame.gaze.split(',')[1]) < -.004),
+        returned: Math.abs(pet.getBoundingClientRect().left - frames[0].x) < 1,
+      }
+    })
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="step"]').waitFor()
+    await page.waitForTimeout(590)
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-walk.png') })
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="reach"]').waitFor()
+    await page.waitForTimeout(320)
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-chase.png') })
+    const chase = await chaseFrames
+    if (recording) {
+      await recording.send('Page.stopScreencast')
+      await recording.detach()
+      await writeFile(resolve(process.argv[recordAt + 1]), JSON.stringify({ bounds: frameBounds, frames: captured }))
+    }
+    assert.deepEqual(chase.stages.slice(0, 6), ['discover', 'plant', 'step', 'jump', 'reach', 'land'])
+    assert.deepEqual(chase.phases, ['rise', 'walk', 'jump', 'reach', 'land', 'return', 'sit'])
+    assert.ok(chase.steps >= 12 && chase.plantedDriftPx < 1.1, JSON.stringify(chase))
+    assert.ok(chase.moved && chase.closestReachPx < 31 && chase.escapeRisePx > 22 && chase.looksUp && chase.returned, JSON.stringify(chase))
+    await page.getByRole('button', { name: '演示工作状态', exact: true }).click()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="working"][data-pose="chew"]').waitFor()
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'bluefish-settings.png') })
+    for (const meal of ['pork', 'eggs', 'cookies']) {
+      await previewFrame.locator(`.qyt-bluefish-mascot[data-mode="working"][data-pose="chew"][data-meal="${meal}"]`).waitFor()
+      await mascot.locator(`.qyt-bluefish-character[data-art-to="${meal}2"]`).waitFor()
+      await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, `bluefish-meal-${meal}.png`) })
+    }
+    await previewFrame.locator('body').evaluate(body => { body.dataset.qytBluefishDemoStarted = String(Date.now() - 71 * 60_000) })
+    await previewFrame.getByText('求你啦，先休息一会儿。我们回来再继续，好不好？', { exact: true }).waitFor()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="working"][data-affect="worried"]').waitFor()
+    assert.equal(await previewFrame.locator('[data-phase]').evaluate(phase => phase.getAnimations().some(animation => animation.effect.getKeyframes().some(frame => frame.translate === '-3px 0px' || frame.translate === '-3px'))), true)
+    await previewFrame.locator('[data-phase]').evaluate(phase => Promise.allSettled(phase.getAnimations().map(animation => animation.finished)))
+    await page.locator('.qyt-settings').screenshot({ path: join(output, 'bluefish-reminder.png') })
+    await page.getByRole('button', { name: '结束演示', exact: true }).click()
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    await mascot.evaluate(node => {
+      const { x, y, width, height } = node.getBoundingClientRect()
+      const phase = node.parentElement
+      for (let i = 0; i < 4; i++) phase.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: x + width * .46, clientY: y + height * .42 }))
+    })
+    await previewFrame.locator('.qyt-bluefish-mascot[data-affect="grumpy"]').waitFor()
+    const fishMotion = page.getByRole('radiogroup', { name: '蓝色大肥鱼背景效果', exact: true })
+    await fishMotion.getByRole('radio', { name: '静态', exact: true }).click()
+    await mascot.waitFor({ state: 'detached' })
+    assert.equal(await page.getByRole('button', { name: '演示工作状态', exact: true }).count(), 0)
+    assert.equal(await previewFrame.locator('[data-phase]').evaluate(node => getComputedStyle(node, '::after').backgroundImage.includes('data:image/png')), true)
+    await fishMotion.getByRole('radio', { name: '动态', exact: true }).click()
+    await mascot.waitFor()
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await mascot.waitFor({ state: 'detached' })
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await mascot.waitFor()
+    await page.clock.install()
+    await fishMotion.getByRole('radio', { name: '静态', exact: true }).click()
+    await mascot.waitFor({ state: 'detached' })
+    await fishMotion.getByRole('radio', { name: '动态', exact: true }).click()
+    await mascot.waitFor()
+    await page.clock.fastForward(40_000)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="nap"]').waitFor()
+    await page.mouse.move(frameBounds.x + 16, frameBounds.y + 24)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    await page.clock.fastForward(23_000)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="fish"]').waitFor()
+    await page.clock.fastForward(3050)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="fish"][data-affect="happy"]').waitFor()
+    await page.clock.fastForward(2100)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    await page.mouse.move(frameBounds.x + 22, frameBounds.y + 26)
+    await page.clock.fastForward(26_000)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="desk"]').waitFor()
+    await page.clock.fastForward(490)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="clear"]').waitFor()
+    await page.clock.fastForward(760)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="open"]').waitFor()
+    await page.clock.fastForward(710)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="write"]').waitFor()
+    const writing = await character.getAttribute('data-art-progress')
+    await page.clock.runFor(180)
+    assert.notEqual(await character.getAttribute('data-art-progress'), writing)
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-writing.png') })
+    await page.clock.fastForward(5500)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    await page.clock.fastForward(40_000)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="nap"]').waitFor()
+    await page.clock.fastForward(1100)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="doze"]').waitFor()
+    await page.clock.fastForward(2700)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="bed"]').waitFor()
+    await page.clock.fastForward(620)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="knee"]').waitFor()
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-bed-knee.png') })
+    await page.clock.fastForward(500)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="climb"]').waitFor()
+    await page.clock.fastForward(600)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="lie"]').waitFor()
+    await page.clock.fastForward(580)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="cover"]').waitFor()
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-bed-cover.png') })
+    await page.clock.fastForward(800)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-action-stage="sleep"]').waitFor()
+    await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, 'bluefish-bed.png') })
+    await page.mouse.move(frameBounds.x + 28, frameBounds.y + 30)
+    await page.clock.fastForward(2250)
+    await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    for (const [tool, movement] of [['gun', 'bubbles'], ['wand', 'bubbles'], ['gun', 'bubbleRun'], ['wand', 'bubbleRun']]) {
+      await page.getByRole('button', { name: '玩泡泡', exact: true }).click()
+      await previewFrame.locator('.qyt-bluefish-mascot[data-mode="bubbles"]').waitFor()
+      await page.clock.runFor(1210)
+      const emitted = previewFrame.locator(`.qyt-bluefish-emitted-bubble[data-source="${tool}"][data-choreography="${movement}"]`).first()
+      await emitted.waitFor()
+      const originError = await emitted.evaluate(bubble => {
+        const scene = bubble.parentElement
+        const pet = scene.querySelector('.qyt-bluefish-mascot')
+        const character = pet.querySelector('.qyt-bluefish-character')
+        const [x, y] = character.dataset.nozzle.split(',').map(Number)
+        const bounds = pet.getBoundingClientRect(), area = scene.getBoundingClientRect()
+        return Math.hypot(parseFloat(bubble.style.left) + parseFloat(bubble.style.width) / 2 - (bounds.left - area.left + bounds.width * x),
+          parseFloat(bubble.style.top) + parseFloat(bubble.style.height) / 2 - (bounds.top - area.top + bounds.height * y))
+      })
+      assert.ok(originError < 11, `${movement}/${tool} spawn error ${originError}px`)
+      assert.ok(await emitted.evaluate(bubble => bubble.getAnimations().some(animation => animation.effect.getKeyframes().at(-1).transform.includes('px, -'))))
+      await page.locator('iframe[data-qyt-theme-preview]').screenshot({ path: join(output, `bluefish-${movement}-${tool}.png`) })
+      await page.clock.fastForward(6200)
+      await previewFrame.locator('.qyt-bluefish-mascot[data-mode="idle"]').waitFor()
+    }
     assert.deepEqual(errors, [])
-    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, geometry, nestedMutation: oceanMutation, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-gallery.png', 'theme-gallery-narrow.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png', 'fox-settings-light.png', 'fox-settings-dark.png', 'fox-settings-narrow.png', 'garo-settings-light.png', 'garo-settings-static.png'] }
+    const report = { passed: true, source: 'src/client/index.tsx::QiuYaToolsSettings + src/client/q-theme.ts::installQTheme', html: htmlPath, chase, geometry, nestedMutation: oceanMutation, lightPalette, darkPalette, narrow, preferences: both, screenshots: ['ocean-settings.png', 'ocean-settings-card.png', 'ocean-settings-static.png', 'ocean-settings-narrow.png', 'begonia-settings.png', 'begonia-settings-card.png', 'begonia-settings-dark.png', 'begonia-settings-narrow.png', 'theme-gallery.png', 'theme-gallery-narrow.png', 'moonfrost-settings.png', 'moonfrost-settings-card.png', 'moonfrost-settings-dark.png', 'moonfrost-settings-narrow.png', 'buliangren-settings.png', 'buliangren-settings-dark.png', 'buliangren-settings-narrow.png', 'fox-settings-light.png', 'fox-settings-dark.png', 'fox-settings-narrow.png', 'garo-settings-light.png', 'garo-settings-static.png', 'bluefish-walk.png', 'bluefish-chase.png', 'bluefish-writing.png', 'bluefish-bed.png'] }
     await writeFile(join(output, 'settings-preview-result.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report, null, 2))
   } finally {

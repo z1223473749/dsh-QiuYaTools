@@ -36,8 +36,7 @@ const expected = {
   qThemeEnabled: true,
   qThemeId: 'moonfrost',
   qCustomThemes: [],
-  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' } },
-  computerUseEnabled: true,
+  qThemeSettings: { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' }, bluefish: { motion: 'dynamic' } },
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,
@@ -61,6 +60,11 @@ assert.equal(host.Config.simplify(validated.value), null, 'default-valued fields
 assert.deepEqual(unwrap(host.Config({})), expected,
   'callable Config and Standard Schema must agree')
 
+const legacy = host.Config({ computerUseEnabled: true, qThemeId: 'bluefish' })
+assert.equal(legacy.qThemeId.get(), 'bluefish')
+assert.equal(Object.hasOwn(validated.value, 'computerUseEnabled'), false, 'retired computer settings must not be part of the active schema')
+assert.equal(standard.validate(host.Config.simplify(legacy)).issues, undefined, 'legacy extra settings remain loadable')
+
 const custom = { id: 'custom:sample', name: '我的风景', image: 'data:image/webp;base64,UklGRg==', width: 800, height: 600, accent: '#ad563e', motion: 'dynamic', movement: 'pan', atmosphere: 'snow', intensity: .35, speed: .45, x: 50, y: 62, zoom: 1.2, mask: .9 }
 const smart = { version: 1, assetId: 'a'.repeat(64), sourceHash: 'b'.repeat(64), regions: [{ id: 'r0', kind: 'sway', label: '柳枝', polygon: [[.1,.1],[.3,.1],[.3,.8]], anchor: [.2,.1], tip: [.2,.8], amplitude: .008, speed: 1, direction: 0, enabled: true }], protect: [[[.4,.3],[.5,.3],[.5,.4]]], strokes: [{ regionId: 'r0', mode: 'protect', radius: .01, points: [[.4,.3]] }] }
 for (const input of [
@@ -71,6 +75,8 @@ for (const input of [
   { pasteCharacterThreshold: 1_000_000, pasteLineThreshold: 100_000 },
   { enabled: false, promptSuggestionsEnabled: false, qThemeEnabled: false, autoCheckUpdates: false },
   { qThemeSettings: { ocean: { motion: 'static' } } },
+  { qThemeId: 'bluefish' },
+  { qThemeId: 'bluefish', qThemeSettings: { bluefish: { motion: 'static' } } },
   { qThemeId: 'ocean', qThemeSettings: { ocean: { motion: 'static' } } },
   { qThemeId: 'begonia', qThemeSettings: { begonia: { motion: 'static' } } },
   { qThemeSettings: { moonfrost: { motion: 'static' } } },
@@ -159,7 +165,7 @@ host.apply({
 }, validated.value)
 assert.deepEqual(injections, [
   ['connection', 'sessionQuery', 'profileContext', 'agents', 'sessions'],
-  ['connection', 'webServer'], ['connection'], ['settings'], ['connection', 'webServer'],
+  ['connection'], ['settings'], ['connection', 'webServer'],
   ['connection', 'profileContext'], ['connection', 'llm', 'attachments', 'profileContext'],
   ['connection', 'llm', 'sessions', 'sessionProjections', 'agentDefaultModel'],
 ])
@@ -210,7 +216,7 @@ test('the installed Host imports and validates settings with no project node_mod
     child.stdout, child.stderr,
   ].filter(Boolean).join('\n'))
   assert.deepEqual(JSON.parse(child.stdout.trim()), {
-    imported: true, standardSchema: true, volatileFields: 17, invalidCases: 32, applied: true,
+    imported: true, standardSchema: true, volatileFields: 16, invalidCases: 32, applied: true,
   })
 })
 
@@ -242,8 +248,8 @@ test('the bundled schema activates through real Cordis and preserves the shared 
   assert.equal(fiber.config.promptSuggestionsEnabled.get(), true)
   assert.equal(fiber.config.qThemeEnabled.get(), true)
   assert.equal(fiber.config.qThemeId.get(), 'moonfrost')
-  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' } })
-  assert.equal(Object.keys(fiber.config).length, 17)
+  assert.deepEqual(fiber.config.qThemeSettings.get(), { ocean: { motion: 'dynamic' }, begonia: { motion: 'dynamic' }, sunset: { motion: 'dynamic' }, moonfrost: { motion: 'dynamic' }, buliangren: { motion: 'dynamic' }, fox: { motion: 'dynamic', muted: true }, garo: { motion: 'dynamic' }, bluefish: { motion: 'dynamic' } })
+  assert.equal(Object.keys(fiber.config).length, 16)
   assert.equal(fiber.config.autoCheckUpdates.get(), true)
   assert.equal(fiber.config.conversationCommentsEnabled.get(), true)
   assert.equal(fiber.config.gitEnabled.get(), true)

@@ -13,10 +13,10 @@ const repository = 'git+https://github.com/z1223473749/dsh-QiuYaTools.git'
 const maximumArchive = 64 * 1024 * 1024
 const maximumUnpacked = 256 * 1024 * 1024
 const windowsNotices = ['WEBVIEW2-LICENSE.txt', 'WEBVIEW2-NOTICE.txt', 'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt']
-const macApps = ['QiuYaTools Sessions.app', 'QiuYaTools Computer.app']
+const macApps = ['QiuYaTools Sessions.app']
 
 export const nativePackages = Object.freeze([
-  { name: 'dsh-qiuya-tools-native-darwin-universal', platform: 'darwin', architecture: 'universal', cpu: ['arm64', 'x64'], manifest: 'lib/macos-manifest.json', executables: ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window', 'QiuYaTools Computer.app/Contents/MacOS/qiuya-computer'] },
+  { name: 'dsh-qiuya-tools-native-darwin-universal', platform: 'darwin', architecture: 'universal', cpu: ['arm64', 'x64'], manifest: 'lib/macos-manifest.json', executables: ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window'] },
   ...['arm64', 'x64'].map(architecture => ({ name: `dsh-qiuya-tools-native-win32-${architecture}`, platform: 'win32', architecture, cpu: [architecture], manifest: 'lib/native/windows-manifest.json', executables: [`win32-${architecture}/qiuya-windows.exe`] })),
 ].map(value => Object.freeze({ ...value, cpu: Object.freeze(value.cpu), executables: Object.freeze(value.executables) })))
 
@@ -171,8 +171,8 @@ export function validateUniversalArchive(bytes, { version }) {
   if (metadata.scripts !== undefined || metadata.os !== undefined || metadata.cpu !== undefined) failure('universal package must be script-free and platform-neutral')
   const expected = nativeOptionalDependencies(metadata)
   if (JSON.stringify(Object.entries(metadata.optionalDependencies ?? {}).sort()) !== JSON.stringify(Object.entries(expected).sort())) failure('native optional dependencies must match the exact native version')
-  for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'cordis.patch.yml']) if (!files.get(`package/${file}`)?.bytes.length) failure('missing universal public entry')
-  for (const path of files.keys()) if (path.startsWith('package/lib/') && !['package/lib/index.js', 'package/lib/client.js', 'package/lib/computer-agent.js'].includes(path)) failure('universal package must not carry native files')
+  for (const file of ['lib/index.js', 'lib/client.js', 'cordis.patch.yml']) if (!files.get(`package/${file}`)?.bytes.length) failure('missing universal public entry')
+  for (const path of files.keys()) if (path.startsWith('package/lib/') && !['package/lib/index.js', 'package/lib/client.js'].includes(path)) failure('universal package must not carry native files')
   return { name: metadata.name, version, files: [...files.keys()] }
 }
 
@@ -261,9 +261,9 @@ export async function packageUniversal({ root = rootDirectory, output = join(roo
     await mkdir(join(stage, 'lib'), { recursive: true })
     await writeFile(join(stage, 'package.json'), JSON.stringify(metadata, null, 2) + '\n')
     for (const file of ['README.md', 'LICENSE', 'NOTICE', 'cordis.patch.yml']) await cp(join(root, file), join(stage, file))
-    for (const file of ['index.js', 'client.js', 'computer-agent.js']) await cp(join(root, 'lib', file), join(stage, 'lib', file))
-    for (const directory of ['assets', 'locale', 'browser-extension']) await cp(join(root, directory), join(stage, directory), { recursive: true, filter: path => !path.endsWith('.DS_Store') })
-    for (const file of ['scripts/computer-agent.mjs', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md', 'docs/native-updates.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
+    for (const file of ['index.js', 'client.js']) await cp(join(root, 'lib', file), join(stage, 'lib', file))
+    for (const directory of ['assets', 'locale']) await cp(join(root, directory), join(stage, directory), { recursive: true, filter: path => !path.endsWith('.DS_Store') })
+    for (const file of ['docs/computer-use-guide.md', 'docs/git-guide.md', 'docs/q-theme-framework.md', 'docs/native-updates.md']) { await mkdir(dirname(join(stage, file)), { recursive: true }); await cp(join(root, file), join(stage, file)) }
     return await pack(stage, join(output, 'dsh-qiuya-tools.tgz'), bytes => validateUniversalArchive(bytes, { version: parent.version }))
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }

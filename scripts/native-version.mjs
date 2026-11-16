@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const defaultRoot = fileURLToPath(new URL('../', import.meta.url))
 const nativeNames = ['dsh-qiuya-tools-native-darwin-universal', 'dsh-qiuya-tools-native-win32-arm64', 'dsh-qiuya-tools-native-win32-x64']
-const inputs = ['src/native/macos', 'src/native/windows', 'src/features/session-windows/SessionWindow.swift', 'src/features/session-windows/build-helper.mjs', 'scripts/build-macos-computer.mjs', 'scripts/macos-computer-build-cache.mjs', 'scripts/build-windows-native.mjs', 'assets/icon-color.webp']
+const inputs = ['src/native/windows', 'src/features/session-windows/SessionWindow.swift', 'src/features/session-windows/build-helper.mjs', 'scripts/build-windows-native.mjs', 'assets/icon-color.webp']
 
 /** Include new source files; exclude compiler intermediates and diagnostic fixtures. */
 export async function nativeSourceDigest(root = defaultRoot) {
@@ -20,7 +20,7 @@ export async function nativeSourceDigest(root = defaultRoot) {
     }
   }
   for (const path of inputs) {
-    if (path === 'src/native/macos' || path === 'src/native/windows') await visit(path)
+    if (path === 'src/native/windows') await visit(path)
     else files.push(path)
   }
   const hash = createHash('sha256')

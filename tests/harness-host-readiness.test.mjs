@@ -23,12 +23,3 @@ test('an exited Host fails immediately with its already-redacted diagnostic', as
   await assert.rejects(waitForHarnessHostUrl(() => ({ exited: true, error: 'own Host failed; token=<redacted>' }), { sleep: async () => { sleeps++ } }), /own Host failed; token=<redacted>/u)
   assert.equal(sleeps, 0)
 })
-
-test('the real installer and Windows carrier include readiness helper while UI retains its original 90-second wait', async () => {
-  const [installer, carrier, runtime, ui] = await Promise.all(['scripts/test-harness-install.mjs', 'scripts/e2e-windows-harness-pd.mjs', 'scripts/prepare-windows-test-runtime.mjs', 'scripts/e2e-harness.mjs'].map(path => readFile(new URL('../' + path, import.meta.url), 'utf8')))
-  assert.match(installer, /const url = await waitForHarnessHostUrl/u)
-  assert.match(carrier, /files\.set\('harness-host-readiness\.mjs'/u)
-  assert.match(carrier, /\['previous\.tgz', 'test-harness-install\.mjs', 'harness-host-readiness\.mjs'\]/u)
-  assert.ok(runtime.includes("'scripts/harness-host-readiness.mjs'"))
-  assert.match(ui, /'Isolated Harness did not start', 90000/u)
-})

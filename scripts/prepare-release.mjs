@@ -17,7 +17,7 @@ const { sourceCommit, productionSourceStatus } = await verifyReleaseSources({ ro
 await checkNativeVersion(root)
 const assets = []
 for (const [platform, architecture] of [['darwin', 'universal'], ['win32', 'arm64'], ['win32', 'x64']]) {
-  // Validates platform manifests, native architecture, both Mac helpers and the
+  // Validates platform manifests, native architecture, the session-window helper and the
   // existing 64 MiB archive limit. Missing native builds fail before publication.
   const asset = await packageCandidate(platform, architecture, output)
   await verifyPackage(join(output, asset.name))
@@ -40,7 +40,7 @@ await writeFile(join(output, 'release-assets.json'), JSON.stringify({
   nativeAssets, assets, signed: false,
 }, null, 2) + '\n')
 const shippedFiles = {}
-for (const file of ['lib/index.js', 'lib/client.js', 'lib/computer-agent.js', 'package.json', 'README.md', 'docs/computer-use-guide.md', 'docs/git-guide.md', 'scripts/computer-agent.mjs']) {
+for (const file of ['lib/index.js', 'lib/client.js', 'package.json', 'README.md', 'docs/computer-use-guide.md', 'docs/git-guide.md']) {
   shippedFiles[file] = createHash('sha256').update(await readFile(join(root, file))).digest('hex')
 }
 await writeFile(join(output, 'delivery-manifest.json'), JSON.stringify({

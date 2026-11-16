@@ -81,7 +81,7 @@ export function apply(ctx) {
   await writeFile(overlay, JSON.stringify([
     { id: 'agent-default-model', config: { provider: 'qiuya-git-smoke', model: 'fixture' } },
     { id: 'session-title-llm', disabled: true }, { id: 'session-telemetry-otel', disabled: true },
-    { insert: [{ id: 'qiuya-git-smoke-provider', name: providerPath }, { id: 'qiuya-tools', name: join(root, 'lib/index.js'), config: { enabled: true, gitEnabled: true, computerUseEnabled: false, promptSuggestionsEnabled: false, sessionWindowsEnabled: false, qThemeEnabled: false } }] },
+    { insert: [{ id: 'qiuya-git-smoke-provider', name: providerPath }, { id: 'qiuya-tools', name: join(root, 'lib/index.js'), config: { enabled: true, gitEnabled: true, promptSuggestionsEnabled: false, sessionWindowsEnabled: false, qThemeEnabled: false } }] },
   ], null, 2))
   host = spawn(cli, ['--profile', 'web', '--patch', overlay, '--no-open', '--port', '0'], { env, cwd: repo, stdio: ['pipe', 'pipe', 'pipe'] })
   host.stdout.on('data', value => { hostLog += value }); host.stderr.on('data', value => { hostLog += value }); let spawnError

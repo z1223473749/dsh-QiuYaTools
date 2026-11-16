@@ -39,7 +39,7 @@ async function installation(platform = 'win32', architecture = 'x64') {
   await mkdir(join(plugin, 'lib'), { recursive: true })
   const options = { platform, architecture, version, base: pathToFileURL(join(plugin, 'lib') + '/') }
   const manifestPath = platform === 'win32' ? 'lib/native/windows-manifest.json' : 'lib/macos-manifest.json'
-  const files = platform === 'win32' ? [`win32-${architecture}/qiuya-windows.exe`] : ['QiuYaTools Computer.app/Contents/MacOS/qiuya-computer', 'QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window']
+  const files = platform === 'win32' ? [`win32-${architecture}/qiuya-windows.exe`] : ['QiuYaTools Sessions.app/Contents/MacOS/qiuya-session-window']
   const binary = platform === 'win32' ? pe(architecture) : universal()
   const manifest = { protocolVersion: 1, version, artifacts: files.map(file => ({ file, bytes: binary.length, sha256: createHash('sha256').update(binary).digest('hex'), ...(platform === 'win32' ? { platform, architecture, protocolVersion: 1, selfContained: true } : {}) })) }
   const metadata = { name, version, type: 'module', os: [platform], cpu: platform === 'darwin' ? ['arm64', 'x64'] : [architecture], exports: { './package.json': './package.json' } }
@@ -52,19 +52,19 @@ async function installation(platform = 'win32', architecture = 'x64') {
   return { options, plugin, dependency, name, install, manifest, metadata, manifestPath, executable }
 }
 
-test('Git/npm installations resolve sibling platform packages for both native features', async () => {
+test('Git/npm installations resolve sibling platform packages for detached session windows', async () => {
   for (const platform of ['darwin', 'win32']) for (const architecture of ['arm64', 'x64']) {
     const fixture = await installation(platform, architecture); await fixture.install()
-    assert.equal(resolve('computer', fixture.options), fixture.executable())
-    assert.equal(resolve('session-window', fixture.options), fixture.executable(fixture.dependency, platform === 'darwin' ? 1 : 0))
-    if (platform === 'win32') assert.equal(resolve('computer', fixture.options), resolve('session-window', fixture.options))
+    assert.equal(resolve('session-window', fixture.options), fixture.executable())
+    assert.equal(resolve('session-window', fixture.options), fixture.executable(fixture.dependency, 0))
+    if (platform === 'win32') assert.equal(resolve('session-window', fixture.options), resolve('session-window', fixture.options))
   }
 })
 
 test('complete platform archives use verified bundled components without optional dependencies', async () => {
   for (const platform of ['darwin', 'win32']) {
     const fixture = await installation(platform); await fixture.install(fixture.plugin)
-    assert.equal(resolve('computer', fixture.options), fixture.executable(fixture.plugin))
+    assert.equal(resolve('session-window', fixture.options), fixture.executable(fixture.plugin))
   }
 })
 
@@ -72,23 +72,23 @@ test('partial or old Git native content falls back to the current platform depen
   const fixture = await installation('darwin'); await fixture.install(fixture.plugin)
   await rm(fixture.executable(fixture.plugin))
   await fixture.install()
-  assert.equal(resolve('computer', fixture.options), fixture.executable())
+  assert.equal(resolve('session-window', fixture.options), fixture.executable())
   fixture.manifest.version = '0.0.0'
   await writeFile(join(fixture.plugin, fixture.manifestPath), JSON.stringify(fixture.manifest))
-  assert.equal(resolve('session-window', fixture.options), fixture.executable(fixture.dependency, 1))
+  assert.equal(resolve('session-window', fixture.options), fixture.executable(fixture.dependency, 0))
 })
 
 test('missing native dependencies report installation guidance and can be repaired in the same process', async () => {
   const fixture = await installation()
-  assert.throws(() => resolve('computer', fixture.options), error => error.code === 'NATIVE_INSTALLATION_INCOMPLETE' && /重新安装/.test(error.message) && !/spawn|ENOENT/.test(error.message))
+  assert.throws(() => resolve('session-window', fixture.options), error => error.code === 'NATIVE_INSTALLATION_INCOMPLETE' && /重新安装/.test(error.message) && !/spawn|ENOENT/.test(error.message))
   await fixture.install()
-  assert.equal(resolve('computer', fixture.options), fixture.executable())
+  assert.equal(resolve('session-window', fixture.options), fixture.executable())
 })
 
 test('wrong package version, protocol, executable architecture and modified bytes are rejected', async () => {
   for (const fault of ['version', 'protocol', 'architecture', 'bytes']) {
     const fixture = await installation(); await fixture.install()
-    assert.equal(resolve('computer', fixture.options), fixture.executable(), 'establish an integrity-cache entry before changing the payload')
+    assert.equal(resolve('session-window', fixture.options), fixture.executable(), 'establish an integrity-cache entry before changing the payload')
     if (fault === 'version') { fixture.metadata.version = '0.0.0'; await writeFile(join(fixture.dependency, 'package.json'), JSON.stringify(fixture.metadata)) }
     if (fault === 'protocol') { fixture.manifest.protocolVersion = 2; await writeFile(join(fixture.dependency, fixture.manifestPath), JSON.stringify(fixture.manifest)) }
     if (fault === 'architecture') {
@@ -97,7 +97,7 @@ test('wrong package version, protocol, executable architecture and modified byte
       await writeFile(join(fixture.dependency, fixture.manifestPath), JSON.stringify(fixture.manifest))
     }
     if (fault === 'bytes') { const bytes = await readFile(fixture.executable()); bytes[900] = 12; await writeFile(fixture.executable(), bytes) }
-    assert.throws(() => resolve('computer', fixture.options), { code: 'NATIVE_INSTALLATION_INCOMPLETE' }, fault)
+    assert.throws(() => resolve('session-window', fixture.options), { code: 'NATIVE_INSTALLATION_INCOMPLETE' }, fault)
   }
 })
 
@@ -109,8 +109,8 @@ test('new Host/UI versions reuse the independently pinned native package and rej
   for (const platform of ['darwin', 'win32']) {
     const fixture = await installation(platform); await fixture.install()
     const options = { ...fixture.options, version: '99.0.0', nativeVersion: version }
-    assert.equal(resolve('computer', options), fixture.executable())
-    assert.equal(resolve('session-window', { ...options, version: '99.0.1' }), fixture.executable(fixture.dependency, platform === 'darwin' ? 1 : 0))
-    assert.throws(() => resolve('computer', { ...options, nativeVersion: '99.0.2' }), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
+    assert.equal(resolve('session-window', options), fixture.executable())
+    assert.equal(resolve('session-window', { ...options, version: '99.0.1' }), fixture.executable(fixture.dependency, 0))
+    assert.throws(() => resolve('session-window', { ...options, nativeVersion: '99.0.2' }), { code: 'NATIVE_INSTALLATION_INCOMPLETE' })
   }
 })

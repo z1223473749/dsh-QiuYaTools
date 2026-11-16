@@ -10,17 +10,6 @@ import { LOCAL_VIDEO_ID } from './theme-video.ts'
 import { MOTION_KINDS } from './smart-motion.ts'
 import { installPromptSuggestionsHost } from './features/prompt-suggestions/host.ts'
 import { PROJECT_REPOSITORY } from './project.ts'
-import { installComputerHost } from './features/computer-use/host.ts'
-import { installComputerTools, type ComputerToolsRecorder } from './features/computer-use/tools.ts'
-import { installComputerToolRouting } from './features/computer-use/tool-routing.ts'
-import { installComputerAcceptanceRuns } from './features/acceptance-runs/integration.ts'
-import { installAcceptanceWorkflows } from './features/acceptance-workflows/integration.ts'
-import { installAcceptanceTemplates } from './features/acceptance-templates/integration.ts'
-import { WorkflowEvidenceVerifier } from './features/acceptance-workflows/verifier.ts'
-import { installAnnotations } from './features/annotations/integration.ts'
-import { createWorkbenchAnnotationSource } from './features/workbench/annotation-source.ts'
-import { installWorkbench } from './features/workbench/integration.ts'
-import type { ModelTargetRegistry } from './features/workbench/model-target.ts'
 import pkg from '../package.json' with { type: 'json' }
 import { installGitHost } from './features/git/host.ts'
 import { CUSTOM_THEME_ID, THEME_IMAGE, MAX_CUSTOM_THEMES, MAX_THEME_IMAGE_BYTES, THEME_MOVEMENTS, THEME_ATMOSPHERES, type CustomTheme } from './custom-themes.ts'
@@ -41,7 +30,6 @@ export interface Config {
   qThemeId: Volatile<QThemeId>
   qThemeSettings: Volatile<QThemeSettings>
   qCustomThemes: Volatile<CustomTheme[]>
-  computerUseEnabled: Volatile<boolean>
   autoCheckUpdates: Volatile<boolean>
   pasteCharacterThreshold: Volatile<number>
   pasteLineThreshold: Volatile<number>
@@ -101,7 +89,6 @@ export const Config = z.object({
     x: z.number().min(0).max(100), y: z.number().min(0).max(100),
     zoom: z.number().min(1).max(2), mask: z.number().min(.5).max(1),
   })).max(MAX_CUSTOM_THEMES).default([]).description('用户自定义主题和压缩图片，随当前配置保存').volatile(),
-  computerUseEnabled: z.boolean().default(true).description('启用电脑操控、实时悬浮预览和人工接管').volatile(),
   autoCheckUpdates: z.boolean().default(true).description('后台自动检查插件更新并显示提醒，安装由用户确认').volatile(),
   pasteCharacterThreshold: z.number().step(1).min(1).max(1_000_000).default(1000)
     .description('粘贴内容达到此字符数时转为 TXT 附件').volatile(),
@@ -115,50 +102,6 @@ export function apply(ctx: Context, config: Config): void {
     child.effect(() => {
       const host = installGitHost(child, () => config.enabled.get() && config.gitEnabled.get())
       return () => host.dispose()
-    })
-  })
-  ctx.inject(['connection', 'webServer'], child => {
-    let stopped = false
-    let cleanup: (() => Promise<void>) | undefined
-    child.effect(() => {
-      void installComputerHost(child, () => config.enabled.get() && config.computerUseEnabled.get()).then(host => {
-        if (stopped) return host.dispose()
-        cleanup = host.dispose
-        child.inject(['tools', 'attachments'], tools => {
-          tools.effect(() => {
-            const enabled = () => config.enabled.get() && config.computerUseEnabled.get()
-            const routing = tools.inject(['systemPrompt', 'agents'], routingContext => {
-              if (host.manager) routingContext.effect(() => installComputerToolRouting(routingContext, host.manager!, enabled))
-            })
-            let recorder: ComputerToolsRecorder | undefined, modelTarget: ModelTargetRegistry | undefined
-            const unregister = installComputerTools(tools, host.service, { enabled, entry: host.entry, ...(host.manager ? { tasks: host.manager } : {}), onSelected: exec => modelTarget?.selectDesktop(exec), recorder: {
-              observed: (...args) => recorder?.observed(...args) ?? Promise.resolve(undefined),
-              issuing: (...args) => recorder?.issuing(...args) ?? Promise.resolve(undefined),
-            } })
-            const integration = tools.inject(['agents', 'sessionQuery', 'profileContext'], runsContext => {
-              runsContext.effect(() => {
-                if (!host.manager) return () => {}
-                const nativeManager = host.manager, runEnvironments = { runEnvironment(id: string) { return modelTarget ? modelTarget.runEnvironment(id) : nativeManager.runEnvironment(id) } }
-                const workflowVerifier = new WorkflowEvidenceVerifier()
-                const runs = installComputerAcceptanceRuns(runsContext, runEnvironments, { enabled, version: pkg.version, verifiers: [workflowVerifier.verifier], onEvidenceCommitted: (exec, evidence, observation) => workflowVerifier.capture(exec, evidence, observation) })
-                recorder = runs.computer
-                let stopped = false, annotations: Awaited<ReturnType<typeof installAnnotations>> | undefined, workbench: Awaited<ReturnType<typeof installWorkbench>> | undefined, workflows: Awaited<ReturnType<typeof installAcceptanceWorkflows>> | undefined, templates: Awaited<ReturnType<typeof installAcceptanceTemplates>> | undefined
-                const preparing = installWorkbench(runsContext, nativeManager, { enabled, recorder: () => recorder, diagnostics: true, diagnosticAssociation: (exec, context) => runs.ledger.service.diagnosticAssociation(exec, { environmentId: context.environmentId, targetId: context.targetId, epoch: context.epoch }) }).then(async value => { if (stopped) { await value.dispose(); return } workbench = value; modelTarget = value.modelTarget; const annotationSource = createWorkbenchAnnotationSource({ registry: value.registry, browsers: value.browsers, enabled }); const annotation = await installAnnotations(runsContext, { source: annotationSource, resolveOwnerScope: value.resolveOwnerScope, enabled }); if (stopped) { await annotation.dispose(); return } annotations = annotation; const prepared = await installAcceptanceWorkflows(runsContext, { enabled, target: value.modelTarget, verifier: workflowVerifier, ledger: runs.ledger }); if (stopped) { await prepared.dispose(); return } workflows = prepared; const template = await installAcceptanceTemplates(runsContext, { enabled, workflows: prepared.service, authenticate: prepared.authenticate, resolveOwnerScope: prepared.resolveOwnerScope, modelTarget: value.modelTarget }); if (stopped) { await template.dispose(); return } templates = template }).catch(() => runsContext.logger.error('电脑工作台初始化失败，请检查当前宿主版本与插件连接。'))
-                return async () => {
-                  stopped = true; if (recorder === runs.computer) recorder = undefined
-                  if (modelTarget === workbench?.modelTarget) modelTarget = undefined
-                  await preparing
-                  const workflowResults = await Promise.allSettled([annotations?.dispose(), templates?.dispose(), workflows?.dispose()]); workflowVerifier.dispose()
-                  const results = [...workflowResults, ...await Promise.allSettled([runs.dispose(), workbench?.dispose()])], failed = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
-                  if (failed.length) throw new AggregateError(failed.map(value => value.reason), '工作台清理尚未确认。')
-                }
-              })
-            })
-            return async () => { recorder = undefined; unregister(); await routing.dispose(); await integration.dispose() }
-          })
-        })
-      }).catch(error => child.logger.error('电脑操控初始化失败：%s', error instanceof Error ? error.message : '初始化失败'))
-      return async () => { stopped = true; await cleanup?.() }
     })
   })
   ctx.inject(['connection'], child => {

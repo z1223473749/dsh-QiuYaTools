@@ -1,7 +1,7 @@
 import { getCustomThemes, type CustomTheme } from './custom-themes.ts'
 export const SETTINGS_ID = 'qiuya-tools'
 
-export const Q_THEME_IDS = ['moonfrost', 'garo', 'ocean', 'begonia', 'sunset', 'buliangren', 'fox'] as const
+export const Q_THEME_IDS = ['moonfrost', 'garo', 'ocean', 'begonia', 'sunset', 'buliangren', 'fox', 'bluefish'] as const
 export type QPresetThemeId = typeof Q_THEME_IDS[number]
 export const DEFAULT_Q_THEME_ID: QPresetThemeId = 'moonfrost'
 export type QThemeId = QPresetThemeId | `custom:${string}`
@@ -17,6 +17,7 @@ export const DEFAULT_Q_THEME_SETTINGS: QThemeSettings = Object.freeze({
   buliangren: Object.freeze({ motion: 'dynamic' }),
   fox: Object.freeze({ motion: 'dynamic', muted: true }),
   garo: Object.freeze({ motion: 'dynamic' }),
+  bluefish: Object.freeze({ motion: 'dynamic' }),
 })
 
 /** Serialized values projected by the Host configuration form. */
@@ -38,7 +39,6 @@ export interface Preferences {
   /** Each theme owns its options; changing one leaves the others intact. */
   qThemeSettings: QThemeSettings
   qCustomThemes: CustomTheme[]
-  computerUseEnabled: boolean
   /** Background checks only; installation always requires an explicit action. */
   autoCheckUpdates: boolean
   pasteCharacterThreshold: number
@@ -64,7 +64,6 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
   qThemeId: DEFAULT_Q_THEME_ID,
   qThemeSettings: DEFAULT_Q_THEME_SETTINGS,
   qCustomThemes: [],
-  computerUseEnabled: false,
   autoCheckUpdates: true,
   pasteCharacterThreshold: 1000,
   pasteLineThreshold: 15,

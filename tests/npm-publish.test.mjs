@@ -31,7 +31,7 @@ const release = { tagName: 'v0.5.2', isDraft: false, isPrerelease: false, publis
 const absent = { code: 1, stdout: JSON.stringify({ error: { code: 'E404' } }), stderr: '' }
 const ok = value => ({ code: 0, stdout: JSON.stringify(value), stderr: '' })
 const host = `
-const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:true,computerUseEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15};
+const defaults={enabled:true,pastedTextEnabled:true,sessionWindowsEnabled:true,bulkArchiveEnabled:true,planCommentsEnabled:true,sidebarToolsEnabled:true,promptSuggestionsEnabled:true,qThemeEnabled:true,pasteCharacterThreshold:1000,pasteLineThreshold:15};
 export const Config={['~standard']:{version:1,vendor:'schemastery',validate(input){
   if(input.pasteCharacterThreshold===0)return{issues:[{message:'Invalid threshold'}]};
   return{value:Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,{get:()=>value,[Symbol.for('cosmokit.volatile.write')]:()=>{}}]))};
@@ -342,7 +342,7 @@ async function nativeReleaseFixture(t, options = {}) {
   const archives = new Map(nativeNames.map(name => [name, distributionTarball(nativeEntries(name, options.native?.[name]))]))
   archives.set(rootPackage.name, distributionTarball([
     ['package/package.json', JSON.stringify({ ...checkout, ...options.wrapper })], ['package/lib/index.js', host],
-    ['package/lib/client.js', 'public client'], ['package/lib/computer-agent.js', 'public agent'], ['package/cordis.patch.yml', '[]\n'],
+    ['package/lib/client.js', 'public client'], ['package/cordis.patch.yml', '[]\n'],
   ]))
   const integrities = new Map([...archives].map(([name, bytes]) => [name, `sha512-${createHash('sha512').update(bytes).digest('base64')}`]))
   const calls = [], events = [], published = [], waits = [], visible = new Set(options.existing ?? []), scans = new Map()
